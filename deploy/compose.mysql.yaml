@@ -1,0 +1,24 @@
+services:
+  bytemuse:
+    image: bytemuse-go:local
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "18043:3750"
+    environment:
+      APP_ENV: production
+      HTTP_ADDR: :3750
+      WEB_STATIC_DIR: /app/web
+      DATABASE_DRIVER: mysql
+      DATABASE_DSN: ${DATABASE_DSN:?MySQL DATABASE_DSN is required}
+      DEMO_SEED_ENABLED: "false"
+      SESSION_SECRET: ${SESSION_SECRET:?SESSION_SECRET is required}
+    healthcheck:
+      test: ["CMD", "/app/bytemuse", "doctor"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+

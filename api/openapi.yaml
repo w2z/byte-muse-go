@@ -1,0 +1,549 @@
+openapi: 3.1.0
+info:
+  title: ByteMuse API
+  version: 0.1.0
+  description: ByteMuse Go 第一阶段公开契约。所有时间均为 UTC RFC 3339。
+servers:
+  - url: /api/v1
+paths:
+  /auth/login:
+    post:
+      operationId: login
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: 登录成功，响应同时设置 HttpOnly 会话 Cookie
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /auth/refresh:
+    post:
+      operationId: refreshSession
+      security: []
+      summary: 续签当前会话
+      description: |
+        不接收请求体，直接使用请求携带的 bytemuse_session Cookie 续签。
+        会话仍有效、或过期未超过 24 小时宽限窗口时，下发新 Cookie 并把有效期续回满额
+        （未勾选“记住密码”1 天，勾选后 30 天）；超出宽限窗口返回 401，前端需要跳转登录页。
+      responses:
+        '200':
+          description: 续签成功，响应同时刷新 HttpOnly 会话 Cookie
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /dashboard:
+    get:
+      operationId: getDashboard
+      responses:
+        '200':
+          description: 仪表盘汇总
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Dashboard'
+  /media:
+    get:
+      operationId: listMedia
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - name: query
+          in: query
+          schema:
+            type: string
+            maxLength: 100
+        - name: subscription_status
+          in: query
+          schema:
+            $ref: '#/components/schemas/SubscriptionStatus'
+      responses:
+        '200':
+          description: 影片分页列表
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MediaPage'
+  /media/{mediaId}:
+    get:
+      operationId: getMedia
+      parameters:
+        - $ref: '#/components/parameters/MediaId'
+      responses:
+        '200':
+          description: 影片详情
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Media'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /actors:
+    get:
+      operationId: listActors
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: 已订阅演员分页列表
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActorPage'
+  /subscriptions:
+    get:
+      operationId: listSubscriptions
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - name: status
+          in: query
+          schema:
+            $ref: '#/components/schemas/SubscriptionStatus'
+      responses:
+        '200':
+          description: 订阅分页列表
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubscriptionPage'
+    post:
+      operationId: createSubscription
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateSubscriptionRequest'
+      responses:
+        '201':
+          description: 已创建订阅
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Subscription'
+        '200':
+          description: 幂等重放，返回已有订阅
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Subscription'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /subscriptions/{subscriptionId}/cancel:
+    post:
+      operationId: cancelSubscription
+      parameters:
+        - $ref: '#/components/parameters/SubscriptionId'
+      responses:
+        '200':
+          description: 已取消；重复取消返回同一结果
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Subscription'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /downloads:
+    get:
+      operationId: listDownloads
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - name: status
+          in: query
+          schema:
+            $ref: '#/components/schemas/DownloadStatus'
+      responses:
+        '200':
+          description: 下载任务分页列表
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DownloadPage'
+  /system/status:
+    get:
+      operationId: getSystemStatus
+      responses:
+        '200':
+          description: 系统及数据库状态
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SystemStatus'
+  /system/settings:
+    get:
+      operationId: getSystemSettings
+      responses:
+        '200':
+          description: 脱敏后的系统设置
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SystemSettings'
+  /events:
+    get:
+      operationId: streamEvents
+      responses:
+        '200':
+          description: 系统事件流
+          content:
+            text/event-stream:
+              schema:
+                type: string
+  /health/live:
+    get:
+      operationId: live
+      security: []
+      responses:
+        '200':
+          description: 进程存活
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+  /health/ready:
+    get:
+      operationId: ready
+      security: []
+      responses:
+        '200':
+          description: 数据库和迁移已就绪
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+        '503':
+          description: 服务未就绪
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: bytemuse_session
+  parameters:
+    Page:
+      name: page
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+    PageSize:
+      name: page_size
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+    MediaId:
+      name: mediaId
+      in: path
+      required: true
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 64
+    SubscriptionId:
+      name: subscriptionId
+      in: path
+      required: true
+      schema:
+        type: string
+        minLength: 26
+        maxLength: 26
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema:
+        type: string
+        minLength: 8
+        maxLength: 128
+  responses:
+    Unauthorized:
+      description: 未登录或会话失效
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NotFound:
+      description: 资源不存在
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Conflict:
+      description: 当前状态不允许该操作
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+  schemas:
+    LoginRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username:
+          type: string
+          minLength: 1
+          maxLength: 64
+        password:
+          type: string
+          minLength: 8
+          maxLength: 256
+        remember:
+          type: boolean
+          default: false
+          description: 勾选“记住密码”时为 true，会话有效期由 1 天延长至 30 天；省略按 false 处理。
+    LoginResponse:
+      type: object
+      required: [user]
+      properties:
+        user:
+          $ref: '#/components/schemas/User'
+    User:
+      type: object
+      required: [id, username]
+      properties:
+        id:
+          type: string
+        username:
+          type: string
+    Media:
+      type: object
+      required: [id, code, title, subscription_status, library_status, created_at, updated_at]
+      properties:
+        id:
+          type: string
+        code:
+          type: string
+        title:
+          type: string
+        translated_title:
+          type: [string, 'null']
+        poster_url:
+          type: [string, 'null']
+          format: uri
+        release_date:
+          type: [string, 'null']
+          format: date
+        duration_minutes:
+          type: [integer, 'null']
+          minimum: 0
+        subscription_status:
+          $ref: '#/components/schemas/SubscriptionStatus'
+        library_status:
+          $ref: '#/components/schemas/LibraryStatus'
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    MediaPage:
+      allOf:
+        - $ref: '#/components/schemas/PageMeta'
+        - type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items:
+                $ref: '#/components/schemas/Media'
+    Actor:
+      type: object
+      properties:
+        name:
+          type: string
+        photo:
+          type: string
+          nullable: true
+        limit_date:
+          type: string
+          format: date
+          nullable: true
+    ActorPage:
+      allOf:
+        - $ref: '#/components/schemas/PageMeta'
+        - type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items:
+                $ref: '#/components/schemas/Actor'
+    Subscription:
+      type: object
+      required: [id, media_id, status, mode, filter, created_at, updated_at, version]
+      properties:
+        id:
+          type: string
+        media_id:
+          type: string
+        status:
+          $ref: '#/components/schemas/SubscriptionStatus'
+        mode:
+          type: string
+          enum: [strict, preload]
+        filter:
+          type: object
+          additionalProperties: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        version:
+          type: integer
+          minimum: 1
+    CreateSubscriptionRequest:
+      type: object
+      required: [media_id, mode]
+      properties:
+        media_id:
+          type: string
+        mode:
+          type: string
+          enum: [strict, preload]
+        filter:
+          type: object
+          additionalProperties: true
+          default: {}
+    SubscriptionPage:
+      allOf:
+        - $ref: '#/components/schemas/PageMeta'
+        - type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items:
+                $ref: '#/components/schemas/Subscription'
+    DownloadTask:
+      type: object
+      required: [id, media_id, status, created_at, updated_at]
+      properties:
+        id:
+          type: string
+        media_id:
+          type: string
+        status:
+          $ref: '#/components/schemas/DownloadStatus'
+        external_id:
+          type: [string, 'null']
+        error_message:
+          type: [string, 'null']
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    DownloadPage:
+      allOf:
+        - $ref: '#/components/schemas/PageMeta'
+        - type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items:
+                $ref: '#/components/schemas/DownloadTask'
+    Dashboard:
+      type: object
+      required: [active_subscriptions, completed_downloads, media_count, healthy_integrations]
+      properties:
+        active_subscriptions:
+          type: integer
+        completed_downloads:
+          type: integer
+        media_count:
+          type: integer
+        healthy_integrations:
+          type: integer
+    SystemStatus:
+      type: object
+      required: [version, database_driver, scheduler_running, started_at]
+      properties:
+        version:
+          type: string
+        database_driver:
+          type: string
+          enum: [sqlite, postgres, mysql]
+        scheduler_running:
+          type: boolean
+        started_at:
+          type: string
+          format: date-time
+    SystemSettings:
+      type: object
+      required: [database_driver, demo_seed_enabled]
+      properties:
+        database_driver:
+          type: string
+          enum: [sqlite, postgres, mysql]
+        demo_seed_enabled:
+          type: boolean
+    Health:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        details:
+          type: object
+          additionalProperties: true
+    PageMeta:
+      type: object
+      required: [page, page_size, total]
+      properties:
+        page:
+          type: integer
+          minimum: 1
+        page_size:
+          type: integer
+          minimum: 1
+        total:
+          type: integer
+          minimum: 0
+    SubscriptionStatus:
+      type: string
+      enum: [none, active, canceled]
+    DownloadStatus:
+      type: string
+      enum: [queued, searching, submitted, downloading, completed, failed, unknown]
+    LibraryStatus:
+      type: string
+      enum: [unknown, absent, present]
+security:
+  - sessionCookie: []
