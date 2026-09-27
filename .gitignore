@@ -1,3 +1,5 @@
+node_modules/
+.workbuddy/
 .env
 .env.*
 !.env.example
