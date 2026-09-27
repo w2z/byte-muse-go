@@ -22,6 +22,12 @@ function formatAttribute(key: string, value: unknown): string {
 
 /** 将结构化日志属性压缩成单行中文文案，保留未知属性以便排查问题。 */
 export function formatLogMessage(message: string, attrs?: Record<string, unknown>): string {
+  if (message === "定时任务执行完成" && attrs?.task === "清理系统日志") {
+    const deleted = Number(attrs.deleted ?? 0);
+    return deleted > 0
+      ? "清理系统日志（" + formatValue(attrs.deleted) + "条）"
+      : message + "，任务：" + formatValue(attrs.task);
+  }
   if (message === "定时清理日志完成" && Number(attrs?.deleted ?? 0) > 0) {
     return "清理系统日志（" + formatValue(attrs?.deleted) + "条）";
   }
@@ -47,5 +53,8 @@ export function formatLogMessage(message: string, attrs?: Record<string, unknown
 
 /** 没有实际删除日志的清理记录不应占用日志列表空间。 */
 export function shouldDisplayLog(message: string, attrs?: Record<string, unknown>): boolean {
+  if (message === "定时任务执行完成" && attrs?.task === "清理系统日志") {
+    return Number(attrs.deleted ?? 0) > 0;
+  }
   return !(message === "定时清理日志完成" && Number(attrs?.deleted ?? 0) <= 0);
 }

@@ -15,11 +15,14 @@ import (
 	"github.com/robfig/cron/v3"
 )
 
+// JobResult contains structured values that are added to the completion log.
+type JobResult map[string]any
+
 // Job is one named cron callback. Run must honor context cancellation.
 type Job struct {
 	Name string
 	Spec string
-	Run  func(context.Context)
+	Run  func(context.Context) JobResult
 }
 
 // TaskInfo is the scheduler state exposed to the management API.
@@ -92,15 +95,20 @@ func (m *Manager) executeClaimed(ctx context.Context, state *jobState) {
 	state.lastRun = &now
 	m.mu.Unlock()
 	logging.Info(logging.CategorySystem, "定时任务开始执行", "task", state.job.Name)
+	result := JobResult(nil)
 	defer func() {
 		state.running.Store(false)
 		if recovered := recover(); recovered != nil {
 			logging.Error(logging.CategorySystem, "定时任务执行失败", "task", state.job.Name, "error", fmt.Sprint(recovered))
 			return
 		}
-		logging.Info(logging.CategorySystem, "定时任务执行完成", "task", state.job.Name)
+		attrs := []any{"task", state.job.Name}
+		for key, value := range result {
+			attrs = append(attrs, key, value)
+		}
+		logging.Info(logging.CategorySystem, "定时任务执行完成", attrs...)
 	}()
-	state.job.Run(ctx)
+	result = state.job.Run(ctx)
 }
 
 // Start starts the cron engine exactly once for this manager instance.

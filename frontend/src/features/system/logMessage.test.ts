@@ -19,6 +19,11 @@ describe("日志单行文案", () => {
     expect(formatLogMessage("定时清理日志完成", { deleted: 12, retention_days: 30 })).toBe("清理系统日志（12条）");
   });
 
+  it("将清理任务完成日志显示删除数量，并隐藏零删除记录", () => {
+    expect(shouldDisplayLog("定时任务执行完成", { task: "清理系统日志", deleted: 0 })).toBe(false);
+    expect(formatLogMessage("定时任务执行完成", { task: "清理系统日志", deleted: 12 })).toBe("清理系统日志（12条）");
+  });
+
   it("将管理员登录成功和失败显示为指定单行模板", () => {
     expect(formatLogMessage("管理员登录成功", { username: "admin" })).toBe("管理员登录成功：admin");
     expect(formatLogMessage("管理员登录失败", { error: "用户名或密码错误", ip: "127.0.0.1" })).toBe("管理员登录失败：用户名或密码错误，IP：127.0.0.1");

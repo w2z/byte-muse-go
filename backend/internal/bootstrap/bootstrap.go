@@ -162,32 +162,30 @@ func (c *Commands) Serve(ctx context.Context) error {
 		return fmt.Errorf("read translation settings: %w", err)
 	}
 	jobs := configuredJobs(translationSettings.Values)
-	jobs = append(jobs, scheduler.Job{Name: "清理系统日志", Spec: "* * * * *", Run: func(jobCtx context.Context) {
+	jobs = append(jobs, scheduler.Job{Name: "清理系统日志", Spec: "* * * * *", Run: func(jobCtx context.Context) scheduler.JobResult {
 		settings, err := settingsService.Get(jobCtx)
 		if err != nil {
 			logging.Error(logging.CategorySystem, "读取日志保留设置失败", "error", err.Error())
-			return
+			return nil
 		}
 		raw := strings.TrimSpace(settings.Values["LOG_RETENTION_DAYS"])
 		if raw == "" || raw == "0" {
-			return
+			return nil
 		}
 		days, err := strconv.Atoi(raw)
 		if err != nil || days < 0 {
 			logging.Error(logging.CategorySystem, "日志保留天数配置无效", "value", raw)
-			return
+			return nil
 		}
 		if days == 0 {
-			return
+			return nil
 		}
 		deleted, err := logging.Default.DeleteBefore(jobCtx, time.Now().UTC().Add(-time.Duration(days)*24*time.Hour))
 		if err != nil {
 			logging.Error(logging.CategorySystem, "定时清理日志失败", "error", err.Error())
-			return
+			return nil
 		}
-		if deleted > 0 {
-			logging.Info(logging.CategorySystem, "定时清理日志完成", "deleted", deleted, "retention_days", days)
-		}
+		return scheduler.JobResult{"deleted": deleted, "retention_days": days}
 	}})
 	manager, err := scheduler.New(jobs)
 	if err != nil {
@@ -241,8 +239,9 @@ func configuredJobs(values map[string]string) []scheduler.Job {
 			continue
 		}
 		name := definition.name
-		jobs = append(jobs, scheduler.Job{Name: name, Spec: spec, Run: func(context.Context) {
+		jobs = append(jobs, scheduler.Job{Name: name, Spec: spec, Run: func(context.Context) scheduler.JobResult {
 			logging.Info(logging.CategoryOther, "定时任务已触发，业务执行器尚未接入", "task", name)
+			return nil
 		}})
 	}
 	return jobs
