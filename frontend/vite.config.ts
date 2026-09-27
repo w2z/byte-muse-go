@@ -1,6 +1,5 @@
 import react from "@vitejs/plugin-react";
-import { loadEnv } from "vite";
-import { defineConfig } from "vitest/config";
+import { defineConfig, loadEnv } from "vite";
 
 export default defineConfig(({ mode }) => {
   const target = loadEnv(mode, process.cwd(), "VITE_API_PROXY_TARGET").VITE_API_PROXY_TARGET || "http://127.0.0.1:3750";
@@ -12,11 +11,6 @@ export default defineConfig(({ mode }) => {
         "/api": { target, changeOrigin: true },
         "/health": { target, changeOrigin: true },
       },
-    },
-    test: {
-      environment: "jsdom",
-      globals: true,
-      setupFiles: ["./src/test/setup.ts"],
     },
   };
 });

@@ -1,46 +1,69 @@
-package scheduler_test
+package scheduler
 
 import (
 	"context"
-	"sync/atomic"
+	"errors"
 	"testing"
 	"time"
-
-	"bytemuse/backend/internal/scheduler"
 )
 
-func TestSchedulerStartsOnlyOnceAndStops(t *testing.T) {
-	var starts atomic.Int32
-	manager, err := scheduler.New([]scheduler.Job{{
-		Name: "probe",
-		Spec: "@every 10ms",
-		Run:  func(context.Context) { starts.Add(1) },
+func TestRunNowTracksLastRunAndRunningState(t *testing.T) {
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+	manager, err := New([]Job{{
+		Name: "测试任务",
+		Spec: "* * * * *",
+		Run: func(context.Context) {
+			started <- struct{}{}
+			<-release
+		},
 	}})
 	if err != nil {
-		t.Fatalf("new scheduler: %v", err)
+		t.Fatalf("create scheduler: %v", err)
 	}
-	if err := manager.Start(); err != nil {
-		t.Fatalf("first start: %v", err)
+
+	if err := manager.RunNow("测试任务"); err != nil {
+		t.Fatalf("run task now: %v", err)
 	}
-	if err := manager.Start(); err != nil {
-		t.Fatalf("idempotent second start: %v", err)
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("task did not start")
 	}
+	items := manager.Tasks()
+	if len(items) != 1 || !items[0].Running || items[0].LastRun == nil {
+		t.Fatalf("unexpected running state: %#v", items)
+	}
+	if err := manager.RunNow("测试任务"); err == nil {
+		t.Fatal("expected duplicate run to be rejected")
+	}
+	close(release)
 	deadline := time.Now().Add(time.Second)
-	for starts.Load() == 0 && time.Now().Before(deadline) {
-		time.Sleep(time.Millisecond)
+	for time.Now().Before(deadline) {
+		if !manager.Tasks()[0].Running {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
-	if starts.Load() == 0 {
-		t.Fatal("scheduled job did not run")
+	t.Fatal("task did not finish")
+}
+
+func TestRunNowReportsUnknownTask(t *testing.T) {
+	manager, err := New([]Job{{Name: "任务", Spec: "* * * * *", Run: func(context.Context) {}}})
+	if err != nil {
+		t.Fatalf("create scheduler: %v", err)
 	}
-	if manager.StartCount() != 1 {
-		t.Fatalf("underlying start count = %d, want 1", manager.StartCount())
+	if !errors.Is(manager.RunNow("不存在"), ErrTaskNotFound) {
+		t.Fatal("expected ErrTaskNotFound")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	if err := manager.Stop(ctx); err != nil {
-		t.Fatalf("stop scheduler: %v", err)
-	}
-	if manager.Running() {
-		t.Fatal("scheduler still reports running after stop")
+}
+
+func TestNewRejectsDuplicateTaskNames(t *testing.T) {
+	_, err := New([]Job{
+		{Name: "重复", Spec: "* * * * *", Run: func(context.Context) {}},
+		{Name: "重复", Spec: "* * * * *", Run: func(context.Context) {}},
+	})
+	if err == nil {
+		t.Fatal("expected duplicate task names to be rejected")
 	}
 }

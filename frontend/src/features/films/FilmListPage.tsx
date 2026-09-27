@@ -1,63 +1,74 @@
-import { Button, Descriptions, Modal, Table, Tag } from "@arco-design/web-react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Descriptions, Modal, Tag } from "@arco-design/web-react";
+import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { apiRequest, type Page } from "../../shared/api/client";
-import type { Media } from "../../shared/api/types";
+import type { LibraryStatus, Media } from "../../shared/api/types";
+import { DEFAULT_PAGE_SIZE } from "../../shared/ui/ListPagination";
+import { MediaCardGrid } from "../../shared/ui/MediaCardGrid";
+import { PageHeader } from "../../shared/ui/PageHeader";
 import { PageState } from "../../shared/ui/PageState";
+import "./FilmListPage.css";
 
-const statusText = {
-  none: "未订阅",
-  active: "订阅中",
-  canceled: "已取消",
-} as const;
+/** 媒体库状态的中文文案。 */
+const libraryText: Record<LibraryStatus, string> = {
+  unknown: "未知",
+  absent: "未入库",
+  present: "已入库",
+};
 
-/** 影片列表读取 GET /media，订阅状态与媒体库状态分开展示。 */
+/** 媒体库状态对应的标签色，已入库用强调色，未知用警示色。 */
+const libraryStateClass: Record<LibraryStatus, string> = {
+  unknown: "warn",
+  absent: "idle",
+  present: "active",
+};
+
+/**
+ * 影片（媒体库）列表。
+ *
+ * 读取 GET /media 并按对标站番号卡片网格排布：网格、卡片和分页条统一由公共 MediaCardGrid 提供，
+ * 页面不自行实现卡片样式。订阅状态由 CodeCard 自带的标签展示，媒体库状态通过 renderMeta 补充；
+ * 进入详情由网格的 onSelect 打开 Modal + GET /media/{mediaId} 展示。
+ * 订阅仍走 POST /subscriptions 并带幂等键，成功后失效 media 与 subscriptions 查询。
+ */
 export function FilmListPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [page, setPage] = useState(1);
-  const queryClient = useQueryClient();
-  const subscribe = useMutation({
-    mutationFn: (mediaId: string) => apiRequest("/subscriptions", { method: "POST", headers: { "Idempotency-Key": crypto.randomUUID() }, body: JSON.stringify({ media_id: mediaId, mode: "strict", filter: {} }) }),
-    onSuccess: async () => { await queryClient.invalidateQueries({ queryKey: ["media"] }); await queryClient.invalidateQueries({ queryKey: ["subscriptions"] }); },
-  });
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
   const detail = useQuery({ queryKey: ["media-detail", selectedId], queryFn: () => apiRequest<Media>(`/media/${encodeURIComponent(selectedId!)}`), enabled: selectedId !== null });
   const query = useQuery({
-    queryKey: ["media", page],
-    queryFn: () => apiRequest<Page<Media>>(`/media?page=${page}&page_size=20`),
+    queryKey: ["media", page, pageSize],
+    queryFn: () => apiRequest<Page<Media>>(`/media?page=${page}&page_size=${pageSize}`),
   });
   const items = query.data?.items ?? [];
+  const total = query.data?.total ?? 0;
+
+  /** 切换每页条数：页长变了，页码必须回到第一页，否则会请求到越界页。 */
+  function changePageSize(next: number) {
+    setPageSize(next);
+    setPage(1);
+  }
 
   return (
     <section>
-      <div className="page-heading"><div><div className="eyebrow">媒体库 / LIBRARY</div><h1>影片</h1><p className="page-description">所有被发现、订阅和整理过的内容都会在这里汇合。</p></div><div className="toolbar-note">{query.data?.total ?? 0} 项记录</div></div>
-      {subscribe.isSuccess && <p role="status" className="inline-success">订阅已创建</p>}
-      {subscribe.isError && <p role="alert" className="inline-error">{subscribe.error.message}</p>}
-      <PageState
-        isLoading={query.isLoading}
-        error={query.error}
-        isEmpty={!query.isLoading && !query.error && items.length === 0}
+      <PageHeader title="影片" />
+      <MediaCardGrid
+        items={items}
+        query={query}
         emptyText="暂无影片"
-        onRetry={() => void query.refetch()}
-      >
-        <div className="table-shell"><div className="toolbar"><div className="toolbar-note">资源目录 / 当前页</div></div><Table
-          rowKey="id"
-          data={items}
-          pagination={false}
-          columns={[
-            { title: "编号", dataIndex: "code", render: (value) => <span className="code-cell">{value}</span> },
-            { title: "标题", dataIndex: "title", render: (value) => <span className="title-cell">{value}</span> },
-            { title: "操作", render: (_, record) => <><Button type="text" onClick={() => setSelectedId(record.id)}>查看详情</Button><Button type="text" disabled={record.subscription_status === "active" || subscribe.isPending} loading={subscribe.isPending && subscribe.variables === record.id} onClick={() => subscribe.mutate(record.id)}>订阅影片</Button></> },
-            {
-              title: "订阅",
-                render: (_, record) => <Tag className={`state-tag ${record.subscription_status === "active" ? "active" : "idle"}`}>{statusText[record.subscription_status]}</Tag>,
-            },
-            {
-              title: "媒体库",
-                render: (_, record) => <Tag className={`state-tag ${record.library_status === "present" ? "active" : "idle"}`}>{record.library_status}</Tag>,
-            },
-          ]}
-        /><div className="list-pagination"><Button disabled={page === 1} onClick={() => setPage(page - 1)}>上一页</Button><span>第 {page} 页 / 共 {Math.max(1, Math.ceil((query.data?.total ?? 0) / 20))} 页</span><Button disabled={page * 20 >= (query.data?.total ?? 0)} onClick={() => setPage(page + 1)}>下一页</Button></div></div>
-      </PageState>
+        total={total}
+        page={page}
+        pageSize={pageSize}
+        onPageChange={setPage}
+        onPageSizeChange={changePageSize}
+        onSelect={(media) => setSelectedId(media.id)}
+        renderMeta={(media) => (
+          <div className="film-card-library">
+            <span className="code-card-meta">媒体库</span>
+            <Tag className={`state-tag ${libraryStateClass[media.library_status]}`}>{libraryText[media.library_status]}</Tag>
+          </div>
+        )}
+      />
       <Modal title="影片详情" visible={selectedId !== null} footer={null} onCancel={() => setSelectedId(null)}>
         <PageState isLoading={detail.isLoading} error={detail.error} isEmpty={false} emptyText="" onRetry={() => void detail.refetch()}>
           <Descriptions data={[{ label: "番号", value: detail.data?.code ?? "" }, { label: "标题", value: detail.data?.title ?? "" }, { label: "订阅", value: detail.data?.subscription_status ?? "" }, { label: "媒体库", value: detail.data?.library_status ?? "" }]} column={1} />

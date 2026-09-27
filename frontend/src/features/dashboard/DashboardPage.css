@@ -1,0 +1,76 @@
+/* 看板页专有样式。
+   整页排版对齐 Arco Design Pro 的 workplace 看板（react-pro.arco.design/dashboard/workplace）：
+   左主区 flex:1 + 右辅助区固定 280px，卡间距 16px，卡片内边距 16px。
+   卡片外壳沿用公共 .panel（白底、1px 边框、4px 圆角、无阴影），
+   这里只定义看板自己的内部排版，公共层不改动，避免影响其他页面。
+   关键尺寸来自 Pro 源码（pages/dashboard/workplace/style/*.module.less）：
+   统计项图标 54px 圆形 / 标题 12px / 数值 22px-600 / 单位 12px，
+   快捷入口图标 32px 圆角 6px / 文字 12px。 */
+
+.wp-layout { display: flex; align-items: flex-start; gap: 16px; }
+.wp-main { display: flex; flex: 1 1 auto; min-width: 0; flex-direction: column; gap: 16px; }
+.wp-side { display: flex; flex: 0 0 280px; width: 280px; flex-direction: column; gap: 16px; }
+
+.wp-card { width: 100%; }
+.wp-card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
+.wp-card-title { color: var(--ink); font-size: 16px; font-weight: 500; line-height: 24px; }
+.wp-divider { height: 1px; margin: 16px 0; background: var(--line); border: 0; }
+
+/* ===== Overview 卡：问候 → 统计项 → 实时动态 ===== */
+.wp-stats { display: flex; align-items: center; }
+.wp-stat { display: flex; flex: 1 1 0; align-items: center; min-width: 0; padding-left: 20px; }
+.wp-stat-icon { display: grid; flex: none; width: 54px; height: 54px; margin-right: 12px; place-items: center; color: var(--mint); background: var(--panel-deep); border-radius: 50%; font-size: 24px; }
+.wp-stats-divider { flex: none; width: 1px; height: 60px; background: var(--line); }
+.wp-stat-title { color: var(--ink); font-size: 12px; line-height: 20px; }
+.wp-stat-count { color: var(--ink); font-size: 22px; font-weight: 600; line-height: 30px; }
+.wp-stat-unit { margin-left: 8px; color: var(--muted); font-size: 12px; font-weight: 400; }
+
+.wp-subhead { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
+.wp-subhead-title { color: var(--ink); font-size: 16px; font-weight: 500; line-height: 24px; }
+.wp-subhead-note { margin-left: 4px; color: var(--muted); font-size: 12px; font-weight: 400; }
+.wp-more { flex: none; color: var(--mint); font-size: 14px; text-decoration: none; }
+.wp-more:hover { color: var(--mint-deep); }
+
+/* 事件流只反映连接状态，没有事件时给出等高的占位区，保持卡片高度稳定。 */
+.wp-event { display: grid; min-height: 120px; place-content: center; gap: 8px; color: var(--ink-2); font-size: 13px; text-align: center; }
+.wp-event span { color: var(--muted); font-size: 12px; }
+
+/* ===== 当前快照：条形长度只用于组内数值比较 ===== */
+.wp-snapshot-head { align-items: flex-start; }
+.wp-snapshot-note { margin-top: 4px; color: var(--muted); font-size: 12px; line-height: 20px; }
+.wp-snapshot { display: grid; gap: 18px; }
+.wp-snapshot-row { display: grid; gap: 8px; }
+.wp-snapshot-meta { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; color: var(--ink-2); font-size: 13px; }
+.wp-snapshot-meta strong { flex: none; color: var(--ink); font-size: 15px; font-weight: 600; }
+.wp-snapshot-meta small { margin-left: 5px; color: var(--muted); font-size: 12px; font-weight: 400; }
+.wp-snapshot-progress { line-height: 1; }
+.wp-snapshot-progress .arco-progress-line { margin-right: 0; }
+.wp-snapshot-progress .arco-progress-line-outer { padding-right: 0; }
+.wp-snapshot-progress .arco-progress-line-outer { background: var(--panel-deep); }
+.wp-snapshot-progress .arco-progress-line-inner { background: var(--mint); }
+
+/* ===== 快捷入口卡：三列图标宫格 + 最近访问 ===== */
+.wp-shortcuts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.wp-shortcut { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 12px; color: var(--ink); border-radius: 4px; text-decoration: none; }
+.wp-shortcut:hover { color: var(--mint); }
+.wp-shortcut-icon { display: grid; width: 32px; height: 32px; margin-bottom: 4px; place-items: center; color: var(--ink-2); background: var(--panel-deep); border-radius: 6px; font-size: 18px; transition: color .18s ease, background-color .18s ease; }
+.wp-shortcut:hover .wp-shortcut-icon { color: var(--mint); background: var(--accent-soft); }
+.wp-shortcut-title { font-size: 12px; line-height: 20px; text-align: center; }
+.wp-recent { margin-bottom: 16px; color: var(--ink); font-size: 16px; font-weight: 500; line-height: 24px; }
+
+/* ===== 服务入口卡 ===== */
+.wp-service { display: flex; flex-direction: column; gap: 12px; }
+.wp-service-item { display: block; padding: 4px; text-decoration: none; }
+.wp-service-item strong { display: block; color: var(--ink-2); font-size: 13px; font-weight: 500; }
+.wp-service-item span { display: block; margin-top: 2px; color: var(--muted); font-size: 12px; }
+.wp-service-item:hover strong { color: var(--mint); }
+
+/* 窄屏下右栏落到主区下方，统计项改两列并去掉竖分隔线。
+   切到纵向后必须覆盖 .wp-layout 的 align-items: flex-start，否则两个子区会按内容宽度收缩。 */
+@media (max-width: 1023px) {
+  .wp-layout { flex-direction: column; align-items: stretch; }
+  .wp-side { flex: 1 1 auto; width: auto; }
+  .wp-stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+  .wp-stats-divider { display: none; }
+  .wp-stat { padding-left: 0; }
+}

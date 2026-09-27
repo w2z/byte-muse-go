@@ -1,0 +1,63 @@
+.task-table .arco-table-td {
+  vertical-align: middle;
+}
+
+.task-name-cell,
+.task-cron-cell {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.task-name-cell strong {
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.task-name-cell span,
+.task-last-run {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.task-name-cell span::before {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin: 0 6px 1px 0;
+  border-radius: 50%;
+  background: var(--success);
+  content: "";
+}
+
+.task-cron-cell > span {
+  color: var(--ink-2);
+  line-height: 1.5;
+}
+
+.task-cron-cell code {
+  width: fit-content;
+  padding: 2px 6px;
+  color: var(--muted);
+  background: var(--panel-deep);
+  border: 1px solid var(--line-soft);
+  border-radius: 2px;
+  font: 12px/1.4 "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+}
+
+.task-last-run--empty {
+  color: var(--muted);
+  font-style: italic;
+}
+
+@media (max-width: 760px) {
+  .task-table .arco-table-container {
+    overflow-x: auto;
+  }
+
+  .task-table .arco-table {
+    min-width: 760px;
+  }
+}

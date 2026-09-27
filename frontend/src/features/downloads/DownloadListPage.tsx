@@ -1,40 +1,74 @@
-import { Button, Table, Tag } from "@arco-design/web-react";
+import { Table, Tag } from "@arco-design/web-react";
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { apiRequest, type Page } from "../../shared/api/client";
 import type { DownloadTask } from "../../shared/api/types";
+import { ContentCard } from "../../shared/ui/ContentCard";
+import { DEFAULT_PAGE_SIZE, ListPagination } from "../../shared/ui/ListPagination";
+import { PageHeader } from "../../shared/ui/PageHeader";
 import { PageState } from "../../shared/ui/PageState";
 
-/** 下载任务只展示服务端状态，不把它等同于订阅或媒体库状态。 */
+/** 下载任务状态到公共标签色板的映射：完成是正常态，失败告警，其余（排队/搜索/提交/下载中）都是进行中。 */
+function statusTone(status: DownloadTask["status"]): string {
+  if (status === "completed") return "active";
+  if (status === "failed") return "warn";
+  return "idle";
+}
+
+/**
+ * 下载任务列表。
+ *
+ * 下载任务是队列明细，属于表格型数据，所以按照对标站 对标站 的任务页保持表格：
+ * 上方一行页面标题，下方是一块圆角边框卡片（公共 .table-shell）包住表格，表格使用与
+ * 定时任务页共用的 .data-table 样式（默认密度 + 深色表头 + 行分隔线）。分页使用
+ * 公共 ListPagination，页码边界由服务端返回的总数换算，保留服务端分页。
+ *
+ * 空数据时不再整页替换为空态，而是在表格内通过 noDataElement 展示空态，
+ * 与定时任务页行为一致。只展示服务端状态，不把它等同于订阅或媒体库状态；
+ * 数据来源 GET /downloads。
+ */
 export function DownloadListPage() {
   const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
   const query = useQuery({
-    queryKey: ["downloads", page],
-    queryFn: () => apiRequest<Page<DownloadTask>>(`/downloads?page=${page}&page_size=20`),
+    queryKey: ["downloads", page, pageSize],
+    queryFn: () => apiRequest<Page<DownloadTask>>(`/downloads?page=${page}&page_size=${pageSize}`),
   });
   const items = query.data?.items ?? [];
+  const total = query.data?.total ?? 0;
+
+  /** 切换每页条数：页长变了，页码必须回到第一页，否则会请求到越界页。 */
+  function changePageSize(next: number) {
+    setPageSize(next);
+    setPage(1);
+  }
 
   return (
     <section>
-      <div className="page-heading"><div><div className="eyebrow">下载队列 / PIPELINE</div><h1>下载任务</h1><p className="page-description">从资源发现到客户端完成，所有任务的状态都在这里可见。</p></div><div className="toolbar-note">实时队列</div></div>
-      <PageState
-        isLoading={query.isLoading}
-        error={query.error}
-        isEmpty={!query.isLoading && !query.error && items.length === 0}
-        emptyText="暂无下载任务"
-        onRetry={() => void query.refetch()}
-      >
-        <div className="table-shell"><div className="toolbar"><div className="toolbar-note">任务流水 / 最近更新优先</div></div><Table
-          rowKey="id"
-          data={items}
-          pagination={false}
-          columns={[
-            { title: "影片", dataIndex: "media_id" },
-            { title: "状态", dataIndex: "status", render: (value) => <Tag className={`state-tag ${value === "completed" ? "active" : value === "failed" ? "warn" : "idle"}`}>{value}</Tag> },
-            { title: "外部任务", dataIndex: "external_id" },
-            { title: "错误", dataIndex: "error_message" },
-          ]}
-        /><div className="list-pagination"><Button disabled={page === 1} onClick={() => setPage(page - 1)}>上一页</Button><span>第 {page} 页 / 共 {Math.max(1, Math.ceil((query.data?.total ?? 0) / 20))} 页</span><Button disabled={page * 20 >= (query.data?.total ?? 0)} onClick={() => setPage(page + 1)}>下一页</Button></div></div>
+      <PageHeader title="下载任务" />
+      <PageState isLoading={query.isLoading} error={query.error} onRetry={() => void query.refetch()}>
+        <ContentCard className="table-shell data-table-shell">
+          <Table
+            className="data-table"
+            border={false}
+            rowKey="id"
+            data={items}
+            loading={query.isLoading || query.isFetching}
+            noDataElement={<div className="data-table-empty" role="status">暂无下载任务</div>}
+            pagination={false}
+            columns={[
+              { title: "影片", dataIndex: "media_id", render: (value: string) => <span className="code-cell">{value}</span> },
+              { title: "状态", dataIndex: "status", render: (value: DownloadTask["status"]) => <Tag className={`state-tag ${statusTone(value)}`}>{value}</Tag> },
+              {
+                title: "外部任务",
+                dataIndex: "external_id",
+                render: (value: string | null | undefined) => (value ? <span className="code-cell">{value}</span> : null),
+              },
+              { title: "错误", dataIndex: "error_message" },
+            ]}
+          />
+          <ListPagination page={page} total={total} pageSize={pageSize} onChange={setPage} onPageSizeChange={changePageSize} />
+        </ContentCard>
       </PageState>
     </section>
   );

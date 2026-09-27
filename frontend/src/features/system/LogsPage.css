@@ -1,0 +1,64 @@
+.app-content-scroll:has(.logs-page) { display: flex; flex-direction: column; padding-bottom: 0; }
+.app-content-scroll:has(.logs-page) > .page-container { display: flex; flex: 1 1 auto; min-height: 0; }
+.logs-page { display: flex; flex: 1 1 auto; min-height: 0; flex-direction: column; }
+.logs-content-card { display: flex; height: 100%; min-height: 0; flex-direction: column; overflow: hidden; background: var(--panel); border: 1px solid var(--line); border-radius: var(--content-radius); }
+/* 筛选栏按内容高度固定：flex-shrink 取 0，不参与纵向收缩。
+   这里声明了 overflow-x: auto，按 CSS 规则 overflow-y 会一并计算为 auto，
+   一旦筛选栏被压扁，内容纵向溢出就会在筛选栏右端冒出一条纵向滚动条，
+   同时挤掉 15px 宽度、把「清空日志」推离右边距。
+   筛选栏高度是 20 + 32 + 20 = 72，属于固定骨架，剩余高度由 .logs-terminal 消化。 */
+.logs-filters { display: flex; flex: 0 0 auto; flex-wrap: nowrap; align-items: center; gap: 12px; padding: 20px 24px; overflow-x: auto; white-space: nowrap; }
+.logs-filter-label { color: var(--ink-2); font-size: var(--control-font-size); }
+/* 筛选栏横向排布：允许换行。
+   四个控件统一 330px 后，单行总宽 = 标签 168 + 间距 108 + 4×330 + 三个按钮 252 = 1848px，
+   宽屏（内容区 ≥1848）一行放得下；窄屏若还强制 nowrap，就只能靠横向滚动，
+   「清空日志」会被推到可视区外，用户根本点不到。改为换行后窄屏自动折到第二行，不会丢控件。 */
+.logs-filters { display: flex; flex: 0 0 auto; flex-wrap: wrap; align-items: center; gap: 12px; padding: 20px 24px; overflow-x: auto; white-space: nowrap; }
+/* 「标签 + 控件」成对包一层，折行时整对一起换行：标签和控件是行内的两个 flex item，
+   不包住就会出现「标签留在上一行、控件掉到下一行」的断裂。 */
+.logs-field { display: flex; min-width: 0; align-items: center; gap: 12px; }
+.logs-filter-label { color: var(--ink-2); font-size: var(--control-font-size); }
+/* 关键词 Input、分类/级别 Select、时间段 RangePicker 统一同宽 330px（用户指定），一排框看起来才是同一套；
+   一律走 Arco default 尺寸（高 32、字号 14、圆角与边框同源），高度已天然一致，只需对齐宽度。
+   330 由时间段决定：它是复合控件，要放下两段 "YYYY-MM-DD HH:mm:ss" + 分隔 + 日历图标，无法再窄。 */
+.logs-keyword, .logs-select, .logs-time-range { flex: 0 0 330px; width: 330px; }
+/* 按钮不再固定宽度：统一走 Arco default 尺寸（高 32 / 左右内边距 15），
+   宽度由内容撑开，与同排的 Input、Select 的默认高度齐平。
+   原来固定 80px 是按 small 按钮（高 28）定的，换成 default 后「查询」带图标会超出 80px。 */
+.logs-clear-button { margin-left: auto; }
+.logs-divider { flex: 0 0 auto; margin: 0 !important; }
+/* flex-basis 取 0（而不是 auto）：日志流内容动辄数千像素，basis: auto 会让整列初始主轴尺寸远超卡片高度，
+   进入收缩分支后按 basis 比例分配负空间，筛选栏和分页条会被一起压扁。
+   basis 为 0 时初始主轴尺寸只有筛选栏、分隔线和分页条，剩余高度全部由日志流增长吃掉，
+   正常视口下不会触发收缩，筛选栏稳定保持 72px。 */
+.logs-terminal { flex: 1 1 0; min-height: 0; margin: 20px 24px 0; overflow-y: scroll; overflow-x: auto; scrollbar-gutter: stable; background: rgba(0, 0, 0, .045); border-radius: var(--content-radius); font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
+body[arco-theme="dark"] .logs-terminal { background: rgba(255, 255, 255, .05); }
+.logs-line { display: grid; grid-template-columns: 14px 164px 100px 74px minmax(0, 1fr); gap: 10px; align-items: center; min-height: 32px; padding: 5px 14px; border-bottom: 1px solid var(--line-soft); font-size: 13px; line-height: 20px; }
+.logs-line:last-child { border-bottom: 0; }
+.logs-dot { width: 7px; height: 7px; margin-top: 2px; border-radius: 50%; background: var(--mint); }
+.logs-line--error .logs-dot { background: var(--danger); }
+.logs-line--warn .logs-dot { background: var(--orange); }
+.logs-line--other .logs-dot { background: var(--muted); }
+.logs-time { color: var(--muted); font-size: 12px; }
+.logs-category { color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; }
+.logs-level { color: var(--mint); font-size: 11px; font-weight: 600; }
+.logs-line--error .logs-level { color: var(--danger); }
+.logs-line--warn .logs-level { color: var(--orange); }
+.logs-line--other .logs-level { color: var(--muted); }
+.logs-message { color: var(--ink-2); overflow-wrap: anywhere; white-space: normal; }
+.logs-empty, .logs-loading { display: grid; min-height: 220px; place-items: center; color: var(--muted); font-family: "PingFang SC", "Microsoft YaHei", sans-serif; }
+.logs-loading { gap: 10px; grid-auto-flow: column; }
+.logs-loading-spinner { width: 16px; height: 16px; border: 2px solid var(--line); border-top-color: var(--mint); border-radius: 50%; animation: logs-spin .7s linear infinite; }
+@keyframes logs-spin { to { transform: rotate(360deg); } }
+.logs-content-card .list-pagination { margin: 16px 24px 20px; }
+@media (max-width: 760px) {
+  .logs-filters { padding: 16px; white-space: normal; }
+  /* 窄屏：每个「标签 + 控件」独占一行，控件吃满剩余宽度，四个字段仍然同宽。 */
+  .logs-field { flex: 1 1 100%; }
+  .logs-keyword, .logs-select, .logs-time-range { flex: 1 1 auto; width: auto; }
+  .logs-clear-button { margin-left: 0; }
+  .logs-terminal { margin: 16px; }
+  .logs-line { grid-template-columns: 14px minmax(0, 1fr); }
+  .logs-time, .logs-category, .logs-level, .logs-message { grid-column: 2; }
+  .logs-content-card .list-pagination { margin: 12px 16px 16px; }
+}

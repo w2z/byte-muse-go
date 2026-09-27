@@ -11,6 +11,13 @@ export type DownloadStatus =
   | "failed"
   | "unknown";
 export type SubscriptionMode = "strict" | "preload";
+export type MediaDisplayStatus =
+  | "unsubscribed"
+  | "subscribed"
+  | "downloading"
+  | "completed"
+  | "failed"
+  | "unknown";
 export type DatabaseDriver = "sqlite" | "postgres" | "mysql";
 
 export type User = {
@@ -28,10 +35,16 @@ export type Media = {
   title: string;
   translated_title: string | null;
   poster_url?: string | null;
+  banner_url?: string | null;
+  preview_url?: string | null;
+  still_photos?: string[];
   release_date?: string | null;
   duration_minutes?: number | null;
   subscription_status: SubscriptionStatus;
   library_status: LibraryStatus;
+  display_status?: MediaDisplayStatus;
+  active_subscription?: Subscription | null;
+  download_status?: DownloadStatus | null;
   created_at: string;
   updated_at: string;
 };
@@ -45,6 +58,7 @@ export type Subscription = {
   created_at: string;
   updated_at: string;
   version: number;
+  media?: Media;
 };
 
 export type DownloadTask = {
@@ -57,23 +71,31 @@ export type DownloadTask = {
   updated_at: string;
 };
 
+export type ScheduledTask = {
+  name: string;
+  cron: string;
+  last_run: string | null;
+  running: boolean;
+};
+
+export type LogRecord = {
+  time: string;
+  level: "debug" | "info" | "warning" | "error";
+  category: string;
+  message: string;
+  attrs?: Record<string, unknown>;
+};
+
 export type Dashboard = {
   active_subscriptions: number;
   completed_downloads: number;
   media_count: number;
-  healthy_integrations: number;
-};
-
-export type SystemStatus = {
-  version: string;
-  database_driver: DatabaseDriver;
-  scheduler_running: boolean;
-  started_at: string;
 };
 
 export type SystemSettings = {
   database_driver: DatabaseDriver;
-  demo_seed_enabled: boolean;
+  values: Record<string, string>;
+  configured: Record<string, boolean>;
 };
 
 export type Actor = {

@@ -4,34 +4,43 @@ package httpapi
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"mime"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
 	"bytemuse/backend/internal/application"
 	"bytemuse/backend/internal/auth"
 	"bytemuse/backend/internal/domain"
+	"bytemuse/backend/internal/logging"
 	"bytemuse/backend/internal/ports"
+	"bytemuse/backend/internal/scheduler"
 )
 
 // Dependencies contains the services required by the HTTP transport.
 type Dependencies struct {
-	Auth          *auth.Service
-	Catalog       *application.CatalogService
-	Actors        *application.ActorService
-	Subscriptions *application.SubscriptionService
-	Downloads     *application.DownloadService
-	Dashboard     *application.DashboardService
-	System        *application.SystemService
-	Readiness     ports.ReadinessProbe
-	StaticDir     string
+	Auth           *auth.Service
+	Catalog        *application.CatalogService
+	CatalogQueries *application.CatalogQueryService
+	Actors         *application.ActorService
+	Subscriptions  *application.SubscriptionService
+	Downloads      *application.DownloadService
+	Dashboard      *application.DashboardService
+	Settings       *application.SettingsService
+	Scheduler      *scheduler.Manager
+	Logs           *logging.Logger
+	Readiness      ports.ReadinessProbe
+	StaticDir      string
 }
 
 // publicAuthPaths 是不要求既有会话即可访问的认证入口：登录本身，以及用过期会话换取新会话的续签。
@@ -48,27 +57,28 @@ func New(dependencies Dependencies) http.Handler {
 	api.Route("/api/v1", func(router chi.Router) {
 		router.Post("/auth/login", login(dependencies.Auth))
 		router.Post("/auth/refresh", refresh(dependencies.Auth))
+		router.Post("/auth/logout", logout(dependencies.Auth))
 		router.Get("/dashboard", dashboard(dependencies.Dashboard))
 		router.Get("/media", listMedia(dependencies.Catalog))
 		router.Get("/actors", listActors(dependencies.Actors))
-		router.Get("/ranks", listMedia(dependencies.Catalog))
-		router.Get("/tags", emptyCollection)
-		router.Get("/brands", emptyCollection)
-		router.Get("/codes/release_today", listMedia(dependencies.Catalog))
-		router.Get("/codes/recommend", listMedia(dependencies.Catalog))
-		router.Get("/complex/search", listMedia(dependencies.Catalog))
-		router.Get("/tasks", listDownloads(dependencies.Downloads))
-		router.Get("/logs", emptyCollection)
-		router.Get("/notice", emptyCollection)
-		router.Get("/profile", profile(dependencies.Auth))
+		router.Put("/actors/{actorName}/subscription", saveActorSubscription(dependencies.Actors))
+		router.Delete("/actors/{actorName}/subscription", cancelActorSubscription(dependencies.Actors))
+		router.Get("/ranks", listRank(dependencies.CatalogQueries))
+		router.Get("/codes/release_today", listReleaseToday(dependencies.CatalogQueries))
+		router.Get("/codes/recommend", listRecommendations(dependencies.CatalogQueries))
+		router.Get("/complex/search", searchCatalog(dependencies.CatalogQueries))
+		router.Get("/tasks", listScheduledTasks(dependencies.Scheduler))
+		router.Post("/tasks/{taskName}/run", runScheduledTask(dependencies.Scheduler))
+		router.Get("/logs", listLogs(dependencies.Logs))
+		router.Delete("/logs", clearLogs(dependencies.Logs))
 		router.Get("/media/{mediaId}", getMedia(dependencies.Catalog))
 		router.Get("/subscriptions", listSubscriptions(dependencies.Subscriptions))
 		router.Post("/subscriptions", createSubscription(dependencies.Subscriptions))
+		router.Put("/subscriptions/{subscriptionId}", updateSubscription(dependencies.Subscriptions))
 		router.Post("/subscriptions/{subscriptionId}/cancel", cancelSubscription(dependencies.Subscriptions))
 		router.Get("/downloads", listDownloads(dependencies.Downloads))
-		router.Get("/system/status", systemStatus(dependencies.System))
-		router.Get("/system/settings", systemSettings(dependencies.System))
-		router.Get("/events", events)
+		router.Get("/system/settings", getSystemSettings(dependencies.Settings))
+		router.Put("/system/settings", updateSystemSettings(dependencies.Settings))
 	})
 
 	spa := spaHandler(dependencies.StaticDir)
@@ -85,6 +95,77 @@ func New(dependencies Dependencies) http.Handler {
 		}
 		spa.ServeHTTP(response, request)
 	})
+}
+
+// listLogs exposes persisted process logs used by the management page.
+// Filters are read-only and share the logging package's stable vocabularies.
+func listLogs(logger *logging.Logger) http.HandlerFunc {
+	return func(response http.ResponseWriter, request *http.Request) {
+		page, pageSize, ok := paginationWithLimit(response, request, 100, logging.MaxPageSize)
+		if !ok {
+			return
+		}
+		startTime, endTime, ok := logTimeRange(response, request)
+		if !ok {
+			return
+		}
+		query := logging.Query{
+			Level:     logging.Level(request.URL.Query().Get("level")),
+			Category:  logging.Category(request.URL.Query().Get("category")),
+			Keyword:   request.URL.Query().Get("keyword"),
+			StartTime: startTime, EndTime: endTime,
+			Page: page, PageSize: pageSize,
+		}
+		if query.Level != "" && !query.Level.Valid() {
+			writeError(response, http.StatusBadRequest, "invalid_log_filter", "日志级别无效")
+			return
+		}
+		if query.Category != "" && !query.Category.Valid() {
+			writeError(response, http.StatusBadRequest, "invalid_log_filter", "日志分类无效")
+			return
+		}
+		if logger == nil {
+			writeJSON(response, http.StatusOK, application.Page[logging.Record]{Page: page, PageSize: pageSize, Total: 0, Items: []logging.Record{}})
+			return
+		}
+		items, total, err := logger.Search(request.Context(), query)
+		if err != nil {
+			writeError(response, http.StatusInternalServerError, "log_query_failed", "日志查询失败")
+			return
+		}
+		writeJSON(response, http.StatusOK, application.Page[logging.Record]{Page: page, PageSize: pageSize, Total: total, Items: items})
+	}
+}
+
+// clearLogs 按当前筛选条件永久删除系统日志；无条件时删除全部日志。
+func clearLogs(logger *logging.Logger) http.HandlerFunc {
+	return func(response http.ResponseWriter, request *http.Request) {
+		startTime, endTime, ok := logTimeRange(response, request)
+		if !ok {
+			return
+		}
+		query := logging.Query{
+			Level:     logging.Level(request.URL.Query().Get("level")),
+			Category:  logging.Category(request.URL.Query().Get("category")),
+			Keyword:   request.URL.Query().Get("keyword"),
+			StartTime: startTime, EndTime: endTime,
+		}
+		if query.Level != "" && !query.Level.Valid() {
+			writeError(response, http.StatusBadRequest, "invalid_log_filter", "日志级别无效")
+			return
+		}
+		if query.Category != "" && !query.Category.Valid() {
+			writeError(response, http.StatusBadRequest, "invalid_log_filter", "日志分类无效")
+			return
+		}
+		if logger != nil {
+			if _, err := logger.Clear(request.Context(), query); err != nil {
+				writeError(response, http.StatusInternalServerError, "log_clear_failed", "日志清空失败")
+				return
+			}
+		}
+		response.WriteHeader(http.StatusNoContent)
+	}
 }
 
 func live(response http.ResponseWriter, _ *http.Request) {
@@ -111,15 +192,18 @@ func login(service *auth.Service) http.HandlerFunc {
 	return func(response http.ResponseWriter, request *http.Request) {
 		var body requestBody
 		if service == nil || decodeJSON(response, request, &body) != nil {
+			logging.Error(logging.CategorySystem, "管理员登录失败", "error", "请求参数无效", "ip", requestIP(request))
 			writeError(response, http.StatusUnauthorized, "unauthorized", "用户名或密码错误")
 			return
 		}
 		session, err := service.Login(body.Username, body.Password, body.Remember)
 		if err != nil {
+			logging.Error(logging.CategorySystem, "管理员登录失败", "error", "用户名或密码错误", "ip", requestIP(request))
 			writeError(response, http.StatusUnauthorized, "unauthorized", "用户名或密码错误")
 			return
 		}
 		writeSession(response, service, session)
+		logging.Info(logging.CategorySystem, "管理员登录成功", "username", body.Username)
 	}
 }
 
@@ -137,6 +221,29 @@ func refresh(service *auth.Service) http.HandlerFunc {
 			return
 		}
 		writeSession(response, service, session)
+	}
+}
+
+func requestIP(request *http.Request) string {
+	if request == nil || request.RemoteAddr == "" {
+		return "未知"
+	}
+	host, _, err := net.SplitHostPort(request.RemoteAddr)
+	if err == nil {
+		return host
+	}
+	return request.RemoteAddr
+}
+
+// logout 立即使浏览器丢弃当前会话 Cookie；服务端会话本身无状态，无需额外存储撤销记录。
+func logout(service *auth.Service) http.HandlerFunc {
+	return func(response http.ResponseWriter, _ *http.Request) {
+		if service == nil {
+			writeError(response, http.StatusInternalServerError, "internal_error", "服务内部错误")
+			return
+		}
+		http.SetCookie(response, service.ClearCookie())
+		response.WriteHeader(http.StatusNoContent)
 	}
 }
 
@@ -167,6 +274,7 @@ func dashboard(service *application.DashboardService) http.HandlerFunc {
 	return func(response http.ResponseWriter, request *http.Request) {
 		result, err := service.Get(request.Context())
 		if err != nil {
+			logging.Error(logging.CategorySystem, "仪表盘查询失败")
 			writeApplicationError(response, err)
 			return
 		}
@@ -189,6 +297,120 @@ func listMedia(service *application.CatalogService) http.HandlerFunc {
 	}
 }
 
+func saveActorSubscription(service *application.ActorService) http.HandlerFunc {
+	type requestBody struct {
+		LimitDate string `json:"limit_date"`
+	}
+	return func(response http.ResponseWriter, request *http.Request) {
+		var body requestBody
+		if err := decodeJSON(response, request, &body); err != nil {
+			writeError(response, http.StatusBadRequest, "invalid_request", "请求体不是有效 JSON")
+			return
+		}
+		item, err := service.SaveSubscription(request.Context(), chi.URLParam(request, "actorName"), body.LimitDate)
+		if err != nil {
+			logging.Error(logging.CategorySubscription, "演员订阅保存失败", "actor", chi.URLParam(request, "actorName"))
+			writeApplicationError(response, err)
+			return
+		}
+		writeJSON(response, http.StatusOK, item)
+		logging.Info(logging.CategorySubscription, "演员订阅已保存", "actor", chi.URLParam(request, "actorName"))
+	}
+}
+
+func cancelActorSubscription(service *application.ActorService) http.HandlerFunc {
+	return func(response http.ResponseWriter, request *http.Request) {
+		item, err := service.CancelSubscription(request.Context(), chi.URLParam(request, "actorName"))
+		if err != nil {
+			logging.Error(logging.CategorySubscription, "演员订阅取消失败", "actor", chi.URLParam(request, "actorName"))
+			writeApplicationError(response, err)
+			return
+		}
+		writeJSON(response, http.StatusOK, item)
+		logging.Info(logging.CategorySubscription, "演员订阅已取消", "actor", chi.URLParam(request, "actorName"))
+	}
+}
+
+func listRank(service *application.CatalogQueryService) http.HandlerFunc {
+	return func(response http.ResponseWriter, request *http.Request) {
+		if service == nil {
+			writeError(response, http.StatusServiceUnavailable, "service_unavailable", "榜单服务尚未就绪")
+			return
+		}
+		page, pageSize, ok := pagination(response, request)
+		if !ok {
+			return
+		}
+		result, err := service.Rank(request.Context(), request.URL.Query().Get("type"), page, pageSize)
+		if err != nil {
+			logging.Error(logging.CategoryCollection, "榜单查询失败", "rank_type", request.URL.Query().Get("type"))
+			writeApplicationError(response, err)
+			return
+		}
+		writeJSON(response, http.StatusOK, result)
+		logging.Info(logging.CategoryCollection, "榜单查询完成", "rank_type", request.URL.Query().Get("type"), "count", len(result.Items))
+	}
+}
+
+func listReleaseToday(service *application.CatalogQueryService) http.HandlerFunc {
+	return func(response http.ResponseWriter, request *http.Request) {
+		if service == nil {
+			writeError(response, http.StatusServiceUnavailable, "service_unavailable", "上新服务尚未就绪")
+			return
+		}
+		page, pageSize, ok := pagination(response, request)
+		if !ok {
+			return
+		}
+		result, err := service.ReleaseToday(request.Context(), page, pageSize)
+		if err != nil {
+			writeApplicationError(response, err)
+			return
+		}
+		writeJSON(response, http.StatusOK, result)
+	}
+}
+
+func listRecommendations(service *application.CatalogQueryService) http.HandlerFunc {
+	return func(response http.ResponseWriter, request *http.Request) {
+		if service == nil {
+			writeError(response, http.StatusServiceUnavailable, "service_unavailable", "推荐服务尚未就绪")
+			return
+		}
+		page, pageSize, ok := pagination(response, request)
+		if !ok {
+			return
+		}
+		result, err := service.Recommend(request.Context(), page, pageSize)
+		if err != nil {
+			writeApplicationError(response, err)
+			return
+		}
+		writeJSON(response, http.StatusOK, result)
+	}
+}
+
+func searchCatalog(service *application.CatalogQueryService) http.HandlerFunc {
+	return func(response http.ResponseWriter, request *http.Request) {
+		if service == nil {
+			writeError(response, http.StatusServiceUnavailable, "service_unavailable", "搜索服务尚未就绪")
+			return
+		}
+		page, pageSize, ok := pagination(response, request)
+		if !ok {
+			return
+		}
+		result, err := service.Search(request.Context(), request.URL.Query().Get("q"), page, pageSize)
+		if err != nil {
+			logging.Error(logging.CategorySubscription, "资源搜索失败")
+			writeApplicationError(response, err)
+			return
+		}
+		writeJSON(response, http.StatusOK, result)
+		logging.Info(logging.CategorySubscription, "资源搜索完成", "count", len(result.Items))
+	}
+}
+
 func listActors(service *application.ActorService) http.HandlerFunc {
 	return func(response http.ResponseWriter, request *http.Request) {
 		if service == nil {
@@ -199,7 +421,7 @@ func listActors(service *application.ActorService) http.HandlerFunc {
 		if !ok {
 			return
 		}
-		result, err := service.List(request.Context(), page, pageSize)
+		result, err := service.List(request.Context(), page, pageSize, request.URL.Query().Get("subscription"))
 		if err != nil {
 			writeApplicationError(response, err)
 			return
@@ -227,10 +449,12 @@ func listSubscriptions(service *application.SubscriptionService) http.HandlerFun
 		}
 		result, err := service.List(request.Context(), page, pageSize, domain.SubscriptionStatus(request.URL.Query().Get("status")))
 		if err != nil {
+			logging.Error(logging.CategorySubscription, "订阅查询失败")
 			writeApplicationError(response, err)
 			return
 		}
 		writeJSON(response, http.StatusOK, result)
+		logging.Info(logging.CategorySubscription, "订阅查询完成", "count", len(result.Items))
 	}
 }
 
@@ -258,6 +482,30 @@ func createSubscription(service *application.SubscriptionService) http.HandlerFu
 			status = http.StatusCreated
 		}
 		writeJSON(response, status, item)
+		logging.Info(logging.CategorySubscription, "订阅已保存", "media_id", body.MediaID, "created", created)
+	}
+}
+
+func updateSubscription(service *application.SubscriptionService) http.HandlerFunc {
+	type requestBody struct {
+		Mode    domain.SubscriptionMode `json:"mode"`
+		Filter  map[string]any          `json:"filter"`
+		Version int                     `json:"version"`
+	}
+	return func(response http.ResponseWriter, request *http.Request) {
+		var body requestBody
+		if err := decodeJSON(response, request, &body); err != nil {
+			writeError(response, http.StatusBadRequest, "invalid_request", "请求体不是有效 JSON")
+			return
+		}
+		item, err := service.Update(request.Context(), application.UpdateSubscriptionCommand{ID: chi.URLParam(request, "subscriptionId"), Mode: body.Mode, Filter: body.Filter, ExpectedVersion: body.Version})
+		if err != nil {
+			logging.Error(logging.CategorySubscription, "编辑订阅失败", "subscription_id", chi.URLParam(request, "subscriptionId"))
+			writeApplicationError(response, err)
+			return
+		}
+		writeJSON(response, http.StatusOK, item)
+		logging.Info(logging.CategorySubscription, "订阅已编辑", "subscription_id", chi.URLParam(request, "subscriptionId"))
 	}
 }
 
@@ -265,10 +513,12 @@ func cancelSubscription(service *application.SubscriptionService) http.HandlerFu
 	return func(response http.ResponseWriter, request *http.Request) {
 		item, err := service.Cancel(request.Context(), chi.URLParam(request, "subscriptionId"))
 		if err != nil {
+			logging.Error(logging.CategorySubscription, "取消订阅失败", "subscription_id", chi.URLParam(request, "subscriptionId"))
 			writeApplicationError(response, err)
 			return
 		}
 		writeJSON(response, http.StatusOK, item)
+		logging.Info(logging.CategorySubscription, "订阅已取消", "subscription_id", chi.URLParam(request, "subscriptionId"))
 	}
 }
 
@@ -280,52 +530,139 @@ func listDownloads(service *application.DownloadService) http.HandlerFunc {
 		}
 		result, err := service.List(request.Context(), page, pageSize, domain.DownloadStatus(request.URL.Query().Get("status")))
 		if err != nil {
+			logging.Error(logging.CategoryDownload, "下载任务查询失败")
 			writeApplicationError(response, err)
 			return
 		}
 		writeJSON(response, http.StatusOK, result)
+		logging.Info(logging.CategoryDownload, "下载任务查询完成", "count", len(result.Items))
 	}
 }
 
-func systemStatus(service *application.SystemService) http.HandlerFunc {
+func listScheduledTasks(manager *scheduler.Manager) http.HandlerFunc {
 	return func(response http.ResponseWriter, _ *http.Request) {
-		writeJSON(response, http.StatusOK, service.Status())
+		if manager == nil {
+			writeError(response, http.StatusServiceUnavailable, "service_unavailable", "调度器尚未就绪")
+			return
+		}
+		items := manager.Tasks()
+		result := make([]domain.ScheduledTask, 0, len(items))
+		for _, item := range items {
+			result = append(result, domain.ScheduledTask{Name: item.Name, Cron: item.Spec, LastRun: item.LastRun, Running: item.Running})
+		}
+		writeJSON(response, http.StatusOK, application.Page[domain.ScheduledTask]{Page: 1, PageSize: len(result), Total: len(result), Items: result})
 	}
 }
 
-func systemSettings(service *application.SystemService) http.HandlerFunc {
-	return func(response http.ResponseWriter, _ *http.Request) {
-		writeJSON(response, http.StatusOK, service.Settings())
+func runScheduledTask(manager *scheduler.Manager) http.HandlerFunc {
+	return func(response http.ResponseWriter, request *http.Request) {
+		if manager == nil {
+			writeError(response, http.StatusServiceUnavailable, "service_unavailable", "调度器尚未就绪")
+			return
+		}
+		name, err := url.PathUnescape(chi.URLParam(request, "taskName"))
+		if err != nil || strings.TrimSpace(name) == "" {
+			writeError(response, http.StatusBadRequest, "invalid_task", "任务名称无效")
+			return
+		}
+		if err := manager.RunNow(name); err != nil {
+			if errors.Is(err, scheduler.ErrTaskNotFound) {
+				writeError(response, http.StatusNotFound, "task_not_found", "定时任务不存在")
+				return
+			}
+			writeError(response, http.StatusConflict, "task_running", "任务正在执行中")
+			return
+		}
+		writeJSON(response, http.StatusAccepted, map[string]string{"message": "任务已开始执行"})
 	}
 }
 
-func events(response http.ResponseWriter, request *http.Request) {
-	flusher, ok := response.(http.Flusher)
-	if !ok {
-		writeError(response, http.StatusInternalServerError, "stream_unsupported", "事件流不可用")
-		return
+func getSystemSettings(service *application.SettingsService) http.HandlerFunc {
+	return func(response http.ResponseWriter, request *http.Request) {
+		if service == nil {
+			writeError(response, http.StatusServiceUnavailable, "service_unavailable", "设置服务尚未就绪")
+			return
+		}
+		settings, err := service.Get(request.Context())
+		if err != nil {
+			writeApplicationError(response, err)
+			return
+		}
+		writeJSON(response, http.StatusOK, settings)
 	}
-	response.Header().Set("Content-Type", "text/event-stream")
-	response.Header().Set("Cache-Control", "no-cache")
-	response.Header().Set("X-Accel-Buffering", "no")
-	response.WriteHeader(http.StatusOK)
-	_, _ = response.Write([]byte("event: ready\ndata: {}\n\n"))
-	flusher.Flush()
-	<-request.Context().Done()
 }
 
+func updateSystemSettings(service *application.SettingsService) http.HandlerFunc {
+	type requestBody struct{ Values map[string]string }
+	return func(response http.ResponseWriter, request *http.Request) {
+		var body requestBody
+		if service == nil {
+			writeError(response, http.StatusServiceUnavailable, "service_unavailable", "设置服务尚未就绪")
+			return
+		}
+		if err := decodeJSON(response, request, &body); err != nil || body.Values == nil {
+			writeError(response, http.StatusBadRequest, "invalid_request", "请求体不是有效设置")
+			return
+		}
+		settings, err := service.Update(request.Context(), body.Values)
+		if errors.Is(err, application.ErrInvalidSetting) {
+			writeError(response, http.StatusBadRequest, "invalid_setting", settingErrorMessage(err))
+			return
+		}
+		if err != nil {
+			writeApplicationError(response, err)
+			return
+		}
+		writeJSON(response, http.StatusOK, settings)
+	}
+}
 func pagination(response http.ResponseWriter, request *http.Request) (int, int, bool) {
+	return paginationWithLimit(response, request, 20, ports.MaxPageSize)
+}
+
+func paginationWithLimit(response http.ResponseWriter, request *http.Request, defaultPageSize, maxPageSize int) (int, int, bool) {
 	page, err := parsePositive(request.URL.Query().Get("page"), 1)
 	if err != nil {
 		writeError(response, http.StatusBadRequest, "invalid_pagination", "page 必须是正整数")
 		return 0, 0, false
 	}
-	pageSize, err := parsePositive(request.URL.Query().Get("page_size"), 20)
-	if err != nil || pageSize > 100 {
-		writeError(response, http.StatusBadRequest, "invalid_pagination", "page_size 必须在 1 到 100 之间")
+	pageSize, err := parsePositive(request.URL.Query().Get("page_size"), defaultPageSize)
+	if err != nil || pageSize > maxPageSize {
+		writeError(response, http.StatusBadRequest, "invalid_pagination", fmt.Sprintf("page_size 必须在 1 到 %d 之间", maxPageSize))
 		return 0, 0, false
 	}
 	return page, pageSize, true
+}
+
+// logTimeRange 解析日志筛选的 RFC3339 时间边界；仅提供一侧时执行单边筛选。
+func logTimeRange(response http.ResponseWriter, request *http.Request) (*time.Time, *time.Time, bool) {
+	parse := func(name string) (*time.Time, error) {
+		raw := strings.TrimSpace(request.URL.Query().Get(name))
+		if raw == "" {
+			return nil, nil
+		}
+		value, err := time.Parse(time.RFC3339, raw)
+		if err != nil {
+			return nil, err
+		}
+		value = value.UTC()
+		return &value, nil
+	}
+	start, err := parse("start_time")
+	if err != nil {
+		writeError(response, http.StatusBadRequest, "invalid_log_filter", "开始时间必须使用 RFC3339 格式")
+		return nil, nil, false
+	}
+	end, err := parse("end_time")
+	if err != nil {
+		writeError(response, http.StatusBadRequest, "invalid_log_filter", "结束时间必须使用 RFC3339 格式")
+		return nil, nil, false
+	}
+	if start != nil && end != nil && start.After(*end) {
+		writeError(response, http.StatusBadRequest, "invalid_log_filter", "开始时间不能晚于结束时间")
+		return nil, nil, false
+	}
+	return start, end, true
 }
 
 func parsePositive(raw string, fallback int) (int, error) {
@@ -352,14 +689,33 @@ func decodeJSON(response http.ResponseWriter, request *http.Request, target any)
 	return nil
 }
 
+// settingErrorMessage 把配置校验失败的原因透出给调用方，避免只回一句笼统的“不支持”。
+// 校验消息只包含设置项名称与取值范围，不会包含用户填写的敏感值。
+func settingErrorMessage(err error) string {
+	message := strings.TrimSpace(strings.TrimPrefix(err.Error(), application.ErrInvalidSetting.Error()))
+	message = strings.TrimPrefix(message, ":")
+	if message = strings.TrimSpace(message); message == "" {
+		return "包含不支持的设置项"
+	}
+	return "设置项无效：" + message
+}
+
 func writeApplicationError(response http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, application.ErrInvalidPagination), errors.Is(err, application.ErrInvalidSubscription):
 		writeError(response, http.StatusBadRequest, "invalid_request", "请求参数无效")
-	case errors.Is(err, ports.ErrMediaNotFound), errors.Is(err, ports.ErrSubscriptionNotFound):
+	case errors.Is(err, application.ErrInvalidActorLimitDate):
+		writeError(response, http.StatusBadRequest, "invalid_request", "限制日期必须使用 YYYY-MM-DD 格式")
+	case errors.Is(err, ports.ErrMediaNotFound), errors.Is(err, ports.ErrSubscriptionNotFound), errors.Is(err, ports.ErrActorNotFound):
 		writeError(response, http.StatusNotFound, "not_found", "资源不存在")
 	case errors.Is(err, ports.ErrIdempotencyConflict):
 		writeError(response, http.StatusConflict, "conflict", "幂等键已用于不同请求")
+	case errors.Is(err, ports.ErrActiveSubscriptionExists):
+		writeError(response, http.StatusConflict, "already_subscribed", "该番号已订阅，未重复添加；卡片状态可查看本地文件是否存在")
+	case errors.Is(err, ports.ErrVersionConflict):
+		writeError(response, http.StatusConflict, "conflict", "订阅已被其他操作更新，请刷新后重试")
+	case errors.Is(err, ports.ErrSubscriptionInactive):
+		writeError(response, http.StatusConflict, "conflict", "当前订阅已失效，无法编辑")
 	default:
 		writeError(response, http.StatusInternalServerError, "internal_error", "服务内部错误")
 	}
@@ -413,24 +769,5 @@ func serveFile(response http.ResponseWriter, request *http.Request, filename str
 	response.WriteHeader(http.StatusOK)
 	if request.Method != http.MethodHead {
 		_, _ = response.Write(content)
-	}
-}
-
-func emptyCollection(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"items": []any{}, "total": 0})
-}
-func profile(service *auth.Service) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		cookie, err := r.Cookie(auth.CookieName())
-		if err != nil {
-			writeError(w, http.StatusUnauthorized, "unauthorized", "未登录或会话失效")
-			return
-		}
-		session, err := service.Validate(cookie.Value)
-		if err != nil {
-			writeError(w, http.StatusUnauthorized, "unauthorized", "未登录或会话失效")
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"user": session})
 	}
 }

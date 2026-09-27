@@ -1,0 +1,44 @@
+/* 榜单页专有样式：榜单筛选条的分段按钮组。
+   对标站 对标站 的榜单页用 flex items-center border rounded-md overflow-hidden 包住
+   一组 ghost 按钮（日榜 / 周榜 / 月榜 与 1~5），选中项用浅灰底标识；这里用同一套规格，
+   颜色全部走公共 token，深浅色主题由 body[arco-theme="dark"] 自动接管。 */
+.rank-filter {
+  display: inline-flex;
+  align-items: center;
+  overflow: hidden;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--content-radius);
+}
+
+.rank-filter button {
+  padding: 5px 12px;
+  color: var(--ink-2);
+  background: transparent;
+  border: 0;
+  border-left: 1px solid var(--line);
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background .18s ease, color .18s ease;
+}
+
+.rank-filter button:first-child {
+  border-left: 0;
+}
+
+.rank-filter button:hover {
+  background: var(--hover);
+}
+
+.rank-filter button[aria-pressed="true"] {
+  color: var(--mint);
+  background: var(--accent-soft);
+  font-weight: 600;
+}
+
+/* 小屏下两个分段组并排放不下时换行，避免撑破 .page-toolbar 的窄屏单列布局。 */
+.toolbar-group.rank-filter-bar {
+  flex-wrap: wrap;
+}

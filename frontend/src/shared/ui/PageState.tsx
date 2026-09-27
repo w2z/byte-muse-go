@@ -4,9 +4,12 @@ import type { ReactNode } from "react";
 type PageStateProps = {
   isLoading: boolean;
   error: Error | null;
-  isEmpty: boolean;
-  emptyText: string;
+  /** 空数据整页替换为 Empty；表格型页面改用表格内 noDataElement 时不传。 */
+  isEmpty?: boolean;
+  emptyText?: string;
   onRetry?: () => void;
+  /** 空数据时仍需保留在正文下方的内容，例如服务端分页条。 */
+  emptyExtra?: ReactNode;
   children: ReactNode;
 };
 
@@ -17,6 +20,7 @@ export function PageState({
   isEmpty,
   emptyText,
   onRetry,
+  emptyExtra,
   children,
 }: PageStateProps) {
   if (isLoading) {
@@ -37,7 +41,14 @@ export function PageState({
     );
   }
   if (isEmpty) {
-    return <Empty description={emptyText} />;
+    return (
+      <div className="page-state-empty">
+        <div className="page-state-empty-body">
+          <Empty description={emptyText} />
+        </div>
+        {emptyExtra}
+      </div>
+    );
   }
   return children;
 }

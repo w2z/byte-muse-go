@@ -1,0 +1,7 @@
+/* 订阅页专有样式：卡片内的字段行与底部操作区。
+   .info-card 的圆角、边框、阴影、内边距等规格由公共样式提供，这里不覆盖。 */
+.subscription-card-fields { display: flex; flex-direction: column; gap: 4px; }
+.subscription-field { display: flex; gap: 8px; font-size: 12px; }
+.subscription-field-label { flex: none; color: var(--muted); }
+.subscription-field-value { color: var(--ink-2); overflow-wrap: anywhere; }
+.subscription-card-actions { margin-top: auto; }

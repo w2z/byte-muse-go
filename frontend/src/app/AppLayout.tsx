@@ -1,64 +1,74 @@
-import { Avatar, Breadcrumb, Button, Layout, Menu, Tag, Tooltip } from "@arco-design/web-react";
-import { IconApps, IconCalendar, IconDashboard, IconFile, IconFire, IconList, IconMenuFold, IconMenuUnfold, IconNotification, IconSearch, IconSettings, IconStar, IconStorage, IconTag, IconThunderbolt, IconUser, IconVideoCamera } from "@arco-design/web-react/icon";
-import { useLayoutEffect, useMemo, useState } from "react";
-import { Outlet, useLocation, useNavigate } from "react-router-dom";
-import { UNAUTHORIZED_EVENT } from "../shared/api/client";
+import { Breadcrumb, Button, Layout, Menu, Tooltip } from "@arco-design/web-react";
+import { IconCalendar, IconDashboard, IconFile, IconFire, IconList, IconMenuFold, IconMenuUnfold, IconMoon, IconSearch, IconSettings, IconStar, IconSun, IconThunderbolt, IconUser, IconVideoCamera } from "@arco-design/web-react/icon";
+import { useLayoutEffect, useState } from "react";
+import { useMutation } from "@tanstack/react-query";
+import { Outlet, useLocation, useMatches, useNavigate } from "react-router-dom";
+import { UNAUTHORIZED_EVENT, apiRequest } from "../shared/api/client";
 import { useSession } from "../shared/auth/session";
+import { useTheme } from "../shared/theme/theme";
+import { PageSurface } from "../shared/ui/PageSurface";
+import type { RouteMeta } from "./routes";
 
 const contentItems = [
   { key: "/dashboard", label: "看板" },
   { key: "/subscribe", label: "订阅" },
   { key: "/actor", label: "演员" },
-  { key: "/tag", label: "标签" },
   { key: "/release-today", label: "上新" },
   { key: "/recommend", label: "推荐" },
   { key: "/rank", label: "榜单" },
-  { key: "/brands", label: "厂牌" },
   { key: "/search", label: "搜索" },
   { key: "/films", label: "媒体库" },
   { key: "/downloads", label: "下载任务" },
 ];
 const systemItems = [
-  { key: "/profile", label: "账户" },
   { key: "/settings", label: "设置" },
   { key: "/task", label: "任务" },
   { key: "/logs", label: "日志" },
-  { key: "/notice", label: "注意" },
-  { key: "/status", label: "系统状态" },
 ];
-const allItems = [...contentItems, ...systemItems];
 const routeAliases: Record<string, string> = { "/subscriptions": "/subscribe", "/config": "/settings" };
 function menuIcon(key: string) {
   if (key === "/dashboard") return <IconDashboard />;
   if (key === "/subscribe") return <IconStar />;
   if (key === "/actor") return <IconUser />;
-  if (key === "/tag") return <IconTag />;
   if (key === "/release-today") return <IconCalendar />;
   if (key === "/recommend") return <IconFire />;
   if (key === "/rank") return <IconThunderbolt />;
-  if (key === "/brands") return <IconApps />;
   if (key === "/search") return <IconSearch />;
   if (key === "/films") return <IconVideoCamera />;
   if (key === "/downloads") return <IconList />;
-  if (key === "/profile") return <IconUser />;
   if (key === "/settings") return <IconSettings />;
   if (key === "/task") return <IconThunderbolt />;
   if (key === "/logs") return <IconFile />;
-  if (key === "/notice") return <IconNotification />;
-  if (key === "/status") return <IconStorage />;
   return <IconFile />;
 }
 
-/** 登录后的管理布局，统一管理分组导航、页面层级和未授权跳转。 */
+/** 登录后的管理布局：顶栏通栏（logo + 主题/设置/退出），侧栏在顶栏下方，底部自带折叠按钮。 */
 export function AppLayout() {
   const navigate = useNavigate();
   const location = useLocation();
+  const matches = useMatches();
   const clearSession = useSession((state) => state.clear);
-  const user = useSession((state) => state.user);
+  const themeMode = useTheme((state) => state.mode);
+  const toggleTheme = useTheme((state) => state.toggle);
   const [collapsed, setCollapsed] = useState(false);
+  const logout = useMutation({
+    mutationFn: () => apiRequest<void>("/auth/logout", { method: "POST" }),
+    onSettled: () => {
+      clearSession();
+      navigate("/login", { replace: true });
+    },
+  });
   const selectedKey = routeAliases[location.pathname] ?? location.pathname;
-  const currentItem = useMemo(() => allItems.find((item) => item.key === selectedKey), [selectedKey]);
-  const parentLabel = contentItems.some((item) => item.key === selectedKey) ? "通用" : "系统";
+  // 页面标签、分组和白底内容块均由路由元数据驱动，避免布局层重复维护路径清单。
+  const currentMeta = [...matches]
+    .reverse()
+    .map((match) => match.handle as RouteMeta | undefined)
+    .find((handle) => handle?.label);
+  const isWhiteSurface = currentMeta?.surface === "white";
+  const contentClassName = isWhiteSurface ? "app-content app-content--surface" : "app-content";
+  const isDark = themeMode === "dark";
+  const themeToggleLabel = isDark ? "切换为亮色模式" : "切换为暗色模式";
+  const collapseLabel = collapsed ? "展开菜单" : "折叠菜单";
   useLayoutEffect(() => {
     const handleUnauthorized = () => {
       clearSession();
@@ -72,24 +82,48 @@ export function AppLayout() {
       <span className="nav-icon" aria-hidden="true">{menuIcon(item.key)}</span><span className="nav-label">{item.label}</span>
     </Menu.Item>
   ));
+  const goHome = () => navigate("/dashboard");
   return (
     <Layout className="app-shell">
-      <Layout.Sider className="app-sider" width={240} collapsedWidth={64} collapsed={collapsed} onCollapse={setCollapsed} breakpoint="xl" trigger={null}>
-        <div className="brand-lockup" onClick={() => navigate("/dashboard")} role="button" tabIndex={0} aria-label="返回看板" onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") navigate("/dashboard"); }}><span className="brand-mark">B<span>/</span>M</span>{!collapsed && <span className="brand-name">BYTEMUSE</span>}</div>
-        <nav aria-label="主导航" className="side-nav">
-          {!collapsed && <p className="nav-caption">通用</p>}
-          <Menu collapse={collapsed} theme="light" selectedKeys={[selectedKey]} onClickMenuItem={(key) => navigate(key)}>{renderItems(contentItems)}</Menu>
-          {!collapsed && <p className="nav-caption system-caption">系统</p>}
-          <Menu collapse={collapsed} selectedKeys={[selectedKey]} onClickMenuItem={(key) => navigate(key)}>{renderItems(systemItems)}</Menu>
-        </nav>
-        {!collapsed && <div className="sider-footer"><div className="sider-footer-version">BYTEMUSE / 0.1.0</div></div>}
-      </Layout.Sider>
-      <Layout className="app-main">
-        <Layout.Header className="app-header">
-          <div className="header-left"><Tooltip content={collapsed ? "展开菜单" : "收起菜单"}><Button type="text" className="collapse-button" aria-label={collapsed ? "展开菜单" : "收起菜单"} onClick={() => setCollapsed((value) => !value)}>{collapsed ? <IconMenuUnfold /> : <IconMenuFold />}</Button></Tooltip><div className="header-context"><span className="header-kicker">{parentLabel}</span><span className="header-divider">/</span><strong>{currentItem?.label ?? "页面未找到"}</strong></div></div>
-          <div className="header-actions"><Tag className="user-pill">{user?.username ?? "访客"}</Tag><Button className="avatar-button" shape="circle" aria-label="账户" onClick={() => navigate("/profile")}><Avatar size={28}>{(user?.username ?? "访客").slice(0, 1).toUpperCase()}</Avatar></Button></div>
-        </Layout.Header>
-        <Layout.Content className="app-content"><div className="page-container"><div className="pro-breadcrumb"><Breadcrumb><Breadcrumb.Item key="brand">ByteMuse</Breadcrumb.Item><Breadcrumb.Item key="group">{parentLabel}</Breadcrumb.Item><Breadcrumb.Item key="page">{currentItem?.label ?? "页面未找到"}</Breadcrumb.Item></Breadcrumb></div><Outlet /></div></Layout.Content>
+      <Layout.Header className="app-header">
+        <div className="brand-lockup" onClick={goHome} role="button" tabIndex={0} aria-label="返回看板" onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") goHome(); }}><span className="brand-mark">B<span>/</span>M</span><span className="brand-name">BYTEMUSE</span></div>
+        <div className="header-actions">
+          <Tooltip content={themeToggleLabel}><Button className="icon-button" type="secondary" shape="circle" aria-label={themeToggleLabel} onClick={toggleTheme}>{isDark ? <IconSun /> : <IconMoon />}</Button></Tooltip>
+          <Tooltip content="系统设置"><Button className="icon-button" type="secondary" shape="circle" aria-label="系统设置" onClick={() => navigate("/settings")}><IconSettings /></Button></Tooltip>
+          <Button className="logout-button" type="secondary" aria-label="退出登录" loading={logout.isPending} onClick={() => logout.mutate()}>退出登录</Button>
+        </div>
+      </Layout.Header>
+      <Layout className="app-body">
+        <Layout.Sider className="app-sider" width={240} collapsedWidth={64} collapsed={collapsed} collapsible trigger={null} onCollapse={setCollapsed}>
+          <nav aria-label="主导航" className="side-nav">
+            {!collapsed && <p className="nav-caption">通用</p>}
+            <Menu collapse={collapsed} theme="light" selectedKeys={[selectedKey]} onClickMenuItem={(key) => navigate(key)}>{renderItems(contentItems)}</Menu>
+            {!collapsed && <p className="nav-caption system-caption">系统</p>}
+            <Menu collapse={collapsed} selectedKeys={[selectedKey]} onClickMenuItem={(key) => navigate(key)}>{renderItems(systemItems)}</Menu>
+          </nav>
+          <div className="sider-bottom">
+            <Tooltip content={collapseLabel} position={collapsed ? "right" : "top"}>
+              <button type="button" className="sider-collapse" aria-label={collapseLabel} aria-expanded={!collapsed} onClick={() => setCollapsed(!collapsed)}>
+                {collapsed ? <IconMenuUnfold /> : <IconMenuFold />}
+              </button>
+            </Tooltip>
+          </div>
+        </Layout.Sider>
+        <Layout className="app-main">
+          <Layout.Content className={contentClassName}>
+            <div className="app-content-scroll">
+              {currentMeta ? (
+                <Breadcrumb className="app-breadcrumb" aria-label="内容导航">
+                  <Breadcrumb.Item key="group">{currentMeta.group}</Breadcrumb.Item>
+                  <Breadcrumb.Item key="page">{currentMeta.label}</Breadcrumb.Item>
+                </Breadcrumb>
+              ) : null}
+              <div className="page-container">
+                {isWhiteSurface ? <PageSurface><Outlet /></PageSurface> : <Outlet />}
+              </div>
+            </div>
+          </Layout.Content>
+        </Layout>
       </Layout>
     </Layout>
   );

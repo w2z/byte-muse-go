@@ -43,6 +43,15 @@ paths:
                 $ref: '#/components/schemas/LoginResponse'
         '401':
           $ref: '#/components/responses/Unauthorized'
+  /auth/logout:
+    post:
+      operationId: logout
+      summary: 注销当前会话
+      responses:
+        '204':
+          description: 已清除当前会话 Cookie
+        '401':
+          $ref: '#/components/responses/Unauthorized'
   /dashboard:
     get:
       operationId: getDashboard
@@ -89,19 +98,142 @@ paths:
                 $ref: '#/components/schemas/Media'
         '404':
           $ref: '#/components/responses/NotFound'
-  /actors:
+  /ranks:
     get:
-      operationId: listActors
+      operationId: listRanks
+      summary: 查询榜单
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - name: type
+          in: query
+          description: 榜单类型；省略时使用 monthly
+          schema:
+            type: string
+            enum: [daily, weekly, monthly]
+            default: monthly
+      responses:
+        '200':
+          description: 按数据库中榜单快照顺序返回媒体分页数据
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MediaPage'
+  /codes/release_today:
+    get:
+      operationId: listReleaseToday
+      summary: 查询今日上新
       parameters:
         - $ref: '#/components/parameters/Page'
         - $ref: '#/components/parameters/PageSize'
       responses:
         '200':
-          description: 已订阅演员分页列表
+          description: 仅返回发布日期等于服务当前本地日期的数据库媒体分页数据
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MediaPage'
+  /codes/recommend:
+    get:
+      operationId: listRecommendations
+      summary: 查询推荐
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: 根据数据库中的订阅、完成记录及媒体元数据计算的推荐分页数据；没有偏好数据时返回空列表
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MediaPage'
+  /complex/search:
+    get:
+      operationId: searchCatalog
+      summary: 综合搜索
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - name: q
+          in: query
+          description: 按番号、原始标题或翻译标题搜索；空值返回全部数据库媒体
+          schema:
+            type: string
+            maxLength: 100
+      responses:
+        '200':
+          description: 数据库搜索结果
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MediaPage'
+  /actors:
+    get:
+      operationId: listActors
+      summary: 查询演员列表
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - name: subscription
+          in: query
+          description: 按演员订阅状态筛选；all 为全部，active 为已订阅，none 为未订阅
+          schema:
+            type: string
+            enum: [all, active, none]
+            default: all
+      responses:
+        '200':
+          description: 演员分页列表
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ActorPage'
+  /actors/{actorName}/subscription:
+    parameters:
+      - name: actorName
+        in: path
+        required: true
+        description: 演员名称，允许中文与空格，调用方须进行 URL 编码
+        schema:
+          type: string
+          minLength: 1
+    put:
+      operationId: saveActorSubscription
+      summary: 创建或编辑演员订阅
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ActorSubscriptionRequest'
+      responses:
+        '200':
+          description: 已保存演员订阅限制日期
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Actor'
+        '400':
+          description: 日期不是 YYYY-MM-DD 格式
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      operationId: cancelActorSubscription
+      summary: 取消演员订阅
+      description: 仅清空演员的限制日期，保留演员资料，便于后续重新订阅。
+      responses:
+        '200':
+          description: 已取消演员订阅，limit_date 返回 null
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Actor'
+        '404':
+          $ref: '#/components/responses/NotFound'
   /subscriptions:
     get:
       operationId: listSubscriptions
@@ -110,6 +242,7 @@ paths:
         - $ref: '#/components/parameters/PageSize'
         - name: status
           in: query
+          description: 订阅列表状态；订阅页固定使用 active，取消后的记录不会返回
           schema:
             $ref: '#/components/schemas/SubscriptionStatus'
       responses:
@@ -143,21 +276,53 @@ paths:
               schema:
                 $ref: '#/components/schemas/Subscription'
         '409':
-          $ref: '#/components/responses/Conflict'
+          description: 该番号已经存在活动订阅，不会重复添加；客户端应刷新列表并展示本地文件状态
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
   /subscriptions/{subscriptionId}/cancel:
     post:
       operationId: cancelSubscription
+      summary: 删除订阅
       parameters:
         - $ref: '#/components/parameters/SubscriptionId'
       responses:
         '200':
-          description: 已取消；重复取消返回同一结果
+          description: 已删除订阅记录；媒体保留，排队或搜索中的下载任务删除，已提交任务保留
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Subscription'
         '404':
           $ref: '#/components/responses/NotFound'
+  /subscriptions/{subscriptionId}:
+    put:
+      operationId: updateSubscription
+      summary: 编辑活动订阅
+      parameters:
+        - $ref: '#/components/parameters/SubscriptionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateSubscriptionRequest'
+      responses:
+        '200':
+          description: 已更新订阅，version 自增
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Subscription'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: 版本已变化，或订阅记录已不存在而不能再编辑
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
   /downloads:
     get:
       operationId: listDownloads
@@ -175,36 +340,189 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/DownloadPage'
-  /system/status:
+  /tasks:
     get:
-      operationId: getSystemStatus
+      operationId: listScheduledTasks
+      summary: 查询定时任务
+      description: 返回调度器中已配置的后台定时任务、原始 Cron 表达式、最近执行时间和当前执行状态；该接口不是下载任务列表。
+      parameters:
+        - name: all
+          in: query
+          description: 设为 true 时返回全部定时任务，不分页；省略时使用分页参数。
+          schema:
+            type: boolean
+            default: false
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
       responses:
         '200':
-          description: 系统及数据库状态
+          description: 定时任务列表；all=true 时返回全部任务
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/SystemStatus'
+                $ref: '#/components/schemas/ScheduledTaskPage'
+  /tasks/{taskName}/run:
+    post:
+      operationId: runScheduledTask
+      summary: 立即执行定时任务
+      parameters:
+        - name: taskName
+          in: path
+          required: true
+          description: 定时任务名称
+          schema:
+            type: string
+      responses:
+        '202':
+          description: 任务已开始执行
+        '404':
+          description: 定时任务不存在
+        '409':
+          description: 任务正在执行中
+  /logs:
+    get:
+      operationId: listLogs
+      summary: 查询持久化系统日志
+      description: 查询数据库中持久化的系统日志；服务重启后日志仍然保留。
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: page_size
+          in: query
+          description: 日志每页条数；前端可选 100、200、300、400、500，默认 100。
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+            default: 100
+        - name: level
+          in: query
+          schema:
+            type: string
+            enum: [debug, info, warning, error]
+        - name: category
+          in: query
+          schema:
+            type: string
+            description: 日志业务分类
+        - name: keyword
+          in: query
+          schema:
+            type: string
+            maxLength: 100
+        - name: start_time
+          in: query
+          description: 按日志 logged_at 筛选的起始时间（包含），使用 RFC3339 格式。
+          schema:
+            type: string
+            format: date-time
+        - name: end_time
+          in: query
+          description: 按日志 logged_at 筛选的结束时间（包含），使用 RFC3339 格式。
+          schema:
+            type: string
+            format: date-time
+      responses:
+        '200':
+          description: 按时间倒序返回日志分页
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LogPage'
+        '400':
+          description: 日志筛选参数无效
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: 日志查询失败
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    delete:
+      operationId: clearLogs
+      summary: 清空持久化系统日志
+      description: 按 level、category、keyword、start_time、end_time 删除匹配日志；未提供筛选条件时删除全部日志，删除后无法恢复。
+      parameters:
+        - name: level
+          in: query
+          schema:
+            type: string
+            enum: [debug, info, warning, error]
+        - name: category
+          in: query
+          schema:
+            type: string
+            description: 日志业务分类
+        - name: keyword
+          in: query
+          schema:
+            type: string
+            maxLength: 100
+        - name: start_time
+          in: query
+          description: 按日志 logged_at 筛选的起始时间（包含），使用 RFC3339 格式。
+          schema:
+            type: string
+            format: date-time
+        - name: end_time
+          in: query
+          description: 按日志 logged_at 筛选的结束时间（包含），使用 RFC3339 格式。
+          schema:
+            type: string
+            format: date-time
+      responses:
+        '204':
+          description: 匹配的数据库系统日志已永久删除
+        '400':
+          description: 日志筛选参数无效
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: 日志清空失败
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
   /system/settings:
     get:
       operationId: getSystemSettings
       responses:
         '200':
-          description: 脱敏后的系统设置
+          description: 已登录管理员可读取的系统设置；敏感值会以明文值回显，前端使用密码控件显示
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/SystemSettings'
-  /events:
-    get:
-      operationId: streamEvents
+    put:
+      operationId: updateSystemSettings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SystemSettingsUpdate'
       responses:
         '200':
-          description: 系统事件流
+          description: 已保存并返回当前分组的完整系统设置
           content:
-            text/event-stream:
+            application/json:
               schema:
-                type: string
+                $ref: '#/components/schemas/SystemSettings'
+        '400':
+          description: 包含不支持的设置项或请求体无效
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
   /health/live:
     get:
       operationId: live
@@ -250,10 +568,11 @@ components:
     PageSize:
       name: page_size
       in: query
+      description: 每页条数。上限与 application.MaxPageSize 一致，前端分页条的每页条数选项不会超过该值。
       schema:
         type: integer
         minimum: 1
-        maximum: 100
+        maximum: 200
         default: 20
     MediaId:
       name: mediaId
@@ -331,12 +650,13 @@ components:
           type: string
     Media:
       type: object
-      required: [id, code, title, subscription_status, library_status, created_at, updated_at]
+      required: [id, code, title, still_photos, subscription_status, library_status, display_status, created_at, updated_at]
       properties:
         id:
           type: string
         code:
           type: string
+          description: 原始番号，保留数据源中的空格和大小写
         title:
           type: string
         translated_title:
@@ -344,6 +664,21 @@ components:
         poster_url:
           type: [string, 'null']
           format: uri
+          description: 竖版或备用封面；banner_url 为空时用于卡片回退
+        banner_url:
+          type: [string, 'null']
+          format: uri
+          description: 横向大图，番号宫格优先展示该字段
+        preview_url:
+          type: [string, 'null']
+          format: uri
+          description: 预告视频地址；null 表示没有可播放预告
+        still_photos:
+          type: array
+          description: 按数据源顺序排列的剧照地址；没有剧照时为空数组
+          items:
+            type: string
+            format: uri
         release_date:
           type: [string, 'null']
           format: date
@@ -354,6 +689,18 @@ components:
           $ref: '#/components/schemas/SubscriptionStatus'
         library_status:
           $ref: '#/components/schemas/LibraryStatus'
+        display_status:
+          $ref: '#/components/schemas/MediaDisplayStatus'
+        active_subscription:
+          description: 当前活动订阅摘要；未订阅时为 null
+          oneOf:
+            - $ref: '#/components/schemas/SubscriptionSummary'
+            - type: 'null'
+        download_status:
+          description: 最近下载任务状态；从未创建下载任务时为 null
+          oneOf:
+            - $ref: '#/components/schemas/DownloadStatus'
+            - type: 'null'
         created_at:
           type: string
           format: date-time
@@ -372,16 +719,27 @@ components:
                 $ref: '#/components/schemas/Media'
     Actor:
       type: object
+      required: [name, photo, limit_date]
       properties:
         name:
           type: string
+          description: 演员名称，也是写接口中的稳定标识
         photo:
-          type: string
-          nullable: true
+          type: [string, 'null']
+          format: uri
+          description: 演员头像地址；null 表示暂无头像
+        limit_date:
+          type: [string, 'null']
+          format: date
+          description: 订阅检索的最早发行日期；null 表示未订阅
+    ActorSubscriptionRequest:
+      type: object
+      required: [limit_date]
+      properties:
         limit_date:
           type: string
           format: date
-          nullable: true
+          description: 订阅检索的最早发行日期，格式必须为 YYYY-MM-DD
     ActorPage:
       allOf:
         - $ref: '#/components/schemas/PageMeta'
@@ -406,8 +764,7 @@ components:
           type: string
           enum: [strict, preload]
         filter:
-          type: object
-          additionalProperties: true
+          $ref: '#/components/schemas/SubscriptionFilter'
         created_at:
           type: string
           format: date-time
@@ -417,6 +774,65 @@ components:
         version:
           type: integer
           minimum: 1
+          description: 乐观锁版本；每次编辑成功后加一，取消接口返回删除前的快照且不再持久化该记录
+        media:
+          description: 订阅列表内嵌的媒体卡片数据；单条写操作响应可省略
+          $ref: '#/components/schemas/Media'
+    SubscriptionSummary:
+      type: object
+      required: [id, media_id, status, mode, filter, created_at, updated_at, version]
+      properties:
+        id:
+          type: string
+        media_id:
+          type: string
+        status:
+          $ref: '#/components/schemas/SubscriptionStatus'
+        mode:
+          type: string
+          enum: [strict, preload]
+        filter:
+          $ref: '#/components/schemas/SubscriptionFilter'
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        version:
+          type: integer
+          minimum: 1
+    SubscriptionFilter:
+      type: object
+      description: 资源筛选规则；布尔字段省略时按 false，体积字段为 null 时不限制
+      additionalProperties: true
+      properties:
+        only_chinese:
+          type: boolean
+          description: 仅选择带中文字幕的资源
+        only_uc:
+          type: boolean
+          description: 仅选择无码资源
+        exclude_uc:
+          type: boolean
+          description: 排除无码资源
+        only_free:
+          type: boolean
+          description: 仅选择免费资源
+        only_uhd:
+          type: boolean
+          description: 仅选择 UHD 资源
+        exclude_uhd:
+          type: boolean
+          description: 排除 UHD 资源
+        min_size:
+          type: [number, 'null']
+          minimum: 0
+          description: 最小资源体积，单位 MB；null 表示不限制
+        max_size:
+          type: [number, 'null']
+          minimum: 0
+          description: 最大资源体积，单位 MB；null 表示不限制
     CreateSubscriptionRequest:
       type: object
       required: [media_id, mode]
@@ -426,10 +842,24 @@ components:
         mode:
           type: string
           enum: [strict, preload]
+          description: strict 为严格模式，preload 为预下载模式
         filter:
-          type: object
-          additionalProperties: true
+          $ref: '#/components/schemas/SubscriptionFilter'
           default: {}
+    UpdateSubscriptionRequest:
+      type: object
+      required: [mode, filter, version]
+      properties:
+        mode:
+          type: string
+          enum: [strict, preload]
+          description: strict 为严格模式，preload 为预下载模式
+        filter:
+          $ref: '#/components/schemas/SubscriptionFilter'
+        version:
+          type: integer
+          minimum: 1
+          description: 客户端最后读取到的订阅版本，过期时返回 409
     SubscriptionPage:
       allOf:
         - $ref: '#/components/schemas/PageMeta'
@@ -470,9 +900,64 @@ components:
               type: array
               items:
                 $ref: '#/components/schemas/DownloadTask'
+    ScheduledTask:
+      type: object
+      required: [name, cron, last_run, running]
+      properties:
+        name:
+          type: string
+          description: 定时任务名称
+        cron:
+          type: string
+          description: 五段式 Cron 表达式
+        last_run:
+          type: [string, 'null']
+          format: date-time
+          description: 最近一次开始执行的时间；进程重启后为空
+        running:
+          type: boolean
+          description: 当前是否正在执行
+    ScheduledTaskPage:
+      allOf:
+        - $ref: '#/components/schemas/PageMeta'
+        - type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items:
+                $ref: '#/components/schemas/ScheduledTask'
+    LogRecord:
+      type: object
+      required: [time, level, category, message]
+      properties:
+        time:
+          type: string
+          format: date-time
+        level:
+          type: string
+          enum: [debug, info, warning, error]
+        category:
+          type: string
+        message:
+          type: string
+        attrs:
+          type: object
+          description: 原样保存的附加字段，不进行敏感值脱敏
+          additionalProperties: true
+    LogPage:
+      allOf:
+        - $ref: '#/components/schemas/PageMeta'
+        - type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items:
+                $ref: '#/components/schemas/LogRecord'
     Dashboard:
       type: object
-      required: [active_subscriptions, completed_downloads, media_count, healthy_integrations]
+      required: [active_subscriptions, completed_downloads, media_count]
       properties:
         active_subscriptions:
           type: integer
@@ -480,31 +965,42 @@ components:
           type: integer
         media_count:
           type: integer
-        healthy_integrations:
-          type: integer
-    SystemStatus:
-      type: object
-      required: [version, database_driver, scheduler_running, started_at]
-      properties:
-        version:
-          type: string
-        database_driver:
-          type: string
-          enum: [sqlite, postgres, mysql]
-        scheduler_running:
-          type: boolean
-        started_at:
-          type: string
-          format: date-time
     SystemSettings:
       type: object
-      required: [database_driver, demo_seed_enabled]
+      required: [database_driver, values, configured]
       properties:
         database_driver:
           type: string
           enum: [sqlite, postgres, mysql]
-        demo_seed_enabled:
-          type: boolean
+          description: 数据库引擎，由部署环境管理，只读
+        values:
+          type: object
+          additionalProperties:
+            type: string
+          description: >-
+            设置值。键名与旧版 template.env、对标站 /config 一致；敏感值也会在已登录管理员会话中回显，
+            按对标站设置页分组维护：站点、Emby、Plex、Jellyfin、微信、Telegram、Qbittorrent、
+            Transmission、迅雷、CloudDrive2、过滤、排序、定时任务、翻译、Agent、其他。
+            布尔取值固定为 true / false；数字为非负整数字符串；DEFAULT_FILTER 为过滤规则 JSON 字符串；
+            DEFAULT_SORT 为逗号分隔的排序标签（uc、!uc、seeders、chinese、uhd、!uhd、site、free）；
+            MAIN_SITE 取 ALL / 馒头 / BT / PTT / NicePT / Rousi；IMAGE_MODE 取 INVISIBLE / VISIBLE / BLUR；LOG_RETENTION_DAYS 为日志保留天数，默认 30，0 或空值表示不自动删除；TRANSLATION_ENGINE 取 none / openai / google / baidu / deeplx；DEEPLX_URL 为 DeepLX 服务地址（例如 http://127.0.0.1:1188）；TRANSLATION_PROMPT 仅在 OpenAI 翻译时作为翻译 system prompt，留空使用内置提示词；AGENT_SYSTEM_PROMPT 仅用于 Telegram/Agent 对话，留空使用内置提示词。
+        configured:
+          type: object
+          additionalProperties:
+            type: boolean
+          description: 敏感设置是否已经配置；与 values 中的敏感值配套，用于兼容客户端判断
+    SystemSettingsUpdate:
+      type: object
+      required: [values]
+      properties:
+        values:
+          type: object
+          additionalProperties:
+            type: string
+          description: >-
+            待保存的业务设置，只提交当前分组；页面应提交当前字段的完整值。普通字段和敏感字段的空值都会保存为空，
+            用于显式清除配置；保存其他字段时不要提交未编辑的敏感字段。
+            取值域与 SystemSettings.values 一致，越界或未声明的键返回 400 invalid_setting。
     Health:
       type: object
       required: [status]
@@ -542,6 +1038,10 @@ components:
     DownloadStatus:
       type: string
       enum: [queued, searching, submitted, downloading, completed, failed, unknown]
+    MediaDisplayStatus:
+      type: string
+      description: 卡片统一展示状态，由服务端按媒体库、下载任务和活动订阅的优先级计算
+      enum: [unsubscribed, subscribed, downloading, completed, failed, unknown]
     LibraryStatus:
       type: string
       enum: [unknown, absent, present]

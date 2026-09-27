@@ -261,7 +261,7 @@ Docker 发布使用多阶段构建或等效的“构建环境与运行环境分�
 ### 6.3 业务与公共能力
 
 - 服务端状态是权威；前端只做展示转换和即时反馈，不复制订阅资格、筛选和任务完成规则。
-- Mock 与契约一致并可切换真实 API。Mock 完成仅为已实现，不能算已联调。
+- 所有页面只能通过统一请求客户端访问真实 API；不得在开发运行时注入 Mock 或假数据。
 - 统一请求库负责基址、认证、超时、取消、序列化、错误归一化和必要重试；页面不得散落底层请求。
 - 图片预览、加载失败、骨架屏、空状态、分页、消息、确认框等公共能力统一封装。
 - 处理重复点击、重复提交、请求竞态、过期响应、路由切换取消、筛选分页和刷新恢复。
@@ -401,7 +401,7 @@ Docker 发布使用多阶段构建或等效的“构建环境与运行环境分�
 - 当前阶段：新版 Go 后端、React/Arco 前端与 API 基线已建立，继续按业务切片扩展旧版功能。
 - 已完成：统一 Agent 规范；旧版目录、接口、ORM、调度、主要集成和关键订阅状态的静态核查；旧数据库第一轮只读结构、行数、状态和代码引用审计。
 - 尚未完成：对标系统全页面和流程清单；数据库异常数据的业务原因；旧功能的完整重建范围与 API 兼容策略。当前技术栈为 Go、React/Arco，支持 SQLite、PostgreSQL、MySQL；首批业务切片已实现，未接入模块仍需逐项建立契约。
-- 新版代码已存在于 backend/、frontend/，API 契约位于 api/openapi.yaml。开发模式默认直连 Go API；VITE_ENABLE_MOCK=true 才启用 MSW。已实现登录、看板、媒体、订阅、下载、设置与系统状态页面；演员、标签、上新、推荐、榜单、厂牌、搜索、账户、任务、日志和通知仍缺 Go API，页面明确标记为未接入。
+- 新版代码已存在于 backend/、frontend/，API 契约位于 api/openapi.yaml。前端开发和生产构建均直连 Go API，不使用浏览器 Mock 或假数据；所有页面数据必须来自后端数据库。已实现且页面有后端接口支撑：登录、看板、媒体库、订阅、下载任务、演员、上新、推荐、榜单、搜索、设置、任务、日志。标签、厂牌、账户、通知仍缺 Go API，页面明确标记为未接入。设置页的分组、字段命名与旧版/对标站已完全对齐（16 个分组），配置项的消费方（下载器、媒体服务器、通知、过滤排序）仍待按模块接入。
 
 ### 12.2 已决策事项
 
@@ -413,7 +413,14 @@ Docker 发布使用多阶段构建或等效的“构建环境与运行环境分�
 - Git 只提交源码和可复现构建所需资产，打包目录和发布文件必须通过根目录 .gitignore 排除。
 - Docker 最终运行镜像只保留打包产物和必要运行资源，源码、测试、.git、开发依赖和构建工具不得进入最终镜像。
 - UI 必须经过浏览器实际交互和截图验收。
-- 开放 API 变更必须通过 apifox-new-mcp 同步并回读。
+- 页面内容区不渲染任何可见标题与顶部工具栏：页面名已由顶层面包屑 .app-breadcrumb 承担，PageHeader 只输出一个 .sr-only h1（供无障碍名称与路由断言），原有的计数、更新时间等操作区已删除。内容第一块与面包屑之间的间距只有面包屑自身的 margin-bottom 16px，所有页面一致。
+- 输入框与按钮规格以对标站 react-pro.arco.design/form/step、/form/group 实测为唯一标准：输入框、Select、InputNumber 与所有按钮（含设置页底部通栏操作栏的保存、重置）统一 32px（Arco size-default），页面组件一律不写 size 属性，显式写 size="default" 也算多余；设置页操作栏栏高 60（上下内边距 12 + 按钮 32 居中）；表单字段纵向间距 20px；控件内文字 14px。统一由 styles.css 的 --control-font-size、--field-gap-y 与 Arco 默认尺寸维护，新增控件不得另立规格。
+- 列表分页以服务端分页为唯一权威，前端一律复用 shared/ui/ListPagination（内部为 Arco Pagination）：总数走 showTotal，页码走默认分页按钮，每页条数走 sizeCanChange，选项固定为 15/30/50/100/200，默认 15；分页条在内容区左对齐，不再自行拼装「上一页/下一页」文本分页。每页条数由页面持有并按 page_size 写入请求参数（同时进 react-query 的 queryKey），切换条数必须把页码重置为 1；page_size 上限由 backend/internal/ports 的 MaxPageSize 单点定义，HTTP 层、业务层与仓储层共同引用，前端选项不得超过该值。
+- 系统设置项以旧版 app/config/template.env（即对标站 /config）的键名为唯一权威，页面按对标站 16 个分组维护：站点、Emby、Plex、Jellyfin、微信、Telegram、Qbittorrent、Transmission、迅雷、CloudDrive2、过滤、排序、定时任务、翻译、Agent、其他。
+- 配置项取值域在 backend/internal/application/settings.go 的 writableSettings 一处声明与校验，前端控件类型与之对应：文本、布尔（统一存 true/false）、非负整数、JSON 对象（DEFAULT_FILTER）、封闭枚举（IMAGE_MODE、MAIN_SITE、RANK_TYPE）、排序标签（DEFAULT_SORT）。越界或未声明的键返回 400 invalid_setting 并回传具体原因。
+- 漂移过的设置键名 WECHAT_PROXY_URL、PROXY_URL、CD2_PASSWORD、CD2_SAVE_PATH、EXTERNAL_URL 已废弃，统一为 WECHAT_PROXY、PROXY、CLOUDNAS_PASSWORD、CLOUDNAS_SAVEPATH、EXTERNAL_DOMAIN；库中原本无这些键的存量数据，无需迁移。
+- 开放 API 变更必须通过 apifox-new-mcp 同步并回读。apifox MCP 不可用时，只能改 api/openapi.yaml 并在交付说明中明确记录未同步的接口清单，不得静默跳过。
+- 日志能力由进程内环形缓冲承担，不引入新的持久化表：backend/internal/logging 的 Logger 保留最近 500 条日志（超出丢弃最旧），进程重启即清空，因此日志只反映当前进程生命周期，历史日志仍以 stderr 输出为准。日志记录统一为 UTC RFC 3339 时间，级别为 debug/info/warning/error，分类为 采集同步/订阅查询/下载/媒体库/通知/系统/Agent/其他，敏感键（token、password、secret、cookie 等）在写入缓冲前过滤。查询契约 GET /logs 支持 page、page_size、level、category、keyword；清空契约 DELETE /logs 返回 {cleared}，只清当前进程缓冲，不删任何业务数据。前端日志页按 5s 间隔轮询该接口，不建长连接。
 - 三个及以上相互独立的同类任务优先并行，结束后统一审查。
 
 ### 12.3 数据库未使用对象台账

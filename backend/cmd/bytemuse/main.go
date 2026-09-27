@@ -22,7 +22,7 @@ func main() {
 	defer stop()
 	commands := bootstrap.NewCommands(cfg)
 	code := cli.Run(ctx, os.Args[1:], os.Stdout, cli.Commands{
-		Serve: commands.Serve, MigrationStatus: commands.MigrationStatus, MigrationUp: commands.MigrationUp, Doctor: commands.Doctor, LegacyActors: commands.LegacyActors,
+		Serve: commands.Serve, MigrationStatus: commands.MigrationStatus, MigrationUp: commands.MigrationUp, Doctor: commands.Doctor, LegacyCatalog: commands.LegacyCatalog, LegacyActors: commands.LegacyActors, LegacyRanks: commands.LegacyRanks,
 	})
 	os.Exit(code)
 }

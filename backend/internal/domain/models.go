@@ -42,17 +42,61 @@ const (
 	LibraryStatusPresent LibraryStatus = "present"
 )
 
+// MediaDisplayStatus is the single user-facing state shown on media cards.
+// It combines library, download, and subscription facts without hiding failed or unknown tasks.
+type MediaDisplayStatus string
+
+const (
+	MediaDisplayStatusUnsubscribed MediaDisplayStatus = "unsubscribed"
+	MediaDisplayStatusSubscribed   MediaDisplayStatus = "subscribed"
+	MediaDisplayStatusDownloading  MediaDisplayStatus = "downloading"
+	MediaDisplayStatusCompleted    MediaDisplayStatus = "completed"
+	MediaDisplayStatusFailed       MediaDisplayStatus = "failed"
+	MediaDisplayStatusUnknown      MediaDisplayStatus = "unknown"
+)
+
+// ResolveMediaDisplayStatus applies the product-wide display priority used by every media view.
+func ResolveMediaDisplayStatus(library LibraryStatus, subscription SubscriptionStatus, download *DownloadStatus) MediaDisplayStatus {
+	if library == LibraryStatusPresent || download != nil && *download == DownloadStatusCompleted {
+		return MediaDisplayStatusCompleted
+	}
+	if download != nil {
+		switch *download {
+		case DownloadStatusQueued, DownloadStatusSearching, DownloadStatusSubmitted, DownloadStatusDownloading:
+			return MediaDisplayStatusDownloading
+		}
+	}
+	if subscription == SubscriptionStatusActive {
+		return MediaDisplayStatusSubscribed
+	}
+	if download != nil {
+		switch *download {
+		case DownloadStatusFailed:
+			return MediaDisplayStatusFailed
+		case DownloadStatusUnknown:
+			return MediaDisplayStatusUnknown
+		}
+	}
+	return MediaDisplayStatusUnsubscribed
+}
+
 // Media is the API-facing catalog representation.
 type Media struct {
 	ID                 string             `json:"id"`
 	Code               string             `json:"code"`
 	Title              string             `json:"title"`
 	TranslatedTitle    *string            `json:"translated_title"`
-	PosterURL           *string            `json:"poster_url"`
-	ReleaseDate         *string            `json:"release_date"`
+	PosterURL          *string            `json:"poster_url"`
+	BannerURL          *string            `json:"banner_url"`
+	PreviewURL         *string            `json:"preview_url"`
+	StillPhotos        []string           `json:"still_photos"`
+	ReleaseDate        *string            `json:"release_date"`
 	DurationMinutes    *int               `json:"duration_minutes"`
 	SubscriptionStatus SubscriptionStatus `json:"subscription_status"`
 	LibraryStatus      LibraryStatus      `json:"library_status"`
+	DisplayStatus      MediaDisplayStatus `json:"display_status"`
+	ActiveSubscription *Subscription      `json:"active_subscription"`
+	DownloadStatus     *DownloadStatus    `json:"download_status"`
 	CreatedAt          time.Time          `json:"created_at"`
 	UpdatedAt          time.Time          `json:"updated_at"`
 }
@@ -73,6 +117,7 @@ type Subscription struct {
 	CreatedAt time.Time          `json:"created_at"`
 	UpdatedAt time.Time          `json:"updated_at"`
 	Version   int                `json:"version"`
+	Media     *Media             `json:"media,omitempty"`
 }
 
 // SubscriptionPage is a repository result before request pagination metadata is attached.
@@ -98,24 +143,24 @@ type DownloadPage struct {
 	Total int
 }
 
-// SystemStatus exposes non-sensitive process state.
-type SystemStatus struct {
-	Version          string    `json:"version"`
-	DatabaseDriver   string    `json:"database_driver"`
-	SchedulerRunning bool      `json:"scheduler_running"`
-	StartedAt        time.Time `json:"started_at"`
+// ScheduledTask describes one configured background job shown on the task page.
+type ScheduledTask struct {
+	Name    string     `json:"name"`
+	Cron    string     `json:"cron"`
+	LastRun *time.Time `json:"last_run"`
+	Running bool       `json:"running"`
 }
 
 // Dashboard contains the first-stage operational counts shown to administrators.
 type Dashboard struct {
 	ActiveSubscriptions int `json:"active_subscriptions"`
 	CompletedDownloads  int `json:"completed_downloads"`
-	MediaCount           int `json:"media_count"`
-	HealthyIntegrations  int `json:"healthy_integrations"`
+	MediaCount          int `json:"media_count"`
 }
 
-// SystemSettings exposes the non-sensitive runtime settings allowed by the public contract.
+// SystemSettings exposes the runtime settings allowed by the authenticated settings contract.
 type SystemSettings struct {
-	DatabaseDriver string `json:"database_driver"`
-	DemoSeedEnabled bool   `json:"demo_seed_enabled"`
+	DatabaseDriver string            `json:"database_driver"`
+	Values         map[string]string `json:"values"`
+	Configured     map[string]bool   `json:"configured"`
 }

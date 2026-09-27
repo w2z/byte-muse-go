@@ -13,9 +13,8 @@ services:
       WEB_STATIC_DIR: /app/web
       DATABASE_DRIVER: sqlite
       DATABASE_DSN: file:/data/bytemuse.db?_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)
-      DEMO_SEED_ENABLED: "false"
-      ADMIN_USERNAME: ${ADMIN_USERNAME:-test}
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-test}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:?ADMIN_USERNAME is required}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?ADMIN_PASSWORD is required}
       SESSION_SECRET: ${SESSION_SECRET:?SESSION_SECRET is required}
     volumes:
       - bytemuse-data:/data

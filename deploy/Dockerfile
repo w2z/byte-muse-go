@@ -25,7 +25,6 @@ ENV HTTP_ADDR=:3750 \
     WEB_STATIC_DIR=/app/web \
     DATABASE_DRIVER=sqlite \
     DATABASE_DSN=/data/bytemuse.db \
-    DEMO_SEED_ENABLED=false
 EXPOSE 3750
 VOLUME ["/data"]
 USER nonroot:nonroot

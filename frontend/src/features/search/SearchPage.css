@@ -1,0 +1,19 @@
+/* 搜索页专有样式。
+   对标站 对标站 搜索页是一条「输入框 + 搜索按钮」单行工具栏（space-x-2），
+   输入框占满剩余宽度、按钮不收缩；公共 .page-toolbar 已提供桌面端横向、移动端纵向的骨架。 */
+.search-field {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* Arco 输入框在有 suffix/allowClear 时会包一层 wrapper，统一让它撑满工具行的剩余宽度。 */
+.search-field .arco-input-group-wrapper,
+.search-field .arco-input-wrapper {
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
+}
+
+.search-field > .arco-btn {
+  flex: none;
+}

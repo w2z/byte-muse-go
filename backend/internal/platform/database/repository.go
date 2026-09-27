@@ -28,12 +28,12 @@ func (r *sqlMediaRepository) List(ctx context.Context, query ports.MediaListQuer
 	if err := r.exec.QueryRowContext(ctx, `SELECT COUNT(*) FROM media`).Scan(&total); err != nil {
 		return domain.MediaPage{}, err
 	}
-	rows, err := r.exec.QueryContext(ctx, fmt.Sprintf(`SELECT %s FROM media ORDER BY updated_at DESC, id ASC LIMIT %s OFFSET %s`, mediaColumns(), placeholder(r.dialect, 1), placeholder(r.dialect, 2)), limit, offset)
+	rows, err := r.exec.QueryContext(ctx, fmt.Sprintf(`SELECT %s FROM media m %s ORDER BY m.updated_at DESC, m.id ASC LIMIT %s OFFSET %s`, mediaProjectionColumns("m"), mediaProjectionJoins(), placeholder(r.dialect, 1), placeholder(r.dialect, 2)), limit, offset)
 	if err != nil {
 		return domain.MediaPage{}, err
 	}
 	defer rows.Close()
-	items, err := scanMediaRows(rows)
+	items, err := scanMediaProjectionRows(rows)
 	if err != nil {
 		return domain.MediaPage{}, err
 	}
@@ -41,11 +41,32 @@ func (r *sqlMediaRepository) List(ctx context.Context, query ports.MediaListQuer
 }
 
 func (r *sqlMediaRepository) Get(ctx context.Context, id string) (domain.Media, error) {
-	media, err := scanMedia(r.exec.QueryRowContext(ctx, fmt.Sprintf(`SELECT %s FROM media WHERE id = %s`, mediaColumns(), placeholder(r.dialect, 1)), id))
+	media, err := scanMediaProjection(r.exec.QueryRowContext(ctx, fmt.Sprintf(`SELECT %s FROM media m %s WHERE m.id = %s`, mediaProjectionColumns("m"), mediaProjectionJoins(), placeholder(r.dialect, 1)), id))
 	if errors.Is(err, sql.ErrNoRows) {
 		return domain.Media{}, ports.ErrMediaNotFound
 	}
 	return media, err
+}
+
+// UpdateTranslatedTitle 只更新媒体译文和更新时间，避免覆盖并发写入的其他字段。
+func (r *sqlMediaRepository) UpdateTranslatedTitle(ctx context.Context, id, translatedTitle string) error {
+	translatedTitle = strings.TrimSpace(translatedTitle)
+	if id == "" || translatedTitle == "" {
+		return fmt.Errorf("media id and translated title are required")
+	}
+	now := time.Now().UTC()
+	result, err := r.exec.ExecContext(ctx, fmt.Sprintf(`UPDATE media SET translated_title = %s, updated_at = %s WHERE id = %s`, placeholder(r.dialect, 1), placeholder(r.dialect, 2), placeholder(r.dialect, 3)), translatedTitle, encodeTime(now, r.dialect), id)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return ports.ErrMediaNotFound
+	}
+	return nil
 }
 
 func (r *sqlMediaRepository) upsert(ctx context.Context, media domain.Media) error {
@@ -63,6 +84,7 @@ func (r *sqlMediaRepository) upsert(ctx context.Context, media domain.Media) err
 type sqlSubscriptionRepository struct {
 	dialect Dialect
 	exec    sqlExecutor
+	db      *sql.DB
 }
 
 func (r *sqlSubscriptionRepository) Create(ctx context.Context, request ports.CreateSubscription) (domain.Subscription, bool, error) {
@@ -86,6 +108,11 @@ func (r *sqlSubscriptionRepository) Create(ctx context.Context, request ports.Cr
 	if !errors.Is(err, ports.ErrSubscriptionNotFound) {
 		return domain.Subscription{}, false, err
 	}
+	if exists, err := r.hasActiveForMedia(ctx, request.MediaID); err != nil {
+		return domain.Subscription{}, false, err
+	} else if exists {
+		return domain.Subscription{}, false, ports.ErrActiveSubscriptionExists
+	}
 	now := time.Now().UTC()
 	item := domain.Subscription{
 		ID:        newSortableID(),
@@ -100,6 +127,9 @@ func (r *sqlSubscriptionRepository) Create(ctx context.Context, request ports.Cr
 	columns := []string{"id", "media_id", "status", "mode", "filter_json", "idempotency_key", "idempotency_hash", "created_at", "updated_at", "version"}
 	_, err = r.exec.ExecContext(ctx, fmt.Sprintf(`INSERT INTO subscriptions (%s) VALUES (%s)`, strings.Join(columns, ", "), placeholders(r.dialect, len(columns), 1)), item.ID, item.MediaID, item.Status, item.Mode, string(filterJSON), request.IdempotencyKey, idempotencyHash, encodeTime(item.CreatedAt, r.dialect), encodeTime(item.UpdatedAt, r.dialect), item.Version)
 	if err != nil {
+		if activeSubscriptionConstraintError(err) {
+			return domain.Subscription{}, false, ports.ErrActiveSubscriptionExists
+		}
 		return domain.Subscription{}, false, err
 	}
 	if err := updateMediaSubscriptionStatus(ctx, r.exec, r.dialect, item.MediaID, domain.SubscriptionStatusActive, now); err != nil {
@@ -108,37 +138,121 @@ func (r *sqlSubscriptionRepository) Create(ctx context.Context, request ports.Cr
 	return item, true, nil
 }
 
+// hasActiveForMedia provides a clear domain error before the database uniqueness constraint
+// handles the concurrent-create race.
+func (r *sqlSubscriptionRepository) hasActiveForMedia(ctx context.Context, mediaID string) (bool, error) {
+	var marker int
+	err := r.exec.QueryRowContext(ctx, fmt.Sprintf(`SELECT 1 FROM subscriptions WHERE media_id = %s AND status = %s LIMIT 1`, placeholder(r.dialect, 1), placeholder(r.dialect, 2)), mediaID, domain.SubscriptionStatusActive).Scan(&marker)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+func activeSubscriptionConstraintError(err error) bool {
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "idx_subscriptions_one_active_per_media") ||
+		strings.Contains(message, "subscriptions.active_media_id") ||
+		strings.Contains(message, "unique constraint failed: subscriptions.media_id")
+}
+
+// Cancel removes the subscription record and clears the media's active subscription status.
+// Pending queue/search tasks for the media are removed in the same transaction; submitted or later tasks are retained as history.
 func (r *sqlSubscriptionRepository) Cancel(ctx context.Context, id string) (domain.Subscription, bool, error) {
+	if r.db != nil {
+		if _, inTransaction := r.exec.(*sql.Tx); !inTransaction {
+			tx, err := r.db.BeginTx(ctx, nil)
+			if err != nil {
+				return domain.Subscription{}, false, err
+			}
+			transactional := &sqlSubscriptionRepository{dialect: r.dialect, exec: tx}
+			item, changed, err := transactional.cancel(ctx, id)
+			if err != nil {
+				_ = tx.Rollback()
+				return domain.Subscription{}, false, err
+			}
+			if err := tx.Commit(); err != nil {
+				return domain.Subscription{}, false, err
+			}
+			return item, changed, nil
+		}
+	}
+	return r.cancel(ctx, id)
+}
+
+func (r *sqlSubscriptionRepository) cancel(ctx context.Context, id string) (domain.Subscription, bool, error) {
 	current, err := r.get(ctx, id)
 	if err != nil {
 		return domain.Subscription{}, false, err
-	}
-	if current.Status == domain.SubscriptionStatusCanceled {
-		return current, false, nil
 	}
 	now := time.Now().UTC()
 	if !now.After(current.UpdatedAt) {
 		now = current.UpdatedAt.Add(time.Nanosecond)
 	}
-	version := current.Version + 1
-	result, err := r.exec.ExecContext(ctx, fmt.Sprintf(`UPDATE subscriptions SET status = %s, updated_at = %s, version = %s WHERE id = %s`, placeholder(r.dialect, 1), placeholder(r.dialect, 2), placeholder(r.dialect, 3), placeholder(r.dialect, 4)), domain.SubscriptionStatusCanceled, encodeTime(now, r.dialect), version, id)
+	result, err := r.exec.ExecContext(ctx, fmt.Sprintf(`DELETE FROM subscriptions WHERE id = %s`, placeholder(r.dialect, 1)), id)
 	if err != nil {
 		return domain.Subscription{}, false, err
 	}
 	if affected, err := result.RowsAffected(); err == nil && affected == 0 {
 		return domain.Subscription{}, false, ports.ErrSubscriptionNotFound
 	}
-	if err := updateMediaSubscriptionStatus(ctx, r.exec, r.dialect, current.MediaID, domain.SubscriptionStatusCanceled, now); err != nil {
+	if _, err := r.exec.ExecContext(ctx, fmt.Sprintf(`DELETE FROM download_tasks WHERE media_id = %s AND status IN (%s, %s)`, placeholder(r.dialect, 1), placeholder(r.dialect, 2), placeholder(r.dialect, 3)), current.MediaID, domain.DownloadStatusQueued, domain.DownloadStatusSearching); err != nil {
+		return domain.Subscription{}, false, err
+	}
+	if err := updateMediaSubscriptionStatus(ctx, r.exec, r.dialect, current.MediaID, domain.SubscriptionStatusNone, now); err != nil {
 		return domain.Subscription{}, false, err
 	}
 	current.Status = domain.SubscriptionStatusCanceled
 	current.UpdatedAt = now
-	current.Version = version
 	return current, true, nil
+}
+
+// Update atomically replaces editable rules when the caller still holds the current version.
+func (r *sqlSubscriptionRepository) Update(ctx context.Context, request ports.UpdateSubscription) (domain.Subscription, error) {
+	if request.ID == "" || request.ExpectedVersion < 1 || !validSubscriptionMode(request.Mode) {
+		return domain.Subscription{}, fmt.Errorf("invalid subscription update")
+	}
+	current, err := r.get(ctx, request.ID)
+	if err != nil {
+		return domain.Subscription{}, err
+	}
+	if current.Status != domain.SubscriptionStatusActive {
+		return domain.Subscription{}, ports.ErrSubscriptionInactive
+	}
+	if current.Version != request.ExpectedVersion {
+		return domain.Subscription{}, ports.ErrVersionConflict
+	}
+	filterJSON, err := json.Marshal(cloneFilter(request.Filter))
+	if err != nil {
+		return domain.Subscription{}, err
+	}
+	now := time.Now().UTC()
+	if !now.After(current.UpdatedAt) {
+		now = current.UpdatedAt.Add(time.Nanosecond)
+	}
+	result, err := r.exec.ExecContext(ctx, fmt.Sprintf(
+		`UPDATE subscriptions SET mode = %s, filter_json = %s, updated_at = %s, version = %s WHERE id = %s AND status = %s AND version = %s`,
+		placeholder(r.dialect, 1), placeholder(r.dialect, 2), placeholder(r.dialect, 3), placeholder(r.dialect, 4),
+		placeholder(r.dialect, 5), placeholder(r.dialect, 6), placeholder(r.dialect, 7),
+	), request.Mode, string(filterJSON), encodeTime(now, r.dialect), current.Version+1, request.ID, domain.SubscriptionStatusActive, request.ExpectedVersion)
+	if err != nil {
+		return domain.Subscription{}, err
+	}
+	if affected, err := result.RowsAffected(); err == nil && affected == 0 {
+		return domain.Subscription{}, ports.ErrVersionConflict
+	}
+	current.Mode = request.Mode
+	current.Filter = cloneFilter(request.Filter)
+	current.UpdatedAt = now
+	current.Version++
+	return current, nil
 }
 
 func (r *sqlSubscriptionRepository) List(ctx context.Context, query ports.SubscriptionListQuery) (domain.SubscriptionPage, error) {
 	limit, offset := normalizePagination(query.Limit, query.Offset)
+	if query.Status == "" {
+		query.Status = domain.SubscriptionStatusActive
+	}
 	where, args := statusWhere(r.dialect, string(query.Status))
 	var total int
 	if err := r.exec.QueryRowContext(ctx, `SELECT COUNT(*) FROM subscriptions`+where, args...).Scan(&total); err != nil {
@@ -154,7 +268,43 @@ func (r *sqlSubscriptionRepository) List(ctx context.Context, query ports.Subscr
 	if err != nil {
 		return domain.SubscriptionPage{}, err
 	}
+	if err := rows.Close(); err != nil {
+		return domain.SubscriptionPage{}, err
+	}
+	if err := r.attachMedia(ctx, items); err != nil {
+		return domain.SubscriptionPage{}, err
+	}
 	return domain.SubscriptionPage{Items: items, Total: total}, nil
+}
+
+func (r *sqlSubscriptionRepository) attachMedia(ctx context.Context, items []domain.Subscription) error {
+	if len(items) == 0 {
+		return nil
+	}
+	ids := make([]any, 0, len(items))
+	byMedia := make(map[string][]int, len(items))
+	for index := range items {
+		if _, seen := byMedia[items[index].MediaID]; !seen {
+			ids = append(ids, items[index].MediaID)
+		}
+		byMedia[items[index].MediaID] = append(byMedia[items[index].MediaID], index)
+	}
+	rows, err := r.exec.QueryContext(ctx, fmt.Sprintf(`SELECT %s FROM media m %s WHERE m.id IN (%s)`, mediaProjectionColumns("m"), mediaProjectionJoins(), placeholders(r.dialect, len(ids), 1)), ids...)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	media, err := scanMediaProjectionRows(rows)
+	if err != nil {
+		return err
+	}
+	for index := range media {
+		for _, subscriptionIndex := range byMedia[media[index].ID] {
+			copy := media[index]
+			items[subscriptionIndex].Media = &copy
+		}
+	}
+	return nil
 }
 
 func (r *sqlSubscriptionRepository) get(ctx context.Context, id string) (domain.Subscription, error) {
@@ -275,7 +425,7 @@ func validLibraryStatus(status domain.LibraryStatus) bool {
 }
 
 func normalizePagination(limit int, offset int) (int, int) {
-	if limit <= 0 || limit > 100 {
+	if limit <= 0 || limit > ports.MaxPageSize {
 		limit = 50
 	}
 	if offset < 0 {
@@ -352,6 +502,26 @@ func mediaColumns() string {
 	return "id, code, title, translated_title, poster_url, release_date, duration_minutes, subscription_status, library_status, created_at, updated_at"
 }
 
+func mediaProjectionColumns(alias string) string {
+	base := strings.Replace(prefixedMediaColumns(alias), alias+".subscription_status", "CASE WHEN s.id IS NOT NULL THEN 'active' ELSE "+alias+".subscription_status END", 1)
+	return base + ", lm.banner_url, lm.preview_url, lm.still_photo, " +
+		"s.id, s.media_id, s.status, s.mode, s.filter_json, s.created_at, s.updated_at, s.version, d.status"
+}
+
+func mediaProjectionJoins() string {
+	return `LEFT JOIN legacy_media_metadata lm ON lm.media_id = m.id
+		LEFT JOIN subscriptions s ON s.id = (
+			SELECT s2.id FROM subscriptions s2
+			WHERE s2.media_id = m.id AND s2.status = 'active'
+			ORDER BY s2.updated_at DESC, s2.id ASC LIMIT 1
+		)
+		LEFT JOIN download_tasks d ON d.id = (
+			SELECT d2.id FROM download_tasks d2
+			WHERE d2.media_id = m.id
+			ORDER BY d2.updated_at DESC, d2.id ASC LIMIT 1
+		)`
+}
+
 func subscriptionColumns() string {
 	return "id, media_id, status, mode, filter_json, created_at, updated_at, version"
 }
@@ -373,6 +543,110 @@ func scanMediaRows(rows *sql.Rows) ([]domain.Media, error) {
 	}
 	return items, rows.Err()
 }
+
+func scanMediaProjectionRows(rows *sql.Rows) ([]domain.Media, error) {
+	items := make([]domain.Media, 0)
+	for rows.Next() {
+		item, err := scanMediaProjection(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func scanMediaProjection(row rowScanner) (domain.Media, error) {
+	var item domain.Media
+	var translatedTitle, posterURL, releaseDate any
+	var duration sql.NullInt64
+	var createdAt, updatedAt any
+	var bannerURL, previewURL, stillPhoto sql.NullString
+	var subscriptionID, subscriptionMediaID, subscriptionStatus, subscriptionMode, filterJSON sql.NullString
+	var subscriptionCreatedAt, subscriptionUpdatedAt any
+	var subscriptionVersion sql.NullInt64
+	var downloadStatus sql.NullString
+	if err := row.Scan(
+		&item.ID, &item.Code, &item.Title, &translatedTitle, &posterURL, &releaseDate, &duration,
+		&item.SubscriptionStatus, &item.LibraryStatus, &createdAt, &updatedAt,
+		&bannerURL, &previewURL, &stillPhoto,
+		&subscriptionID, &subscriptionMediaID, &subscriptionStatus, &subscriptionMode, &filterJSON,
+		&subscriptionCreatedAt, &subscriptionUpdatedAt, &subscriptionVersion, &downloadStatus,
+	); err != nil {
+		return domain.Media{}, err
+	}
+	item.TranslatedTitle, _ = valueToStringPtr(translatedTitle)
+	item.PosterURL, _ = valueToStringPtr(posterURL)
+	item.ReleaseDate, _ = valueToStringPtr(releaseDate)
+	if duration.Valid {
+		value := int(duration.Int64)
+		item.DurationMinutes = &value
+	}
+	if bannerURL.Valid && strings.TrimSpace(bannerURL.String) != "" {
+		item.BannerURL = stringPointer(bannerURL.String)
+	}
+	if previewURL.Valid && strings.TrimSpace(previewURL.String) != "" {
+		item.PreviewURL = stringPointer(previewURL.String)
+	}
+	item.StillPhotos = parseStillPhotos(stillPhoto.String)
+	created, err := valueToTime(createdAt)
+	if err != nil {
+		return domain.Media{}, fmt.Errorf("created_at: %w", err)
+	}
+	updated, err := valueToTime(updatedAt)
+	if err != nil {
+		return domain.Media{}, fmt.Errorf("updated_at: %w", err)
+	}
+	item.CreatedAt = created
+	item.UpdatedAt = updated
+	if subscriptionID.Valid {
+		active := domain.Subscription{
+			ID: subscriptionID.String, MediaID: subscriptionMediaID.String,
+			Status: domain.SubscriptionStatus(subscriptionStatus.String), Mode: domain.SubscriptionMode(subscriptionMode.String),
+			Version: int(subscriptionVersion.Int64), Filter: map[string]any{},
+		}
+		if filterJSON.Valid && filterJSON.String != "" {
+			if err := json.Unmarshal([]byte(filterJSON.String), &active.Filter); err != nil {
+				return domain.Media{}, fmt.Errorf("subscription filter: %w", err)
+			}
+		}
+		active.CreatedAt, err = valueToTime(subscriptionCreatedAt)
+		if err != nil {
+			return domain.Media{}, fmt.Errorf("subscription created_at: %w", err)
+		}
+		active.UpdatedAt, err = valueToTime(subscriptionUpdatedAt)
+		if err != nil {
+			return domain.Media{}, fmt.Errorf("subscription updated_at: %w", err)
+		}
+		item.ActiveSubscription = &active
+	}
+	if downloadStatus.Valid {
+		status := domain.DownloadStatus(downloadStatus.String)
+		item.DownloadStatus = &status
+	}
+	item.DisplayStatus = domain.ResolveMediaDisplayStatus(item.LibraryStatus, item.SubscriptionStatus, item.DownloadStatus)
+	return item, nil
+}
+
+func parseStillPhotos(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return []string{}
+	}
+	var values []string
+	if json.Unmarshal([]byte(raw), &values) != nil {
+		values = strings.FieldsFunc(raw, func(r rune) bool { return r == ',' || r == '\n' || r == '\r' })
+	}
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			result = append(result, value)
+		}
+	}
+	return result
+}
+
+func stringPointer(value string) *string { return &value }
 
 func scanMedia(row rowScanner) (domain.Media, error) {
 	var item domain.Media

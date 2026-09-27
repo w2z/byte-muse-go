@@ -1,70 +1,53 @@
-import { Button, Message, Table, Tag } from "@arco-design/web-react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { apiRequest, type Page } from "../../shared/api/client";
-import type { Subscription } from "../../shared/api/types";
-import { PageState } from "../../shared/ui/PageState";
+import type { Media, Subscription } from "../../shared/api/types";
+import { DEFAULT_PAGE_SIZE } from "../../shared/ui/ListPagination";
+import { MediaCardGrid } from "../../shared/ui/MediaCardGrid";
+import { PageHeader } from "../../shared/ui/PageHeader";
+import "./SubscriptionListPage.css";
 
-const statusText = {
-  none: "未订阅",
-  active: "订阅中",
-  canceled: "已取消",
-} as const;
+const modeText = { strict: "严格", preload: "预下载" } as const;
 
-/** 订阅列表与取消共用订阅服务。请求未完成时禁用同一行，避免重复提交。 */
+/** 订阅列表直接使用服务端内嵌的媒体投影，保证与其他番号页面共用同一张大图卡。 */
 export function SubscriptionListPage() {
-  const queryClient = useQueryClient();
   const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
   const query = useQuery({
-    queryKey: ["subscriptions", page],
-    queryFn: () => apiRequest<Page<Subscription>>(`/subscriptions?page=${page}&page_size=20`),
-  });
-  const cancel = useMutation({
-    mutationFn: (subscription: Subscription) =>
-      apiRequest<Subscription>(`/subscriptions/${subscription.id}/cancel`, { method: "POST" }),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["subscriptions"] });
-    },
-    onError: (error: Error) => {
-      Message.error(error.message);
-    },
+    queryKey: ["subscriptions", page, pageSize],
+    queryFn: () => apiRequest<Page<Subscription>>(`/subscriptions?page=` + page + `&page_size=` + pageSize + `&status=active`),
   });
   const items = query.data?.items ?? [];
+  const total = query.data?.total ?? 0;
+
+  /** 切换每页条数：页长变了，页码必须回到第一页，否则会请求到越界页。 */
+  function changePageSize(next: number) {
+    setPageSize(next);
+    setPage(1);
+  }
+
+  /** 订阅行没有媒体投影时该项不可渲染，交给网格组件按 null 跳过。 */
+  function mediaFor(item: Subscription): Media | null {
+    if (!item.media) return null;
+    return { ...item.media, active_subscription: item.status === "active" ? item : null };
+  }
 
   return (
     <section>
-      <div className="page-heading"><div><div className="eyebrow">订阅中心 / WATCHLIST</div><h1>订阅</h1><p className="page-description">让系统替你盯住资源变化，匹配到合适内容时自动进入队列。</p></div><div className="toolbar-note">{query.data?.total ?? 0} 个追踪项</div></div>
-      <PageState
-        isLoading={query.isLoading}
-        error={query.error}
-        isEmpty={!query.isLoading && !query.error && items.length === 0}
+      <PageHeader title="订阅" />
+      <MediaCardGrid
+        items={items}
+        query={query}
         emptyText="暂无订阅"
-        onRetry={() => void query.refetch()}
-      >
-        <div className="table-shell"><div className="toolbar"><div className="toolbar-note">自动追踪 / 状态总览</div></div><Table
-          rowKey="id"
-          data={items}
-          pagination={false}
-          columns={[
-            { title: "影片", dataIndex: "media_id" },
-            { title: "模式", dataIndex: "mode" },
-            { title: "状态", render: (_, record) => <Tag className={`state-tag ${record.status === "active" ? "active" : "idle"}`}>{statusText[record.status]}</Tag> },
-            {
-              title: "操作",
-              render: (_, record) => (
-                <Button
-                  className="danger-action"
-                  disabled={record.status !== "active" || cancel.isPending}
-                  loading={cancel.isPending && cancel.variables?.id === record.id}
-                  onClick={() => cancel.mutate(record)}
-                >
-                  取消订阅
-                </Button>
-              ),
-            },
-          ]}
-        /><div className="list-pagination"><Button disabled={page === 1} onClick={() => setPage(page - 1)}>上一页</Button><span>第 {page} 页 / 共 {Math.max(1, Math.ceil((query.data?.total ?? 0) / 20))} 页</span><Button disabled={page * 20 >= (query.data?.total ?? 0)} onClick={() => setPage(page + 1)}>下一页</Button></div></div>
-      </PageState>
+        total={total}
+        page={page}
+        pageSize={pageSize}
+        onPageChange={setPage}
+        onPageSizeChange={changePageSize}
+        itemKey={(item) => item.id}
+        toMedia={mediaFor}
+        renderMeta={(item) => <div className="code-card-meta">{modeText[item.mode]}模式</div>}
+      />
     </section>
   );
 }

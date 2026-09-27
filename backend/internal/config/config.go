@@ -20,7 +20,6 @@ type Config struct {
 	AppEnvironment  string
 	DatabaseDriver  string
 	DatabaseDSN     string
-	DemoSeedEnabled bool
 	AdminUsername   string
 	AdminPassword   string
 	SessionSecret   string
@@ -44,10 +43,6 @@ func Load() (Config, error) {
 	if driver != "sqlite" && driver != "postgres" && driver != "mysql" {
 		return Config{}, fmt.Errorf("unsupported DATABASE_DRIVER %q", driver)
 	}
-	demoSeedEnabled, err := strconv.ParseBool(envOrDefault("DEMO_SEED_ENABLED", "false"))
-	if err != nil {
-		return Config{}, fmt.Errorf("DEMO_SEED_ENABLED must be a boolean: %w", err)
-	}
 	httpAddress := envOrDefault("HTTP_ADDR", "")
 	if httpAddress == "" {
 		httpAddress = envOrDefault("HTTP_ADDRESS", ":3750")
@@ -67,7 +62,6 @@ func Load() (Config, error) {
 		AppEnvironment:  envOrDefault("APP_ENV", "development"),
 		DatabaseDriver:  driver,
 		DatabaseDSN:     databaseDSN,
-		DemoSeedEnabled: demoSeedEnabled,
 		AdminUsername:   strings.TrimSpace(os.Getenv("ADMIN_USERNAME")),
 		AdminPassword:   os.Getenv("ADMIN_PASSWORD"),
 		SessionSecret:   os.Getenv("SESSION_SECRET"),

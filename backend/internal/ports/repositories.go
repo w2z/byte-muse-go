@@ -15,7 +15,24 @@ var (
 	ErrSubscriptionNotFound = errors.New("subscription not found")
 	// ErrIdempotencyConflict reports reuse of a key for a different operation payload.
 	ErrIdempotencyConflict = errors.New("idempotency key payload conflict")
+	// ErrVersionConflict reports an optimistic concurrency conflict.
+	ErrVersionConflict = errors.New("version conflict")
+	// ErrSubscriptionInactive reports attempts to edit a canceled subscription.
+	ErrSubscriptionInactive = errors.New("subscription inactive")
+	// ErrActiveSubscriptionExists reports a second active subscription for one media item.
+	ErrActiveSubscriptionExists = errors.New("active subscription already exists")
+	// ErrActorNotFound reports an unknown actor identity.
+	ErrActorNotFound = errors.New("actor not found")
 )
+
+// MaxPageSize 是列表查询每页条数的唯一上限，HTTP 层、业务层与仓储层都必须引用它。
+//
+// 三处曾各自写死 100：HTTP 与业务层拒绝超限请求，仓储层则把超限值静默降级
+// （limit 回落 50、日志 page_size 回落 20），于是 page_size=200 会得到
+// “响应声明 200、实际只返回 50 条”的错误组合。收敛成一个常量后不会再漂移。
+// 前端分页条的每页条数选项（frontend/src/shared/ui/ListPagination.tsx 的 PAGE_SIZE_OPTIONS）
+// 不得超过该值。
+const MaxPageSize = 200
 
 // MediaListQuery is the normalized repository pagination request.
 type MediaListQuery struct {
@@ -29,12 +46,25 @@ type MediaRepository interface {
 	Get(ctx context.Context, id string) (domain.Media, error)
 }
 
+// MediaTranslationWriter 持久化成功翻译后的媒体标题。
+type MediaTranslationWriter interface {
+	UpdateTranslatedTitle(ctx context.Context, id, translatedTitle string) error
+}
+
 // CreateSubscription is an atomic idempotent subscription write request.
 type CreateSubscription struct {
 	IdempotencyKey string
-	MediaID       string
-	Mode          domain.SubscriptionMode
-	Filter        map[string]any
+	MediaID        string
+	Mode           domain.SubscriptionMode
+	Filter         map[string]any
+}
+
+// UpdateSubscription replaces editable rules on one active subscription.
+type UpdateSubscription struct {
+	ID              string
+	Mode            domain.SubscriptionMode
+	Filter          map[string]any
+	ExpectedVersion int
 }
 
 // SubscriptionListQuery is the normalized repository pagination and status filter.
@@ -47,6 +77,7 @@ type SubscriptionListQuery struct {
 // SubscriptionRepository owns atomic create/replay and cancel transitions.
 type SubscriptionRepository interface {
 	Create(ctx context.Context, request CreateSubscription) (item domain.Subscription, created bool, err error)
+	Update(ctx context.Context, request UpdateSubscription) (domain.Subscription, error)
 	Cancel(ctx context.Context, id string) (item domain.Subscription, changed bool, err error)
 	List(ctx context.Context, query SubscriptionListQuery) (domain.SubscriptionPage, error)
 }
@@ -66,9 +97,4 @@ type DownloadRepository interface {
 // ReadinessProbe verifies dependencies required before traffic is accepted.
 type ReadinessProbe interface {
 	Ready(ctx context.Context) error
-}
-
-// HealthyIntegrationCounter reports currently healthy external integrations.
-type HealthyIntegrationCounter interface {
-	CountHealthy(ctx context.Context) (int, error)
 }

@@ -13,9 +13,8 @@ services:
       WEB_STATIC_DIR: /app/web
       DATABASE_DRIVER: mysql
       DATABASE_DSN: ${DATABASE_DSN:?MySQL DATABASE_DSN is required}
-      DEMO_SEED_ENABLED: "false"
-      ADMIN_USERNAME: ${ADMIN_USERNAME:-test}
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-test}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:?ADMIN_USERNAME is required}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?ADMIN_PASSWORD is required}
       SESSION_SECRET: ${SESSION_SECRET:?SESSION_SECRET is required}
     healthcheck:
       test: ["CMD", "/app/bytemuse", "doctor"]

@@ -5,6 +5,8 @@ import { createRoot } from "react-dom/client";
 import { createBrowserRouter, RouterProvider } from "react-router-dom";
 import { routes } from "./app/routes";
 import "./app/styles.css";
+import { API_BASE } from "./shared/api/client";
+import { useSession } from "./shared/auth/session";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -12,29 +14,32 @@ const queryClient = new QueryClient({
   },
 });
 
-async function enableMocking() {
-  if (!import.meta.env.DEV) return;
-  if (import.meta.env.VITE_ENABLE_MOCK !== "true") {
-    // 旧开发页面可能已经安装 Service Worker，关闭 Mock 时同步移除。
-    const registrations = await navigator.serviceWorker?.getRegistrations();
-    const mockWorkers = (registrations ?? []).filter((item) => item.active?.scriptURL.endsWith("/mockServiceWorker.js"));
-    await Promise.all(mockWorkers.map((item) => item.unregister()));
-    if (mockWorkers.length > 0 && navigator.serviceWorker?.controller?.scriptURL.endsWith("/mockServiceWorker.js")) {
-      window.location.reload();
-      return;
-    }
-    return;
-  }
-  const { worker } = await import("./mocks/browser");
-  await worker.start({ onUnhandledRequest: "bypass" });
-}
-
 const root = document.getElementById("root");
 if (!root) {
   throw new Error("缺少应用根节点");
 }
 
-void enableMocking().then(() => {
+/**
+ * 刷新页面时先恢复 HttpOnly 会话，再挂载受保护布局。
+ * 如果直接先渲染管理布局，子页面的首个请求会在 401 后触发跳转，用户会看到一次明显的页面闪动。
+ */
+async function restoreSession(): Promise<void> {
+  try {
+    const response = await fetch(`${API_BASE}/auth/refresh`, {
+      method: "POST",
+      credentials: "include",
+      headers: { Accept: "application/json" },
+    });
+    if (response.ok) {
+      const result = (await response.json()) as { user?: { id: string; username: string } };
+      if (result.user) useSession.getState().setUser(result.user);
+    }
+  } catch {
+    // 网络不可用时交给页面请求状态展示错误，不阻塞登录页挂载。
+  }
+}
+
+void restoreSession().finally(() => {
   createRoot(root).render(
     <StrictMode>
       <QueryClientProvider client={queryClient}>

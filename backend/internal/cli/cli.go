@@ -13,13 +13,15 @@ type Commands struct {
 	MigrationStatus func(context.Context) (string, error)
 	MigrationUp     func(context.Context) error
 	Doctor          func(context.Context) error
+	LegacyCatalog   func(context.Context, string) error
 	LegacyActors    func(context.Context, string) error
+	LegacyRanks     func(context.Context, string) error
 }
 
 // Run validates args, invokes one command, writes operator-facing output, and returns a process exit code.
 func Run(ctx context.Context, args []string, output io.Writer, commands Commands) int {
 	usage := func() int {
-		fmt.Fprintln(output, "用法: bytemuse serve | migrate status | migrate up | migrate legacy-actors <旧版数据库路径> | doctor")
+		fmt.Fprintln(output, "用法: bytemuse serve | migrate status | migrate up | migrate legacy-catalog <旧版数据库路径> | migrate legacy-actors <旧版数据库路径> | migrate legacy-ranks <旧版数据库路径> | doctor")
 		return 2
 	}
 	var err error
@@ -34,8 +36,12 @@ func Run(ctx context.Context, args []string, output io.Writer, commands Commands
 		}
 	case len(args) == 2 && args[0] == "migrate" && args[1] == "up" && commands.MigrationUp != nil:
 		err = commands.MigrationUp(ctx)
+	case len(args) == 3 && args[0] == "migrate" && args[1] == "legacy-catalog" && commands.LegacyCatalog != nil:
+		err = commands.LegacyCatalog(ctx, args[2])
 	case len(args) == 3 && args[0] == "migrate" && args[1] == "legacy-actors" && commands.LegacyActors != nil:
 		err = commands.LegacyActors(ctx, args[2])
+	case len(args) == 3 && args[0] == "migrate" && args[1] == "legacy-ranks" && commands.LegacyRanks != nil:
+		err = commands.LegacyRanks(ctx, args[2])
 	case len(args) == 1 && args[0] == "doctor" && commands.Doctor != nil:
 		err = commands.Doctor(ctx)
 	default:

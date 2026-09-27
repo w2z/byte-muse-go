@@ -7,7 +7,6 @@ import (
 	"net/url"
 	"strings"
 
-	"bytemuse/backend/internal/domain"
 	"bytemuse/backend/internal/ports"
 
 	_ "github.com/go-sql-driver/mysql"
@@ -160,7 +159,7 @@ func (s *sqlStore) Media() ports.MediaRepository {
 }
 
 func (s *sqlStore) Subscriptions() ports.SubscriptionRepository {
-	return &sqlSubscriptionRepository{dialect: s.dialect, exec: s.exec}
+	return &sqlSubscriptionRepository{dialect: s.dialect, exec: s.exec, db: s.db}
 }
 
 func (s *sqlStore) Downloads() ports.DownloadRepository {
@@ -169,14 +168,6 @@ func (s *sqlStore) Downloads() ports.DownloadRepository {
 
 func (s *sqlStore) ReadinessProbe() ports.ReadinessProbe {
 	return &sqlReadinessProbe{dialect: s.dialect, exec: s.exec}
-}
-
-func (s *sqlStore) UpsertMedia(ctx context.Context, media domain.Media) error {
-	return (&sqlMediaRepository{dialect: s.dialect, exec: s.exec}).upsert(ctx, media)
-}
-
-func (s *sqlStore) InsertDownloadTaskForTest(ctx context.Context, task domain.DownloadTask) error {
-	return (&sqlDownloadRepository{dialect: s.dialect, exec: s.exec}).insert(ctx, task)
 }
 
 func (s *sqlStore) SQLDB() *sql.DB {

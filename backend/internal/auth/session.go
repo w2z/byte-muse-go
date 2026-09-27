@@ -214,6 +214,20 @@ func (s *Service) Cookie(session Session) *http.Cookie {
 // CookieName returns the fixed public session-cookie name.
 func CookieName() string { return cookieName }
 
+// ClearCookie 返回用于注销的过期会话 Cookie，属性与登录 Cookie 保持一致。
+func (s *Service) ClearCookie() *http.Cookie {
+	return &http.Cookie{
+		Name:     cookieName,
+		Value:    "",
+		Path:     "/",
+		Expires:  time.Unix(1, 0).UTC(),
+		MaxAge:   -1,
+		HttpOnly: true,
+		Secure:   s.secure,
+		SameSite: http.SameSiteLaxMode,
+	}
+}
+
 // ttlFor 返回本次登录应使用的会话有效期：勾选“记住密码”时用 rememberTTL，否则用 ttl。
 func (s *Service) ttlFor(remember bool) time.Duration {
 	if remember {

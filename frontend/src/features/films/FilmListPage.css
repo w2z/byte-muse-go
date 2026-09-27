@@ -1,0 +1,3 @@
+/* 媒体库页专有样式：卡片里「媒体库」标签与状态徽标同排居中。
+   卡片本身的圆角、边框、封面比例等规格由公共 .code-card 提供，这里不覆盖。 */
+.film-card-library { display: flex; align-items: center; gap: 6px; }

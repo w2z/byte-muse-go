@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 
-	"bytemuse/backend/internal/domain"
 	"bytemuse/backend/internal/ports"
 )
 
@@ -39,9 +38,4 @@ type Store interface {
 	ReadinessProbe() ports.ReadinessProbe
 	SQLDB() *sql.DB
 	Close() error
-
-	// UpsertMedia is a fixture/seed helper kept in the database package so application layers do not learn SQL.
-	UpsertMedia(ctx context.Context, media domain.Media) error
-	// InsertDownloadTaskForTest is a fixture helper for repository contract tests; production writes will move behind services.
-	InsertDownloadTaskForTest(ctx context.Context, task domain.DownloadTask) error
 }

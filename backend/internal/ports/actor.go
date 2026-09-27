@@ -1,11 +1,21 @@
 package ports
 
 import (
-	"bytemuse/backend/internal/domain"
 	"context"
+
+	"bytemuse/backend/internal/domain"
 )
 
-// ActorRepository reads persisted actor subscriptions.
+// ActorListQuery selects all, active, or unsubscribed actors.
+type ActorListQuery struct {
+	Limit        int
+	Offset       int
+	Subscription string
+}
+
+// ActorRepository owns actor subscription dates without deleting actor identity rows.
 type ActorRepository interface {
-	ListSubscribed(ctx context.Context, limit, offset int) ([]domain.Actor, int, error)
+	List(ctx context.Context, query ActorListQuery) ([]domain.Actor, int, error)
+	SaveSubscription(ctx context.Context, name, limitDate string) (domain.Actor, error)
+	CancelSubscription(ctx context.Context, name string) (domain.Actor, error)
 }
