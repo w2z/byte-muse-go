@@ -176,11 +176,17 @@ paths:
         - $ref: '#/components/parameters/PageSize'
         - name: subscription
           in: query
-          description: 按演员订阅状态筛选；all 为全部，active 为已订阅，none 为未订阅
+          description: 演员列表页签；active 为已订阅，hot 为热门演员，all/none 保留兼容
           schema:
             type: string
-            enum: [all, active, none]
-            default: all
+            enum: [all, active, none, hot]
+            default: active
+        - name: keywords
+          in: query
+          description: 按演员名称进行包含匹配；为空时不筛选
+          schema:
+            type: string
+            maxLength: 100
       responses:
         '200':
           description: 演员分页列表

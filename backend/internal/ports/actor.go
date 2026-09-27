@@ -6,11 +6,12 @@ import (
 	"bytemuse/backend/internal/domain"
 )
 
-// ActorListQuery selects all, active, or unsubscribed actors.
+// ActorListQuery selects an actor tab and optional name keyword.
 type ActorListQuery struct {
 	Limit        int
 	Offset       int
 	Subscription string
+	Keywords     string
 }
 
 // ActorRepository owns actor subscription dates without deleting actor identity rows.

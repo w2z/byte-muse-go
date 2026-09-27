@@ -68,7 +68,7 @@ func TestLogMigrationExistsForEveryDialect(t *testing.T) {
 	for _, dialect := range []Dialect{DialectSQLite, DialectPostgres, DialectMySQL} {
 		plan := MigrationPlan(dialect)
 		latest := plan[len(plan)-1]
-		if latest.Version != 10 || latest.Name != "remove_canceled_subscription_rows" {
+		if latest.Version != 11 || latest.Name != "add_catalog_query_indexes" {
 			t.Fatalf("%s latest migration = %d/%s", dialect, latest.Version, latest.Name)
 		}
 	}

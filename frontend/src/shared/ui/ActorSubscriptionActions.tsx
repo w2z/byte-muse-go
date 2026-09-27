@@ -30,11 +30,16 @@ export function ActorSubscriptionActions({ actor }: ActorSubscriptionActionsProp
       {messageHolder}
       {actor.limit_date ? (
         <div className="actor-card-actions">
-          <Button status="danger" loading={cancel.isPending} disabled={cancel.isPending} onClick={() => cancel.mutate()}>取消订阅</Button>
+          <Button status="danger" loading={cancel.isPending} disabled={cancel.isPending} onClick={() => cancel.mutate()}>退订</Button>
           <Button disabled={cancel.isPending} onClick={openEditor}>编辑</Button>
         </div>
       ) : <Button type="primary" onClick={openEditor}>订阅</Button>}
-      <AppDialog title={(actor.limit_date ? "编辑演员 " : "订阅演员 ") + actor.name} visible={visible} onClose={() => setVisible(false)} footer={<><Button onClick={() => setVisible(false)}>取消</Button><Button type="primary" loading={save.isPending} disabled={save.isPending} onClick={() => save.mutate()}>保存</Button></>}>
+      <AppDialog
+        title={(actor.limit_date ? "编辑演员 " : "订阅演员 ") + actor.name}
+        visible={visible}
+        onClose={() => setVisible(false)}
+        footer={<><Button onClick={() => setVisible(false)}>取消</Button><Button type="primary" loading={save.isPending} disabled={save.isPending} onClick={() => save.mutate()}>{actor.limit_date ? "确认" : "保存"}</Button></>}
+      >
         <label className="actor-subscription-date"><span>限制日期</span><input className="actor-subscription-date-input" aria-label="限制日期" type="date" value={limitDate} onInput={(event) => setLimitDate(event.currentTarget.value)} onChange={(event) => setLimitDate(event.currentTarget.value)} /></label>
       </AppDialog>
     </>

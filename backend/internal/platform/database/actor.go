@@ -20,22 +20,48 @@ func NewActorRepository(db *sql.DB, dialect Dialect) ports.ActorRepository {
 	return &actorRepository{db: db, dialect: dialect}
 }
 
-// List returns actors selected by subscription state, ordered by name.
+// List returns actors selected by subscription state and optional name keyword.
 func (r *actorRepository) List(ctx context.Context, request ports.ActorListQuery) ([]domain.Actor, int, error) {
 	limit, offset := normalizePagination(request.Limit, request.Offset)
-	where := ""
+	conditions := make([]string, 0, 2)
+	args := make([]any, 0, 2)
 	switch request.Subscription {
 	case "active":
-		where = " WHERE limit_date IS NOT NULL"
+		conditions = append(conditions, "limit_date IS NOT NULL")
 	case "none":
-		where = " WHERE limit_date IS NULL"
+		conditions = append(conditions, "limit_date IS NULL")
+	case "hot":
+		// 热门演员通过演员榜单快照关联，不额外限制订阅状态。
+	}
+	if keyword := strings.TrimSpace(request.Keywords); keyword != "" {
+		conditions = append(conditions, fmt.Sprintf("UPPER(name) LIKE %s", placeholder(r.dialect, len(args)+1)))
+		args = append(args, "%"+strings.ToUpper(keyword)+"%")
+	}
+	where := ""
+	if len(conditions) > 0 {
+		where = " WHERE " + strings.Join(conditions, " AND ")
+	}
+	from := "actors"
+	if request.Subscription == "hot" {
+		from = "actors a INNER JOIN rank_entries ar ON ar.rank_type = 'actors' AND UPPER(ar.code) = UPPER(a.name)"
 	}
 	var total int
-	if err := r.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM actors"+where).Scan(&total); err != nil {
+	if err := r.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+from+where, args...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
-	query := fmt.Sprintf(`SELECT name, photo, limit_date FROM actors%s ORDER BY name LIMIT %s OFFSET %s`, where, placeholder(r.dialect, 1), placeholder(r.dialect, 2))
-	rows, err := r.db.QueryContext(ctx, query, limit, offset)
+	orderBy := "name ASC"
+	if request.Subscription == "hot" {
+		orderBy = "ar.position ASC, a.name ASC"
+	}
+	selectArgs := append(append([]any{}, args...), limit, offset)
+	selectFrom := "actors"
+	selectColumns := "name, photo, limit_date"
+	if request.Subscription == "hot" {
+		selectFrom = "actors a INNER JOIN rank_entries ar ON ar.rank_type = 'actors' AND UPPER(ar.code) = UPPER(a.name)"
+		selectColumns = "a.name, a.photo, a.limit_date"
+	}
+	query := fmt.Sprintf(`SELECT %s FROM %s%s ORDER BY %s LIMIT %s OFFSET %s`, selectColumns, selectFrom, where, orderBy, placeholder(r.dialect, len(selectArgs)-1), placeholder(r.dialect, len(selectArgs)))
+	rows, err := r.db.QueryContext(ctx, query, selectArgs...)
 	if err != nil {
 		return nil, 0, err
 	}

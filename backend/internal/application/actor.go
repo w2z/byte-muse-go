@@ -21,18 +21,18 @@ func NewActorService(repository ports.ActorRepository) *ActorService {
 	return &ActorService{repository: repository}
 }
 
-// List returns only actors with an active legacy subscription date.
-func (s *ActorService) List(ctx context.Context, page, pageSize int, subscription string) (Page[domain.Actor], error) {
+// List returns actors for a tab and optional name keyword.
+func (s *ActorService) List(ctx context.Context, page, pageSize int, subscription, keywords string) (Page[domain.Actor], error) {
 	if err := validatePagination(page, pageSize); err != nil {
 		return Page[domain.Actor]{}, err
 	}
 	if subscription == "" {
 		subscription = "all"
 	}
-	if subscription != "all" && subscription != "active" && subscription != "none" {
+	if subscription != "all" && subscription != "active" && subscription != "none" && subscription != "hot" {
 		return Page[domain.Actor]{}, ErrInvalidPagination
 	}
-	items, total, err := s.repository.List(ctx, ports.ActorListQuery{Limit: pageSize, Offset: (page - 1) * pageSize, Subscription: subscription})
+	items, total, err := s.repository.List(ctx, ports.ActorListQuery{Limit: pageSize, Offset: (page - 1) * pageSize, Subscription: subscription, Keywords: keywords})
 	if err != nil {
 		return Page[domain.Actor]{}, fmt.Errorf("list actors: %w", err)
 	}

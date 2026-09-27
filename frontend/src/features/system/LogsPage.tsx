@@ -1,4 +1,4 @@
-import { Button, DatePicker, Divider, Input, Modal, Select } from "@arco-design/web-react";
+import { Button, DatePicker, Divider, Input, Select } from "@arco-design/web-react";
 import { IconDelete, IconSearch } from "@arco-design/web-react/icon";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
@@ -7,6 +7,7 @@ import { clampLogTimeRange, getDisabledLogTime, getLogTimeShortcuts, isFutureLog
 import { formatLogMessage, shouldDisplayLog } from "./logMessage";
 import { apiRequest, type Page } from "../../shared/api/client";
 import type { LogRecord } from "../../shared/api/types";
+import { AppDialog } from "../../shared/ui/AppDialog";
 import { useFeedbackMessage } from "../../shared/ui/FeedbackMessage";
 import { ListPagination } from "../../shared/ui/ListPagination";
 import { PageHeader } from "../../shared/ui/PageHeader";
@@ -40,7 +41,7 @@ function formatTime(value: string): string {
 /** 系统日志页面：筛选区和日志流共用白色内容区，筛选规则由后端统一执行。 */
 export function LogsPage() {
   const queryClient = useQueryClient();
-  const [modal, modalHolder] = Modal.useModal();
+  const [clearConfirmVisible, setClearConfirmVisible] = useState(false);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(DEFAULT_LOG_PAGE_SIZE);
   const [draftKeyword, setDraftKeyword] = useState("");
@@ -80,6 +81,7 @@ export function LogsPage() {
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["logs"] });
+      setClearConfirmVisible(false);
       message.success("日志已清空");
     },
     onError: (error: Error) => message.error(error.message),
@@ -112,17 +114,16 @@ export function LogsPage() {
     setPageSize(next);
     setPage(1);
   };
+  /** 打开清空确认弹窗；真正的删除只在弹窗里点「确定清空」时执行。
+      清空范围随当前已生效的筛选条件变化，所以文案要区分「当前筛选结果」和「全部日志」。 */
   const confirmClearLogs = () => {
     if (clearMutation.isPending) return;
-    modal.confirm?.({
-      title: "清空日志",
-      content: keyword || category || level || timeRange ? "确定清空当前筛选结果中的日志吗？清空后无法恢复。" : "确定清空全部日志吗？清空后无法恢复。",
-      okText: "确定清空",
-      cancelText: "取消",
-      okButtonProps: { status: "danger" },
-      maskClosable: false,
-      onOk: () => clearMutation.mutateAsync(),
-    });
+    setClearConfirmVisible(true);
+  };
+  /** 弹窗关闭：请求进行中不允许关（点遮罩、ESC、右上角 X 都走这里），避免请求结果无处反馈。 */
+  const closeClearConfirm = () => {
+    if (clearMutation.isPending) return;
+    setClearConfirmVisible(false);
   };
 
   return (
@@ -169,7 +170,7 @@ export function LogsPage() {
             </div>
             <Button type="primary" icon={<IconSearch />} onClick={applyFilters}>查询</Button>
             <Button onClick={resetFilters}>重置</Button>
-            <Button className="logs-clear-button" status="danger" icon={<IconDelete />} loading={clearMutation.isPending} onClick={confirmClearLogs}>清空日志</Button>
+            <Button className="logs-clear-button" status="danger" icon={<IconDelete />} onClick={confirmClearLogs}>清空日志</Button>
           </div>
           <Divider className="logs-divider" />
           <div className="logs-terminal" role="log" aria-label="系统日志" aria-live="polite">
@@ -191,7 +192,19 @@ export function LogsPage() {
         </div>
       </PageState>
       {messageHolder}
-      {modalHolder}
+      {/* 清空确认弹窗走公共 AppDialog：点遮罩空白、ESC、右上角 X 三种方式都能关。
+          Arco 的 Modal.confirm 遮罩关闭只认 click，在弹窗内拖选后到遮罩上松手会误关，本项目不用它。 */}
+      <AppDialog
+        title="清空日志"
+        visible={clearConfirmVisible}
+        onClose={closeClearConfirm}
+        footer={<>
+          <Button onClick={closeClearConfirm}>取消</Button>
+          <Button status="danger" loading={clearMutation.isPending} disabled={clearMutation.isPending} onClick={() => clearMutation.mutate()}>确定清空</Button>
+        </>}
+      >
+        {keyword || category || level || timeRange ? "确定清空当前筛选结果中的日志吗？清空后无法恢复。" : "确定清空全部日志吗？清空后无法恢复。"}
+      </AppDialog>
     </section>
   );
 }

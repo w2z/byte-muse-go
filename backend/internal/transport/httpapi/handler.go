@@ -421,7 +421,7 @@ func listActors(service *application.ActorService) http.HandlerFunc {
 		if !ok {
 			return
 		}
-		result, err := service.List(request.Context(), page, pageSize, request.URL.Query().Get("subscription"))
+		result, err := service.List(request.Context(), page, pageSize, request.URL.Query().Get("subscription"), request.URL.Query().Get("keywords"))
 		if err != nil {
 			writeApplicationError(response, err)
 			return

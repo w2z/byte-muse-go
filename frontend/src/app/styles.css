@@ -71,8 +71,9 @@ body button.arco-btn[class]:focus-visible { box-shadow: none; }
 .app-shell { display: flex; flex-direction: column; height: 100vh; overflow: hidden; background: var(--page); }
 .app-body { display: flex; flex: 1 1 auto; width: 100%; min-height: 0; }
 /* 首屏布局在数据请求完成前就占据稳定宽度，避免刷新时正文先回弹。 */
-.app-sider { position: relative; z-index: 2; flex: 0 0 240px; width: 240px; height: 100%; background: var(--panel); border-right: 1px solid var(--line); }
-.app-sider.arco-layout-sider-collapsed { flex-basis: 64px; width: 64px; }
+/* 宽度由 Arco Layout.Sider 的内联 style 控制，不能用固定 flex-basis 覆盖，
+   否则折叠时 Flex 布局会直接跳变，无法执行 Arco 自带的 width 过渡。 */
+.app-sider { position: relative; z-index: 2; flex: 0 0 auto; height: 100%; background: var(--panel); border-right: 1px solid var(--line); }
 .brand-lockup { display: flex; align-items: center; gap: 12px; height: 100%; cursor: pointer; }
 .brand-mark { color: var(--mint); font: 800 19px/1 "PingFang SC", "Microsoft YaHei", Arial, sans-serif; letter-spacing: -1.5px; }
 .brand-mark span { color: var(--mint-deep); font-weight: 400; }
@@ -231,7 +232,7 @@ h1 { margin: 0; color: var(--ink); font-size: 16px; font-weight: 500; letter-spa
 .media-player-empty { display: grid; min-height: 240px; place-items: center; color: var(--muted); background: var(--panel-deep); }
 /* 全局操作反馈：参考 Ant Design Message 顶部居中提示，但保留项目 Arco token。
    进入时从上方轻落并淡入，关闭时向上收回并淡出；动画阶段由 FeedbackMessage 组件控制。 */
-.feedback-message { position: fixed; z-index: 1101; top: 56px; left: 50%; display: inline-flex; min-height: 40px; align-items: center; gap: 8px; max-width: min(560px, calc(100vw - 32px)); padding: 9px 16px; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 4px; box-shadow: 0 6px 16px rgba(0,0,0,.08), 0 3px 6px -4px rgba(0,0,0,.12), 0 9px 28px 8px rgba(0,0,0,.05); font-size: 14px; line-height: 22px; transform: translate(-50%, -10px); opacity: 0; pointer-events: none; }
+.feedback-message { position: fixed; z-index: 1101; top: 56px; left: 50%; display: inline-flex; min-height: 40px; align-items: center; gap: 8px; max-width: min(560px, calc(100vw - 32px)); padding: 9px 16px; color: var(--ink); background: var(--panel); border: 0; border-radius: 4px; box-shadow: 0 4px 10px rgba(0, 0, 0, .1); font-size: 14px; line-height: 22px; transform: translate(-50%, -10px); opacity: 0; pointer-events: none; }
 .feedback-message > .arco-icon { flex: 0 0 auto; font-size: 16px; }
 .feedback-message.success > .arco-icon { color: rgb(0, 180, 42); }
 .feedback-message.error > .arco-icon { color: var(--danger); }
@@ -277,6 +278,14 @@ h1 { margin: 0; color: var(--ink); font-size: 16px; font-weight: 500; letter-spa
 .actor-card-name { color: var(--ink); font-size: 18px; font-weight: 700; line-height: 1.3; overflow-wrap: anywhere; }
 .actor-card-meta { color: var(--muted); font-size: 12px; }
 .actor-card-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.actor-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
+.actor-tabs { flex: 0 0 auto; min-width: 300px; }
+.actor-tabs .arco-tabs-nav { margin-bottom: 0; padding: 4px; background: var(--panel-deep); border-radius: 10px; }
+.actor-tabs .arco-tabs-nav::before, .actor-tabs .arco-tabs-nav-ink { display: none; }
+.actor-tabs .arco-tabs-tab { min-width: 120px; margin: 0; padding: 8px 20px; color: var(--ink-2); border-radius: 6px; justify-content: center; transition: color .18s ease, background .18s ease, box-shadow .18s ease; }
+.actor-tabs .arco-tabs-tab-active { color: var(--ink); background: var(--panel); box-shadow: 0 1px 3px rgba(0, 0, 0, .08); }
+.actor-search { width: min(280px, 42vw); }
+@media (max-width: 640px) { .actor-toolbar { align-items: stretch; flex-direction: column; } .actor-tabs { min-width: 0; } .actor-search { width: 100%; } }
 .actor-subscription-date { display: grid; gap: 8px; }
 .actor-subscription-date-input { width: 100%; height: 32px; padding: 4px 12px; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 2px; outline: none; }
 .actor-subscription-date-input:hover { border-color: var(--faint); }

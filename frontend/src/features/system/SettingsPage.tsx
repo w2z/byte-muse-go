@@ -28,6 +28,11 @@ type SettingGroup = { code: string; title: string; fields: SettingField[] };
 type SettingCategory = { code: string; title: string; groupCodes: string[] };
 type SettingsUpdate = { values: Record<string, string> };
 const TabPane = Tabs.TabPane;
+
+/** 判断设置页是否应响应 Ctrl+S，忽略浏览器默认的网页保存快捷键。 */
+export function isSettingsSaveShortcut(event: Pick<KeyboardEvent, "key" | "ctrlKey">): boolean {
+  return event.ctrlKey && event.key.toLowerCase() === "s";
+}
 /** 表单草稿：文本类存字符串，开关类存布尔。 */
 type Draft = Record<string, string | boolean>;
 
@@ -747,6 +752,16 @@ export function SettingsPage() {
     update.mutate({ values: buildPayload() });
   };
 
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (!isSettingsSaveShortcut(event)) return;
+      event.preventDefault();
+      if (!update.isPending) submit();
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [update.isPending, submit]);
+
   const reset = () => {
     if (query.data) syncDraft(query.data);
   };
@@ -1001,7 +1016,7 @@ export function SettingsPage() {
             type="primary"
             icon={<IconSave />}
             loading={update.isPending}
-            disabled={!hasChanges || update.isPending}
+            disabled={update.isPending}
             onClick={submit}
           >
             保存设置

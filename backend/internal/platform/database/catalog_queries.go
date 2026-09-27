@@ -227,15 +227,48 @@ func (r *CatalogQueryRepository) Recommend(ctx context.Context, startDate, endDa
 		return domain.MediaPage{Items: []domain.Media{}, Total: total}, nil
 	}
 	end := min(offset+limit, total)
-	items := make([]domain.Media, 0, end-offset)
-	for _, candidate := range filtered[offset:end] {
-		item, err := scanMediaProjection(r.db.QueryRowContext(ctx, fmt.Sprintf("SELECT %s FROM media m %s WHERE m.id = %s", mediaProjectionColumns("m"), mediaProjectionJoins(), placeholder(r.dialect, 1)), candidate.id))
-		if err != nil {
-			return domain.MediaPage{}, err
-		}
-		items = append(items, item)
+	selected := filtered[offset:end]
+	ids := make([]string, 0, len(selected))
+	for _, candidate := range selected {
+		ids = append(ids, candidate.id)
+	}
+	items, err := r.loadMediaProjectionBatch(ctx, ids)
+	if err != nil {
+		return domain.MediaPage{}, err
 	}
 	return domain.MediaPage{Items: items, Total: total}, nil
+}
+
+// loadMediaProjectionBatch loads complete media projections in one query and restores the requested ID order.
+func (r *CatalogQueryRepository) loadMediaProjectionBatch(ctx context.Context, ids []string) ([]domain.Media, error) {
+	if len(ids) == 0 {
+		return []domain.Media{}, nil
+	}
+	placeholdersSQL := placeholders(r.dialect, len(ids), 1)
+	args := make([]any, len(ids))
+	for index, id := range ids {
+		args[index] = id
+	}
+	rows, err := r.db.QueryContext(ctx, fmt.Sprintf("SELECT %s FROM media m %s WHERE m.id IN (%s)", mediaProjectionColumns("m"), mediaProjectionJoins(), placeholdersSQL), args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	loaded, err := scanMediaProjectionRows(rows)
+	if err != nil {
+		return nil, err
+	}
+	byID := make(map[string]domain.Media, len(loaded))
+	for _, item := range loaded {
+		byID[item.ID] = item
+	}
+	ordered := make([]domain.Media, 0, len(ids))
+	for _, id := range ids {
+		if item, ok := byID[id]; ok {
+			ordered = append(ordered, item)
+		}
+	}
+	return ordered, nil
 }
 
 type recommendationProfile struct {

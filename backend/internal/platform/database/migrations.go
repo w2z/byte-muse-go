@@ -27,7 +27,16 @@ func MigrationPlan(dialect Dialect) []Migration {
 	default:
 		return nil
 	}
-	return append(plan, settingsMigration(dialect), activeSubscriptionMigration(dialect), defaultSettingsMigration(dialect), systemLogsMigration(dialect), logRetentionSettingMigration(dialect), cleanupCanceledSubscriptionsMigration(dialect))
+	return append(plan, settingsMigration(dialect), activeSubscriptionMigration(dialect), defaultSettingsMigration(dialect), systemLogsMigration(dialect), logRetentionSettingMigration(dialect), cleanupCanceledSubscriptionsMigration(dialect), catalogQueryIndexesMigration(dialect))
+}
+
+// catalogQueryIndexesMigration adds the indexes used by the release and recommendation projections.
+func catalogQueryIndexesMigration(dialect Dialect) Migration {
+	return Migration{Version: 11, Name: "add_catalog_query_indexes", Statements: []string{
+		"CREATE INDEX idx_media_release_date_code ON media (release_date, code)",
+		"CREATE INDEX idx_media_release_subscription ON media (release_date, subscription_status)",
+		"CREATE INDEX idx_legacy_metadata_status_media ON legacy_media_metadata (legacy_status, media_id)",
+	}}
 }
 
 // cleanupCanceledSubscriptionsMigration removes rows written by the former soft-cancel behavior.

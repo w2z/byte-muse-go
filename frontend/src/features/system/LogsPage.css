@@ -51,6 +51,9 @@ body[arco-theme="dark"] .logs-terminal { background: rgba(255, 255, 255, .05); }
 .logs-loading-spinner { width: 16px; height: 16px; border: 2px solid var(--line); border-top-color: var(--mint); border-radius: 50%; animation: logs-spin .7s linear infinite; }
 @keyframes logs-spin { to { transform: rotate(360deg); } }
 .logs-content-card .list-pagination { margin: 16px 24px 20px; }
+/* 清空日志的确认弹窗只有一行说明文字，公共弹窗默认 720px 会显得空。
+   遮罩虽然 position: fixed，但 DOM 上仍在 .logs-page 内，所以在这里局部收窄即可，不动公共组件。 */
+.logs-page .app-dialog { width: min(420px, 100%); }
 @media (max-width: 760px) {
   .logs-filters { padding: 16px; white-space: normal; }
   /* 窄屏：每个「标签 + 控件」独占一行，控件吃满剩余宽度，四个字段仍然同宽。 */
