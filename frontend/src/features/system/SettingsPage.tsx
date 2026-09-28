@@ -52,8 +52,8 @@ const mainSiteOptions: SettingOption[] = [
   { value: "BT", label: "BT" },
   { value: "PTT", label: "PTT" },
   { value: "NicePT", label: "NicePT" },
-  { value: "PTFans", label: "PTFans 9KG" },
-  { value: "RousiPro", label: "RousiPro 9KG" },
+  { value: "PTFans", label: "PTFans" },
+  { value: "RousiPro", label: "RousiPro" },
 ];
 
 const imageModeOptions: SettingOption[] = [
