@@ -47,3 +47,163 @@ func TestSettingsRejectsNegativeRetentionDays(t *testing.T) {
 		t.Fatal("negative retention days must be rejected")
 	}
 }
+
+func TestSettingsAcceptsDownloaderAndBypassOptions(t *testing.T) {
+	service, err := NewSettingsService(settingsRepositoryStub{}, "sqlite", "a-development-secret-with-at-least-32-bytes")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Update(context.Background(), map[string]string{
+		"ARIA2_URL":     "http://aria2:6800/jsonrpc",
+		"BYPASS_ENGINE": "scrapling",
+	}); err != nil {
+		t.Fatalf("new settings should be accepted: %v", err)
+	}
+}
+
+func TestSettingsRejectsUnknownBypassEngine(t *testing.T) {
+	service, err := NewSettingsService(settingsRepositoryStub{}, "sqlite", "a-development-secret-with-at-least-32-bytes")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Update(context.Background(), map[string]string{"BYPASS_ENGINE": "unknown"}); err == nil {
+		t.Fatal("unknown bypass engine must be rejected")
+	}
+}
+
+func TestSettingsAcceptsPTAndBTDefaultDownloaders(t *testing.T) {
+	service, err := NewSettingsService(settingsRepositoryStub{}, "sqlite", "a-development-secret-with-at-least-32-bytes")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Update(context.Background(), map[string]string{
+		"PT_DEFAULT_DOWNLOADER": "transmission",
+		"BT_DEFAULT_DOWNLOADER": "aria2",
+	}); err != nil {
+		t.Fatalf("default downloader settings should be accepted: %v", err)
+	}
+}
+
+func TestSettingsRejectsDisallowedDefaultDownloaders(t *testing.T) {
+	service, err := NewSettingsService(settingsRepositoryStub{}, "sqlite", "a-development-secret-with-at-least-32-bytes")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for key, value := range map[string]string{
+		"PT_DEFAULT_DOWNLOADER": "aria2",
+		"BT_DEFAULT_DOWNLOADER": "clouddrive2",
+	} {
+		if _, err := service.Update(context.Background(), map[string]string{key: value}); err == nil {
+			t.Fatalf("%s=%s must be rejected", key, value)
+		}
+	}
+}
+
+func TestSettingsPTSiteCredentialsAndRetiredRousiKey(t *testing.T) {
+	service, err := NewSettingsService(settingsRepositoryStub{}, "sqlite", "a-development-secret-with-at-least-32-bytes")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"PTFANS_COOKIE", "ROUSIPRO_COOKIE"} {
+		if _, err := service.Update(context.Background(), map[string]string{key: "session=demo"}); err != nil {
+			t.Fatalf("%s: %v", key, err)
+		}
+	}
+	for _, values := range []map[string]string{{"ROUSI_COOKIE": "legacy"}, {"MAIN_SITE": "Rousi"}} {
+		if _, err := service.Update(context.Background(), values); err == nil {
+			t.Fatalf("retired value accepted: %#v", values)
+		}
+	}
+}
+
+// settingsMemoryRepository 只在测试中保留加密记录，用于核验保存和读取的真实业务边界。
+type settingsMemoryRepository struct{ items []ports.StoredSetting }
+
+func (r *settingsMemoryRepository) List(context.Context) ([]ports.StoredSetting, error) {
+	return r.items, nil
+}
+func (r *settingsMemoryRepository) Upsert(_ context.Context, items []ports.StoredSetting) error {
+	for _, item := range items {
+		found := false
+		for i := range r.items {
+			if r.items[i].Key == item.Key {
+				r.items[i] = item
+				found = true
+				break
+			}
+		}
+		if !found {
+			r.items = append(r.items, item)
+		}
+	}
+	return nil
+}
+
+func TestSettingsSiteAuthModesAndEncryptedCredentials(t *testing.T) {
+	repo := &settingsMemoryRepository{}
+	service, err := NewSettingsService(repo, "sqlite", "a-development-secret-with-at-least-32-bytes")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	values := map[string]string{
+		"PTT_AUTH_TYPE": "key", "PTT_PASSKEY": "example-passkey", "PTT_UID": "123", "PTT_COOKIE": "session=example",
+		"PTFANS_AUTH_TYPE": "key", "PTFANS_API_KEY": "example-ptfans",
+		"ROUSIPRO_AUTH_TYPE": "cookie", "ROUSIPRO_API_KEY": "example-rousi",
+		"NICEPT_AUTH_TYPE": "key", "NICEPT_API_KEY": "example-nicept",
+	}
+	settings, err := service.Update(ctx, values)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for key, want := range values {
+		if settings.Values[key] != want {
+			t.Fatalf("%s did not round trip", key)
+		}
+	}
+	for _, item := range repo.items {
+		if item.Key == "PTT_PASSKEY" || item.Key == "PTT_COOKIE" || item.Key == "PTFANS_API_KEY" || item.Key == "ROUSIPRO_API_KEY" || item.Key == "NICEPT_API_KEY" {
+			if !item.IsSecret || item.Value == values[item.Key] || !settings.Configured[item.Key] {
+				t.Fatalf("%s must be encrypted and configured", item.Key)
+			}
+		}
+	}
+	for _, prefix := range []string{"PTT", "PTFANS", "ROUSIPRO", "NICEPT"} {
+		for _, mode := range []string{"cookie", "key", ""} {
+			if _, err := service.Update(ctx, map[string]string{prefix + "_AUTH_TYPE": mode}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if _, err := service.Update(ctx, map[string]string{prefix + "_AUTH_TYPE": "unknown"}); err == nil {
+			t.Fatalf("%s invalid auth type accepted", prefix)
+		}
+	}
+	for _, uid := range []string{"-1", "0", "1.5", "+1"} {
+		if _, err := service.Update(ctx, map[string]string{"PTT_UID": uid}); err == nil {
+			t.Fatal("non-positive or fractional UID accepted")
+		}
+	}
+	settings, err = service.Update(ctx, map[string]string{"PTFANS_API_KEY": ""})
+	if err != nil || settings.Configured["PTFANS_API_KEY"] {
+		t.Fatal("blank key must clear credential")
+	}
+	if settings.Values["PTT_COOKIE"] != values["PTT_COOKIE"] {
+		t.Fatal("unrelated credential was lost")
+	}
+}
+
+func TestSiteCookieCredentialHonorsModeWithoutFallback(t *testing.T) {
+	for _, prefix := range []string{"PTT", "PTFANS", "ROUSIPRO", "NICEPT"} {
+		for _, mode := range []string{"", "cookie", "key", "invalid"} {
+			values := map[string]string{prefix + "_AUTH_TYPE": mode, prefix + "_COOKIE": "session=example"}
+			got := SiteCookieCredential(values, prefix)
+			want := ""
+			if mode == "cookie" {
+				want = "session=example"
+			}
+			if got != want {
+				t.Fatalf("%s mode %q used incorrect credential", prefix, mode)
+			}
+		}
+	}
+}

@@ -1,16 +1,25 @@
-import { useQuery } from "@tanstack/react-query";
+import { Button } from "@arco-design/web-react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { apiRequest, type Page } from "../../shared/api/client";
 import type { Media, Subscription } from "../../shared/api/types";
 import { DEFAULT_PAGE_SIZE } from "../../shared/ui/ListPagination";
 import { MediaCardGrid } from "../../shared/ui/MediaCardGrid";
 import { PageHeader } from "../../shared/ui/PageHeader";
+import { useFeedbackMessage } from "../../shared/ui/FeedbackMessage";
 import "./SubscriptionListPage.css";
 
 const modeText = { strict: "严格", preload: "预下载" } as const;
 
 /** 订阅列表直接使用服务端内嵌的媒体投影，保证与其他番号页面共用同一张大图卡。 */
 export function SubscriptionListPage() {
+  const [message, messageHolder] = useFeedbackMessage();
+  const queryClient = useQueryClient();
+  const enqueue = useMutation({
+    mutationFn: (id: string) => apiRequest<{ task_id: string }>("/subscriptions/" + encodeURIComponent(id) + "/download", { method: "POST" }),
+    onSuccess: async () => { message.success?.("已加入下载任务"); await queryClient.invalidateQueries(); },
+    onError: (error: Error) => message.error?.(error.message),
+  });
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
   const query = useQuery({
@@ -34,6 +43,7 @@ export function SubscriptionListPage() {
 
   return (
     <section>
+      {messageHolder}
       <PageHeader title="订阅" />
       <MediaCardGrid
         items={items}
@@ -46,7 +56,7 @@ export function SubscriptionListPage() {
         onPageSizeChange={changePageSize}
         itemKey={(item) => item.id}
         toMedia={mediaFor}
-        renderMeta={(item) => <div className="code-card-meta">{modeText[item.mode]}模式</div>}
+        renderMeta={(item) => <div className="code-card-meta">{modeText[item.mode]}模式 <Button type="text" loading={enqueue.isPending && enqueue.variables === item.id} onClick={() => enqueue.mutate(item.id)}>搜索下载</Button></div>}
       />
     </section>
   );

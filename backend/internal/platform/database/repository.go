@@ -24,11 +24,13 @@ type sqlMediaRepository struct {
 
 func (r *sqlMediaRepository) List(ctx context.Context, query ports.MediaListQuery) (domain.MediaPage, error) {
 	limit, offset := normalizePagination(query.Limit, query.Offset)
+	where, args := mediaListWhere(r.dialect, query)
 	var total int
-	if err := r.exec.QueryRowContext(ctx, `SELECT COUNT(*) FROM media`).Scan(&total); err != nil {
+	if err := r.exec.QueryRowContext(ctx, "SELECT COUNT(*) FROM media m"+where, args...).Scan(&total); err != nil {
 		return domain.MediaPage{}, err
 	}
-	rows, err := r.exec.QueryContext(ctx, fmt.Sprintf(`SELECT %s FROM media m %s ORDER BY m.updated_at DESC, m.id ASC LIMIT %s OFFSET %s`, mediaProjectionColumns("m"), mediaProjectionJoins(), placeholder(r.dialect, 1), placeholder(r.dialect, 2)), limit, offset)
+	selectArgs := append(append([]any{}, args...), limit, offset)
+	rows, err := r.exec.QueryContext(ctx, fmt.Sprintf("SELECT %s FROM media m %s%s ORDER BY m.updated_at DESC, m.id ASC LIMIT %s OFFSET %s", mediaProjectionColumns("m"), mediaProjectionJoins(), where, placeholder(r.dialect, len(selectArgs)-1), placeholder(r.dialect, len(selectArgs))), selectArgs...)
 	if err != nil {
 		return domain.MediaPage{}, err
 	}
@@ -38,6 +40,43 @@ func (r *sqlMediaRepository) List(ctx context.Context, query ports.MediaListQuer
 		return domain.MediaPage{}, err
 	}
 	return domain.MediaPage{Items: items, Total: total}, nil
+}
+
+// mediaListWhere builds the shared server-side filters for all-media and library views.
+func mediaListWhere(dialect Dialect, query ports.MediaListQuery) (string, []any) {
+	clauses := make([]string, 0, 4)
+	args := make([]any, 0, 4)
+	add := func(sql string, value any) {
+		args = append(args, value)
+		clauses = append(clauses, fmt.Sprintf(sql, placeholder(dialect, len(args))))
+	}
+	if term := strings.TrimSpace(query.Search); term != "" {
+		pattern := "%" + strings.ToUpper(term) + "%"
+		args = append(args, pattern, pattern, pattern)
+		clauses = append(clauses, fmt.Sprintf("(UPPER(m.code) LIKE %s OR UPPER(m.title) LIKE %s OR UPPER(COALESCE(m.translated_title, '')) LIKE %s)", placeholder(dialect, len(args)-2), placeholder(dialect, len(args)-1), placeholder(dialect, len(args))))
+	}
+	if value := strings.TrimSpace(query.SubscriptionStatus); value != "" {
+		if value == string(domain.SubscriptionStatusNone) {
+			clauses = append(clauses, "NOT EXISTS (SELECT 1 FROM subscriptions sf WHERE sf.media_id = m.id AND sf.status = 'active')")
+		} else {
+			add("CASE WHEN EXISTS (SELECT 1 FROM subscriptions sf WHERE sf.media_id = m.id AND sf.status = 'active') THEN 'active' ELSE m.subscription_status END = %s", value)
+		}
+	}
+	if value := strings.TrimSpace(query.DownloadStatus); value != "" {
+		add("COALESCE((SELECT df.status FROM download_tasks df WHERE df.media_id = m.id ORDER BY df.updated_at DESC, df.id DESC LIMIT 1), 'unknown') = %s", value)
+	}
+	if value := strings.TrimSpace(query.LibraryStatus); value != "" {
+		add("m.library_status = %s", value)
+	}
+	if value := strings.TrimSpace(query.VideoType); value == "unknown" {
+		clauses = append(clauses, "m.video_type IS NULL")
+	} else if value != "" {
+		add("m.video_type = %s", value)
+	}
+	if len(clauses) == 0 {
+		return "", args
+	}
+	return " WHERE " + strings.Join(clauses, " AND "), args
 }
 
 func (r *sqlMediaRepository) Get(ctx context.Context, id string) (domain.Media, error) {
@@ -73,11 +112,11 @@ func (r *sqlMediaRepository) upsert(ctx context.Context, media domain.Media) err
 	if err := validateMedia(media); err != nil {
 		return err
 	}
-	columns := []string{"id", "code", "title", "translated_title", "poster_url", "release_date", "duration_minutes", "subscription_status", "library_status", "created_at", "updated_at"}
+	columns := []string{"id", "code", "title", "translated_title", "poster_url", "release_date", "duration_minutes", "subscription_status", "library_status", "created_at", "updated_at", "video_type"}
 	base := fmt.Sprintf(`INSERT INTO media (%s) VALUES (%s)`, strings.Join(columns, ", "), placeholders(r.dialect, len(columns), 1))
-	updates := []string{"code", "title", "translated_title", "poster_url", "release_date", "duration_minutes", "subscription_status", "library_status", "created_at", "updated_at"}
+	updates := []string{"code", "title", "translated_title", "poster_url", "release_date", "duration_minutes", "subscription_status", "library_status", "created_at", "updated_at", "video_type"}
 	query := base + upsertClause(r.dialect, "id", updates)
-	_, err := r.exec.ExecContext(ctx, query, media.ID, media.Code, media.Title, nullString(media.TranslatedTitle), nullString(media.PosterURL), nullString(media.ReleaseDate), nullInt(media.DurationMinutes), media.SubscriptionStatus, media.LibraryStatus, encodeTime(media.CreatedAt, r.dialect), encodeTime(media.UpdatedAt, r.dialect))
+	_, err := r.exec.ExecContext(ctx, query, media.ID, media.Code, media.Title, nullString(media.TranslatedTitle), nullString(media.PosterURL), nullString(media.ReleaseDate), nullInt(media.DurationMinutes), media.SubscriptionStatus, media.LibraryStatus, encodeTime(media.CreatedAt, r.dialect), encodeTime(media.UpdatedAt, r.dialect), nullString(media.VideoType))
 	return err
 }
 
@@ -335,7 +374,42 @@ type sqlDownloadRepository struct {
 
 func (r *sqlDownloadRepository) List(ctx context.Context, query ports.DownloadListQuery) (domain.DownloadPage, error) {
 	limit, offset := normalizePagination(query.Limit, query.Offset)
-	where, args := statusWhere(r.dialect, string(query.Status))
+	var conditions []string
+	var args []any
+	add := func(column string, value any, operator string) {
+		args = append(args, value)
+		conditions = append(conditions, column+operator+placeholder(r.dialect, len(args)))
+	}
+	if query.Status != "" {
+		add("status", query.Status, " = ")
+	}
+	if query.TransferStatus != "" {
+		if query.TransferStatus == "failed" {
+			conditions = append(conditions, "(status='failed' OR transfer_status='failed')")
+		} else {
+			add("transfer_status", query.TransferStatus, " = ")
+		}
+	}
+	for _, bound := range []struct {
+		column, operator string
+		value            *time.Time
+	}{
+		{"added_at", " >= ", query.AddedFrom}, {"added_at", " < ", query.AddedTo},
+		{"completed_at", " >= ", query.CompletedFrom}, {"completed_at", " < ", query.CompletedTo},
+	} {
+		if bound.value != nil {
+			if r.dialect == DialectSQLite {
+				args = append(args, encodeTime(*bound.value, r.dialect))
+				conditions = append(conditions, "julianday("+bound.column+")"+bound.operator+"julianday("+placeholder(r.dialect, len(args))+")")
+			} else {
+				add(bound.column, encodeTime(*bound.value, r.dialect), bound.operator)
+			}
+		}
+	}
+	where := ""
+	if len(conditions) > 0 {
+		where = " WHERE " + strings.Join(conditions, " AND ")
+	}
 	var total int
 	if err := r.exec.QueryRowContext(ctx, `SELECT COUNT(*) FROM download_tasks`+where, args...).Scan(&total); err != nil {
 		return domain.DownloadPage{}, err
@@ -376,6 +450,9 @@ func (p *sqlReadinessProbe) Ready(ctx context.Context) error {
 }
 
 func validateMedia(media domain.Media) error {
+	if media.VideoType != nil && !domain.ValidVideoType(*media.VideoType) {
+		return fmt.Errorf("invalid video type")
+	}
 	if media.ID == "" || media.Code == "" || media.Title == "" {
 		return fmt.Errorf("media id, code and title are required")
 	}
@@ -504,7 +581,7 @@ func mediaColumns() string {
 
 func mediaProjectionColumns(alias string) string {
 	base := strings.Replace(prefixedMediaColumns(alias), alias+".subscription_status", "CASE WHEN s.id IS NOT NULL THEN 'active' ELSE "+alias+".subscription_status END", 1)
-	return base + ", lm.banner_url, lm.preview_url, lm.still_photo, " +
+	return base + ", " + alias + ".video_type, lm.banner_url, lm.preview_url, lm.still_photo, " +
 		"s.id, s.media_id, s.status, s.mode, s.filter_json, s.created_at, s.updated_at, s.version, d.status"
 }
 
@@ -527,7 +604,7 @@ func subscriptionColumns() string {
 }
 
 func downloadColumns() string {
-	return "id, media_id, status, external_id, error_message, created_at, updated_at"
+	return "id, media_id, status, external_id, error_message, created_at, updated_at, source_site, source_kind, downloader, info_hash, transfer_status, added_at, completed_at"
 }
 
 type rowScanner interface{ Scan(dest ...any) error }
@@ -569,6 +646,7 @@ func scanMediaProjection(row rowScanner) (domain.Media, error) {
 	if err := row.Scan(
 		&item.ID, &item.Code, &item.Title, &translatedTitle, &posterURL, &releaseDate, &duration,
 		&item.SubscriptionStatus, &item.LibraryStatus, &createdAt, &updatedAt,
+		&item.VideoType,
 		&bannerURL, &previewURL, &stillPhoto,
 		&subscriptionID, &subscriptionMediaID, &subscriptionStatus, &subscriptionMode, &filterJSON,
 		&subscriptionCreatedAt, &subscriptionUpdatedAt, &subscriptionVersion, &downloadStatus,
@@ -718,13 +796,32 @@ func scanDownloadRows(rows *sql.Rows) ([]domain.DownloadTask, error) {
 	var items []domain.DownloadTask
 	for rows.Next() {
 		var item domain.DownloadTask
-		var externalID, errorMessage any
+		var externalID, errorMessage, sourceSite, sourceKind, downloader, infoHash, transferStatus, addedAt, completedAt any
 		var createdAt, updatedAt any
-		if err := rows.Scan(&item.ID, &item.MediaID, &item.Status, &externalID, &errorMessage, &createdAt, &updatedAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.MediaID, &item.Status, &externalID, &errorMessage, &createdAt, &updatedAt, &sourceSite, &sourceKind, &downloader, &infoHash, &transferStatus, &addedAt, &completedAt); err != nil {
 			return nil, err
 		}
 		item.ExternalID, _ = valueToStringPtr(externalID)
 		item.ErrorMessage, _ = valueToStringPtr(errorMessage)
+		item.SourceSite, _ = valueToStringPtr(sourceSite)
+		item.SourceKind, _ = valueToStringPtr(sourceKind)
+		item.Downloader, _ = valueToStringPtr(downloader)
+		item.InfoHash, _ = valueToStringPtr(infoHash)
+		item.TransferStatus, _ = valueToStringPtr(transferStatus)
+		if addedAt != nil {
+			at, err := valueToTime(addedAt)
+			if err != nil {
+				return nil, err
+			}
+			item.AddedAt = &at
+		}
+		if completedAt != nil {
+			at, err := valueToTime(completedAt)
+			if err != nil {
+				return nil, err
+			}
+			item.CompletedAt = &at
+		}
 		created, err := valueToTime(createdAt)
 		if err != nil {
 			return nil, fmt.Errorf("created_at: %w", err)

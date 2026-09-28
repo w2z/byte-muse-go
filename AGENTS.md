@@ -398,12 +398,16 @@ Docker 发布使用多阶段构建或等效的“构建环境与运行环境分�
 
 ### 12.1 当前阶段
 
+- 下载任务列表新增服务端状态及加入/完成时间筛选。传输状态由 qBittorrent 只读轮询取得；下载失败包含搜索/提交失败与下载器失败，历史未同步字段保持 NULL，不将 submitted 当作下载完成。
+
 - 当前阶段：新版 Go 后端、React/Arco 前端与 API 基线已建立，继续按业务切片扩展旧版功能。
 - 已完成：统一 Agent 规范；旧版目录、接口、ORM、调度、主要集成和关键订阅状态的静态核查；旧数据库第一轮只读结构、行数、状态和代码引用审计。
 - 尚未完成：对标系统全页面和流程清单；数据库异常数据的业务原因；旧功能的完整重建范围与 API 兼容策略。当前技术栈为 Go、React/Arco，支持 SQLite、PostgreSQL、MySQL；首批业务切片已实现，未接入模块仍需逐项建立契约。
 - 新版代码已存在于 backend/、frontend/，API 契约位于 api/openapi.yaml。前端开发和生产构建均直连 Go API，不使用浏览器 Mock 或假数据；所有页面数据必须来自后端数据库。已实现且页面有后端接口支撑：登录、看板、媒体库、订阅、下载任务、演员、上新、推荐、榜单、搜索、设置、任务、日志。标签、厂牌、账户、通知仍缺 Go API，页面明确标记为未接入。设置页的分组、字段命名与旧版/对标站已完全对齐（16 个分组），配置项的消费方（下载器、媒体服务器、通知、过滤排序）仍待按模块接入。
 
 ### 12.2 已决策事项
+
+- 清理系统日志固定按服务所在时区每天 00:00 执行（`0 0 * * *`）；执行时读取 `LOG_RETENTION_DAYS`，空值或 0 继续表示不自动清理。修改调度后需重新启动后端才能生效。
 
 - 所有 Agent 只以本文件作为 Agent 规则和项目统一说明。
 - 未加密代码/ 保持只读，旧应用不得直接启动用于探索。
@@ -439,7 +443,84 @@ Docker 发布使用多阶段构建或等效的“构建环境与运行环境分�
 
 ### 12.4 项目级任务记录格式
 
+#### SITE-AUTH-02：站点密钥搜索与取种（2026-09-28）
+
+- 用户明确要求将 SITE-AUTH-01 的密钥字段接入真实搜索和取种；统一沿用 ResourceSearcher/PrivateTorrentSource，资源只保存站点与 ID，不保存秘密下载地址。PTFans/NicePT 共用 NexusPHP 令牌协议，RousiPro 独立协议，PTTime 先核实 PassKey 搜索能力；密钥模式不回退 Cookie。
+- 主 Agent 负责集成；允许新增 torrentsearch/nexusphp.go、nexusphp_test.go、pttime.go、pttime_test.go、site_http.go、site_http_test.go 与 bootstrap/download_sites.go、download_sites_test.go 正式源码测试，修改现有 RousiPro 适配与测试、bootstrap、SettingsPage 及测试、OpenAPI、README 和本记录。RousiPro 子任务独占 rousipro.go 与 rousipro_test.go，其他文件主 Agent 独占。禁止新增过程目录、临时脚本、真实凭据文件或修改旧资料、业务库。
+- 无新增数据库结构；凭据沿用迁移 19 与加密设置。受控 HTTP 验证鉴权隔离、分页、空结果、拒绝异常/跨域/重定向与种子校验；真实验收只搜索和取种，不添加 qB、不下载内容、不创建或轮换站点令牌、不部署或重启在用实例。未确认的站点能力不宣传为已支持。
+- 用户后续确认：不接受有限 RSS 代替全站搜索；缺少完整密钥搜索/下载能力的站点只提供 Cookie。PTTime 移除密钥与 UID 表单，运行时仅使用 PTT_COOKIE；历史密钥字段加密保留但不读取，不改写历史配置。允许 NicePT 子任务修改现有 ptfans.go、ptfans_test.go 并新增 nexus_cookie_test.go；允许主 Agent 移除已失去消费者的 settings-site-key-row 样式。
+- 交付实现：三站密钥搜索分页及取种已装配到订阅手动/定时下载的共享运行时。PTFans cas、NicePT 使用 NexusPHP Bearer API；RousiPro 个人 Key 使用兼容 API 的 keyword/category/page/page_size 和详情返回短时 capability URL，不能混用其浏览器 Cookie API 的 query/category_id/offset 协议。Cookie HTML 搜索复用 NexusCookieSearcher，PTTime adults.php、NicePT torrents.php、PTFans special.php，包含断种与全部结果页。资源 URI 只含站点和 ID，取种限同源、拒绝重定向、校验 info hash；密钥模式不携带 Cookie。
+- 真实证据：Go 适配器无 Cookie 搜索及取种，PTFans 1 条/38815 字节、NicePT 1 条/17913 字节、RousiPro 1 条/80745 字节，全部通过 Bencode/info hash；PTTime 浏览器 Cookie 搜索 SNOS-315 1 条并取种20135字节，Go Cookie 解析/分页/下载为受控 HTTP 验证，尚未使用真实 Cookie 驱动 Go 客户端。未请求 qB、未下载内容、未保存真实凭据、未改在用库或重启部署。
+- 验证：后端全量测试、vet、build；前端31项测试、typecheck、build通过。浏览器确认三站鉴权切换、PTTime仅Cookie、旧提示移除与无横向溢出；存在既有React 19 element.ref兼容警告，构建有chunk体积提示。OpenAPI/Apifox设置GET和PUT引用的两个模型已同步并回读。子Agent任务正文传递失败未产生修改，最终由主Agent实施与审查，不宣称独立审查通过。正式新增仅nexusphp.go/nexusphp_test.go、pttime.go/nexus_cookie_test.go及bootstrap/download_sites.go/download_sites_test.go；无临时仓库产物。
+
+#### SITE-AUTH-01：站点凭据模式设置（2026-09-28）
+
+- 范围：PTTime、PTFans、RousiPro、NicePT 标题下增加密钥/Cookie 单选，分别保存凭据；馒头保持存取令牌。未保存模式默认密钥，已保存的选择保持不变，切换不清除隐藏字段；PTTime 密钥模式为同一行排列的 PassKey 与 UID。H&R 文案保持不变。
+- 主 Agent 负责；仅修改现有 SettingsPage 及测试、settings 服务及测试、migrations 和 pt_site_settings_test、bootstrap、OpenAPI 与本记录，不创建项目新路径、过程文档，不改旧源码或原库，不部署，不保存用户提供的真实令牌，不调用 qB。
+- 契约 SITE-AUTH-01：四站 *_AUTH_TYPE 取 key/cookie，空值默认密钥；PTT_PASSKEY 和三站 *_API_KEY 加密保存，空值未配置；PTT_UID 为正整数字符串，空值未配置。迁移 19 只新增 app_settings 配置记录，不改结构或覆盖旧凭据。
+- 边界：此任务仅交付设置表单与持久化，不扩展站点密钥搜索下载适配；密钥模式在页面明确提示未接入，运行时不得回退使用历史 Cookie。PTTime 无 Cookie 取种已核验，密钥搜索尚未确认。
+- 验证：前端 7 文件 28 测试、类型检查及构建通过，后端 go test ./...、go vet ./...、编译通过；SQLite 18→19 迁移保留旧 Cookie、重复升级保留用户模式。隔离真实实例确认四站切换、保存刷新保留、隐藏 Cookie 恢复、重置、无横向溢出及未捕获控制台错误。设置 GET/PUT 与字段描述、请求/响应示例已同步 Apifox 并回读。未部署或升级在用库，未填真实令牌、未调用 qB；截图返回字节但未显示图像，未完成截图视觉验收。
+- 清理：隔离服务已停止；系统 TEMP 下 bytemuse-site-auth-e9c05f094f6c4565930344c9c189d5d4 清理被环境策略拒绝，保留测试可执行文件和仅含虚构凭据的 SQLite 库，不影响业务库。仓库未新增路径。
+
+#### COLLECT-TAGS-01：少量影片标签追加（2026-09-28）
+
+- 2026-09-28 在用本地实例启用：用户明确允许备份、迁移和重启。SQLite 在线备份及停止旧后端后的最终备份保留于 C:/Users/admin/Documents/ByteMuse-backup-20260928-163440/（before-v15.db、before-restart.db）；副本 15→19 升级和重复迁移通过后，原 dev/bytemuse.db 已升级至 19，新后端 3750 就绪且 dev/backend.pid 已同步。按旧表旧列逐项比对确认 46874 部影片、10511 条订阅、1432 位演员、1200 条榜单及全部旧业务内容未变，既有配置值未改、仅新增 11 项，完整性与外键检查通过；未新增采集或下载任务，未执行全库匹配。
+- 在用浏览器验收：5173/tag 实际显示 759 个标签、每页 15 条；第二页、从第二页搜索 4K 后回到第一页（1 标签、关联 152 部）、无匹配提示及清空搜索恢复均通过。标签目录只读，不提供追新订阅。截图调用未返回可见图像，视觉截图仍未验收；控制台出现既有 React 19 element.ref 兼容提示。启动日志四项旧凭据解密警告在重启前的日志中同样存在，本轮未改写凭据，不将其视为本轮修复范围。
+- 2026-09-28 后续 TAG-CATALOG-01：用户反馈占位页面不可见，补齐只读 GET /tags 与 TagListPage。主 Agent 允许新增 backend/internal/ports/tags.go、application/tags.go、platform/database/tags.go、transport/httpapi/tags.go、tags_test.go 及 frontend/src/features/tags/TagListPage.test.tsx 正式源码/测试；修改已有 handler、bootstrap、API types、OpenAPI、README 与本记录。禁止过程目录、业务库写入、订阅功能扩展及无关迁移。数据库内拆分 genres、按影片去重、搜索、排序、分页，不拉全库到浏览器；无新表或结构迁移。Arco 页面复用 InfoCard、PageState、ListPagination。
+- 标签目录验证：HTTP SQLite 集成测试覆盖去重、计数、字面百分号搜索、无匹配、越界页、非法分页、鉴权；标签页 3 个测试通过，前端构建通过，后端全量测试及 vet 通过。全前端测试当时 30 通过、1 项已有设置页“馒头”标签多匹配失败，未改无关测试。Apifox 8873619 默认模块根目录新增 GET /tags 并回读参数、Cookie、响应及示例。隔离浏览器实例仅复制 20 部已有影片资料，显示 16 标签，翻页、搜索重置和空结果均核实；截图工具未返回图像，视觉截图未验收。
+- 运行边界：本地 dev/bytemuse.db 已有 3246 部影片带 genres，在用库仍是迁移 15，而工作区新增其他任务的迁移 16～19；未擅自重启升级在用实例。需协调这些迁移后再启用在用后端的新 /tags 路由。PostgreSQL/MySQL SQL 已实现但实库未验收；兼容字段的只读聚合仍有数据库扫描开销，未建立持久化标签索引。
+- 临时标签页已关闭，截图能力两次均未返回图像；浏览器控制台读取无 error/warn。系统 TEMP 下 bytemuse-tag-page-77795195c79e44dfa004a615df0f44bb 的清理被环境策略拒绝，留有隔离库、可执行文件和日志，不在仓库；未删除用户文件。
+
+- 用户确认临时复用 legacy_media_metadata.genres，不新增标签表；只需部分影片匹配，不做全库扫描或历史批量回填。主 Agent 修改现有 database/collection.go、collection_test.go、ports/collection.go、README 和本记录；不创建新路径，不改旧资料、业务库、页面、调度和订阅下载模块。沿用 COLLECT-02 API，无参数、响应或迁移变化。
+- 唯一写入规则 saveCollectionTx 按可靠番号找到实际 media.id，仅追加去空、去重后的标签；已有文本和顺序不重写，空标签不清空；缺少兼容资料行时仅建标签资料，旧状态/模式留空表示未知。来源快照保留原始标签数组。与单影片队列共用可串行化事务，失败回滚该影片的标签和来源快照。
+- 真实核查纠正：Netflav 搜索首页 20 条记录均无 tags，详情页才有标签；不把搜索成功表述为已采标签，不自动展开全部详情。明确选少量 source_id 调用已有 detail 入口即可。
+- 验证：先复现新影片标签未规范化、已有标签未补充、NULL 和缺失资料行的失败，再通过重复采集、人工字段保留和队列失败回滚回归。真实抓取一页搜索及最多三条详情，在自动清理的隔离 SQLite 库中保存 3 部带标签影片，重复处理两轮无重复增长；在用库写入 0 条。尚未部署或重启在用实例，PostgreSQL/MySQL 实库未验收。
+
+#### CATALOG-TYPE-01：影片类型与所有影片筛选（2026-09-28）
+
+- 用户要求四种影片类型和“所有影片”筛选。单值 video_type 为 censored/uncensored/uncensored_cracked/leaked；NULL 为未分类，历史影片不猜测回填。迁移 15 增加可空 VARCHAR(32)、默认 NULL、值约束和复合索引；数据库升级由正式迁移执行，不手改业务库。
+- 主 Agent 负责；允许修改现有 domain/ports/application/collector/database/httpapi 相关源码、AllFilmsPage.tsx、共享 API 类型、OpenAPI、README；允许新增 database/media_type_test.go、httpapi/media_type_test.go、films/AllFilmsPage.test.tsx 正式测试。禁止过程目录、旧源码和原库修改、无关界面调整；其他同时出现的资源选择/订阅下载改动保持不动。
+- API 沿用 /media，新增 video_type 单选筛选及响应属性，unknown 查询 NULL；枚举在业务层验证，SQL 参数化过滤、统一总数及分页。采集保存明确提供的类型，JavDB 有码榜新影片写 censored；已有影片分类不覆盖。
+- 验证：SQLite 14→15 及重复升级、旧状态不变、四种分类保存与非法类型拒绝、HTTP 组合筛选与分页均通过；浏览器临时真实库 35 条记录，从第 2 页筛出 7 条并重置至第 1 页，搜索组合空结果、未分类、流出均核实，网络请求 video_type=leaked 返回 200。Apifox /media 及 Media 字段、枚举、示例已同步回读。
+- 未验收项：PostgreSQL/MySQL 实库未运行；浏览器截图接口未返回图像且 CDP 截图超时，无法完成视觉截图验收；存在既有 React 19 ref 警告。仅临时实例执行迁移，未重启在用实例或部署；全工作区测试受并发新增下载模块中间状态影响，不能据早先通过结果声称最终全量通过。
+- 最终本切片相关 database/collector/httpapi/application/bootstrap 测试与 vet、后端 build 通过；前端当时 19 测试及构建通过。临时前后端进程及浏览器标签已关闭；临时 SQLite 目录 bytemuse-types-f2f10ceeff02415a8c1daa557521f074 删除被环境策略拒绝，保留在系统 TEMP，含 35 条虚构验收记录，不影响业务库。
+
+#### COLLECT-03：榜单采集与订阅配置解耦（2026-09-28）
+
+- 用户明确采集不需要填写 RANK_TYPE；旧版 sync_rank 固定采集各榜，RANK_TYPE 仅用于订阅筛选。定时和任务立即执行统一将已接入的 JavDB 有码日、周、月榜全部入队，各榜独立登记；原配置保留。
+- 主 Agent 负责；允许修改 bootstrap/collection.go、bootstrap.go、collector/registry.go、README.md 及本记录，允许新增 bootstrap/collection_test.go 长期回归测试；禁止新增过程目录、修改旧源码/原库、变更订阅下载及部署。沿用 COLLECT-02 API，不修改接口或数据库结构。
+- 源站核查：JavDB 导航另有无码、欧美、FC2、热播、TOP250、FANZA 奖项和演员月榜；部分入口跳转登录，未验证其完整周期和分页。以上未接入，不把已实现三个周期表述为源站全部榜单。JavLibrary 历史 1～5 缓存及演员榜、旧厂牌榜不等于新版采集能力。
+- 回归范围：RANK_TYPE 为空、仅 daily、全部三周期时均登记三个批次及首页队列；单榜登记失败不阻止其余周期。只使用自动清理的临时 SQLite 库，不写业务库。
+- 验证结果：先复现空配置入队 0 个、仅 daily 入队 1 个的失败，再修正并通过三种配置与单榜故障回归；go test ./...、go vet ./...、go build ./... 通过。未部署，源站全类型采集仍未完成。
+
+#### COLLECT-02：持久化逐视频采集队列（2026-09-28）
+
+- 用户确认：JavDB 日周月榜采完全部页；视频逐项事务保存；采集后仅异步翻译，不判断订阅、不执行下载。
+- 负责人主 Agent；允许新增和修改 backend/internal/{ports,application,platform/database,transport/httpapi,bootstrap}/collection*.go、platform/collector 正式源码测试；修改迁移注册、启动装配、handler.go、README.md、api/openapi.yaml。禁止项目临时产物、过程文档、修改原始旧库、前端无关改动和部署。
+- 契约 COLLECT-02：POST /collection/runs 返回 202 与持久化 run_id；GET /collection/runs/{runId} 查询各阶段计数及错误。任务按分页、视频、翻译三阶段恢复；租约及令牌防止过期消费者提交；失败有限重试。榜单按批次留存，完整非空且视频均成功后短事务切换当前榜单，失败视频不回滚已保存影片。
+- 实施与验收：先测试持久化重启恢复、重复领取和单视频失败隔离；复用唯一资料保存规则，将翻译任务与视频保存同事务登记；再测试 100 页以上榜单、循环页失败、旧批次不覆盖新榜、空榜保留、取消恢复；最后鉴权 API、调度、全量测试、构建及 Apifox 同步回读。历史影片属性与订阅下载状态保持不变。
+- 状态：已实现并通过本地集成验证，未部署。迁移 14、持久化三阶段队列、202 受理与状态 API、单视频事务、缺失译文后台任务、完整榜单切换均已接入；不判断订阅、不下载。
+- 最终检查：go test ./...、go vet ./...、go build ./... 和 git diff --check 通过；OpenAPI 与 Apifox 已同步 202 契约、新增状态查询并回读字段、鉴权、示例；原有无关改动保留，未启动在用实例、未执行正式库迁移。
+- 验证：102 页榜单回归、分页失败与循环页、坏视频不影响成功视频、租约恢复/过期提交拒绝、较旧批次防覆盖、翻译失败三次止重试/人工译文保护、后台启动停止、13→14 升级与重复迁移、鉴权 API 状态查询均已测试；真实 Netflav 队列处理 20 视频、116 演员，未写在用库。JavDB 实际访问仍受验证限制；PostgreSQL/MySQL 实库及真实付费翻译未验收。新增进度接口无前端页面，历史批次目前保留不自动清理。
+
+#### COLLECT-01：首批站点元数据采集（2026-09-28）
+
+- 已获用户确认：统一采集接口及 AVBase、JavDB、JavBus、Netflav 首批适配；JavLibrary、厂牌、PT 站及 Avgle、ThisAV、Jable、SupJav 继续列入后续范围。
+- 负责人：主 Agent 集成；站点解析与数据库实现按独立文件并行。允许创建 backend/internal/ports/collection.go、application/collection*.go、platform/collector/ 下正式源码和测试、platform/database/collection*.go、transport/httpapi/collection*.go、bootstrap/collection*.go；允许修改启动注册、依赖、权威迁移及 api/openapi.yaml、README.md。禁止创建过程文档、临时 SQL、仓库内调试产物，未加密代码/ 保持只读。
+- 契约 COLLECT-01：显式 POST /collection/runs 单页采集，GET /collection/sources 查询能力；查询界面原 GET 不产生隐式外站写入。来源快照 source + source_id 唯一；可靠番号才建立媒体记录，采集不得覆盖既有媒体元数据、订阅日期及业务状态。
+- 实施顺序：冻结 ports 契约与公共请求错误分类；并行核实四站解析和事务仓储；接入已鉴权 API 与榜单调度；验证解析异常、空结果、重复执行、迁移升级、历史数据保护；同步 OpenAPI 和 Apifox 并回读。
+- 验收：脱敏结构夹具和 HTTP 受控响应测试、SQLite 独立库事务及迁移测试、真实外站低频只读核验。外站验证页返回明确失败，不作为空结果；不获取视频流、不调用下载器、不回填历史库。
+- 当前状态：部分实现并测试，未完成四站整体交付。统一接口、来源快照迁移 13、事务入库、JavDB search/rank 与 Netflav search/detail 已实现；AVBase、JavBus 返回验证页，未发布未经核实的解析能力。
+- 2026-09-28 核验：Netflav 的 Go 实际请求搜索返回 20 条，详情可读演员和发行日期；JavDB PowerShell 请求可读列表，但 Go 实际请求返回 source_blocked，不能标为真实采集通过。原始旧库和在用实例未改动，未部署；SQLite 独立库验证幂等、历史状态保护、空榜保留、坏批次回滚、12 至 13 升级与 API 入库后列表回查。PostgreSQL/MySQL 尚未进行真实数据库验收。
+- 交付证据：go test ./...、go vet ./...、go build ./... 通过；真实 Netflav 搜索在临时 SQLite 库保存 20 条来源、20 条影片、116 条去重演员。两个采集接口已同步 Apifox 项目 8873619 并回读路径、Cookie、参数、错误响应和示例。未增加前端采集操作入口，暂由已鉴权 API 调用。独立审查 Agent 未收到任务正文，本次仅完成主 Agent 代码审查，不能视为独立审查通过。
+
 新增项目级任务时在本节下方按以下字段记录；完成后保留关键决策和验收结论，移除无长期价值的过程细节：
+
+#### DOWNLOAD-01：订阅资源搜索下载（2026-09-28）
+
+- 目标：活动订阅按番号从 PT 与 BT 搜索资源、复用统一筛选规则、持久化任务并提交下载器；BT 使用 sukebei.nyaa.si，产品名 Nyaa BT。
+- 当前实现：PT 已接入 M-Team，BT 已接入 Nyaa BT；下载器仅 qBittorrent。手动入队接口和 `DOWNLOAD_SCHEDULE_TIME` 调度共用持久化流程；配置在每次处理批次读取。submitted 仅表示下载器按 info hash 回查到任务；模糊结果保持 unknown，不自动重投。
+- 验证边界：隔离 SQLite、受控 HTTP 的 PT/BT 解析、选种、提交、重启恢复和鉴权 API 测试通过；Nyaa RSS 只读请求返回条目。真实 M-Team API 结构、私有种子与 qB 端到端提交，以及 PostgreSQL/MySQL 实库迁移尚未验收；未改在用数据库、未部署。其他 PT 站及 Transmission、aria2、迅雷下载提交未接入。
 
 - 任务编号与业务目标：
 - 负责人及角色：

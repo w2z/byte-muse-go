@@ -1,7 +1,12 @@
 /** 与 api/openapi.yaml 0.1.0 对齐的第一阶段响应类型。 */
 
+/** 已存影片标签及去重关联数，不包含追新订阅状态。 */
+export type CatalogTag = { name: string; media_count: number };
+
 export type SubscriptionStatus = "none" | "active" | "canceled";
 export type LibraryStatus = "unknown" | "absent" | "present";
+/** 影片单值类型；尚未分类时为 null。 */
+export type VideoType = "censored" | "uncensored" | "uncensored_cracked" | "leaked";
 export type DownloadStatus =
   | "queued"
   | "searching"
@@ -30,6 +35,7 @@ export type LoginResponse = {
 };
 
 export type Media = {
+  video_type: VideoType | null;
   id: string;
   code: string;
   title: string;
@@ -64,6 +70,13 @@ export type Subscription = {
 export type DownloadTask = {
   id: string;
   media_id: string;
+  source_site?: string | null;
+  source_kind?: "pt" | "bt" | null;
+  downloader?: string | null;
+  info_hash?: string | null;
+  transfer_status?: "downloading" | "paused" | "failed" | "completed" | null;
+  added_at?: string | null;
+  completed_at?: string | null;
   status: DownloadStatus;
   external_id?: string | null;
   error_message?: string | null;

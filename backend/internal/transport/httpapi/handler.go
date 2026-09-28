@@ -29,18 +29,21 @@ import (
 
 // Dependencies contains the services required by the HTTP transport.
 type Dependencies struct {
-	Auth           *auth.Service
-	Catalog        *application.CatalogService
-	CatalogQueries *application.CatalogQueryService
-	Actors         *application.ActorService
-	Subscriptions  *application.SubscriptionService
-	Downloads      *application.DownloadService
-	Dashboard      *application.DashboardService
-	Settings       *application.SettingsService
-	Scheduler      *scheduler.Manager
-	Logs           *logging.Logger
-	Readiness      ports.ReadinessProbe
-	StaticDir      string
+ Tags *application.TagService
+	Collection            *application.CollectionService
+	Auth                  *auth.Service
+	Catalog               *application.CatalogService
+	CatalogQueries        *application.CatalogQueryService
+	Actors                *application.ActorService
+	Subscriptions         *application.SubscriptionService
+	SubscriptionDownloads *application.SubscriptionDownloadService
+	Downloads             *application.DownloadService
+	Dashboard             *application.DashboardService
+	Settings              *application.SettingsService
+	Scheduler             *scheduler.Manager
+	Logs                  *logging.Logger
+	Readiness             ports.ReadinessProbe
+	StaticDir             string
 }
 
 // publicAuthPaths 是不要求既有会话即可访问的认证入口：登录本身，以及用过期会话换取新会话的续签。
@@ -55,12 +58,16 @@ func New(dependencies Dependencies) http.Handler {
 	api.Get("/health/live", live)
 	api.Get("/health/ready", ready(dependencies.Readiness))
 	api.Route("/api/v1", func(router chi.Router) {
+		router.Get("/collection/sources", collectionSources(dependencies.Collection))
+		router.Post("/collection/runs", runCollection(dependencies.Collection))
+		router.Get("/collection/runs/{runId}", collectionRunStatus(dependencies.Collection))
 		router.Post("/auth/login", login(dependencies.Auth))
 		router.Post("/auth/refresh", refresh(dependencies.Auth))
 		router.Post("/auth/logout", logout(dependencies.Auth))
 		router.Get("/dashboard", dashboard(dependencies.Dashboard))
 		router.Get("/media", listMedia(dependencies.Catalog))
 		router.Get("/actors", listActors(dependencies.Actors))
+		router.Get("/tags", listTags(dependencies.Tags))
 		router.Put("/actors/{actorName}/subscription", saveActorSubscription(dependencies.Actors))
 		router.Delete("/actors/{actorName}/subscription", cancelActorSubscription(dependencies.Actors))
 		router.Get("/ranks", listRank(dependencies.CatalogQueries))
@@ -76,6 +83,7 @@ func New(dependencies Dependencies) http.Handler {
 		router.Post("/subscriptions", createSubscription(dependencies.Subscriptions))
 		router.Put("/subscriptions/{subscriptionId}", updateSubscription(dependencies.Subscriptions))
 		router.Post("/subscriptions/{subscriptionId}/cancel", cancelSubscription(dependencies.Subscriptions))
+		router.Post("/subscriptions/{subscriptionId}/download", enqueueSubscriptionDownload(dependencies.SubscriptionDownloads))
 		router.Get("/downloads", listDownloads(dependencies.Downloads))
 		router.Get("/system/settings", getSystemSettings(dependencies.Settings))
 		router.Put("/system/settings", updateSystemSettings(dependencies.Settings))
@@ -95,6 +103,22 @@ func New(dependencies Dependencies) http.Handler {
 		}
 		spa.ServeHTTP(response, request)
 	})
+}
+
+// enqueueSubscriptionDownload schedules a single active subscription without bypassing the durable worker.
+func enqueueSubscriptionDownload(service *application.SubscriptionDownloadService) http.HandlerFunc {
+	return func(response http.ResponseWriter, request *http.Request) {
+		if service == nil {
+			writeError(response, http.StatusServiceUnavailable, "service_unavailable", "订阅下载未就绪")
+			return
+		}
+		id, e := service.Enqueue(request.Context(), chi.URLParam(request, "subscriptionId"))
+		if e != nil {
+			writeApplicationError(response, e)
+			return
+		}
+		writeJSON(response, http.StatusAccepted, map[string]string{"task_id": id})
+	}
 }
 
 // listLogs exposes persisted process logs used by the management page.
@@ -288,7 +312,21 @@ func listMedia(service *application.CatalogService) http.HandlerFunc {
 		if !ok {
 			return
 		}
-		result, err := service.List(request.Context(), page, pageSize)
+		search := request.URL.Query().Get("search")
+		if search == "" {
+			search = request.URL.Query().Get("query")
+		}
+		subscription := request.URL.Query().Get("subscription")
+		if subscription == "" {
+			subscription = request.URL.Query().Get("subscription_status")
+		}
+		result, err := service.List(request.Context(), page, pageSize, ports.MediaListQuery{
+			Search:             search,
+			SubscriptionStatus: subscription,
+			DownloadStatus:     request.URL.Query().Get("download"),
+			LibraryStatus:      request.URL.Query().Get("library"),
+			VideoType:          request.URL.Query().Get("video_type"),
+		})
 		if err != nil {
 			writeApplicationError(response, err)
 			return
@@ -528,7 +566,39 @@ func listDownloads(service *application.DownloadService) http.HandlerFunc {
 		if !ok {
 			return
 		}
-		result, err := service.List(request.Context(), page, pageSize, domain.DownloadStatus(request.URL.Query().Get("status")))
+		parseTime := func(key string) (*time.Time, bool) {
+			raw := request.URL.Query().Get(key)
+			if raw == "" {
+				return nil, true
+			}
+			value, err := time.Parse(time.RFC3339, raw)
+			if err != nil {
+				return nil, false
+			}
+			value = value.UTC()
+			return &value, true
+		}
+		var filter ports.DownloadListQuery
+		filter.Status = domain.DownloadStatus(request.URL.Query().Get("status"))
+		filter.TransferStatus = request.URL.Query().Get("transfer_status")
+		var valid bool
+		if filter.AddedFrom, valid = parseTime("added_from"); !valid {
+			writeError(response, 400, "invalid_download_filter", "加入时间格式无效")
+			return
+		}
+		if filter.AddedTo, valid = parseTime("added_to"); !valid {
+			writeError(response, 400, "invalid_download_filter", "加入时间格式无效")
+			return
+		}
+		if filter.CompletedFrom, valid = parseTime("completed_from"); !valid {
+			writeError(response, 400, "invalid_download_filter", "完成时间格式无效")
+			return
+		}
+		if filter.CompletedTo, valid = parseTime("completed_to"); !valid {
+			writeError(response, 400, "invalid_download_filter", "完成时间格式无效")
+			return
+		}
+		result, err := service.ListFiltered(request.Context(), page, pageSize, filter)
 		if err != nil {
 			logging.Error(logging.CategoryDownload, "下载任务查询失败")
 			writeApplicationError(response, err)
@@ -702,6 +772,10 @@ func settingErrorMessage(err error) string {
 
 func writeApplicationError(response http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, application.ErrInvalidVideoType):
+		writeError(response, http.StatusBadRequest, "invalid_video_type", "影片类型无效")
+	case errors.Is(err, application.ErrInvalidDownloadFilter):
+		writeError(response, http.StatusBadRequest, "invalid_download_filter", "下载筛选条件无效")
 	case errors.Is(err, application.ErrInvalidPagination), errors.Is(err, application.ErrInvalidSubscription):
 		writeError(response, http.StatusBadRequest, "invalid_request", "请求参数无效")
 	case errors.Is(err, application.ErrInvalidActorLimitDate):

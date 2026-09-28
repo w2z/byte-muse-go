@@ -37,8 +37,8 @@ export function FilmListPage() {
   const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
   const detail = useQuery({ queryKey: ["media-detail", selectedId], queryFn: () => apiRequest<Media>(`/media/${encodeURIComponent(selectedId!)}`), enabled: selectedId !== null });
   const query = useQuery({
-    queryKey: ["media", page, pageSize],
-    queryFn: () => apiRequest<Page<Media>>(`/media?page=${page}&page_size=${pageSize}`),
+    queryKey: ["media", "library", page, pageSize],
+    queryFn: () => apiRequest<Page<Media>>(`/media?page=${page}&page_size=${pageSize}&library=present`),
   });
   const items = query.data?.items ?? [];
   const total = query.data?.total ?? 0;

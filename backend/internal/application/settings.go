@@ -37,10 +37,28 @@ var translationEngines = []string{"none", "openai", "google", "baidu", "deeplx"}
 var sortTags = []string{"uc", "!uc", "seeders", "chinese", "uhd", "!uhd", "site", "free"}
 
 // mainSites 是主站选择器的取值，直接与采集到的 Torrent.site 比较。
-var mainSites = []string{"ALL", "馒头", "BT", "PTT", "NicePT", "Rousi"}
+var mainSites = []string{"ALL", "馒头", "BT", "PTT", "NicePT", "PTFans", "RousiPro"}
 
 // imageModes 是图片显示模式的取值。
 var imageModes = []string{"INVISIBLE", "VISIBLE", "BLUR"}
+
+var bypassEngines = []string{"cloudflare_bypass_for_scraping", "flaresolverr", "scrapling"}
+
+var ptDefaultDownloaderOptions = []string{"qbittorrent", "transmission"}
+var btDefaultDownloaderOptions = []string{"qbittorrent", "transmission", "aria2", "thunder"}
+
+// siteAuthTypes 是站点凭据模式；空值默认使用密钥。
+var siteAuthTypes = []string{"key", "cookie"}
+
+// SiteCookieCredential 只返回当前选中 Cookie 模式的凭据；密钥模式不得回退旧 Cookie。
+// 仅显式选择 Cookie 时返回 Cookie，默认密钥及未知模式均不回退。
+func SiteCookieCredential(values map[string]string, prefix string) string {
+	mode := strings.TrimSpace(values[prefix+"_AUTH_TYPE"])
+	if mode != "cookie" {
+		return ""
+	}
+	return values[prefix+"_COOKIE"]
+}
 
 // rankTypes 是 JAVDB 榜单自动订阅类型，空值表示不订阅。
 var rankTypes = []string{"daily", "weekly", "monthly"}
@@ -56,10 +74,20 @@ type settingSpec struct {
 // 顺序按对标站设置页的分组排列，便于逐组核对。
 var writableSettings = map[string]settingSpec{
 	// 站点
-	"MTEAM_API_KEY": {secret: true, kind: settingText},
-	"PTT_COOKIE":    {secret: true, kind: settingText},
-	"ROUSI_COOKIE":  {secret: true, kind: settingText},
-	"NICEPT_COOKIE": {secret: true, kind: settingText},
+	"MTEAM_API_KEY":      {secret: true, kind: settingText},
+	"PTT_COOKIE":         {secret: true, kind: settingText},
+	"PTFANS_COOKIE":      {secret: true, kind: settingText},
+	"ROUSIPRO_COOKIE":    {secret: true, kind: settingText},
+	"NICEPT_COOKIE":      {secret: true, kind: settingText},
+	"PTT_AUTH_TYPE":      {kind: settingEnum, allowed: siteAuthTypes},
+	"PTT_PASSKEY":        {secret: true, kind: settingText},
+	"PTT_UID":            {kind: settingInt},
+	"PTFANS_AUTH_TYPE":   {kind: settingEnum, allowed: siteAuthTypes},
+	"PTFANS_API_KEY":     {secret: true, kind: settingText},
+	"ROUSIPRO_AUTH_TYPE": {kind: settingEnum, allowed: siteAuthTypes},
+	"ROUSIPRO_API_KEY":   {secret: true, kind: settingText},
+	"NICEPT_AUTH_TYPE":   {kind: settingEnum, allowed: siteAuthTypes},
+	"NICEPT_API_KEY":     {secret: true, kind: settingText},
 
 	// 媒体库
 	"EMBY_URL":         {kind: settingText},
@@ -93,6 +121,13 @@ var writableSettings = map[string]settingSpec{
 	"QBITTORRENT_PASSWORD":      {secret: true, kind: settingText},
 	"QBITTORRENT_DOWNLOAD_PATH": {kind: settingText},
 	"QBITTORRENT_CATEGORY":      {kind: settingText},
+
+	// aria2（仅 BT 资源可使用）
+	"ARIA2_URL":             {kind: settingText},
+	"ARIA2_SECRET":          {secret: true, kind: settingText},
+	"ARIA2_DOWNLOAD_PATH":   {kind: settingText},
+	"PT_DEFAULT_DOWNLOADER": {kind: settingEnum, allowed: ptDefaultDownloaderOptions},
+	"BT_DEFAULT_DOWNLOADER": {kind: settingEnum, allowed: btDefaultDownloaderOptions},
 
 	// Transmission
 	"TRANSMISSION_URL":           {kind: settingText},
@@ -151,6 +186,7 @@ var writableSettings = map[string]settingSpec{
 	"PROXY":                {kind: settingText},
 	"EXTERNAL_DOMAIN":      {kind: settingText},
 	"BYPASS_URL":           {kind: settingText},
+	"BYPASS_ENGINE":        {kind: settingEnum, allowed: bypassEngines},
 	"JAVDB_HOST":           {kind: settingText},
 	"ENABLE_BT_ANTI_LEECH": {kind: settingBool},
 	"ENABLE_PHOTO_CACHE":   {kind: settingBool},
@@ -260,6 +296,9 @@ func validateSettingValue(key string, spec settingSpec, value string) error {
 		number, err := strconv.Atoi(value)
 		if err != nil || number < 0 {
 			return invalid("需要是非负整数")
+		}
+		if key == "PTT_UID" && (number == 0 || strings.Trim(value, "0123456789") != "") {
+			return invalid("需要是正整数用户 ID")
 		}
 	case settingJSON:
 		var object map[string]any

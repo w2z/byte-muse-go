@@ -27,7 +27,139 @@ func MigrationPlan(dialect Dialect) []Migration {
 	default:
 		return nil
 	}
-	return append(plan, settingsMigration(dialect), activeSubscriptionMigration(dialect), defaultSettingsMigration(dialect), systemLogsMigration(dialect), logRetentionSettingMigration(dialect), cleanupCanceledSubscriptionsMigration(dialect), catalogQueryIndexesMigration(dialect))
+	return append(plan, settingsMigration(dialect), activeSubscriptionMigration(dialect), defaultSettingsMigration(dialect), systemLogsMigration(dialect), logRetentionSettingMigration(dialect), cleanupCanceledSubscriptionsMigration(dialect), catalogQueryIndexesMigration(dialect), downloaderAndBypassSettingsMigration(dialect), collectionMigration(dialect), collectionQueueMigration(dialect), mediaTypeMigration(dialect), subscriptionDownloadMigration(dialect), downloadTransferMigration(dialect), ptSiteSettingsMigration(dialect), siteAuthSettingsMigration(dialect))
+}
+
+// siteAuthSettingsMigration 为两种凭据分别建立配置记录，新增模式默认密钥。
+// 仅新增键值，不改表结构、不覆盖凭据；回退代码时保留新增配置即可。
+func siteAuthSettingsMigration(dialect Dialect) Migration {
+	values := []string{}
+	for _, prefix := range []string{"PTT", "PTFANS", "ROUSIPRO", "NICEPT"} {
+		values = append(values, fmt.Sprintf("(%s, 'key', FALSE, %s)", sqlLiteral(prefix+"_AUTH_TYPE"), currentTimestampExpression(dialect)))
+		key := prefix + "_API_KEY"
+		if prefix == "PTT" {
+			key = "PTT_PASSKEY"
+		}
+		values = append(values, fmt.Sprintf("(%s, '', TRUE, %s)", sqlLiteral(key), currentTimestampExpression(dialect)))
+	}
+	values = append(values, fmt.Sprintf("('PTT_UID', '', FALSE, %s)", currentTimestampExpression(dialect)))
+	insert := "INSERT INTO app_settings (setting_key, setting_value, is_secret, updated_at) VALUES " + strings.Join(values, ", ")
+	if dialect == DialectMySQL {
+		insert = strings.Replace(insert, "INSERT INTO", "INSERT IGNORE INTO", 1)
+	} else {
+		insert += " ON CONFLICT (setting_key) DO NOTHING"
+	}
+	return Migration{Version: 19, Name: "site_auth_settings", Statements: []string{insert}}
+}
+
+// ptSiteSettingsMigration seeds credentials for the two requested sites without deleting legacy secrets.
+// A retired main-site preference falls back to automatic selection; historical downloads remain unchanged.
+func ptSiteSettingsMigration(dialect Dialect) Migration {
+	values := []string{}
+	for _, key := range []string{"PTFANS_COOKIE", "ROUSIPRO_COOKIE"} {
+		values = append(values, fmt.Sprintf("(%s, '', TRUE, %s)", sqlLiteral(key), currentTimestampExpression(dialect)))
+	}
+	insert := "INSERT INTO app_settings (setting_key, setting_value, is_secret, updated_at) VALUES " + strings.Join(values, ", ")
+	if dialect == DialectMySQL {
+		insert = strings.Replace(insert, "INSERT INTO", "INSERT IGNORE INTO", 1)
+	} else {
+		insert += " ON CONFLICT (setting_key) DO NOTHING"
+	}
+	return Migration{Version: 18, Name: "pt_site_settings", Statements: []string{
+		insert,
+		"UPDATE app_settings SET setting_value='ALL' WHERE setting_key='MAIN_SITE' AND setting_value='Rousi'",
+	}}
+}
+
+// downloadTransferMigration stores downloader-observed status and times without changing historical task states.
+// NULL means no verified value; rollback requires a deliberate table rebuild on SQLite.
+func downloadTransferMigration(dialect Dialect) Migration {
+	timeType := "TEXT"
+	if dialect == DialectPostgres {
+		timeType = "TIMESTAMPTZ"
+	}
+	if dialect == DialectMySQL {
+		timeType = "DATETIME(6)"
+	}
+	return Migration{Version: 17, Name: "download_transfer_snapshots", Statements: []string{
+		"ALTER TABLE download_tasks ADD COLUMN transfer_status VARCHAR(16) DEFAULT NULL",
+		"ALTER TABLE download_tasks ADD COLUMN added_at " + timeType + " DEFAULT NULL",
+		"ALTER TABLE download_tasks ADD COLUMN completed_at " + timeType + " DEFAULT NULL",
+		"CREATE INDEX idx_download_tasks_transfer_status ON download_tasks(transfer_status)",
+		"CREATE INDEX idx_download_tasks_added_at ON download_tasks(added_at)",
+		"CREATE INDEX idx_download_tasks_completed_at ON download_tasks(completed_at)",
+	}}
+}
+
+// subscriptionDownloadMigration records one idempotent attempt per subscription and resource.
+// NULL candidate fields mean search has not found a resource; unknown submission requires client-side reconciliation.
+func subscriptionDownloadMigration(dialect Dialect) Migration {
+	columns := []string{
+		"ALTER TABLE download_tasks ADD COLUMN subscription_id VARCHAR(64) DEFAULT NULL",
+		"ALTER TABLE download_tasks ADD COLUMN source_site VARCHAR(128) DEFAULT NULL",
+		"ALTER TABLE download_tasks ADD COLUMN source_kind VARCHAR(8) DEFAULT NULL",
+		"ALTER TABLE download_tasks ADD COLUMN resource_uri TEXT DEFAULT NULL",
+		"ALTER TABLE download_tasks ADD COLUMN info_hash VARCHAR(40) DEFAULT NULL",
+		"ALTER TABLE download_tasks ADD COLUMN downloader VARCHAR(32) DEFAULT NULL",
+		"ALTER TABLE download_tasks ADD COLUMN filter_passed BOOLEAN DEFAULT NULL",
+		"ALTER TABLE download_tasks ADD COLUMN lease_until BIGINT DEFAULT NULL",
+		"ALTER TABLE download_tasks ADD COLUMN lease_token VARCHAR(64) DEFAULT NULL",
+		"ALTER TABLE download_tasks ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0",
+		"CREATE INDEX idx_download_tasks_subscription_status ON download_tasks(subscription_id,status)",
+		"CREATE INDEX idx_download_tasks_hash ON download_tasks(info_hash)",
+	}
+	if dialect == DialectMySQL {
+		columns = append(columns, "ALTER TABLE download_tasks ADD COLUMN active_subscription_id VARCHAR(64) GENERATED ALWAYS AS (CASE WHEN status IN ('queued','searching','unknown','submitted','downloading','completed') THEN subscription_id ELSE NULL END) STORED", "CREATE UNIQUE INDEX idx_download_tasks_active_subscription ON download_tasks(active_subscription_id)")
+	} else {
+		columns = append(columns, "CREATE UNIQUE INDEX idx_download_tasks_active_subscription ON download_tasks(subscription_id) WHERE status IN ('queued','searching','unknown','submitted','downloading','completed')")
+	}
+	if dialect == DialectMySQL {
+		columns[3] = "ALTER TABLE download_tasks ADD COLUMN resource_uri TEXT NULL"
+	}
+	return Migration{Version: 16, Name: "subscription_download_attempts", Statements: columns}
+}
+
+// mediaTypeMigration 新增影片类型：VARCHAR(32)，可空，默认 NULL（尚未分类）。
+// 有码/无码/无码破解/流出单值存储；不推断或回填历史类型，回退程序时保留该列。
+func mediaTypeMigration(dialect Dialect) Migration {
+	column := "ALTER TABLE media ADD COLUMN video_type VARCHAR(32) DEFAULT NULL CHECK (video_type IN ('censored','uncensored','uncensored_cracked','leaked'))"
+	if dialect == DialectMySQL {
+		column = "ALTER TABLE media ADD COLUMN video_type VARCHAR(32) DEFAULT NULL COMMENT '影片类型：有码、无码、无码破解、流出；NULL 尚未分类' CHECK (video_type IN ('censored','uncensored','uncensored_cracked','leaked'))"
+	}
+	statements := []string{column, "CREATE INDEX idx_media_video_type_updated ON media(video_type, updated_at, id)"}
+	if dialect == DialectPostgres {
+		statements = append(statements, "COMMENT ON COLUMN media.video_type IS '影片类型：有码、无码、无码破解、流出；NULL 尚未分类'")
+	}
+	return Migration{Version: 15, Name: "add_media_video_type", Statements: statements}
+}
+
+// downloaderAndBypassSettingsMigration adds settings introduced after the initial
+// default seed. It is idempotent so existing installations receive the fields
+// without overwriting administrator values.
+func downloaderAndBypassSettingsMigration(dialect Dialect) Migration {
+	keys := []struct {
+		key, value string
+		secret     bool
+	}{
+		{key: "ARIA2_URL"}, {key: "ARIA2_SECRET", secret: true}, {key: "ARIA2_DOWNLOAD_PATH"},
+		{key: "PT_DEFAULT_DOWNLOADER", value: "qbittorrent"}, {key: "BT_DEFAULT_DOWNLOADER", value: "qbittorrent"},
+		{key: "BYPASS_ENGINE"},
+	}
+	values := make([]string, 0, len(keys))
+	for _, item := range keys {
+		secret := "FALSE"
+		if item.secret {
+			secret = "TRUE"
+		}
+		values = append(values, fmt.Sprintf("(%s, %s, %s, %s)", sqlLiteral(item.key), sqlLiteral(item.value), secret, currentTimestampExpression(dialect)))
+	}
+	statement := fmt.Sprintf("INSERT INTO app_settings (setting_key, setting_value, is_secret, updated_at) VALUES %s", strings.Join(values, ", "))
+	if dialect == DialectMySQL {
+		statement = strings.Replace(statement, "INSERT INTO", "INSERT IGNORE INTO", 1)
+	} else {
+		statement += " ON CONFLICT (setting_key) DO NOTHING"
+	}
+	return Migration{Version: 12, Name: "persist_downloader_and_bypass_settings", Statements: []string{statement}}
 }
 
 // catalogQueryIndexesMigration adds the indexes used by the release and recommendation projections.
@@ -113,6 +245,8 @@ func defaultSettingsMigration(dialect Dialect) Migration {
 		{key: "WECHAT_TOKEN", secret: true}, {key: "WECHAT_ENCODING_AES_KEY", secret: true}, {key: "WECHAT_TO_USER", value: "@all"}, {key: "WECHAT_BANNER", value: "false"},
 		{key: "TELEGRAM_BOT_TOKEN", secret: true}, {key: "TELEGRAM_CHAT_ID"}, {key: "TELEGRAM_WHITELIST"}, {key: "TELEGRAM_SPOILER", value: "false"},
 		{key: "QBITTORRENT_URL"}, {key: "QBITTORRENT_USERNAME"}, {key: "QBITTORRENT_PASSWORD", secret: true}, {key: "QBITTORRENT_DOWNLOAD_PATH"}, {key: "QBITTORRENT_CATEGORY"},
+		{key: "ARIA2_URL"}, {key: "ARIA2_SECRET", secret: true}, {key: "ARIA2_DOWNLOAD_PATH"},
+		{key: "PT_DEFAULT_DOWNLOADER", value: "qbittorrent"}, {key: "BT_DEFAULT_DOWNLOADER", value: "qbittorrent"},
 		{key: "TRANSMISSION_URL"}, {key: "TRANSMISSION_USERNAME"}, {key: "TRANSMISSION_PASSWORD", secret: true}, {key: "TRANSMISSION_DOWNLOAD_PATH"}, {key: "TRANSMISSION_LABEL"},
 		{key: "THUNDER_URL"}, {key: "THUNDER_FILE_ID"}, {key: "THUNDER_AUTHORIZATION", secret: true},
 		{key: "CLOUDNAS_URL"}, {key: "CLOUDNAS_USERNAME"}, {key: "CLOUDNAS_PASSWORD", secret: true}, {key: "CLOUDNAS_SAVEPATH", value: "/115open"},
@@ -124,7 +258,7 @@ func defaultSettingsMigration(dialect Dialect) Migration {
 		{key: "BAIDU_APP_ID"}, {key: "BAIDU_API_KEY", secret: true}, {key: "GOOGLE_API_KEY", secret: true}, {key: "DEEPLX_URL"},
 		{key: "TRANSLATION_ENGINE", value: "none"}, {key: "TRANSLATION_PROMPT"},
 		{key: "OPENAI_URL"}, {key: "OPENAI_MODEL"}, {key: "OPENAI_API_KEY", secret: true}, {key: "AGENT_ENABLE", value: "false"}, {key: "AGENT_SYSTEM_PROMPT"},
-		{key: "IMAGE_MODE", value: "BLUR"}, {key: "PROXY"}, {key: "EXTERNAL_DOMAIN"}, {key: "BYPASS_URL"}, {key: "JAVDB_HOST", value: "https://apidd.czssdgz.com"},
+		{key: "IMAGE_MODE", value: "BLUR"}, {key: "PROXY"}, {key: "EXTERNAL_DOMAIN"}, {key: "BYPASS_ENGINE", value: ""}, {key: "BYPASS_URL"}, {key: "JAVDB_HOST", value: "https://apidd.czssdgz.com"},
 		{key: "ENABLE_BT_ANTI_LEECH", value: "true"}, {key: "ENABLE_PHOTO_CACHE", value: "false"}, {key: "ENABLE_AUTO_COMPLETE", value: "true"},
 	}
 	values := make([]string, 0, len(defaults))

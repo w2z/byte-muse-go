@@ -4,6 +4,7 @@ package ports
 import (
 	"context"
 	"errors"
+	"time"
 
 	"bytemuse/backend/internal/domain"
 )
@@ -36,8 +37,13 @@ const MaxPageSize = 200
 
 // MediaListQuery is the normalized repository pagination request.
 type MediaListQuery struct {
-	Limit  int
-	Offset int
+	Limit              int
+	Offset             int
+	Search             string
+	SubscriptionStatus string
+	DownloadStatus     string
+	LibraryStatus      string
+	VideoType          string // 空串不限；unknown 查询尚未分类。
 }
 
 // MediaRepository reads normalized catalog media without exposing database details.
@@ -84,9 +90,11 @@ type SubscriptionRepository interface {
 
 // DownloadListQuery is the normalized download task pagination and status filter.
 type DownloadListQuery struct {
-	Limit  int
-	Offset int
-	Status domain.DownloadStatus
+	Limit                                          int
+	Offset                                         int
+	Status                                         domain.DownloadStatus
+	TransferStatus                                 string
+	AddedFrom, AddedTo, CompletedFrom, CompletedTo *time.Time
 }
 
 // DownloadRepository reads download tasks independently from media and subscription state.

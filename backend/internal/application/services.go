@@ -15,8 +15,12 @@ import (
 var (
 	// ErrInvalidPagination reports page values outside the public API contract.
 	ErrInvalidPagination = errors.New("invalid pagination")
+	// ErrInvalidVideoType 表示影片类型不在允许的筛选范围内。
+	ErrInvalidVideoType = errors.New("invalid video type")
 	// ErrInvalidSubscription reports a malformed subscription command.
 	ErrInvalidSubscription = errors.New("invalid subscription")
+	// ErrInvalidDownloadFilter reports unsupported status or time-range filters.
+	ErrInvalidDownloadFilter = errors.New("invalid download filter")
 )
 
 // Page attaches normalized request pagination to a result collection.
@@ -45,11 +49,17 @@ func NewCatalogServiceWithTranslation(repository ports.MediaRepository, translat
 }
 
 // List returns one validated page while preserving the repository's total count.
-func (s *CatalogService) List(ctx context.Context, page, pageSize int) (Page[domain.Media], error) {
+func (s *CatalogService) List(ctx context.Context, page, pageSize int, query ports.MediaListQuery) (Page[domain.Media], error) {
+	query.VideoType = strings.TrimSpace(query.VideoType)
+	if query.VideoType != "" && query.VideoType != "unknown" && !domain.ValidVideoType(query.VideoType) {
+		return Page[domain.Media]{}, ErrInvalidVideoType
+	}
 	if err := validatePagination(page, pageSize); err != nil {
 		return Page[domain.Media]{}, err
 	}
-	result, err := s.repository.List(ctx, ports.MediaListQuery{Limit: pageSize, Offset: (page - 1) * pageSize})
+	query.Limit = pageSize
+	query.Offset = (page - 1) * pageSize
+	result, err := s.repository.List(ctx, query)
 	if err != nil {
 		return Page[domain.Media]{}, fmt.Errorf("list media: %w", err)
 	}
@@ -191,10 +201,22 @@ func NewDownloadService(repository ports.DownloadRepository) *DownloadService {
 
 // List returns one validated page of download tasks.
 func (s *DownloadService) List(ctx context.Context, page, pageSize int, status domain.DownloadStatus) (Page[domain.DownloadTask], error) {
+	return s.ListFiltered(ctx, page, pageSize, ports.DownloadListQuery{Status: status})
+}
+
+// ListFiltered validates and applies server-side download state and time filters before pagination.
+func (s *DownloadService) ListFiltered(ctx context.Context, page, pageSize int, query ports.DownloadListQuery) (Page[domain.DownloadTask], error) {
 	if err := validatePagination(page, pageSize); err != nil {
 		return Page[domain.DownloadTask]{}, err
 	}
-	result, err := s.repository.List(ctx, ports.DownloadListQuery{Limit: pageSize, Offset: (page - 1) * pageSize, Status: status})
+	if query.TransferStatus != "" && query.TransferStatus != "downloading" && query.TransferStatus != "paused" && query.TransferStatus != "failed" && query.TransferStatus != "completed" {
+		return Page[domain.DownloadTask]{}, ErrInvalidDownloadFilter
+	}
+	if query.AddedFrom != nil && query.AddedTo != nil && !query.AddedFrom.Before(*query.AddedTo) || query.CompletedFrom != nil && query.CompletedTo != nil && !query.CompletedFrom.Before(*query.CompletedTo) {
+		return Page[domain.DownloadTask]{}, ErrInvalidDownloadFilter
+	}
+	query.Limit, query.Offset = pageSize, (page-1)*pageSize
+	result, err := s.repository.List(ctx, query)
 	if err != nil {
 		return Page[domain.DownloadTask]{}, fmt.Errorf("list downloads: %w", err)
 	}

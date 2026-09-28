@@ -1,5 +1,5 @@
 import { Breadcrumb, Button, Layout, Menu, Tooltip } from "@arco-design/web-react";
-import { IconCalendar, IconDashboard, IconFile, IconFire, IconList, IconMenuFold, IconMenuUnfold, IconMoon, IconSearch, IconSettings, IconStar, IconSun, IconThunderbolt, IconUser, IconVideoCamera } from "@arco-design/web-react/icon";
+import { IconCalendar, IconDashboard, IconFile, IconFire, IconList, IconMenuFold, IconMenuUnfold, IconMoon, IconSearch, IconSettings, IconStar, IconSun, IconTags, IconThunderbolt, IconUser, IconVideoCamera } from "@arco-design/web-react/icon";
 import { useLayoutEffect, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { Outlet, useLocation, useMatches, useNavigate } from "react-router-dom";
@@ -13,11 +13,13 @@ const contentItems = [
   { key: "/dashboard", label: "看板" },
   { key: "/subscribe", label: "订阅" },
   { key: "/actor", label: "演员" },
+  { key: "/tag", label: "标签" },
   { key: "/release-today", label: "上新" },
   { key: "/recommend", label: "推荐" },
   { key: "/rank", label: "榜单" },
   { key: "/search", label: "搜索" },
   { key: "/films", label: "媒体库" },
+  { key: "/all-films", label: "所有影片" },
   { key: "/downloads", label: "下载任务" },
 ];
 const systemItems = [
@@ -30,11 +32,12 @@ function menuIcon(key: string) {
   if (key === "/dashboard") return <IconDashboard />;
   if (key === "/subscribe") return <IconStar />;
   if (key === "/actor") return <IconUser />;
+  if (key === "/tag") return <IconTags />;
   if (key === "/release-today") return <IconCalendar />;
   if (key === "/recommend") return <IconFire />;
   if (key === "/rank") return <IconThunderbolt />;
   if (key === "/search") return <IconSearch />;
-  if (key === "/films") return <IconVideoCamera />;
+  if (key === "/films" || key === "/all-films") return <IconVideoCamera />;
   if (key === "/downloads") return <IconList />;
   if (key === "/settings") return <IconSettings />;
   if (key === "/task") return <IconThunderbolt />;

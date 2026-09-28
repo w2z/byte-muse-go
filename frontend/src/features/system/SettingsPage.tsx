@@ -1,5 +1,5 @@
-import { Button, Input, InputNumber, Radio, Switch, Tabs } from "@arco-design/web-react";
-import { IconSave, IconUndo } from "@arco-design/web-react/icon";
+import { Button, Input, InputNumber, Radio, Select, Switch, Tabs } from "@arco-design/web-react";
+import { IconCheck, IconClose, IconLaunch, IconSave, IconUndo } from "@arco-design/web-react/icon";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { apiRequest } from "../../shared/api/client";
@@ -13,6 +13,8 @@ type SettingOption = { value: string; label: string };
 type SettingField = {
   key: string;
   label: string;
+  /** 站点标题链接，在新标签页打开对应站点。 */
+  siteURL?: string;
   /** 标签下方的补充说明，避免把长文案塞进字段标题。 */
   description?: string;
   kind: FieldKind;
@@ -23,11 +25,19 @@ type SettingField = {
   placeholder?: string;
   unit?: string;
   options?: SettingOption[];
+  /** 支持两种凭据的站点；模式和凭据独立保存，切换时不清空隐藏字段。 */
+  siteAuth?: { modeKey: string; keyField: string; keyPlaceholder: string };
 };
 type SettingGroup = { code: string; title: string; fields: SettingField[] };
 type SettingCategory = { code: string; title: string; groupCodes: string[] };
 type SettingsUpdate = { values: Record<string, string> };
 const TabPane = Tabs.TabPane;
+
+const bypassProjects = [
+  { name: "CloudflareBypassForScraping", url: "https://github.com/sarperavci/CloudflareBypassForScraping" },
+  { name: "FlareSolverr", url: "https://github.com/FlareSolverr/FlareSolverr" },
+  { name: "Scrapling", url: "https://github.com/D4Vinci/Scrapling" },
+] as const;
 
 /** 判断设置页是否应响应 Ctrl+S，忽略浏览器默认的网页保存快捷键。 */
 export function isSettingsSaveShortcut(event: Pick<KeyboardEvent, "key" | "ctrlKey">): boolean {
@@ -42,7 +52,8 @@ const mainSiteOptions: SettingOption[] = [
   { value: "BT", label: "BT" },
   { value: "PTT", label: "PTT" },
   { value: "NicePT", label: "NicePT" },
-  { value: "Rousi", label: "肉丝" },
+  { value: "PTFans", label: "PTFans 9KG" },
+  { value: "RousiPro", label: "RousiPro 9KG" },
 ];
 
 const imageModeOptions: SettingOption[] = [
@@ -54,7 +65,7 @@ const imageModeOptions: SettingOption[] = [
 const rankTypeOptions: SettingOption[] = [
   { value: "", label: "不订阅" },
   { value: "daily", label: "每日" },
-  { value: "weekly", label: "weekly" },
+  { value: "weekly", label: "周" },
   { value: "monthly", label: "每月" },
 ];
 
@@ -105,17 +116,73 @@ const filterSwitches: { key: FilterSwitchKey; label: string }[] = [
 /** 分组、顺序与字段命名对齐对标站 对标站/config。 */
 const groups: SettingGroup[] = [
   {
+    code: "downloader-defaults",
+    title: "默认设置",
+    fields: [
+      {
+        key: "PT_DEFAULT_DOWNLOADER",
+        label: "PT默认下载器",
+        kind: "enum",
+        options: [
+          { value: "qbittorrent", label: "qBittorrent" },
+          { value: "transmission", label: "Transmission" },
+        ],
+      },
+      {
+        key: "BT_DEFAULT_DOWNLOADER",
+        label: "BT默认下载器",
+        kind: "enum",
+        options: [
+          { value: "qbittorrent", label: "qBittorrent" },
+          { value: "transmission", label: "Transmission" },
+          { value: "aria2", label: "aria2" },
+          { value: "thunder", label: "迅雷" },
+        ],
+      },
+    ],
+  },
+  {
     code: "site",
     title: "站点",
     fields: [
-      { key: "MTEAM_API_KEY", label: "馒头令牌", kind: "text", secret: true },
-      { key: "PTT_COOKIE", label: "PTT COOKIE", kind: "text", secret: true },
-      { key: "ROUSI_COOKIE", label: "肉丝 COOKIE", kind: "text", secret: true },
+      {
+        key: "MTEAM_API_KEY", label: "馒头", kind: "text", secret: true,
+        siteURL: "https://kp.m-team.cc/",
+        placeholder: "请输入 存取令牌 (实验室->存取令牌)",
+        description: "无 H&R 要求。",
+      },
+      {
+        key: "PTFANS_COOKIE", label: "PTFans", kind: "text", secret: true,
+        siteURL: "https://ptfans.cc/special.php",
+        siteAuth: { modeKey: "PTFANS_AUTH_TYPE", keyField: "PTFANS_API_KEY", keyPlaceholder: "请输入访问令牌" },
+        description: "H&R：35 天内累计做种 7 天。",
+      },
+      {
+        key: "ROUSIPRO_COOKIE", label: "RousiPro", kind: "text", secret: true,
+        siteURL: "https://rousi.pro/",
+        siteAuth: { modeKey: "ROUSIPRO_AUTH_TYPE", keyField: "ROUSIPRO_API_KEY", keyPlaceholder: "请输入 API Key" },
+        description: "做种要求：做种时间 ≥24 小时或单种分享率 ≥1.0。",
+      },
       {
         key: "NICEPT_COOKIE",
-        label: "NicePT COOKIE",
+        label: "NicePT",
+        siteURL: "https://www.nicept.net/",
         kind: "text",
         secret: true,
+        siteAuth: { modeKey: "NICEPT_AUTH_TYPE", keyField: "NICEPT_API_KEY", keyPlaceholder: "请输入访问令牌" },
+        description: "H&R：12天内做种3天 或 单种分享率 ≥2.0",
+      },
+      {
+        key: "PTT_COOKIE", label: "PTTime", kind: "text", secret: true,
+        siteURL: "https://www.pttime.org/",
+        placeholder: "请输入 PTTime Cookie",
+        description: "无 H&R 要求。",
+      },
+      {
+        key: "MAIN_SITE",
+        label: "主站选择（配合排序器使用）",
+        kind: "enum",
+        options: mainSiteOptions,
       },
     ],
   },
@@ -258,6 +325,15 @@ const groups: SettingGroup[] = [
     ],
   },
   {
+    code: "aria2",
+    title: "aria2",
+    fields: [
+      { key: "ARIA2_URL", label: "aria2地址", kind: "text", placeholder: "http://127.0.0.1:6800/jsonrpc" },
+      { key: "ARIA2_SECRET", label: "aria2密钥", kind: "text", secret: true },
+      { key: "ARIA2_DOWNLOAD_PATH", label: "aria2下载地址", kind: "text" },
+    ],
+  },
+  {
     code: "thunder",
     title: "迅雷",
     fields: [
@@ -307,12 +383,6 @@ const groups: SettingGroup[] = [
     title: "排序",
     fields: [
       { key: "DEFAULT_SORT", label: "排序器", kind: "sort" },
-      {
-        key: "MAIN_SITE",
-        label: "主站选择（配合排序器使用）",
-        kind: "enum",
-        options: mainSiteOptions,
-      },
     ],
   },
   {
@@ -484,9 +554,21 @@ const groups: SettingGroup[] = [
         kind: "text",
       },
       {
+        key: "BYPASS_ENGINE",
+        label: "爬虫增强类型",
+        description: "选择“不使用”关闭爬虫增强，保留已填写的服务地址",
+        kind: "enum",
+        options: [
+          { value: "", label: "不使用" },
+          { value: "cloudflare_bypass_for_scraping", label: "CloudflareBypassForScraping" },
+          { value: "flaresolverr", label: "FlareSolverr" },
+          { value: "scrapling", label: "Scrapling" },
+        ],
+      },
+      {
         key: "BYPASS_URL",
         label: "爬虫增强",
-        description: "真实浏览器模拟网页访问，https://github.com/sarperavci/CloudflareBypassForScraping 或者 https://github.com/FlareSolverr/FlareSolverr",
+        description: "选择增强类型后填写服务地址；仅在采集遇到 Cloudflare 人机页面时调用",
         kind: "text",
       },
       { key: "JAVDB_HOST", label: "JAVDB API地址", kind: "text" },
@@ -532,12 +614,21 @@ const categories: SettingCategory[] = [
   {
     code: "downloader",
     title: "下载器",
-    groupCodes: ["qbittorrent", "transmission", "thunder", "clouddrive2"],
+    groupCodes: ["downloader-defaults", "qbittorrent", "transmission", "aria2", "thunder", "clouddrive2"],
   },
 ];
 
 function filterId(name: string) {
   return `setting-${name}`;
+}
+
+/** 站点名称统一附带外链图标，图标不重复参与无障碍名称。 */
+function SettingTitle({ field }: { field: SettingField }) {
+  return field.siteURL ? (
+    <a className="settings-site-link" href={field.siteURL} target="_blank" rel="noopener noreferrer">
+      {field.label}<IconLaunch aria-hidden="true" />
+    </a>
+  ) : <>{field.label}</>;
 }
 
 function fieldPlaceholder(field: SettingField): string | undefined {
@@ -547,6 +638,19 @@ function fieldPlaceholder(field: SettingField): string | undefined {
     return `请输入${field.label}`;
   }
   return undefined;
+}
+
+function bypassPlaceholder(engine: string): string {
+  switch (engine) {
+    case "cloudflare_bypass_for_scraping":
+      return "http://127.0.0.1:8200";
+    case "flaresolverr":
+      return "http://127.0.0.1:8191/v1";
+    case "scrapling":
+      return "http://127.0.0.1:3000";
+    default:
+      return "请选择爬虫增强类型后输入服务地址";
+  }
 }
 
 function parseFilterDraft(raw?: string): {
@@ -612,7 +716,7 @@ function serializeFilterDraft(filter: FilterDraft, unknown: Record<string, unkno
 /**
  * 站点分组文本框的固定行数。
  *
- * 站点分组的字段都是长凭据（馒头令牌与各家 COOKIE），统一固定三行，并允许用户手动上下拉伸，
+ * 站点分组的 COOKIE 是长凭据，统一固定三行，并允许用户手动上下拉伸；馒头令牌使用单行输入框。
  * 避免各字段被内容长度撑成互不相同的高度。
  * 这里刻意不用 autoSize：Arco 在每次输入时都会重写 height / min-height / max-height，
  * 手动拖出来的高度会被顶回去，初始行数只能用 rows 固定。
@@ -660,6 +764,11 @@ export function SettingsPage() {
             ? "30"
             : "";
         next[field.key] = field.kind === "bool" ? raw === "true" : raw;
+        if (field.siteAuth) {
+          const auth = field.siteAuth;
+          next[auth.modeKey] = values[auth.modeKey] === "cookie" ? "cookie" : "key";
+          next[auth.keyField] = values[auth.keyField] ?? "";
+        }
       }
     }
     const parsed = parseFilterDraft(values.DEFAULT_FILTER);
@@ -727,6 +836,11 @@ export function SettingsPage() {
           continue;
         }
         payload[field.key] = typeof value === "string" ? value.trim() : "";
+        if (field.siteAuth) {
+          for (const key of [field.siteAuth.modeKey, field.siteAuth.keyField]) {
+            if (key) payload[key] = String(draft[key] ?? "").trim();
+          }
+        }
       }
     }
     return payload;
@@ -734,6 +848,9 @@ export function SettingsPage() {
 
   const currentPayload = buildPayload();
   const baselineValue = (key: string) => {
+    if (groups.some((group) => group.fields.some((field) => field.siteAuth?.modeKey === key))) {
+      return savedSnapshot.values[key] === "cookie" ? "cookie" : "key";
+    }
     const saved = savedSnapshot.values[key];
     if (saved !== undefined) return saved;
     const field = groups
@@ -767,6 +884,47 @@ export function SettingsPage() {
   };
 
   const renderField = (field: SettingField, group: SettingGroup) => {
+    // BYPASS_ENGINE 与 BYPASS_URL 合并为“左侧选择、右侧地址”的单一控件。
+    if (field.key === "BYPASS_ENGINE") return null;
+    if (field.siteAuth) {
+      const auth = field.siteAuth;
+      const keyMode = draft[auth.modeKey] === "key";
+      const credentialKey = keyMode ? auth.keyField : field.key;
+      const cookieLabel = field.label === "PTTime" ? "PTTime Cookie" : `${field.label} COOKIE`;
+      return (
+        <div className="settings-field" key={field.key}>
+          <span className="settings-field-label"><SettingTitle field={field} /></span>
+          <div className="settings-option-radio" role="group" aria-label={`${field.label} 鉴权方式`}>
+            <Radio.Group value={keyMode ? "key" : "cookie"} onChange={(mode: string) => setValue(auth.modeKey, mode)}>
+              <Radio value="key">密钥</Radio>
+              <Radio value="cookie">Cookie</Radio>
+            </Radio.Group>
+          </div>
+          {keyMode ? (
+            <div>
+              <Input
+                aria-label={`${field.label} 密钥`}
+                value={String(draft[credentialKey] ?? "")}
+                placeholder={auth.keyPlaceholder}
+                onChange={(value) => setValue(credentialKey, value)}
+              />
+            </div>
+          ) : (
+            <Input.TextArea
+              aria-label={cookieLabel}
+              className="settings-site-textarea"
+              value={String(draft[credentialKey] ?? "")}
+              placeholder={`请输入 ${field.label} Cookie`}
+              rows={SITE_TEXTAREA_ROWS}
+              onChange={(value) => setValue(credentialKey, value)}
+            />
+          )}
+          <span className="settings-field-description">
+            <span>{field.description}</span>
+          </span>
+        </div>
+      );
+    }
     if (field.kind === "json") {
       return (
         <div className="settings-field settings-field-wide" key={field.key}>
@@ -774,7 +932,12 @@ export function SettingsPage() {
           <div className="settings-filter">
             {filterSwitches.map((item) => (
               <label className="settings-filter-row settings-toggle-row" key={item.key}>
+                <span>{item.label}</span>
                 <Switch
+                  size="small"
+                  type="round"
+                  checkedIcon={<IconCheck />}
+                  uncheckedIcon={<IconClose />}
                   aria-label={item.label}
                   checked={filter[item.key]}
                   onChange={(checked: boolean) =>
@@ -784,7 +947,6 @@ export function SettingsPage() {
                     }))
                   }
                 />
-                <span>{item.label}</span>
               </label>
             ))}
             <div className="settings-filter-range">
@@ -867,16 +1029,20 @@ export function SettingsPage() {
 
     if (field.kind === "bool") {
       return (
-        <div className="settings-field settings-toggle-row" key={field.key}>
-          <Switch
-            aria-label={field.label}
-            checked={draft[field.key] === true}
-            onChange={(checked: boolean) => setValue(field.key, checked)}
-          />
-          <div className="settings-toggle-copy">
+        <div className="settings-field" key={field.key}>
+          <div className="settings-toggle-row">
             <span className="settings-field-label">{field.label}</span>
-            {field.description ? <span className="settings-field-description">{field.description}</span> : null}
+            <Switch
+              size="small"
+              type="round"
+              checkedIcon={<IconCheck />}
+              uncheckedIcon={<IconClose />}
+              aria-label={field.label}
+              checked={draft[field.key] === true}
+              onChange={(checked: boolean) => setValue(field.key, checked)}
+            />
           </div>
+          {field.description ? <span className="settings-field-description">{field.description}</span> : null}
         </div>
       );
     }
@@ -885,8 +1051,7 @@ export function SettingsPage() {
       return (
         <div className="settings-field settings-field-wide" key={field.key} aria-label={field.label}>
           <span className="settings-field-label">{field.label}</span>
-          {field.description ? <span className="settings-field-description">{field.description}</span> : null}
-          <div className="settings-option-radio">
+          <div className={`settings-option-radio${field.key === "MAIN_SITE" ? " settings-main-site-options" : ""}`}>
             {typeof draft[field.key] !== "string" || draft[field.key] === "" ? (
               <span className="settings-field-placeholder">请选择</span>
             ) : null}
@@ -894,6 +1059,7 @@ export function SettingsPage() {
               {(field.options ?? []).map((option) => <Radio key={option.value} value={option.value}>{option.label}</Radio>)}
             </Radio.Group>
           </div>
+          {field.description ? <span className="settings-field-description">{field.description}</span> : null}
         </div>
       );
     }
@@ -904,18 +1070,57 @@ export function SettingsPage() {
     const promptField =
       field.key === "TRANSLATION_PROMPT" || field.key === "AGENT_SYSTEM_PROMPT";
     const placeholder = fieldPlaceholder(field);
+    if (field.key === "BYPASS_URL") {
+      const engine = typeof draft.BYPASS_ENGINE === "string" ? draft.BYPASS_ENGINE : "";
+      return (
+        <div className="settings-field" key={field.key}>
+          <label className="settings-field-label" htmlFor={filterId(field.key)}>{field.label}</label>
+          <Input.Group compact>
+            <Select
+              aria-label="爬虫增强类型"
+              value={engine}
+              placeholder="选择类型"
+              options={[
+                { value: "", label: "不使用" },
+                { value: "cloudflare_bypass_for_scraping", label: "CloudflareBypassForScraping" },
+                { value: "flaresolverr", label: "FlareSolverr" },
+                { value: "scrapling", label: "Scrapling" },
+              ]}
+              onChange={(value) => setValue("BYPASS_ENGINE", value)}
+              style={{ width: 220 }}
+            />
+            <Input
+              id={filterId(field.key)}
+              value={value}
+              disabled={engine === ""}
+              placeholder={bypassPlaceholder(engine)}
+              onChange={(nextValue: string) => setValue(field.key, nextValue)}
+              style={{ width: "calc(100% - 220px)" }}
+            />
+          </Input.Group>
+          <div className="settings-field-description">
+            <span>选择“不使用”关闭爬虫增强，已填写的服务地址会保留。{field.description}</span>
+            <span className="settings-reference-links" aria-label="爬虫增强项目地址">
+              {bypassProjects.map((project) => (
+                <a key={project.url} href={project.url} target="_blank" rel="noreferrer">{project.name}</a>
+              ))}
+            </span>
+          </div>
+        </div>
+      );
+    }
     return (
       <div
         className={"settings-field" + (field.wide ? " settings-field-wide" : "")}
         key={field.key}
       >
         <label className="settings-field-label" htmlFor={filterId(field.key)}>
-          {field.label}
+          <SettingTitle field={field} />
         </label>
-        {field.description ? <span className="settings-field-description">{field.description}</span> : null}
-        {siteField || field.kind === "textarea" ? (
+        {(siteField && field.key !== "MTEAM_API_KEY") || field.kind === "textarea" ? (
           <Input.TextArea
             id={filterId(field.key)}
+            aria-label={field.key === "PTT_COOKIE" ? "PTTime Cookie" : undefined}
             className={
               promptField
                 ? "settings-textarea " +
@@ -959,6 +1164,7 @@ export function SettingsPage() {
             onChange={(nextValue: string) => setValue(field.key, nextValue)}
           />
         )}
+        {field.description ? <span className="settings-field-description">{field.description}</span> : null}
       </div>
     );
   };

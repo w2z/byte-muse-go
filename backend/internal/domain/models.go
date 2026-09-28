@@ -80,11 +80,21 @@ func ResolveMediaDisplayStatus(library LibraryStatus, subscription SubscriptionS
 	return MediaDisplayStatusUnsubscribed
 }
 
+// ValidVideoType 校验单值影片分类；未知分类用 NULL 表示，不使用猜测值。
+func ValidVideoType(value string) bool {
+	switch value {
+	case "censored", "uncensored", "uncensored_cracked", "leaked":
+		return true
+	}
+	return false
+}
+
 // Media is the API-facing catalog representation.
 type Media struct {
 	ID                 string             `json:"id"`
 	Code               string             `json:"code"`
 	Title              string             `json:"title"`
+	VideoType          *string            `json:"video_type"` // NULL 表示尚未分类。
 	TranslatedTitle    *string            `json:"translated_title"`
 	PosterURL          *string            `json:"poster_url"`
 	BannerURL          *string            `json:"banner_url"`
@@ -128,13 +138,20 @@ type SubscriptionPage struct {
 
 // DownloadTask is one independently tracked resource download attempt.
 type DownloadTask struct {
-	ID           string         `json:"id"`
-	MediaID      string         `json:"media_id"`
-	Status       DownloadStatus `json:"status"`
-	ExternalID   *string        `json:"external_id"`
-	ErrorMessage *string        `json:"error_message"`
-	CreatedAt    time.Time      `json:"created_at"`
-	UpdatedAt    time.Time      `json:"updated_at"`
+	ID             string         `json:"id"`
+	MediaID        string         `json:"media_id"`
+	SourceSite     *string        `json:"source_site"`
+	SourceKind     *string        `json:"source_kind"`
+	Downloader     *string        `json:"downloader"`
+	InfoHash       *string        `json:"info_hash"`
+	TransferStatus *string        `json:"transfer_status"`
+	AddedAt        *time.Time     `json:"added_at"`
+	CompletedAt    *time.Time     `json:"completed_at"`
+	Status         DownloadStatus `json:"status"`
+	ExternalID     *string        `json:"external_id"`
+	ErrorMessage   *string        `json:"error_message"`
+	CreatedAt      time.Time      `json:"created_at"`
+	UpdatedAt      time.Time      `json:"updated_at"`
 }
 
 // DownloadPage is a repository result before request pagination metadata is attached.

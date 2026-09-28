@@ -1,7 +1,9 @@
 import { Button, Card, Image, Tag } from "@arco-design/web-react";
 import { IconCopy, IconImage, IconPlayArrow } from "@arco-design/web-react/icon";
-import { useState, type ReactNode } from "react";
-import type { Media, MediaDisplayStatus } from "../api/types";
+import { useQuery } from "@tanstack/react-query";
+import { useEffect, useState, type ReactNode } from "react";
+import { apiRequest } from "../api/client";
+import type { Media, MediaDisplayStatus, SystemSettings } from "../api/types";
 import { MediaPlayer } from "./MediaPlayer";
 import { DragScrollRow } from "./DragScrollRow";
 import { useFeedbackMessage } from "./FeedbackMessage";
@@ -34,10 +36,22 @@ type CodeCardProps = {
  * 底部按钮右对齐。番号只从服务端字段取，卡片不做任何业务状态推导；订阅状态由 display_status 决定。
  */
 export function CodeCard({ media, meta, actions, onSelect }: CodeCardProps) {
+  // 与设置页共用缓存：保存即生效，请求由 React Query 合并，不为每张卡片单独请求。
+  const settings = useQuery({
+    queryKey: ["system-settings"],
+    queryFn: () => apiRequest<SystemSettings>("/system/settings"),
+  });
+  const imageMode = settings.data?.values.IMAGE_MODE;
+  // 未加载、读取失败或未知值均不加载图片，避免默认显示导致无图模式短暂泄露封面。
+  const showImages = !settings.isError && (imageMode === "VISIBLE" || imageMode === "BLUR");
+  const imageClassName = imageMode === "BLUR" ? "code-card-image-blurred" : undefined;
   const [message, messageHolder] = useFeedbackMessage();
   const [stillsVisible, setStillsVisible] = useState(false);
   const [currentStill, setCurrentStill] = useState(0);
   const [previewVisible, setPreviewVisible] = useState(false);
+  useEffect(() => {
+    if (!showImages) setStillsVisible(false);
+  }, [showImages]);
   const title = media.translated_title || media.title;
   const coverURL = media.banner_url || media.poster_url;
   const stills = media.still_photos ?? [];
@@ -70,7 +84,7 @@ export function CodeCard({ media, meta, actions, onSelect }: CodeCardProps) {
         role="article"
         size="small"
         bordered
-        cover={<div className="code-card-cover">{coverURL ? <img src={coverURL} alt={media.code + " 封面"} loading="lazy" /> : null}</div>}
+        cover={showImages ? <div className="code-card-cover">{coverURL ? <img className={imageClassName} src={coverURL} alt={media.code + " 封面"} loading="lazy" /> : null}</div> : undefined}
       >
         <div className="code-card-body">
           <div className="code-card-code-row">
@@ -82,7 +96,7 @@ export function CodeCard({ media, meta, actions, onSelect }: CodeCardProps) {
           {meta}
           {titleNode}
           <div className="code-card-actions">
-            {stills.length > 0 ? <Button icon={<IconImage />} onClick={openStills}>剧照</Button> : null}
+            {showImages && stills.length > 0 ? <Button icon={<IconImage />} onClick={openStills}>剧照</Button> : null}
             {media.preview_url ? <Button icon={<IconPlayArrow />} onClick={() => setPreviewVisible(true)}>预告</Button> : null}
             {actions}
           </div>
@@ -90,7 +104,8 @@ export function CodeCard({ media, meta, actions, onSelect }: CodeCardProps) {
       </Card>
       {/* 剧照不经过弹窗：点按钮直接把 Arco Image 预览（ImagePreviewGroup）拉起来，从第一张开始看。
           预览层底部的缩略图条用它的 extra 插槽注入，点缩略图切换 current，与左右箭头、键盘切换共用同一状态。 */}
-      <Image.PreviewGroup
+      {showImages && stillsVisible ? <Image.PreviewGroup
+        imgAttributes={{ className: imageClassName }}
         srcList={stills}
         visible={stillsVisible}
         onVisibleChange={setStillsVisible}
@@ -108,16 +123,16 @@ export function CodeCard({ media, meta, actions, onSelect }: CodeCardProps) {
                   aria-label={"查看第 " + (index + 1) + " 张剧照"}
                   onClick={() => setCurrentStill(index)}
                 >
-                  <img src={src} alt="" />
+                  <img className={imageClassName} src={src} alt="" />
                 </button>
               ))}
             </DragScrollRow>
           ) : null
         }
-      />
+      /> : null}
       {/* 预告仍用弹窗 + 播放器；剧照改由上面的 Image.PreviewGroup 直接展示。 */}
       <AppDialog title={media.code + " 预告"} visible={previewVisible} onClose={() => setPreviewVisible(false)}>
-        {media.preview_url ? <MediaPlayer url={media.preview_url} poster={coverURL} /> : null}
+        {media.preview_url ? <MediaPlayer url={media.preview_url} poster={showImages && imageMode === "VISIBLE" ? coverURL : undefined} /> : null}
       </AppDialog>
     </>
   );

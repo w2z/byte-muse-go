@@ -6,6 +6,10 @@ info:
 servers:
   - url: /api/v1
 paths:
+  /tags: {"get":{"operationId":"listTags","summary":"查询标签目录","description":"只读聚合 legacy_media_metadata.genres。去除空标签，同一影片内重复标签只计一次；按关联影片数降序、名称升序排列。搜索为字面子串匹配。仅查询已存资料，不触发外站采集、全库影片匹配、追新订阅或下载；无数据返回空数组。标签名称按现有原文展示，不做跨语言合并。","parameters":[{"in":"cookie","name":"bytemuse_session","required":true,"description":"登录签发的 HttpOnly 会话 Cookie","schema":{"type":"string"}},{"in":"query","name":"page","description":"页码，从 1 开始","schema":{"type":"integer","minimum":1,"default":1}},{"in":"query","name":"page_size","description":"每页条数，最多 200","schema":{"type":"integer","minimum":1,"maximum":200,"default":15}},{"in":"query","name":"search","description":"标签名的字面子串；去掉首尾空格，省略或空串表示不限","schema":{"type":"string"}}],"responses":{"200":{"description":"标签分页目录；total 为匹配标签数，media_count 为关联影片数，不等同于媒体库已入库数量","content":{"application/json":{"schema":{"type":"object","required":["page","page_size","total","items"],"properties":{"page":{"type":"integer","description":"当前页码"},"page_size":{"type":"integer","description":"每页条数"},"total":{"type":"integer","description":"匹配标签总数"},"items":{"type":"array","description":"当前页标签；无结果为 []","items":{"type":"object","required":["name","media_count"],"properties":{"name":{"type":"string","description":"标签名称，去掉首尾空格，非空"},"media_count":{"type":"integer","minimum":1,"description":"去重关联影片数量"}}}}}},"example":{"page":1,"page_size":15,"total":1,"items":[{"name":"标签甲","media_count":3}]}}}},"400":{"description":"分页参数无效","content":{"application/json":{"schema":{"type":"object","required":["code","message"],"properties":{"code":{"type":"string","description":"错误代码"},"message":{"type":"string","description":"中文错误说明"}}}}}},"401":{"description":"未登录或会话失效","content":{"application/json":{"schema":{"type":"object","required":["code","message"],"properties":{"code":{"type":"string","description":"错误代码"},"message":{"type":"string","description":"中文错误说明"}}}}}},"500":{"description":"查询失败","content":{"application/json":{"schema":{"type":"object","required":["code","message"],"properties":{"code":{"type":"string","description":"错误代码"},"message":{"type":"string","description":"中文错误说明"}}}}}},"503":{"description":"标签目录未就绪","content":{"application/json":{"schema":{"type":"object","required":["code","message"],"properties":{"code":{"type":"string","description":"错误代码"},"message":{"type":"string","description":"中文错误说明"}}}}}}}}}
+  /collection/sources: {"get":{"operationId":"listCollectionSources","summary":"查询采集来源能力","responses":{"200":{"description":"当前可调用的数据源能力；不代表外站实时可达","content":{"application/json":{"schema":{"type":"array","items":{"$ref":"#/components/schemas/CollectionSource"}},"examples":{"sources":{"summary":"已实现来源列表","value":[{"id":"javdb","kinds":["search","rank"]},{"id":"netflav","kinds":["search","detail"]}]}}}}},"401":{"description":"未登录","content":{"application/json":{"schema":{"type":"object","required":["code","message"],"properties":{"code":{"type":"string","description":"稳定错误代码"},"message":{"type":"string","description":"中文错误说明"}}}}}},"503":{"description":"采集服务未装配","content":{"application/json":{"schema":{"type":"object","required":["code","message"],"properties":{"code":{"type":"string","description":"稳定错误代码"},"message":{"type":"string","description":"中文错误说明"}}}}}}},"description":" 必须携带登录接口签发的 bytemuse_session Cookie。","parameters":[{"in":"cookie","name":"bytemuse_session","required":true,"description":"登录签发的 HttpOnly 会话 Cookie，不在文档中填写真实值","schema":{"type":"string"}}]}}
+  /collection/runs: {"post":{"operationId":"enqueueCollection","summary":"异步提交采集任务","description":"COLLECT-02：返回 202 仅表示持久化受理。JavDB 榜单自动采完所有分页；搜索和详情仅采指定页。每个视频独立事务保存，成功不会被其他视频失败回滚。翻译在独立后台任务执行，不触发订阅判断或下载。每阶段最多 3 次尝试，失败任务保留。完整非空且视频全部成功的榜单才切换，空结果及失败保留旧榜。通过 Location 或 GET /collection/runs/{runId} 查看实际进度。需要登录 Cookie。","parameters":[{"in":"cookie","name":"bytemuse_session","required":true,"description":"登录签发的 HttpOnly 会话 Cookie，不在文档中填写真实值","schema":{"type":"string"}}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/CollectionRequest"},"example":{"source":"javdb","kind":"rank","period":"daily","page":1}}}},"responses":{"202":{"description":"已入队，未保证采集成功","headers":{"Location":{"description":"批次状态地址，包含 /api/v1","schema":{"type":"string"}}},"content":{"application/json":{"schema":{"$ref":"#/components/schemas/CollectionRun"},"example":{"run_id":"0123456789abcdef0123456789abcdef","request":{"source":"javdb","kind":"rank","period":"daily","page":1},"status":"queued","crawl_status":"queued","pages":0,"discovered":0,"saved":0,"failed":0,"pending":0,"translated":0,"translation_failed":0,"translation_pending":0,"rank_published":false,"counts":{"fetched":0,"new":0,"existing":0,"inserted":0,"media_inserted":0,"actors_inserted":0},"created_at":"2026-09-28T02:00:00Z"}}}},"400":{"description":"来源、类型或参数无效","content":{"application/json":{"schema":{"type":"object","required":["code","message"],"properties":{"code":{"type":"string","description":"错误代码"},"message":{"type":"string","description":"中文说明"}}}}}},"401":{"description":"未登录","content":{"application/json":{"schema":{"type":"object","required":["code","message"],"properties":{"code":{"type":"string","description":"错误代码"},"message":{"type":"string","description":"中文说明"}}}}}},"500":{"description":"任务登记失败","content":{"application/json":{"schema":{"type":"object","required":["code","message"],"properties":{"code":{"type":"string","description":"错误代码"},"message":{"type":"string","description":"中文说明"}}}}}},"503":{"description":"采集服务未装配","content":{"application/json":{"schema":{"type":"object","required":["code","message"],"properties":{"code":{"type":"string","description":"错误代码"},"message":{"type":"string","description":"中文说明"}}}}}}}}}
+  /collection/runs/{runId}: {"get":{"operationId":"getCollectionRun","summary":"查询异步采集批次进度","description":"只读查询持久化状态；单个视频失败不影响其他视频。未启用翻译时不创建翻译任务。错误代码不包含上游正文或凭据。","parameters":[{"in":"cookie","name":"bytemuse_session","required":true,"description":"登录签发的 HttpOnly 会话 Cookie，不在文档中填写真实值","schema":{"type":"string"}},{"in":"path","name":"runId","required":true,"schema":{"type":"string"},"description":"提交接口返回的 run_id"}],"responses":{"200":{"description":"当前各阶段状态及累计计数","content":{"application/json":{"schema":{"$ref":"#/components/schemas/CollectionRun"},"example":{"run_id":"0123456789abcdef0123456789abcdef","request":{"source":"javdb","kind":"rank","period":"daily","page":1},"status":"completed","crawl_status":"done","pages":2,"discovered":40,"saved":40,"failed":0,"pending":0,"translated":0,"translation_failed":0,"translation_pending":0,"rank_published":true,"counts":{"fetched":40,"new":40,"existing":0,"inserted":40,"media_inserted":40,"actors_inserted":0},"created_at":"2026-09-28T02:00:00Z"}}}},"401":{"description":"未登录","content":{"application/json":{"schema":{"type":"object","required":["code","message"],"properties":{"code":{"type":"string","description":"错误代码"},"message":{"type":"string","description":"中文说明"}}}}}},"404":{"description":"批次不存在","content":{"application/json":{"schema":{"type":"object","required":["code","message"],"properties":{"code":{"type":"string","description":"错误代码"},"message":{"type":"string","description":"中文说明"}}}}}},"500":{"description":"读取状态失败","content":{"application/json":{"schema":{"type":"object","required":["code","message"],"properties":{"code":{"type":"string","description":"错误代码"},"message":{"type":"string","description":"中文说明"}}}}}},"503":{"description":"采集服务未装配","content":{"application/json":{"schema":{"type":"object","required":["code","message"],"properties":{"code":{"type":"string","description":"错误代码"},"message":{"type":"string","description":"中文说明"}}}}}}}}}
   /auth/login:
     post:
       operationId: login
@@ -68,15 +72,44 @@ paths:
       parameters:
         - $ref: '#/components/parameters/Page'
         - $ref: '#/components/parameters/PageSize'
-        - name: query
+        - name: search
           in: query
+          description: 按番号、原始标题或翻译标题模糊搜索
           schema:
             type: string
             maxLength: 100
-        - name: subscription_status
+        - name: query
           in: query
+          description: 兼容旧客户端的搜索参数；与 search 二选一，search 优先
+          schema:
+            type: string
+            maxLength: 100
+        - name: subscription
+          in: query
+          description: 订阅状态筛选
           schema:
             $ref: '#/components/schemas/SubscriptionStatus'
+        - name: subscription_status
+          in: query
+          description: 兼容旧客户端的订阅状态参数；与 subscription 二选一，subscription 优先
+          schema:
+            $ref: '#/components/schemas/SubscriptionStatus'
+        - name: download
+          in: query
+          description: 最新下载任务状态筛选；没有下载任务时按 unknown 处理
+          schema:
+            $ref: '#/components/schemas/DownloadStatus'
+        - name: library
+          in: query
+          description: 媒体库状态筛选
+          schema:
+            $ref: '#/components/schemas/LibraryStatus'
+        - name: video_type
+          in: query
+          description: 影片类型单选；censored 有码，uncensored 无码，uncensored_cracked 无码破解，leaked 流出，unknown 未分类（数据库 NULL）；省略或空串不限，可与其他筛选组合，先筛选后分页
+          schema:
+            type: string
+            enum: [censored, uncensored, uncensored_cracked, leaked, unknown]
       responses:
         '200':
           description: 影片分页列表
@@ -84,6 +117,29 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/MediaPage'
+              example:
+                page: 1
+                page_size: 15
+                total: 1
+                items:
+                  - id: example-media
+                    code: TEST-001
+                    title: 示例影片
+                    video_type: censored
+                    translated_title: null
+                    still_photos: []
+                    subscription_status: none
+                    library_status: unknown
+                    display_status: unsubscribed
+                    active_subscription: null
+                    download_status: null
+                    created_at: '2026-09-28T00:00:00Z'
+                    updated_at: '2026-09-28T00:00:00Z'
+        '400':
+          description: video_type 不在允许范围时返回 invalid_video_type
+          content:
+            application/json:
+              example: {code: invalid_video_type, message: 影片类型无效}
   /media/{mediaId}:
     get:
       operationId: getMedia
@@ -302,6 +358,29 @@ paths:
                 $ref: '#/components/schemas/Subscription'
         '404':
           $ref: '#/components/responses/NotFound'
+  /subscriptions/{subscriptionId}/download:
+    post:
+      operationId: enqueueSubscriptionDownload
+      summary: 为活动订阅登记资源搜索与下载任务
+      description: 重复请求返回已有任务；任务由后台处理。当前已验证的 BT 来源是 Nyaa BT（sukebei.nyaa.si）。
+      parameters:
+        - $ref: '#/components/parameters/SubscriptionId'
+      responses:
+        '202':
+          description: 已持久化任务；task_id 是下载任务标识，不表示下载器已受理
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [task_id]
+                properties:
+                  task_id:
+                    type: string
+                    description: 下载任务 ID，可在 GET /downloads 查询状态
+              example:
+                task_id: ABCDEFGHIJKLMNOPQRSTUVWXYZ
+        '404':
+          $ref: '#/components/responses/NotFound'
   /subscriptions/{subscriptionId}:
     put:
       operationId: updateSubscription
@@ -332,6 +411,7 @@ paths:
   /downloads:
     get:
       operationId: listDownloads
+      description: 按传输状态、加入时间和完成时间先过滤再分页；下载失败还包含搜索或提交阶段失败的任务，未同步字段为 null，不推断旧数据。
       parameters:
         - $ref: '#/components/parameters/Page'
         - $ref: '#/components/parameters/PageSize'
@@ -339,6 +419,26 @@ paths:
           in: query
           schema:
             $ref: '#/components/schemas/DownloadStatus'
+        - name: transfer_status
+          in: query
+          description: qBittorrent 传输状态；failed 同时包含搜索或提交失败的任务；为空时不限，下载中不包含暂停、失败或完成
+          schema: {type: string, enum: [downloading, paused, failed, completed]}
+        - name: added_from
+          in: query
+          description: 加入时间下界，含该时刻，UTC RFC3339
+          schema: {type: string, format: date-time}
+        - name: added_to
+          in: query
+          description: 加入时间上界，不含该时刻，UTC RFC3339
+          schema: {type: string, format: date-time}
+        - name: completed_from
+          in: query
+          description: 下载完成时间下界，含该时刻，UTC RFC3339
+          schema: {type: string, format: date-time}
+        - name: completed_to
+          in: query
+          description: 下载完成时间上界，不含该时刻，UTC RFC3339
+          schema: {type: string, format: date-time}
       responses:
         '200':
           description: 下载任务分页列表
@@ -501,21 +601,33 @@ paths:
   /system/settings:
     get:
       operationId: getSystemSettings
+      description: 已登录管理员读取站点鉴权类型与独立凭据；PTFans、NicePT、RousiPro 支持密钥或 Cookie 搜索取种，PTTime 仅使用 Cookie。
+      parameters:
+        - {in: cookie, name: bytemuse_session, required: true, schema: {type: string}, description: 登录签发的管理员会话 Cookie，不在示例中填写真实值}
       responses:
         '200':
-          description: 已登录管理员可读取的系统设置；敏感值会以明文值回显，前端使用密码控件显示
+          description: 已登录管理员可读取的系统设置；敏感值在管理员设置表单中回显，请勿记录日志
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/SystemSettings'
+              example:
+                database_driver: sqlite
+                values: {PTFANS_AUTH_TYPE: key, PTFANS_API_KEY: example-token, PTFANS_COOKIE: 'session=example'}
+                configured: {PTFANS_API_KEY: true, PTFANS_COOKIE: true}
     put:
       operationId: updateSystemSettings
+      description: 原子保存当前分组；密钥与 Cookie 分别加密保存，切换类型不清除隐藏凭据。
+      parameters:
+        - {in: cookie, name: bytemuse_session, required: true, schema: {type: string}, description: 登录签发的管理员会话 Cookie，不在示例中填写真实值}
       requestBody:
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/SystemSettingsUpdate'
+            example:
+              values: {PTFANS_AUTH_TYPE: key, PTFANS_API_KEY: example-token, PTFANS_COOKIE: 'session=example'}
       responses:
         '200':
           description: 已保存并返回当前分组的完整系统设置
@@ -523,6 +635,10 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SystemSettings'
+              example:
+                database_driver: sqlite
+                values: {PTFANS_AUTH_TYPE: key, PTFANS_API_KEY: example-token, PTFANS_COOKIE: 'session=example'}
+                configured: {PTFANS_API_KEY: true, PTFANS_COOKIE: true}
         '400':
           description: 包含不支持的设置项或请求体无效
           content:
@@ -624,6 +740,14 @@ components:
           schema:
             $ref: '#/components/schemas/Error'
   schemas:
+    CollectionRequest: {"type":"object","required":["source","kind"],"additionalProperties":false,"properties":{"source":{"type":"string","enum":["javdb","netflav"],"description":"数据来源；支持能力以 /collection/sources 为准"},"kind":{"type":"string","enum":["search","detail","rank"],"description":"search 关键词；detail Netflav 站内视频 ID；rank JavDB 有码榜单"},"query":{"type":"string","maxLength":200,"description":"search/detail 必填，detail 只接受站内 ID，不接受 URL"},"period":{"type":"string","enum":["daily","weekly","monthly"],"description":"仅 JavDB rank 必填，分别为日、周、月榜"},"page":{"type":"integer","minimum":0,"maximum":100,"default":1,"description":"省略或 0 按 1；rank 只能从第 1 页启动并自动采至末页，内部翻页无 100 页限制；search 手动单页 1..100；detail 仅 1"}}}
+    CollectedActor: {"type":"object","required":["name"],"properties":{"name":{"type":"string","description":"站点提供的演员名称"},"photo":{"type":"string","description":"演员头像地址；缺失时省略"}}}
+    CollectedMedia: {"type":"object","required":["source_id","url","title","actors","tags"],"properties":{"source_id":{"type":"string","description":"来源站点内的稳定 ID，与 source 联合唯一"},"url":{"type":"string","description":"来源详情页地址"},"code":{"type":"string","description":"可靠番号；未识别时省略，不根据标题强行关联影片"},"title":{"type":"string","description":"原始标题"},"poster_url":{"type":"string","description":"封面地址；缺失时省略"},"release_date":{"type":"string","description":"发行日期 YYYY-MM-DD；无法确认时省略"},"duration_minutes":{"type":"integer","description":"时长，单位分钟；缺失时省略"},"actors":{"type":"array","items":{"$ref":"#/components/schemas/CollectedActor"},"description":"演员资料；未知时为空数组"},"tags":{"type":"array","items":{"type":"string"},"description":"站点标签；未知时为空数组"},"video_type":{"type":"string","enum":["censored","uncensored","uncensored_cracked","leaked"],"description":"明确的影片单值类型：有码、无码、无码破解、流出；未知时省略，不猜测，不覆盖既有影片分类"}}}
+    CollectionSource: {"type":"object","required":["id","kinds"],"properties":{"id":{"type":"string","description":"来源标识"},"kinds":{"type":"array","items":{"type":"string"},"description":"实际已实现的查询类型"}}}
+    CollectionBatch: {"type":"object","required":["items","actors","has_more"],"properties":{"items":{"type":"array","items":{"$ref":"#/components/schemas/CollectedMedia"},"description":"本页影片来源记录"},"actors":{"type":"array","items":{"$ref":"#/components/schemas/CollectedActor"},"description":"本页独立演员资料"},"has_more":{"type":"boolean","description":"站点明确提供下一页；不会自动追页"}}}
+    CollectionCounts: {"type":"object","required":["fetched","new","existing","inserted","media_inserted","actors_inserted"],"properties":{"fetched":{"type":"integer","minimum":0,"description":"按来源 ID 去重后的有效影片记录数"},"new":{"type":"integer","minimum":0,"description":"按来源 ID 去重后的新记录数"},"existing":{"type":"integer","minimum":0,"description":"按来源 ID 去重后的已有记录数"},"inserted":{"type":"integer","minimum":0,"description":"事务成功插入的来源记录数"},"media_inserted":{"type":"integer","minimum":0,"description":"新建影片目录数；无番号记录不计入"},"actors_inserted":{"type":"integer","minimum":0,"description":"新建演员数；保留已有演员订阅日期"}}}
+    CollectionResult: {"type":"object","required":["request","batch","counts","completed_at"],"properties":{"request":{"$ref":"#/components/schemas/CollectionRequest"},"batch":{"$ref":"#/components/schemas/CollectionBatch"},"counts":{"$ref":"#/components/schemas/CollectionCounts"},"completed_at":{"type":"string","format":"date-time","description":"事务提交完成时间，UTC RFC3339"}}}
+    CollectionRun: {"type":"object","required":["run_id","request","status","crawl_status","rank_published","counts","created_at","pages","discovered","saved","failed","pending","translated","translation_failed","translation_pending"],"properties":{"run_id":{"type":"string","description":"持久化采集批次 ID"},"request":{"$ref":"#/components/schemas/CollectionRequest"},"status":{"type":"string","enum":["queued","running","completed","partial_failed","failed"],"description":"整体状态；failed 表示分页最终失败，此时已排队视频仍继续处理；partial_failed 表示入库或翻译有最终失败"},"crawl_status":{"type":"string","enum":["queued","done","failed"],"description":"分页采集状态；done 不代表视频或翻译已完成"},"rank_published":{"type":"boolean","description":"该批次曾完整发布榜单；不表示仍是最新榜单"},"error":{"type":"string","description":"最近可见的脱敏阶段错误代码；没有错误时省略"},"counts":{"$ref":"#/components/schemas/CollectionCounts"},"created_at":{"type":"string","format":"date-time","description":"批次创建时间，UTC"},"pages":{"type":"integer","minimum":0,"description":"已成功解析并登记的页数"},"discovered":{"type":"integer","minimum":0,"description":"按站内 ID 去重后的已发现视频数"},"saved":{"type":"integer","minimum":0,"description":"已独立事务保存的视频数，包含已有影片"},"failed":{"type":"integer","minimum":0,"description":"最终失败的视频数"},"pending":{"type":"integer","minimum":0,"description":"待入库或正在重试的视频数"},"translated":{"type":"integer","minimum":0,"description":"已完成翻译阶段数，含处理前已有译文而跳过的任务"},"translation_failed":{"type":"integer","minimum":0,"description":"最终失败的翻译任务数"},"translation_pending":{"type":"integer","minimum":0,"description":"待翻译或正在重试的任务数"}}}
     LoginRequest:
       type: object
       required: [username, password]
@@ -656,8 +780,13 @@ components:
           type: string
     Media:
       type: object
-      required: [id, code, title, still_photos, subscription_status, library_status, display_status, created_at, updated_at]
+      required: [id, code, title, video_type, still_photos, subscription_status, library_status, display_status, created_at, updated_at]
       properties:
+        video_type:
+          type: [string, 'null']
+          enum: [censored, uncensored, uncensored_cracked, leaked, null]
+          description: 影片单值类型；censored 有码，uncensored 无码，uncensored_cracked 无码破解，leaked 流出；null 尚未分类，历史数据不推断回填
+          example: censored
         id:
           type: string
         code:
@@ -886,6 +1015,29 @@ components:
           type: string
         status:
           $ref: '#/components/schemas/DownloadStatus'
+        source_site:
+          type: [string, 'null']
+          description: 选中资源的站点名；尚未选中时为 null，BT 站显示 Nyaa BT
+        source_kind:
+          type: [string, 'null']
+          enum: [pt, bt, null]
+          description: 资源协议类别；尚未选中时为 null
+        downloader:
+          type: [string, 'null']
+          description: 本次提交使用的下载器；尚未选中资源时为 null
+        info_hash:
+          type: [string, 'null']
+          description: 选中种子的 40 位 info hash；用于下载器结果回查与去重
+        transfer_status:
+          type: [string, 'null']
+          enum: [downloading, paused, failed, completed, null]
+          description: 最近一次 qBittorrent 同步的传输状态；未同步为 null，不等于任务状态
+        added_at:
+          type: [string, 'null']
+          description: 下载器加入时间，UTC RFC3339；尚未同步为 null
+        completed_at:
+          type: [string, 'null']
+          description: 下载器完成时间，UTC RFC3339；未完成或尚未同步为 null
         external_id:
           type: [string, 'null']
         error_message:
@@ -986,10 +1138,24 @@ components:
           description: >-
             设置值。键名与旧版 template.env、对标站 /config 一致；敏感值也会在已登录管理员会话中回显，
             按对标站设置页分组维护：站点、Emby、Plex、Jellyfin、微信、Telegram、Qbittorrent、
-            Transmission、迅雷、CloudDrive2、过滤、排序、定时任务、翻译、Agent、其他。
+            Transmission、aria2、迅雷、CloudDrive2、过滤、排序、定时任务、翻译、Agent、其他。
             布尔取值固定为 true / false；数字为非负整数字符串；DEFAULT_FILTER 为过滤规则 JSON 字符串；
             DEFAULT_SORT 为逗号分隔的排序标签（uc、!uc、seeders、chinese、uhd、!uhd、site、free）；
-            MAIN_SITE 取 ALL / 馒头 / BT / PTT / NicePT / Rousi；IMAGE_MODE 取 INVISIBLE / VISIBLE / BLUR；LOG_RETENTION_DAYS 为日志保留天数，默认 30，0 或空值表示不自动删除；TRANSLATION_ENGINE 取 none / openai / google / baidu / deeplx；DEEPLX_URL 为 DeepLX 服务地址（例如 http://127.0.0.1:1188）；TRANSLATION_PROMPT 仅在 OpenAI 翻译时作为翻译 system prompt，留空使用内置提示词；AGENT_SYSTEM_PROMPT 仅用于 Telegram/Agent 对话，留空使用内置提示词。
+            PTFANS_AUTH_TYPE、ROUSIPRO_AUTH_TYPE、NICEPT_AUTH_TYPE 为 key（密钥）或 cookie（Cookie），默认 key，空值使用密钥；
+            PTFANS_API_KEY、ROUSIPRO_API_KEY、NICEPT_API_KEY 是分别加密保存的密钥，空值表示未配置；
+            三站支持密钥分页搜索和种子下载；密钥与 Cookie 独立保存，切换模式不清除另一种凭据，密钥模式不回退 Cookie。
+            PTTime 仅使用 PTT_COOKIE 搜索和下载，不使用受限 RSS。PTT_AUTH_TYPE、PTT_PASSKEY、PTT_UID 为兼容历史配置保留，运行时不读取，设置页不再提供。
+            MAIN_SITE 取 ALL / 馒头 / BT / PTT / NicePT / PTFans / RousiPro；PTFANS_COOKIE 用于 PTFans 9KG 专区，ROUSIPRO_COOKIE 用于 RousiPro 9KG 目录，均为加密保存的管理员凭据，空值表示未配置；旧 ROUSI_COOKIE 不再显示或接受写入。IMAGE_MODE 取 INVISIBLE / VISIBLE / BLUR；PT_DEFAULT_DOWNLOADER 取 qbittorrent / transmission；BT_DEFAULT_DOWNLOADER 取 qbittorrent / transmission / aria2 / thunder（不含 CloudDrive2）；BYPASS_ENGINE 取 cloudflare_bypass_for_scraping / flaresolverr / scrapling，空值表示关闭；BYPASS_URL 为所选增强服务地址；LOG_RETENTION_DAYS 为日志保留天数，默认 30，0 或空值表示不自动删除；TRANSLATION_ENGINE 取 none / openai / google / baidu / deeplx；DEEPLX_URL 为 DeepLX 服务地址（例如 http://127.0.0.1:1188）；TRANSLATION_PROMPT 仅在 OpenAI 翻译时作为翻译 system prompt，留空使用内置提示词；AGENT_SYSTEM_PROMPT 仅用于 Telegram/Agent 对话，留空使用内置提示词。
+          properties:
+            PTT_AUTH_TYPE: {type: string, deprecated: true, enum: [key, cookie, ''], description: '历史兼容字段，不参与运行；PTTime 固定使用 PTT_COOKIE'}
+            PTFANS_AUTH_TYPE: {type: string, enum: [key, cookie, ''], default: key, description: 'PTFans 鉴权方式；空值默认密钥'}
+            ROUSIPRO_AUTH_TYPE: {type: string, enum: [key, cookie, ''], default: key, description: 'RousiPro 鉴权方式；空值默认密钥'}
+            NICEPT_AUTH_TYPE: {type: string, enum: [key, cookie, ''], default: key, description: 'NicePT 鉴权方式；空值默认密钥'}
+            PTT_PASSKEY: {type: string, deprecated: true, default: '', description: '历史兼容凭据，加密保留但不参与运行；空字符串清除'}
+            PTT_UID: {type: string, deprecated: true, pattern: '^(|[0-9]*[1-9][0-9]*)$', default: '', description: '历史兼容 UID，不参与运行；空字符串未配置，不接受 0'}
+            PTFANS_API_KEY: {type: string, default: '', description: 'PTFans 访问令牌；加密存储，空字符串清除，不是 Tracker PassKey'}
+            ROUSIPRO_API_KEY: {type: string, default: '', description: 'RousiPro API Key；加密存储，空字符串清除'}
+            NICEPT_API_KEY: {type: string, default: '', description: 'NicePT 访问令牌；加密存储，空字符串清除，不是 Tracker PassKey'}
         configured:
           type: object
           additionalProperties:
@@ -1007,6 +1173,17 @@ components:
             待保存的业务设置，只提交当前分组；页面应提交当前字段的完整值。普通字段和敏感字段的空值都会保存为空，
             用于显式清除配置；保存其他字段时不要提交未编辑的敏感字段。
             取值域与 SystemSettings.values 一致，越界或未声明的键返回 400 invalid_setting。
+            站点模式与两种凭据可同时提交；只修改模式不应清空另一种凭据，显式提交空字符串才清除密钥或 Cookie。
+          properties:
+            PTT_AUTH_TYPE: {type: string, deprecated: true, enum: [key, cookie, ''], description: '历史兼容字段，不参与运行；PTTime 固定使用 PTT_COOKIE'}
+            PTFANS_AUTH_TYPE: {type: string, enum: [key, cookie, ''], description: 'PTFans 鉴权方式；空值默认密钥'}
+            ROUSIPRO_AUTH_TYPE: {type: string, enum: [key, cookie, ''], description: 'RousiPro 鉴权方式；空值默认密钥'}
+            NICEPT_AUTH_TYPE: {type: string, enum: [key, cookie, ''], description: 'NicePT 鉴权方式；空值默认密钥'}
+            PTT_PASSKEY: {type: string, deprecated: true, description: '历史兼容凭据，不参与运行；空字符串清除，不提交则保留原值'}
+            PTT_UID: {type: string, deprecated: true, pattern: '^(|[0-9]*[1-9][0-9]*)$', description: '历史兼容 UID，不参与运行；空字符串未配置'}
+            PTFANS_API_KEY: {type: string, description: 'PTFans 访问令牌；加密保存，空字符串清除；不提交则保留原值'}
+            ROUSIPRO_API_KEY: {type: string, description: 'RousiPro API Key；加密保存，空字符串清除；不提交则保留原值'}
+            NICEPT_API_KEY: {type: string, description: 'NicePT 访问令牌；加密保存，空字符串清除；不提交则保留原值'}
     Health:
       type: object
       required: [status]

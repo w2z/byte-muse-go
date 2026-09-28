@@ -3,10 +3,12 @@ import { AppLayout } from "./AppLayout";
 import { LoginPage } from "../features/auth/LoginPage";
 import { DashboardPage } from "../features/dashboard/DashboardPage";
 import { FilmListPage } from "../features/films/FilmListPage";
+import { AllFilmsPage } from "../features/films/AllFilmsPage";
 import { SubscriptionListPage } from "../features/subscriptions/SubscriptionListPage";
 import { DownloadListPage } from "../features/downloads/DownloadListPage";
 import { SettingsPage } from "../features/system/SettingsPage";
 import { ActorListPage } from "../features/actors/ActorListPage";
+import { TagListPage } from "../features/tags/TagListPage";
 import { ReleaseTodayPage } from "../features/releases/ReleaseTodayPage";
 import { RecommendPage } from "../features/recommend/RecommendPage";
 import { RankPage } from "../features/rank/RankPage";
@@ -51,13 +53,15 @@ export const routes: RouteObject[] = [
     children: [
       { index: true, element: <Navigate to="/dashboard" replace /> },
       { path: "dashboard", element: <DashboardPage />, handle: meta("看板", "通用") },
-      { path: "films", element: <FilmListPage />, handle: meta("媒体库", "通用") },
+      { path: "films", element: <FilmListPage />, handle: meta("媒体库", "通用", "white") },
+      { path: "all-films", element: <AllFilmsPage />, handle: meta("所有影片", "通用", "white") },
       { path: "subscriptions", element: <SubscriptionListPage />, handle: meta("订阅", "通用", "white") },
       { path: "subscribe", element: <SubscriptionListPage />, handle: meta("订阅", "通用", "white") },
       { path: "downloads", element: <DownloadListPage />, handle: meta("下载任务", "通用") },
       { path: "settings", element: <SettingsPage />, handle: meta("设置", "系统") },
       { path: "config", element: <SettingsPage />, handle: meta("设置", "系统") },
       { path: "actor", element: <ActorListPage />, handle: meta("演员", "通用", "white") },
+      { path: "tag", element: <TagListPage />, handle: meta("标签", "通用", "white") },
       { path: "release-today", element: <ReleaseTodayPage />, handle: meta("上新", "通用", "white") },
       { path: "recommend", element: <RecommendPage />, handle: meta("推荐", "通用", "white") },
       { path: "rank", element: <RankPage />, handle: meta("榜单", "通用", "white") },

@@ -67,9 +67,14 @@ func TestPersistentLoggerSurvivesReopenAndClearDeletesRows(t *testing.T) {
 func TestLogMigrationExistsForEveryDialect(t *testing.T) {
 	for _, dialect := range []Dialect{DialectSQLite, DialectPostgres, DialectMySQL} {
 		plan := MigrationPlan(dialect)
-		latest := plan[len(plan)-1]
-		if latest.Version != 11 || latest.Name != "add_catalog_query_indexes" {
-			t.Fatalf("%s latest migration = %d/%s", dialect, latest.Version, latest.Name)
+		found := false
+		for _, migration := range plan {
+			if migration.Version == 8 && migration.Name == "create_system_logs" {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("%s missing system log migration", dialect)
 		}
 	}
 }

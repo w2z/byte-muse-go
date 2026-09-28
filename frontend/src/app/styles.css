@@ -190,6 +190,8 @@ h1 { margin: 0; color: var(--ink); font-size: 16px; font-weight: 500; letter-spa
 .code-card > .arco-card-body { padding: var(--content-padding); }
 .code-card-cover { position: relative; width: 100%; aspect-ratio: 1.5 / 1; overflow: hidden; background: var(--panel-deep); }
 .code-card-cover img { display: block; width: 100%; height: 100%; object-fit: cover; }
+/* 图片模式只作用于影片图片；无图模式由组件卸载图片节点，不能仅用 CSS 隐藏。 */
+.code-card-image-blurred { filter: blur(16px); }
 .code-card-body { display: flex; min-height: 100%; flex-direction: column; gap: 8px; }
 .code-card-title { color: var(--ink); font-size: 14px; font-weight: 400; line-height: 1.5; overflow-wrap: anywhere; }
 .code-card-code-row { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; }
@@ -326,6 +328,17 @@ h1 { margin: 0; color: var(--ink); font-size: 16px; font-weight: 500; letter-spa
 .table-shell > .arco-card-body { overflow-x: auto; }
 /* ===== 数据表格（任务/下载任务等表格型页面共用） ===== */
 .data-table-shell > .arco-card-body { padding: 20px; }
+.download-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.download-filter-field { display: flex; min-width: 0; align-items: center; gap: 8px; }
+.download-filter-label { flex: none; color: var(--ink-2); font-size: var(--control-font-size); line-height: 22px; white-space: nowrap; }
+.download-filter-field > .arco-select { width: 160px; }
+.download-filter-field > .arco-picker { width: 340px; }
+.download-filter-actions { display: flex; align-items: center; gap: 8px; }
+@media (max-width: 600px) {
+  .download-filter-field { width: 100%; flex-wrap: wrap; }
+  .download-filter-field > .arco-select,
+  .download-filter-field > .arco-picker { width: min(340px, 100%); }
+}
 .data-table-shell .data-table { overflow: visible; }
 .data-table-shell .data-table .arco-table-container { border-radius: 2px 2px 0 0; }
 .data-table-shell .data-table .arco-table-header { background: var(--panel-deep); }
@@ -416,31 +429,40 @@ h1 { margin: 0; color: var(--ink); font-size: 16px; font-weight: 500; letter-spa
   max-width: 720px;
 }
 .settings-fields--single { grid-template-columns: minmax(0, 1fr); width: 100%; max-width: none; }
-/* 站点分组的文本域（馒头令牌与各家 COOKIE）：由 rows=3 固定三行高（14px × 1.5715 × 3 + 8 内边距 + 2 边框 ≈ 76px），
+/* 站点分组的 COOKIE 文本域：由 rows=3 固定三行高（14px × 1.5715 × 3 + 8 内边距 + 2 边框 ≈ 76px），
    并允许手动上下拉伸。不设 min-height：一旦设了最小高度，用户向下（变矮）拉伸就会被挡住。
    autoSize 与手动拉伸互相冲突，见 SettingsPage 的 SITE_TEXTAREA_ROWS 注释。 */
 .settings-site-textarea { width: 100%; resize: vertical; }
 .settings-field { display: flex; min-width: 0; flex-direction: column; gap: 8px; }
 .settings-field-wide { grid-column: 1 / -1; }
 .settings-field-label { min-height: 22px; color: var(--ink-2); font-size: var(--control-font-size); line-height: 22px; }
+.settings-site-link { display: inline-flex; align-items: center; gap: 5px; color: var(--primary); text-decoration: none; }
+.settings-site-link:hover { text-decoration: underline; }
 .settings-field-description {
-  margin-top: -4px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
   color: var(--muted);
   font-size: 12px;
   line-height: 20px;
   overflow-wrap: anywhere;
 }
-.settings-field .arco-input-inner-wrapper { width: 100%; background: var(--panel); }
+.settings-reference-links { display: flex; flex-wrap: wrap; gap: 4px 14px; }
+.settings-reference-links a { color: var(--primary); text-decoration: none; }
+.settings-reference-links a:hover { text-decoration: underline; }
+.settings-field .arco-input-inner-wrapper { width: 100%; }
 .settings-field > .arco-input,
 .settings-field .arco-input-number,
 .settings-field .arco-input-number .arco-input-inner-wrapper { width: 100%; }
 .settings-toggle-row {
+  display: flex;
+  width: 100%;
   min-height: 32px;
   flex-direction: row;
-  align-items: flex-start;
+  align-items: center;
   justify-content: flex-start;
   gap: 12px;
-  padding: 5px 0 5px 12px;
+  padding: 5px 0;
   background: transparent;
   border: 0;
   border-radius: 0;
@@ -454,7 +476,6 @@ h1 { margin: 0; color: var(--ink); font-size: 16px; font-weight: 500; letter-spa
   font-size: var(--control-font-size);
   line-height: 22px;
 }
-.settings-toggle-row .settings-field-description { margin-top: 0; }
 .settings-option-tabs > .arco-tabs-header-nav { width: fit-content; max-width: 100%; margin: 0; }
 .settings-option-tabs .arco-tabs-header-wrapper { justify-content: flex-start; }
 .settings-option-tabs .arco-tabs-header { flex-wrap: wrap; justify-content: flex-start; }
@@ -468,7 +489,7 @@ h1 { margin: 0; color: var(--ink); font-size: 16px; font-weight: 500; letter-spa
   align-items: center;
   justify-content: flex-start;
   gap: 12px;
-  padding: 5px 0 5px 12px;
+  padding: 5px 0;
   background: transparent;
   border: 0;
   border-radius: 0;
@@ -478,7 +499,8 @@ h1 { margin: 0; color: var(--ink); font-size: 16px; font-weight: 500; letter-spa
 .settings-input-with-unit > .arco-input-number { width: 100%; }
 .settings-input-with-unit .arco-input-number-suffix { color: var(--ink-2); font-size: var(--control-font-size); }
 .settings-option-radio { display: flex; flex-direction: column; gap: 8px; }
-.settings-option-radio .arco-radio-group { display: flex; flex-wrap: wrap; gap: 8px 20px; }
+.settings-option-radio .arco-radio-group { display: flex; flex-wrap: wrap; gap: 8px var(--settings-radio-gap, 20px); }
+.settings-main-site-options { --settings-radio-gap: 8px; }
 .settings-field-placeholder { color: var(--muted); font-size: var(--control-font-size); line-height: 22px; }
 .settings-textarea { width: 100%; }
 .settings-translation-prompt { min-height: 120px; resize: vertical; overflow-x: hidden; }

@@ -15,7 +15,10 @@ import (
 	"bytemuse/backend/internal/auth"
 	"bytemuse/backend/internal/config"
 	"bytemuse/backend/internal/logging"
+	"bytemuse/backend/internal/platform/collector"
 	"bytemuse/backend/internal/platform/database"
+	"bytemuse/backend/internal/platform/downloadclient"
+	"bytemuse/backend/internal/platform/torrentsearch"
 	"bytemuse/backend/internal/ports"
 	runtimeapp "bytemuse/backend/internal/runtime"
 	"bytemuse/backend/internal/scheduler"
@@ -162,7 +165,45 @@ func (c *Commands) Serve(ctx context.Context) error {
 		return fmt.Errorf("read translation settings: %w", err)
 	}
 	jobs := configuredJobs(translationSettings.Values)
-	jobs = append(jobs, scheduler.Job{Name: "清理系统日志", Spec: "* * * * *", Run: func(jobCtx context.Context) scheduler.JobResult {
+	collectionClient, err := collector.NewClientWithProxy(translationSettings.Values["PROXY"])
+	if err != nil {
+		return fmt.Errorf("采集代理配置无效")
+	}
+	collectionService := application.NewQueuedCollectionService(collector.NewRegistry(collectionClient), database.NewCollectionRepository(store.SQLDB(), database.Dialect(c.config.DatabaseDriver)), nil)
+	downloadRepository := database.NewSubscriptionDownloadRepository(store.SQLDB(), database.Dialect(c.config.DatabaseDriver))
+	downloadService := application.NewSubscriptionDownloadService(downloadRepository, nil, nil, func(ctx context.Context) (map[string]string, error) {
+		settings, e := settingsService.Get(ctx)
+		return settings.Values, e
+	})
+	downloadService.SetRuntimeFactory(func(values map[string]string) (application.ResourceSearcher, application.PrivateTorrentSource, map[string]application.MagnetDownloader) {
+		sources := []application.ResourceSearcher{torrentsearch.NewNyaaSearcher(nil, "")}
+		privateSearchers, privateSources := configuredPrivateSites(values, nil)
+		sources = append(sources, privateSearchers...)
+		var searcher application.ResourceSearcher = application.MultiResourceSearcher{Sources: sources}
+		var private application.PrivateTorrentSource
+		if len(privateSources) > 0 {
+			private = application.PrivateTorrentSources{Sources: privateSources}
+		}
+		return searcher, private, map[string]application.MagnetDownloader{
+			"qbittorrent": downloadclient.NewQbittorrent(values["QBITTORRENT_URL"], values["QBITTORRENT_USERNAME"], values["QBITTORRENT_PASSWORD"], values["QBITTORRENT_DOWNLOAD_PATH"], values["QBITTORRENT_CATEGORY"], nil),
+		}
+	})
+	for i := range jobs {
+		if jobs[i].Name == "同步榜单" {
+			jobs[i].Run = collectionRankJob(collectionService)
+		}
+		if jobs[i].Name == "订阅下载" {
+			jobs[i].Run = func(jobCtx context.Context) scheduler.JobResult {
+				count, e := downloadService.RunActive(jobCtx)
+				if e != nil {
+					logging.Error(logging.CategoryDownload, "订阅下载执行失败", "error", e.Error())
+				}
+				return scheduler.JobResult{"queued": count}
+			}
+		}
+	}
+	// 日志清理按服务所在时区每天零点执行，保留天数仍在执行时读取。
+	jobs = append(jobs, scheduler.Job{Name: "清理系统日志", Spec: "0 0 * * *", Run: func(jobCtx context.Context) scheduler.JobResult {
 		settings, err := settingsService.Get(jobCtx)
 		if err != nil {
 			logging.Error(logging.CategorySystem, "读取日志保留设置失败", "error", err.Error())
@@ -201,23 +242,75 @@ func (c *Commands) Serve(ctx context.Context) error {
 		return fmt.Errorf("create translation service: %w", err)
 	}
 	mediaRepository := store.Media()
-	mediaWriter, ok := mediaRepository.(ports.MediaTranslationWriter)
-	if !ok {
-		return fmt.Errorf("media repository does not support title translation")
+	if translationSettings.Values["TRANSLATION_ENGINE"] != "" && translationSettings.Values["TRANSLATION_ENGINE"] != "none" {
+		collectionService.SetTranslator(translationService)
 	}
+	workerCtx, cancelWorkers := context.WithCancel(ctx)
+	workersDone := make(chan struct{})
+	go func() { defer close(workersDone); collectionService.Work(workerCtx) }()
+	defer func() { cancelWorkers(); <-workersDone }()
+	downloadWorkerDone := make(chan struct{})
+	syncTransfers := func(syncCtx context.Context) {
+		current, err := settingsService.Get(syncCtx)
+		if err != nil {
+			logging.Error(logging.CategoryDownload, "读取下载器设置失败", "error", err.Error())
+			return
+		}
+		values := current.Values
+		if values["QBITTORRENT_URL"] == "" || values["QBITTORRENT_USERNAME"] == "" || values["QBITTORRENT_PASSWORD"] == "" {
+			return
+		}
+		client := downloadclient.NewQbittorrent(values["QBITTORRENT_URL"], values["QBITTORRENT_USERNAME"], values["QBITTORRENT_PASSWORD"], values["QBITTORRENT_DOWNLOAD_PATH"], values["QBITTORRENT_CATEGORY"], nil)
+		states, err := client.ListTransferStates(syncCtx)
+		if err != nil {
+			logging.Error(logging.CategoryDownload, "qBittorrent 状态同步失败", "error", err.Error())
+			return
+		}
+		updates := make([]ports.TransferState, 0, len(states))
+		for _, state := range states {
+			updates = append(updates, ports.TransferState{Hash: state.Hash, Status: state.Status, AddedAt: state.AddedAt, CompletedAt: state.CompletedAt})
+		}
+		if err := downloadRepository.SaveTransferStates(syncCtx, updates); err != nil {
+			logging.Error(logging.CategoryDownload, "下载状态保存失败", "error", err.Error())
+		}
+	}
+	go func() {
+		defer close(downloadWorkerDone)
+		ticker := time.NewTicker(15 * time.Second)
+		defer ticker.Stop()
+		lastSync := time.Time{}
+		for {
+			select {
+			case <-workerCtx.Done():
+				return
+			case <-ticker.C:
+				if e := downloadService.Process(workerCtx, 10); e != nil {
+					logging.Error(logging.CategoryDownload, "订阅下载任务处理失败", "error", e.Error())
+				}
+				if time.Since(lastSync) >= time.Minute {
+					syncTransfers(workerCtx)
+					lastSync = time.Now()
+				}
+			}
+		}
+	}()
+	defer func() { cancelWorkers(); <-downloadWorkerDone }()
 	handler := httpapi.New(httpapi.Dependencies{
-		Auth:           authService,
-		Catalog:        application.NewCatalogServiceWithTranslation(mediaRepository, translationService, mediaWriter),
-		CatalogQueries: application.NewCatalogQueryService(database.NewCatalogQueryRepository(store.SQLDB(), database.Dialect(c.config.DatabaseDriver))),
-		Actors:         application.NewActorService(database.NewActorRepository(store.SQLDB(), database.Dialect(c.config.DatabaseDriver))),
-		Subscriptions:  application.NewSubscriptionService(store.Subscriptions()),
-		Downloads:      application.NewDownloadService(store.Downloads()),
-		Dashboard:      application.NewDashboardService(store.Media(), store.Subscriptions(), store.Downloads()),
-		Settings:       settingsService,
-		Scheduler:      manager,
-		Logs:           logging.Default,
-		Readiness:      store.ReadinessProbe(),
-		StaticDir:      c.config.WebStaticDir,
+		Collection:            collectionService,
+		Auth:                  authService,
+		Catalog:               application.NewCatalogService(mediaRepository),
+		CatalogQueries:        application.NewCatalogQueryService(database.NewCatalogQueryRepository(store.SQLDB(), database.Dialect(c.config.DatabaseDriver))),
+		Actors:                application.NewActorService(database.NewActorRepository(store.SQLDB(), database.Dialect(c.config.DatabaseDriver))),
+		Tags: application.NewTagService(database.NewTagRepository(store.SQLDB(), database.Dialect(c.config.DatabaseDriver))),
+		Subscriptions:         application.NewSubscriptionService(store.Subscriptions()),
+		SubscriptionDownloads: downloadService,
+		Downloads:             application.NewDownloadService(store.Downloads()),
+		Dashboard:             application.NewDashboardService(store.Media(), store.Subscriptions(), store.Downloads()),
+		Settings:              settingsService,
+		Scheduler:             manager,
+		Logs:                  logging.Default,
+		Readiness:             store.ReadinessProbe(),
+		StaticDir:             c.config.WebStaticDir,
 	})
 	server := &http.Server{Addr: c.config.HTTPAddress, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
 	return runtimeapp.New(server, manager, c.config.ShutdownTimeout).Run(ctx)
