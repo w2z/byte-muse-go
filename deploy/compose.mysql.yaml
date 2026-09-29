@@ -26,13 +26,16 @@ services:
       # 宿主机目录需允许容器内 UID 65532 写入：chown -R 65532:65532 /path/to/byte-muse/data /path/to/byte-muse/strm
       - /path/to/byte-muse/data:/data
       - /path/to/byte-muse/strm:/strm
-  # 内置 MySQL：与应用同一 bridge 网络，服务名 mysql_byte_muse_go 即 DSN 主机名，不对宿主机发布端口。
+  # 内置 MySQL：与应用同一 bridge 网络，服务名 mysql_byte_muse_go 即 DSN 主机名。
+  # 3306 端口发布到宿主机供数据库客户端连接；宿主端口被占用时只改冒号左侧的值。
   mysql_byte_muse_go:
     image: mysql:8.4
     container_name: mysql_byte_muse_go
     restart: always
     networks:
       - bridge
+    ports:
+      - "3306:3306"
     environment:
       MYSQL_DATABASE: bytemuse
       MYSQL_USER: bytemuse

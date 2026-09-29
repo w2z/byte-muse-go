@@ -85,6 +85,9 @@ foreach ($composeFile in $composeFiles) {
         if ($text -notmatch '(?m)^\s+container_name:\s*postgres_byte_muse_go\s*$') {
             throw "$($composeFile.Name) 必须固定数据库容器名为 postgres_byte_muse_go"
         }
+        if ($text -notmatch '(?m)^\s+-\s+"5432:5432"\s*$') {
+            throw "$($composeFile.Name) 必须把内置 postgres 的 5432 端口发布到宿主机"
+        }
     }
     if ($composeFile.Name -match '\.mysql\.') {
         if ($text -notmatch '(?m)^\s+mysql_byte_muse_go:\s*$' -or $text -notmatch '@tcp\(mysql_byte_muse_go:3306\)') {
@@ -92,6 +95,9 @@ foreach ($composeFile in $composeFiles) {
         }
         if ($text -notmatch '(?m)^\s+container_name:\s*mysql_byte_muse_go\s*$') {
             throw "$($composeFile.Name) 必须固定数据库容器名为 mysql_byte_muse_go"
+        }
+        if ($text -notmatch '(?m)^\s+-\s+"3306:3306"\s*$') {
+            throw "$($composeFile.Name) 必须把内置 mysql 的 3306 端口发布到宿主机"
         }
     }
 }
