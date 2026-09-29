@@ -79,14 +79,18 @@ foreach ($composeFile in $composeFiles) {
     }
     # 数据库方言模板自带数据库容器：DSN 主机名就是该容器名，写错会连不上并反复重启。
     if ($composeFile.Name -match '\.postgres\.') {
-        if ($text -notmatch '(?m)^\s+postgres_byte_muse_go:\s*$' -or $text -notmatch '@postgres_byte_muse_go:5432/') {
-            throw "$($composeFile.Name) 必须包含内置 postgres 服务，且 DATABASE_DSN 指向 postgres_byte_muse_go:5432"
+        if ($text -notmatch '(?m)^\s+postgres_byte_muse_go:\s*$' -or $text -notmatch '@postgres_byte_muse_go:5431/') {
+            throw "$($composeFile.Name) 必须包含内置 postgres 服务，且 DATABASE_DSN 指向 postgres_byte_muse_go:5431"
         }
         if ($text -notmatch '(?m)^\s+container_name:\s*postgres_byte_muse_go\s*$') {
             throw "$($composeFile.Name) 必须固定数据库容器名为 postgres_byte_muse_go"
         }
-        if ($text -notmatch '(?m)^\s+-\s+"5432:5432"\s*$') {
-            throw "$($composeFile.Name) 必须把内置 postgres 的 5432 端口发布到宿主机"
+        # 容器内监听端口必须与 DSN 一致，用 PGPORT 指定，避免用 command 覆盖镜像启动命令。
+        if ($text -notmatch '(?m)^\s+PGPORT:\s*"5431"\s*$') {
+            throw "$($composeFile.Name) 必须用 PGPORT 让内置 postgres 监听 5431"
+        }
+        if ($text -notmatch '(?m)^\s+-\s+"5431:5431"\s*$') {
+            throw "$($composeFile.Name) 必须把内置 postgres 的 5431 端口发布到宿主机"
         }
     }
     if ($composeFile.Name -match '\.mysql\.') {

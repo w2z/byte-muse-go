@@ -147,7 +147,7 @@ services:
       TZ: Asia/Shanghai
       DATABASE_DRIVER: postgres
       # 改用外部数据库时才替换主机、端口与密码。
-      DATABASE_DSN: postgres://bytemuse:请替换为数据库密码@postgres_byte_muse_go:5432/bytemuse?sslmode=disable
+      DATABASE_DSN: postgres://bytemuse:请替换为数据库密码@postgres_byte_muse_go:5431/bytemuse?sslmode=disable
       # 部署前必须替换下面三项：管理员账号密码，以及 32 字节以上随机会话密钥。
       # 占位值长度不足 32 字节，未替换时服务会直接拒绝启动。
       ADMIN_USERNAME: admin
@@ -166,10 +166,11 @@ services:
     networks:
       - bridge
     ports:
-      - "5432:5432"
+      - "5431:5431"
     environment:
       POSTGRES_DB: bytemuse
       POSTGRES_USER: bytemuse
+      PGPORT: "5431"
       POSTGRES_PASSWORD: 请替换为数据库密码
       TZ: Asia/Shanghai
     healthcheck:
