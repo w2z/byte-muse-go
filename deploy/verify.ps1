@@ -102,6 +102,24 @@ foreach ($composeFile in $composeFiles) {
     }
 }
 
+# README 里的 Compose 配置是用户实际复制的来源，必须与 deploy/ 模板逐字一致，否则两处会静默分叉。
+$readmePath = Join-Path (Split-Path -Parent $PSScriptRoot) 'README.md'
+if (-not (Test-Path -LiteralPath $readmePath)) {
+    throw '缺少 README.md'
+}
+$readme = (Get-Content -Raw -LiteralPath $readmePath) -replace "`r`n", "`n"
+$readmeBlocks = @([regex]::Matches($readme, '(?ms)^```yaml\n(.*?)^```$') | ForEach-Object { $_.Groups[1].Value.TrimEnd("`n") })
+$expectedCompose = @('compose.sqlite.yaml', 'compose.postgres.yaml', 'compose.mysql.yaml')
+if ($readmeBlocks.Count -ne $expectedCompose.Count) {
+    throw "README.md 必须按 SQLite/PostgreSQL/MySQL 给出 $($expectedCompose.Count) 个完整 Compose 配置块，实际 $($readmeBlocks.Count) 个"
+}
+for ($i = 0; $i -lt $expectedCompose.Count; $i++) {
+    $expected = ((Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot $expectedCompose[$i])) -replace "`r`n", "`n").TrimEnd("`n")
+    if ($readmeBlocks[$i] -ne $expected) {
+        throw "README.md 第 $($i + 1) 个 Compose 配置块与 deploy/$($expectedCompose[$i]) 不一致：README 是用户的复制来源，两处必须逐字相同"
+    }
+}
+
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
     throw "未找到 docker 命令：Dockerfile 与 Compose 静态检查已通过，但无法解析 Compose 配置"
 }

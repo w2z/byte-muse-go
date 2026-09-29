@@ -43,6 +43,8 @@ docker buildx build --platform linux/amd64,linux/arm64 \
 pwsh -NoProfile -File deploy/verify.ps1
 ```
 
+README.md 中按 SQLite/PostgreSQL/MySQL 给出的三个 Compose 配置块与 `deploy/compose.*.yaml` 必须逐字一致：README 是用户实际复制的来源，脚本会直接比对，改模板时必须同步改 README。
+
 ## 版本记录
 
 `version.json` 是发布版本记录，由 `deploy/version.ps1` 在代码提交后写入，构建流程只读取和校验，不回写仓库：
