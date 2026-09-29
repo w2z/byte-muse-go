@@ -36,6 +36,7 @@ it("显示带 v 前缀的当前版本，无更新时保持默认背景", async (
   expect(tag).not.toBeNull();
   expect(tag?.className).not.toContain("orangered");
   expect(tag?.className).not.toContain("checkable");
+  expect(container.querySelector(".arco-icon-github")).not.toBeNull();
   expect(container.querySelector(".header-version-link")).toBeNull();
 });
 

@@ -1,5 +1,5 @@
 import { Tag, Tooltip } from "@arco-design/web-react";
-import { IconInfoCircle } from "@arco-design/web-react/icon";
+import { IconGithub } from "@arco-design/web-react/icon";
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest } from "../../shared/api/client";
 import type { SystemVersion } from "../../shared/api/types";
@@ -11,6 +11,7 @@ const VERSION_STALE_TIME = 10 * 60 * 1000;
  * 顶栏版本标签：显示当前运行版本，发现新版本时换成提示色并可跳转发布仓库。
  *
  * 标签只做展示：不传 checkable（可选中）等交互属性，文字选中由 .header-version-tag 关闭。
+ * 图标使用 Arco 的 IconGithub，与跳转的发布仓库语义一致。
  * 默认态不传 Tag 的 color：Arco 对非预设色值会走自定义色分支（白字 + 内联背景），
  * 传 "default" 反而会让标签文字不可见。
  * 容器始终占位，版本请求返回前后顶栏宽度不变，右侧按钮不会跳动。
@@ -32,7 +33,7 @@ export function VersionTag() {
       ? `当前版本 v${version}` + (checkError ? `（检查更新失败：${checkError}）` : "，已是最新版本")
       : "";
   const tag = version ? (
-    <Tag className="header-version-tag" color={hasUpdate ? "orangered" : undefined} icon={<IconInfoCircle />}>{`v${version}`}</Tag>
+    <Tag className="header-version-tag" color={hasUpdate ? "orangered" : undefined} icon={<IconGithub />}>{`v${version}`}</Tag>
   ) : null;
   return (
     <span className="header-version">
