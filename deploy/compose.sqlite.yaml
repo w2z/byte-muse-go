@@ -1,5 +1,5 @@
 services:
-  byte-muse:
+  byte-muse-go:
     image: ghcr.io/w2z/byte-muse-go:latest
     container_name: byte-muse-go
     restart: always
@@ -22,7 +22,7 @@ services:
       - /path/to/byte-muse/data:/data
       - /path/to/byte-muse/strm:/strm
   # 抓取增强服务：设置页把 BYPASS_ENGINE 选为 cloudflare_bypass_for_scraping、BYPASS_URL 填 http://cloudflarebypass_byte_muse_go:8000
-  cloudflarebypass:
+  cloudflarebypass_byte_muse_go:
     image: ghcr.io/sarperavci/cloudflarebypassforscraping:latest
     container_name: cloudflarebypass_byte_muse_go
     restart: always

@@ -74,12 +74,12 @@ foreach ($composeFile in $composeFiles) {
     if ($text -match '(?m)^\s+-\s+\S+:/app\s*$') {
         throw "$($composeFile.Name) 不得挂载覆盖 /app"
     }
-    if ($text -notmatch '(?m)^\s+cloudflarebypass:\s*$' -or $text -notmatch 'ghcr\.io/sarperavci/cloudflarebypassforscraping') {
-        throw "$($composeFile.Name) 必须包含 cloudflarebypass 抓取增强服务"
+    if ($text -notmatch '(?m)^\s+cloudflarebypass_byte_muse_go:\s*$' -or $text -notmatch 'ghcr\.io/sarperavci/cloudflarebypassforscraping') {
+        throw "$($composeFile.Name) 必须包含 cloudflarebypass_byte_muse_go 抓取增强服务"
     }
     # 数据库方言模板自带数据库容器：DSN 主机名就是该容器名，写错会连不上并反复重启。
     if ($composeFile.Name -match '\.postgres\.') {
-        if ($text -notmatch '(?m)^\s+postgres:\s*$' -or $text -notmatch '@postgres_byte_muse_go:5432/') {
+        if ($text -notmatch '(?m)^\s+postgres_byte_muse_go:\s*$' -or $text -notmatch '@postgres_byte_muse_go:5432/') {
             throw "$($composeFile.Name) 必须包含内置 postgres 服务，且 DATABASE_DSN 指向 postgres_byte_muse_go:5432"
         }
         if ($text -notmatch '(?m)^\s+container_name:\s*postgres_byte_muse_go\s*$') {
@@ -87,7 +87,7 @@ foreach ($composeFile in $composeFiles) {
         }
     }
     if ($composeFile.Name -match '\.mysql\.') {
-        if ($text -notmatch '(?m)^\s+mysql:\s*$' -or $text -notmatch '@tcp\(mysql_byte_muse_go:3306\)') {
+        if ($text -notmatch '(?m)^\s+mysql_byte_muse_go:\s*$' -or $text -notmatch '@tcp\(mysql_byte_muse_go:3306\)') {
             throw "$($composeFile.Name) 必须包含内置 mysql 服务，且 DATABASE_DSN 指向 tcp(mysql_byte_muse_go:3306)"
         }
         if ($text -notmatch '(?m)^\s+container_name:\s*mysql_byte_muse_go\s*$') {
@@ -109,9 +109,9 @@ foreach ($composeFile in $composeFiles) {
     $services = @($configuration | Where-Object { $_ -and $_.Trim() } | ForEach-Object { $_.Trim() } | Sort-Object)
     # 数据库方言模板额外带一个数据库服务；sqlite 用文件库，不需要。
     $expected = switch -Regex ($composeFile.Name) {
-        '\.postgres\.' { 'byte-muse,cloudflarebypass,postgres'; break }
-        '\.mysql\.' { 'byte-muse,cloudflarebypass,mysql'; break }
-        default { 'byte-muse,cloudflarebypass' }
+        '\.postgres\.' { 'byte-muse-go,cloudflarebypass_byte_muse_go,postgres_byte_muse_go'; break }
+        '\.mysql\.' { 'byte-muse-go,cloudflarebypass_byte_muse_go,mysql_byte_muse_go'; break }
+        default { 'byte-muse-go,cloudflarebypass_byte_muse_go' }
     }
     if (($services -join ',') -ne $expected) {
         throw "$($composeFile.Name) 的服务必须正好是 $expected，实际为 $($services -join ',')"

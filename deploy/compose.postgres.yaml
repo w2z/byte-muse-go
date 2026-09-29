@@ -1,5 +1,5 @@
 services:
-  byte-muse:
+  byte-muse-go:
     image: ghcr.io/w2z/byte-muse-go:latest
     container_name: byte-muse-go
     restart: always
@@ -7,14 +7,14 @@ services:
       - bridge
     ports:
       - "3750:3750"
-    # 数据库未就绪时先不启动应用：迁移在启动阶段执行，连不上会反复重启。depends_on 引用服务名，DSN 用容器名。
+    # 数据库未就绪时先不启动应用：迁移在启动阶段执行，连不上会反复重启。
     depends_on:
-      postgres:
+      postgres_byte_muse_go:
         condition: service_healthy
     environment:
       TZ: Asia/Shanghai
       DATABASE_DRIVER: postgres
-      # 连接下面的 postgres 容器，容器名 postgres_byte_muse_go 就是 DSN 主机名；改用外部数据库时替换主机、端口与密码。
+      # 连接下面的 postgres_byte_muse_go 服务，服务名就是 DSN 主机名；改用外部数据库时替换主机、端口与密码。
       DATABASE_DSN: postgres://bytemuse:请替换为数据库密码@postgres_byte_muse_go:5432/bytemuse?sslmode=disable
       # 部署前必须替换下面三项：管理员账号密码，以及 32 字节以上随机会话密钥。
       # 占位值长度不足 32 字节，未替换时服务会直接拒绝启动。
@@ -26,8 +26,8 @@ services:
       # 宿主机目录需允许容器内 UID 65532 写入：chown -R 65532:65532 /path/to/byte-muse/data /path/to/byte-muse/strm
       - /path/to/byte-muse/data:/data
       - /path/to/byte-muse/strm:/strm
-  # 内置 PostgreSQL：与应用同一 bridge 网络，容器名 postgres_byte_muse_go 即 DSN 主机名，不对宿主机发布端口。
-  postgres:
+  # 内置 PostgreSQL：与应用同一 bridge 网络，服务名 postgres_byte_muse_go 即 DSN 主机名，不对宿主机发布端口。
+  postgres_byte_muse_go:
     image: postgres:17-alpine
     container_name: postgres_byte_muse_go
     restart: always
@@ -47,7 +47,7 @@ services:
       # PostgreSQL 数据目录；容器内以 UID 70 运行，宿主机目录需可写。
       - /path/to/byte-muse/pgdata:/var/lib/postgresql/data
   # 抓取增强服务：设置页把 BYPASS_ENGINE 选为 cloudflare_bypass_for_scraping、BYPASS_URL 填 http://cloudflarebypass_byte_muse_go:8000
-  cloudflarebypass:
+  cloudflarebypass_byte_muse_go:
     image: ghcr.io/sarperavci/cloudflarebypassforscraping:latest
     container_name: cloudflarebypass_byte_muse_go
     restart: always
