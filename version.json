@@ -1,13 +1,13 @@
 {
-  "version": "0.1.18",
-  "commit": "dc47468b8c4c15202829ccdfcb574a78b7dee896",
-  "short_commit": "dc47468",
-  "built_at": "2026-09-29T10:24:52Z",
+  "version": "0.1.19",
+  "commit": "6b908e91acb971398dbb7423ca7aea60c0b33cc9",
+  "short_commit": "6b908e9",
+  "built_at": "2026-09-29T11:23:53Z",
   "image": "ghcr.io/w2z/byte-muse-go",
-  "digest": "sha256:0f1a61ee5b1ec30e43b60eca33e46cc26b09f156582f1d789fe7b87b8cf2bdb3",
+  "digest": "sha256:f38ae87c3b59bf662a6b3648e068dab230ca4ee99cd5a783a93b41e7ada1e541",
   "tags": [
-    "0.1.18",
-    "sha-dc47468",
+    "0.1.19",
+    "sha-6b908e9",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
