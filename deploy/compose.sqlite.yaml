@@ -1,30 +1,39 @@
 services:
-  bytemuse:
-    image: ${BYTEMUSE_IMAGE:-bytemuse-go:local}
-    build:
-      context: ..
-      dockerfile: deploy/Dockerfile
-    restart: unless-stopped
+  byte-muse:
+    image: ghcr.io/w2z/byte-muse-go:latest
+    container_name: byte-muse
+    restart: always
+    networks:
+      - bridge
     ports:
-      - "18043:3750"
+      - "3750:3750"
     environment:
-      APP_ENV: production
-      TZ: ${TZ:-Asia/Shanghai}
-      HTTP_ADDR: :3750
-      WEB_STATIC_DIR: /app/web
+      TZ: Asia/Shanghai
       DATABASE_DRIVER: sqlite
       DATABASE_DSN: file:/data/bytemuse.db?_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)
-      ADMIN_USERNAME: ${ADMIN_USERNAME:?ADMIN_USERNAME is required}
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?ADMIN_PASSWORD is required}
-      SESSION_SECRET: ${SESSION_SECRET:?SESSION_SECRET is required}
+      # 部署前必须替换下面三项：管理员账号密码，以及 32 字节以上随机会话密钥。
+      # 占位值长度不足 32 字节，未替换时服务会直接拒绝启动。
+      ADMIN_USERNAME: admin
+      ADMIN_PASSWORD: 请替换为管理员密码
+      SESSION_SECRET: 请替换SESSION_SECRET
     volumes:
-      - bytemuse-data:/data
-    healthcheck:
-      test: ["CMD", "/app/bytemuse", "doctor"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
+      # 只挂载 /data：镜像的 /app 存放服务二进制与前端产物，挂载覆盖后容器无法启动。
+      # 宿主机目录需允许容器内 UID 65532 写入：chown -R 65532:65532 /path/to/byte-muse/data
+      - /path/to/byte-muse/data:/data
+  # 抓取增强服务：设置页把 BYPASS_ENGINE 选为 cloudflare_bypass_for_scraping、BYPASS_URL 填 http://cloudflarebypass:8000
+  cloudflarebypass:
+    image: ghcr.io/sarperavci/cloudflarebypassforscraping:latest
+    container_name: CloudFlareBypass
+    restart: always
+    networks:
+      - bridge
+    ports:
+      - "30089:8000"
+    environment:
+      - HTTP_PROXY=http://<代理主机>:<代理端口>
+      - HTTPS_PROXY=http://<代理主机>:<代理端口>
+      - DOCKERMODE=true
 
-volumes:
-  bytemuse-data:
+networks:
+  bridge:
+    driver: bridge

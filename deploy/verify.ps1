@@ -37,14 +37,42 @@ if ($runtime -notmatch '(?m)^USER nonroot:nonroot') {
 if ($runtime -notmatch 'CMD \["serve"\]') {
     throw "容器默认命令必须是 serve，HTTP 与定时任务才在同一进程内运行"
 }
-$composeFiles = Get-ChildItem -LiteralPath $PSScriptRoot -Filter 'compose.*.yaml'
+# 只校验仓库模板：本地未跟踪的 *.local.yaml 允许保留真实内网地址。
+$composeFiles = @(Get-ChildItem -LiteralPath $PSScriptRoot -Filter 'compose.*.yaml' | Where-Object { $_.Name -notlike '*.local.yaml' })
+if ($composeFiles.Count -ne 3) {
+    throw "deploy 目录必须保留 compose.sqlite/postgres/mysql 三个模板"
+}
 foreach ($composeFile in $composeFiles) {
     $text = Get-Content -Raw -LiteralPath $composeFile.FullName
-    if ($text -notmatch '(?m)^\s+TZ:\s*\$\{TZ:-Asia/Shanghai\}') {
-        throw "$($composeFile.Name) 必须把 TZ 固定为 Asia/Shanghai 并允许覆盖"
+    if ($text -notmatch '(?m)^\s+TZ:\s*Asia/Shanghai\s*$') {
+        throw "$($composeFile.Name) 必须把 TZ 固定为 Asia/Shanghai"
     }
-    if ($text -notmatch '(?m)^\s+image:\s*\$\{BYTEMUSE_IMAGE:-') {
-        throw "$($composeFile.Name) 必须使用可覆盖的 BYTEMUSE_IMAGE 镜像变量"
+    if ($text -notmatch '(?m)^\s+image:\s*ghcr\.io/w2z/byte-muse-go:') {
+        throw "$($composeFile.Name) 必须直接使用已发布的 ghcr.io/w2z/byte-muse-go 镜像"
+    }
+    # Compose 配置直接可读可改，不依赖环境变量插值：缺省值藏在 shell 里会让部署命令与文件内容不一致。
+    if ($text -match '\$\{') {
+        throw "$($composeFile.Name) 不得使用环境变量插值，必须直接写出配置值"
+    }
+    # 仓库公开：Compose 模板不得写入内网地址，真实拓扑放本地未跟踪文件。
+    if ($text -match '(?<!\d)(?:10|192\.168|172\.(?:1[6-9]|2\d|3[01]))\.\d{1,3}\.\d{1,3}\.\d{1,3}(?!\d)') {
+        throw "$($composeFile.Name) 不得写入内网 IP 地址"
+    }
+    if ($text -notmatch '(?m)^\s+container_name:\s*byte-muse\s*$') {
+        throw "$($composeFile.Name) 必须固定容器名为 byte-muse"
+    }
+    if ($text -notmatch '(?m)^\s+restart:\s*always\s*$') {
+        throw "$($composeFile.Name) 必须使用 restart: always"
+    }
+    if ($text -notmatch '(?m)^\s+-\s+/path/to/byte-muse/data:/data\s*$') {
+        throw "$($composeFile.Name) 必须把宿主机数据目录挂载到 /data"
+    }
+    # 镜像的 /app 存放服务二进制与前端产物，挂载覆盖后容器无法启动。
+    if ($text -match '(?m)^\s+-\s+\S+:/app\s*$') {
+        throw "$($composeFile.Name) 不得挂载覆盖 /app"
+    }
+    if ($text -notmatch '(?m)^\s+cloudflarebypass:\s*$' -or $text -notmatch 'ghcr\.io/sarperavci/cloudflarebypassforscraping') {
+        throw "$($composeFile.Name) 必须包含 cloudflarebypass 抓取增强服务"
     }
 }
 
@@ -52,22 +80,15 @@ if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
     throw "未找到 docker 命令：Dockerfile 与 Compose 静态检查已通过，但无法解析 Compose 配置"
 }
 
-# 这里只校验 Compose 结构，不需要真实凭据：缺失的必填变量用占位值补齐，已设置的值不覆盖。
-$placeholders = @{ ADMIN_USERNAME = 'verify'; ADMIN_PASSWORD = 'verify'; SESSION_SECRET = 'verify-session-secret-at-least-32-bytes'; DATABASE_DSN = 'verify' }
-foreach ($name in $placeholders.Keys) {
-    if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
-        Set-Item -Path "env:$name" -Value $placeholders[$name]
-    }
-}
 
 foreach ($composeFile in $composeFiles) {
     $configuration = docker compose -f $composeFile.FullName config --services 2>&1
     if ($LASTEXITCODE -ne 0) {
         throw "$($composeFile.Name) 配置解析失败: $configuration"
     }
-    $services = @($configuration | Where-Object { $_ -and $_.Trim() })
-    if ($services.Count -ne 1 -or $services[0].Trim() -ne 'bytemuse') {
-        throw "$($composeFile.Name) 必须且只能包含 bytemuse 应用服务"
+    $services = @($configuration | Where-Object { $_ -and $_.Trim() } | ForEach-Object { $_.Trim() } | Sort-Object)
+    if (($services -join ',') -ne 'byte-muse,cloudflarebypass') {
+        throw "$($composeFile.Name) 必须包含 byte-muse 与 cloudflarebypass 两个服务"
     }
 }
 
