@@ -117,6 +117,14 @@ func listPan115Files(service *application.Pan115Service) http.HandlerFunc {
 			writePan115Error(response, err)
 			return
 		}
+		if len(page.Path) == 0 {
+			path, err := service.DirectoryPath(request.Context(), page.DirectoryID)
+			if err != nil {
+				writePan115Error(response, err)
+				return
+			}
+			page.Path = path
+		}
 		writeJSON(response, http.StatusOK, page)
 	}
 }

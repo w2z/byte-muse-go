@@ -63,6 +63,14 @@ func SiteCookieCredential(values map[string]string, prefix string) string {
 // rankTypes 是 JAVDB 榜单自动订阅类型，空值表示不订阅。
 var rankTypes = []string{"daily", "weekly", "monthly"}
 
+// strm 设置键：网盘目录到本地 strm 目录的映射、strm 内容使用的对外基址、
+// 以及生成后是否自动刷新 Emby 媒体库。前端字段定义与此处共用同一组键名。
+const (
+	strmPathsSettingKey       = "STRM_PATHS"
+	strmPlayBaseSettingKey    = "STRM_PLAY_BASE"
+	strmEmbyRefreshSettingKey = "STRM_EMBY_REFRESH"
+)
+
 // settingSpec 描述一个可写配置项：是否敏感，以及取值范围。
 type settingSpec struct {
 	secret   bool
@@ -165,6 +173,11 @@ var writableSettings = map[string]settingSpec{
 	// 115 网盘：账号与令牌由扫码登录管理并单独落库，这里只保存离线下载的目标目录与扫描目录。
 	"PAN115_SAVE_PATH":  {kind: settingText},
 	"PAN115_SCAN_PATHS": {kind: settingJSONArray},
+
+	// strm：网盘目录与本地 strm 目录的映射，以及 strm 内容使用的对外基址。
+	strmPathsSettingKey:       {kind: settingJSONArray},
+	strmPlayBaseSettingKey:    {kind: settingText},
+	strmEmbyRefreshSettingKey: {kind: settingBool},
 
 	// 过滤
 	"DEFAULT_FILTER": {kind: settingJSON},
@@ -393,6 +406,13 @@ func validateSettingValue(key string, spec settingSpec, value string) error {
 	case settingJSONArray:
 		if !strings.HasPrefix(value, "[") {
 			return invalid("需要是 JSON 数组")
+		}
+		// 数组元素结构由各设置键自己的解析器定义，避免用一个通用结构解释所有数组设置。
+		if key == strmPathsSettingKey {
+			if _, err := parseStrmMappings(value); err != nil {
+				return invalid(err.Error())
+			}
+			return nil
 		}
 		var entries []pan115ScanPath
 		if err := json.Unmarshal([]byte(value), &entries); err != nil {

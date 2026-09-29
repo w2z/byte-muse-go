@@ -207,6 +207,58 @@ func TestListParsesEntries(t *testing.T) {
 	}
 }
 
+// TestListParsesRootArrayResponse 验证根目录（cid=0）返回的裸条目数组被正常解析。
+// 115 对根目录不回传 cid/count/path，只给条目数组，若按对象解码会直接 500。
+func TestListParsesRootArrayResponse(t *testing.T) {
+	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("cid") != "0" {
+			t.Errorf("根目录请求 cid = %q，期望 0", r.URL.Query().Get("cid"))
+		}
+		writeJSON(t, w, `{"state":true,"code":0,"data":[{"fid":"d1","pid":"0","fn":"云下载","fc":"0","fs":"0","pc":"pc-1"},{"fid":"d2","pid":"0","fn":"存档","fc":"0","fs":"0","pc":"pc-2"}]}`)
+	})
+	page, err := client.List(context.Background(), "token", "0", 0, 100)
+	if err != nil {
+		t.Fatalf("读取根目录失败: %v", err)
+	}
+	if len(page.Files) != 2 || page.Files[0].Name != "云下载" || !page.Files[0].IsDirectory {
+		t.Fatalf("根目录条目解析错误: %+v", page.Files)
+	}
+	if len(page.Path) != 0 {
+		t.Fatalf("数组形式不应回传路径，实际 %+v", page.Path)
+	}
+	if page.Total != 2 || page.HasMore {
+		t.Fatalf("根目录分页 = total %d hasMore %v，期望 2/false", page.Total, page.HasMore)
+	}
+}
+
+// TestListMarksRootArrayHasMore 验证根目录没有总数时按本页条目数推断下一页。
+func TestListMarksRootArrayHasMore(t *testing.T) {
+	client := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(t, w, `{"state":true,"code":0,"data":[{"fid":"d1","pid":"0","fn":"云下载","fc":"0","fs":"0","pc":""},{"fid":"d2","pid":"0","fn":"存档","fc":"0","fs":"0","pc":""}]}`)
+	})
+	page, err := client.List(context.Background(), "token", "0", 0, 2)
+	if err != nil {
+		t.Fatalf("读取根目录失败: %v", err)
+	}
+	if page.Total != 2 || !page.HasMore {
+		t.Fatalf("根目录分页 = total %d hasMore %v，期望 2/true", page.Total, page.HasMore)
+	}
+}
+
+// TestListHandlesEmptyRootArray 验证空根目录返回空页而不是报错。
+func TestListHandlesEmptyRootArray(t *testing.T) {
+	client := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(t, w, `{"state":true,"code":0,"data":[]}`)
+	})
+	page, err := client.List(context.Background(), "token", "0", 0, 100)
+	if err != nil {
+		t.Fatalf("读取空根目录失败: %v", err)
+	}
+	if len(page.Files) != 0 || page.Total != 0 || page.HasMore {
+		t.Fatalf("空根目录分页 = %+v", page)
+	}
+}
+
 // TestAddOfflineUsesMultipartAndReportsDuplicate 验证离线提交使用 multipart 编码，
 // 并把「已存在」识别为可安全忽略的结果。
 func TestAddOfflineUsesMultipartAndReportsDuplicate(t *testing.T) {

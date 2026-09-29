@@ -9,8 +9,9 @@ import { PageState } from "../../shared/ui/PageState";
 import { useFeedbackMessage } from "../../shared/ui/FeedbackMessage";
 import { Pan115LoginPanel } from "./Pan115LoginPanel";
 import { Pan115ScanPathsField, type Pan115ScanPath } from "./Pan115ScanPathsField";
+import { StrmPathsField, type StrmMapping } from "./StrmPathsField";
 
-type FieldKind = "text" | "textarea" | "bool" | "int" | "enum" | "json" | "sort" | "paths";
+type FieldKind = "text" | "textarea" | "bool" | "int" | "enum" | "json" | "sort" | "paths" | "strm-paths";
 type SettingOption = {
   value: string;
   label: string;
@@ -160,6 +161,10 @@ const defaultTranslationEngine = "none";
 
 /** 扫描目录配置键；字段定义、解析与序列化共用同一处定义，避免键名漂移。 */
 const scanPathsKey = "PAN115_SCAN_PATHS";
+/** strm 配置键：网盘映射、strm 内容使用的对外基址、生成后是否刷新 Emby 媒体库。 */
+const strmPathsKey = "STRM_PATHS";
+const strmPlayBaseKey = "STRM_PLAY_BASE";
+const strmEmbyRefreshKey = "STRM_EMBY_REFRESH";
 
 /** 分组、顺序与字段命名对齐对标站的 /config。 */
 const groups: SettingGroup[] = [
@@ -456,6 +461,32 @@ const groups: SettingGroup[] = [
       },
       { key: "CLOUDNAS_SAVEPATH", label: "CD2保存路径", kind: "text" },
     ],
+  },
+  {
+    code: "strm",
+    title: "STRM 生成",
+    fields: [
+      {
+        key: strmPathsKey,
+        label: "网盘映射",
+        kind: "strm-paths",
+        description: "把网盘目录生成到本地 strm 目录，可添加多个映射；每条映射由网盘目录与本地 strm 目录组成。",
+      },
+      {
+        key: strmPlayBaseKey,
+        label: "ByteMuse 访问地址",
+        kind: "text",
+        placeholder: "http://192.168.1.10:3750",
+        description: "strm 内容使用的播放地址前缀，留空时按本次生成的请求来源兜底；容器部署建议显式填写对外可访问地址。",
+      },
+      {
+        key: strmEmbyRefreshKey,
+        label: "生成后刷新 Emby 媒体库",
+        kind: "bool",
+        description: "开启后每次生成 strm 都会请求一次 Emby 媒体库刷新；需要先配置 Emby 地址与密钥。",
+      },
+    ],
+    note: "本地 strm 目录固定以容器内 /strm 为根，映射路径不能超出该目录。",
   },
   {
     code: "filter",
@@ -757,12 +788,17 @@ const categories: SettingCategory[] = [
   {
     code: "netdisk",
     title: "网盘",
-    groupCodes: ["pan115", "clouddrive2"],
+    groupCodes: ["pan115", "clouddrive2", "strm"],
   },
 ];
 
 function filterId(name: string) {
   return `setting-${name}`;
+}
+
+/** 由独立状态而非通用草稿承载的字段类型：这些字段不写入 draft，也不参与草稿比较。 */
+function isStructuredField(kind: FieldKind): boolean {
+  return kind === "json" || kind === "sort" || kind === "paths" || kind === "strm-paths";
 }
 
 /** 分组的全部字段：包含页签内字段，保证草稿初始化、变更判断与保存始终覆盖整组。 */
@@ -888,6 +924,36 @@ function parseScanPaths(raw?: string): Pan115ScanPath[] {
   });
 }
 
+/** 解析 strm 网盘映射配置；非法内容按空数组处理，坏数据不阻塞整个设置页渲染。 */
+function parseStrmPaths(raw?: string): StrmMapping[] {
+  if (!raw) return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(parsed)) return [];
+  return parsed.flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const { kind, id, path, local_path: localPath } = item as Record<string, unknown>;
+    if (kind !== "115" && kind !== "cd2") return [];
+    if (typeof id !== "string" || typeof path !== "string" || typeof localPath !== "string") return [];
+    return [{ kind, id, path, local_path: localPath }];
+  });
+}
+
+/**
+ * 序列化 strm 网盘映射：只提交已选齐网盘目录与本地目录的映射。
+ * 本地路径必须是 /strm 根目录下的绝对形式路径，与后端 STRM_PATHS 校验保持一致。
+ */
+function serializeStrmPaths(mappings: StrmMapping[]): string {
+  const complete = mappings.filter(
+    (item) => item.id.trim() !== "" && item.path.trim() !== "" && item.local_path.startsWith("/"),
+  );
+  return complete.length === 0 ? "" : JSON.stringify(complete);
+}
+
 /**
  * 系统设置页。
  *
@@ -955,6 +1021,7 @@ export function SettingsPage() {
   );
   const [sortOrder, setSortOrder] = useState<string[]>([]);
   const [scanPaths, setScanPaths] = useState<Pan115ScanPath[]>([]);
+  const [strmPaths, setStrmPaths] = useState<StrmMapping[]>([]);
   const [savedSnapshot, setSavedSnapshot] = useState<SettingsUpdate>({
     values: {},
   });
@@ -983,7 +1050,7 @@ export function SettingsPage() {
     const next: Draft = {};
     for (const group of groups) {
       for (const field of groupFields(group)) {
-        if (field.kind === "json" || field.kind === "sort" || field.kind === "paths") continue;
+        if (isStructuredField(field.kind)) continue;
         const raw = Object.prototype.hasOwnProperty.call(values, field.key)
           ? values[field.key]
           : field.key === "LOG_RETENTION_DAYS"
@@ -1004,6 +1071,7 @@ export function SettingsPage() {
     setFilterUnknown(parsed.unknown);
     setSortOrder(parseSortOrder(values.DEFAULT_SORT));
     setScanPaths(parseScanPaths(values[scanPathsKey]));
+    setStrmPaths(parseStrmPaths(values[strmPathsKey]));
   };
 
   useEffect(() => {
@@ -1065,7 +1133,7 @@ export function SettingsPage() {
       .find((item) => item.key === key);
     if (field?.kind === "bool") return "false";
     if (key === "LOG_RETENTION_DAYS") return "30";
-    if (field?.kind === "sort" || field?.kind === "json" || field?.kind === "paths") return "";
+    if (field && isStructuredField(field.kind)) return "";
     return "";
   };
 
@@ -1083,6 +1151,10 @@ export function SettingsPage() {
         }
         if (field.kind === "paths") {
           payload[field.key] = scanPaths.length === 0 ? "" : JSON.stringify(scanPaths);
+          continue;
+        }
+        if (field.kind === "strm-paths") {
+          payload[field.key] = serializeStrmPaths(strmPaths);
           continue;
         }
         const value = draft[field.key];
@@ -1177,6 +1249,15 @@ export function SettingsPage() {
         <div className="settings-field settings-field-wide" key={field.key}>
           <span className="settings-field-label">{field.label}</span>
           <Pan115ScanPathsField value={scanPaths} onChange={setScanPaths} />
+          {field.description ? <span className="settings-field-description">{field.description}</span> : null}
+        </div>
+      );
+    }
+    if (field.kind === "strm-paths") {
+      return (
+        <div className="settings-field settings-field-wide" key={field.key}>
+          <span className="settings-field-label">{field.label}</span>
+          <StrmPathsField value={strmPaths} onChange={setStrmPaths} />
           {field.description ? <span className="settings-field-description">{field.description}</span> : null}
         </div>
       );
@@ -1308,15 +1389,18 @@ export function SettingsPage() {
     }
 
     if (field.kind === "enum") {
+      // 选项自带空值时（如「不订阅」「不使用」），空值本身就是已选项，不能按未选择提示。
+      const enumOptions = field.options ?? [];
+      const enumValue =
+        typeof draft[field.key] === "string" ? (draft[field.key] as string) : "";
+      const enumSelected = enumOptions.some((option) => option.value === enumValue);
       return (
         <div className="settings-field settings-field-wide" key={field.key} aria-label={field.label}>
           <span className="settings-field-label">{field.label}</span>
           <div className={`settings-option-radio${field.key === "MAIN_SITE" ? " settings-main-site-options" : ""}`}>
-            {typeof draft[field.key] !== "string" || draft[field.key] === "" ? (
-              <span className="settings-field-placeholder">请选择</span>
-            ) : null}
-            <Radio.Group value={typeof draft[field.key] === "string" ? draft[field.key] : ""} onChange={(value: string | number) => setValue(field.key, String(value))}>
-              {(field.options ?? []).map((option) => (
+            {enumSelected ? null : <span className="settings-field-placeholder">请选择</span>}
+            <Radio.Group value={enumValue} onChange={(value: string | number) => setValue(field.key, String(value))}>
+              {enumOptions.map((option) => (
                 <Radio
                   key={option.value}
                   value={option.value}

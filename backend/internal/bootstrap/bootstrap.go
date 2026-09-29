@@ -334,6 +334,13 @@ func (c *Commands) Serve(ctx context.Context) error {
 		return fmt.Errorf("create 115 service: %w", err)
 	}
 	defer pan115Service.Close()
+	// strm 服务：把 115 与 CloudDrive2 的网盘目录镜像成本地 strm 文件，并解析播放地址。
+	// CloudDrive2 连接参数来自设置，因此传入按设置懒构造的适配器，改配置后无需重启进程。
+	strmService, err := application.NewStrmService(c.config.StrmRoot, pan115Service,
+		application.NewCloudDriveSettings(settingsValues(settingsService)), settingsValues(settingsService))
+	if err != nil {
+		return fmt.Errorf("create strm service: %w", err)
+	}
 	// 对话回复与业务通知共用同一个渠道解析器，不另建第二套发送逻辑。
 	channels := newChannelRegistry(settingsService)
 	notifier := application.NewNotificationService(settingsValues(settingsService), channels)
@@ -568,6 +575,7 @@ func (c *Commands) Serve(ctx context.Context) error {
 		Readiness:             store.ReadinessProbe(),
 		WeChatCallback:        newWeChatCallback(settingsService),
 		ChannelMessages:       dispatcher,
+		Strm:                  strmService,
 		StaticDir:             c.config.WebStaticDir,
 	})
 	server := &http.Server{Addr: c.config.HTTPAddress, Handler: handler, ReadHeaderTimeout: 10 * time.Second}

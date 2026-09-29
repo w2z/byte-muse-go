@@ -161,6 +161,13 @@ func (c *Client) admit(ctx context.Context) (func(), error) {
 
 // send 发送一次已编码的请求；响应体由调用方关闭。
 func (c *Client) send(ctx context.Context, method, endpoint, token string, body io.Reader, contentType string) (*http.Response, error) {
+	return c.sendWithUserAgent(ctx, method, endpoint, token, body, contentType, nil)
+}
+
+// sendWithUserAgent 在 send 的基础上显式设置 User-Agent。
+// 115 会把下载直链绑定到换取直链时使用的 User-Agent，播放链路必须能透传真实播放端的 UA；
+// userAgent 为 nil 表示不干预，由 net/http 使用默认值。
+func (c *Client) sendWithUserAgent(ctx context.Context, method, endpoint, token string, body io.Reader, contentType string, userAgent *string) (*http.Response, error) {
 	release, err := c.admit(ctx)
 	if err != nil {
 		return nil, err
@@ -177,6 +184,10 @@ func (c *Client) send(ctx context.Context, method, endpoint, token string, body 
 	if token != "" {
 		request.Header.Set("Authorization", "Bearer "+token)
 	}
+	if userAgent != nil {
+		// 显式写入（含空值）：空值同样要落到请求头，用于抑制 net/http 的默认 UA。
+		request.Header.Set("User-Agent", *userAgent)
+	}
 	response, err := c.http.Do(request)
 	if err != nil {
 		return nil, &TransportError{Err: fmt.Errorf("请求 115 失败: %w", err)}
@@ -192,6 +203,11 @@ func (c *Client) send(ctx context.Context, method, endpoint, token string, body 
 // 115 的扫码状态接口按查询串校验签名，把 uid/time/sign 放进请求体会被判为 key invalid，
 // 因此这里统一决定参数位置，调用方不再各自拼接。
 func (c *Client) do(ctx context.Context, method, endpoint, token string, form url.Values) (*http.Response, error) {
+	return c.doWithUserAgent(ctx, method, endpoint, token, form, nil)
+}
+
+// doWithUserAgent 与 do 相同，但可显式设置 User-Agent。
+func (c *Client) doWithUserAgent(ctx context.Context, method, endpoint, token string, form url.Values, userAgent *string) (*http.Response, error) {
 	var body io.Reader
 	contentType := ""
 	if len(form) > 0 {
@@ -202,7 +218,7 @@ func (c *Client) do(ctx context.Context, method, endpoint, token string, form ur
 			contentType = "application/x-www-form-urlencoded"
 		}
 	}
-	return c.send(ctx, method, endpoint, token, body, contentType)
+	return c.sendWithUserAgent(ctx, method, endpoint, token, body, contentType, userAgent)
 }
 
 // appendQuery 把表单并入端点已有的查询串，保留端点自带的参数。
@@ -299,7 +315,12 @@ type apiEnvelope struct {
 
 // apiCall 发送一次 proapi 请求并返回 data 段。
 func (c *Client) apiCall(ctx context.Context, method, endpoint, token string, form url.Values, action string) (json.RawMessage, error) {
-	response, err := c.do(ctx, method, endpoint, token, form)
+	return c.apiCallWithUserAgent(ctx, method, endpoint, token, form, nil, action)
+}
+
+// apiCallWithUserAgent 与 apiCall 相同，但可显式设置 User-Agent；userAgent 为 nil 表示不干预。
+func (c *Client) apiCallWithUserAgent(ctx context.Context, method, endpoint, token string, form url.Values, userAgent *string, action string) (json.RawMessage, error) {
+	response, err := c.doWithUserAgent(ctx, method, endpoint, token, form, userAgent)
 	if err != nil {
 		return nil, err
 	}

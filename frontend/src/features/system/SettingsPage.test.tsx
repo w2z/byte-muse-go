@@ -325,6 +325,19 @@ describe("设置页字段布局", () => {
     expect(screen.getByRole("radio", { name: "馒头" })).toBeChecked();
   });
 
+  it("空值即有效选项的枚举不提示“请选择”，未选择的枚举仍提示", async () => {
+    const user = userEvent.setup();
+    renderSettings();
+    await user.click(await screen.findByRole("tab", { name: "定时任务" }));
+    const rankType = screen.getByLabelText("JAVDB榜单自动订阅");
+    expect(within(rankType).getByRole("radio", { name: "不订阅" })).toBeChecked();
+    expect(within(rankType).queryByText("请选择")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("tab", { name: /^站点$/ }));
+    const mainSite = screen.getByLabelText("主站选择（配合排序器使用）");
+    expect(within(mainSite).getByText("请选择")).toBeInTheDocument();
+  });
+
   it("下载器默认设置独立显示，爬虫增强备注位于控件后并展示三个项目链接", async () => {
     const user = userEvent.setup();
     renderSettings();
@@ -609,5 +622,152 @@ describe("网盘设置", () => {
     // 删除第二个目录后只剩一个地址。
     await user.click(screen.getAllByRole("button", { name: "删除" })[1]);
     expect(screen.queryByLabelText("扫描目录 2")).not.toBeInTheDocument();
+  });
+
+  /** 等待弹窗完全卸载：退出动画在 jsdom 里靠定时器收尾，立刻打开下一个弹窗会同时命中两个。 */
+  async function waitForDialogClosed() {
+    await waitFor(() => expect(screen.queryAllByRole("dialog")).toHaveLength(0));
+  }
+
+  it("STRM 生成页签可添加多条网盘映射，分别选择网盘目录与本地 strm 目录后保存为 JSON 数组", async () => {
+    const user = userEvent.setup();
+    const values: Record<string, string> = {};
+    const cloudDirectories: Record<string, { name: string; path: string }[]> = {
+      "/": [{ name: "115", path: "/115" }],
+      "/115": [],
+    };
+    const localDirectories: Record<string, { name: string; path: string }[]> = {
+      "/": [{ name: "movies", path: "/movies" }],
+      "/movies": [],
+    };
+    vi.mocked(apiRequest).mockImplementation(async (path, options) => {
+      if (path === "/system/settings" && options?.method === "PUT") {
+        const body = JSON.parse(String(options.body)) as { values: Record<string, string> };
+        Object.assign(values, body.values);
+        return { database_driver: "sqlite", values: { ...body.values }, configured: {} };
+      }
+      if (path === "/system/settings") return { database_driver: "sqlite", values: {}, configured: {} };
+      if (path === "/pan115/account") return { linked: true, account: boundAccount };
+      if (path.startsWith("/pan115/files")) {
+        const directoryID = new URL(path, "http://localhost").searchParams.get("directory_id") ?? "0";
+        const entries = directoryID === "0" ? [{ id: "10", name: "电影" }] : [];
+        return {
+          directory_id: directoryID,
+          path: directoryID === "0" ? [{ id: "0", name: "" }] : [{ id: "0", name: "" }, { id: "10", name: "电影" }],
+          files: entries.map((item) => ({
+            id: item.id, parent_id: directoryID, name: item.name, is_directory: true, size: 0, pick_code: "",
+          })),
+          total: entries.length,
+          has_more: false,
+        };
+      }
+      if (path.startsWith("/strm/clouddrive/directories")) {
+        const current = new URL(path, "http://localhost").searchParams.get("path") ?? "/";
+        return { path: current, directories: cloudDirectories[current] ?? [] };
+      }
+      if (path.startsWith("/strm/directories")) {
+        const current = new URL(path, "http://localhost").searchParams.get("path") ?? "/";
+        return { path: current, directories: localDirectories[current] ?? [] };
+      }
+      throw new Error(`未处理的请求 ${path}`);
+    });
+
+    renderSettings();
+    await user.click(await screen.findByRole("tab", { name: "网盘" }));
+    await user.click(screen.getByRole("tab", { name: "STRM 生成" }));
+    expect(screen.getByText("尚未添加 strm 映射")).toBeInTheDocument();
+
+    // 第一条映射：115 网盘目录 + 本地 strm 目录，类型默认 115。
+    await user.click(screen.getByRole("button", { name: "添加映射" }));
+    await user.click(screen.getByRole("button", { name: "选择网盘目录" }));
+    await user.click(await screen.findByRole("button", { name: "电影" }));
+    expect(await screen.findByText("当前目录：/电影")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "选择当前目录" }));
+    await waitForDialogClosed();
+    expect(await screen.findByLabelText("网盘路径 1")).toHaveValue("/电影");
+
+    await user.click(screen.getByRole("button", { name: "选择本地目录" }));
+    await user.click(await screen.findByRole("button", { name: "movies" }));
+    expect(await screen.findByText("当前目录：/movies")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "选择当前目录" }));
+    await waitForDialogClosed();
+    expect(await screen.findByLabelText("本地路径 1")).toHaveValue("/movies");
+
+    // 第二条映射：切到 CloudDrive2 后清空已选网盘目录，重新选择网盘与本地根目录。
+    await user.click(screen.getByRole("button", { name: "添加映射" }));
+    await user.click(
+      within(screen.getByRole("group", { name: "网盘类型 2" })).getByRole("radio", { name: "CloudDrive2" }),
+    );
+    await user.click(screen.getAllByRole("button", { name: "选择网盘目录" })[1]);
+    await user.click(await screen.findByRole("button", { name: "115" }));
+    expect(await screen.findByText("当前目录：/115")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "选择当前目录" }));
+    await waitForDialogClosed();
+    expect(await screen.findByLabelText("网盘路径 2")).toHaveValue("/115");
+
+    await user.click(screen.getAllByRole("button", { name: "选择本地目录" })[1]);
+    await user.click(await screen.findByRole("button", { name: "选择当前目录" }));
+    await waitForDialogClosed();
+    expect(await screen.findByLabelText("本地路径 2")).toHaveValue("/");
+
+    await user.click(screen.getByRole("button", { name: "保存设置" }));
+    await waitFor(() => expect(values.STRM_PATHS).toBe(JSON.stringify([
+      { kind: "115", id: "10", path: "/电影", local_path: "/movies" },
+      { kind: "cd2", id: "/115", path: "/115", local_path: "/" },
+    ])));
+
+    // 删除第一条映射后只剩一条，并且删除后不再显示未选齐提示。
+    await user.click(screen.getByRole("button", { name: "删除映射 1" }));
+    expect(screen.getByLabelText("网盘路径 1")).toHaveValue("/115");
+    expect(screen.queryByLabelText("网盘路径 2")).not.toBeInTheDocument();
+  });
+
+  it("本地 strm 目录选择器固定以 /strm 为根，可新建目录并刷新出外部创建的目录", async () => {
+    const user = userEvent.setup();
+    const created: { path: string; name: string }[] = [];
+    let directories = [{ name: "movies", path: "/movies" }];
+    vi.mocked(apiRequest).mockImplementation(async (path, options) => {
+      if (path === "/system/settings") return { database_driver: "sqlite", values: {}, configured: {} };
+      if (path === "/pan115/account") return { linked: true, account: boundAccount };
+      if (path === "/strm/directories" && options?.method === "POST") {
+        const body = JSON.parse(String(options.body)) as { path: string; name: string };
+        created.push(body);
+        const prefix = body.path === "/" ? "" : body.path;
+        directories = [...directories, { name: body.name, path: `${prefix}/${body.name}` }];
+        return { name: body.name, path: `${prefix}/${body.name}` };
+      }
+      if (path.startsWith("/strm/directories")) {
+        const current = new URL(path, "http://localhost").searchParams.get("path") ?? "/";
+        return { path: current, directories: current === "/" ? directories : [] };
+      }
+      throw new Error(`未处理的请求 ${path}`);
+    });
+
+    renderSettings();
+    await user.click(await screen.findByRole("tab", { name: "网盘" }));
+    await user.click(screen.getByRole("tab", { name: "STRM 生成" }));
+    await user.click(screen.getByRole("button", { name: "添加映射" }));
+    await user.click(screen.getByRole("button", { name: "选择本地目录" }));
+
+    // 根目录固定为 strm：面包屑只有一项且不可点击，没有回到 /strm 以上的入口。
+    const dialog = await screen.findByRole("dialog");
+    const breadcrumbs = within(dialog).getByRole("navigation", { name: "目录路径" });
+    expect(within(breadcrumbs).getAllByRole("button")).toHaveLength(1);
+    expect(within(breadcrumbs).getByRole("button", { name: "strm" })).toBeDisabled();
+    expect(await within(dialog).findByText("当前目录：/")).toBeInTheDocument();
+
+    // 新建目录后列表立即刷新出新目录。
+    await user.type(within(dialog).getByLabelText("新目录名称"), "tv");
+    await user.click(within(dialog).getByRole("button", { name: "新建目录" }));
+    expect(await within(dialog).findByRole("button", { name: "tv" })).toBeInTheDocument();
+    expect(created).toEqual([{ path: "/", name: "tv" }]);
+
+    // 其他位置新建的目录点击刷新后可见。
+    directories = [...directories, { name: "external", path: "/external" }];
+    await user.click(within(dialog).getByRole("button", { name: "刷新" }));
+    expect(await within(dialog).findByRole("button", { name: "external" })).toBeInTheDocument();
+
+    await user.click(within(dialog).getByRole("button", { name: "选择当前目录" }));
+    expect(await screen.findByLabelText("本地路径 1")).toHaveValue("/");
   });
 });

@@ -23,9 +23,11 @@ const (
 	pan115TokenSkew        = 60 * time.Second
 	pan115OfflineScanPages = 3
 	// pan115RootDirectoryID 是 115 根目录的固定标识；保存目录为空时落到这里。
-	pan115RootDirectoryID  = "0"
-	pan115DefaultFileLimit = 100
-	pan115MaxFileLimit     = 1000
+	pan115RootDirectoryID = "0"
+	// pan115RootDirectoryName 是 115 对根目录的固定名称，用于目录选择器的面包屑。
+	pan115RootDirectoryName = "根目录"
+	pan115DefaultFileLimit  = 100
+	pan115MaxFileLimit      = 1000
 )
 
 var (
@@ -49,6 +51,8 @@ type pan115API interface {
 	Account(context.Context, string) (pan115.Account, error)
 	OfflineQuota(context.Context, string) (pan115.OfflineQuota, error)
 	List(context.Context, string, string, int, int) (pan115.FilePage, error)
+	Info(context.Context, string, string) (pan115.FileInfo, error)
+	DownloadURL(context.Context, string, string, string) (string, error)
 	AddOffline(context.Context, string, string, string) (string, error)
 	OfflineTasks(context.Context, string, int) (pan115.OfflinePage, error)
 	RemoveOffline(context.Context, string, string) error
@@ -238,6 +242,61 @@ func (s *Pan115Service) Files(ctx context.Context, directoryID string, offset, l
 		return domain.Pan115FilePage{}, err
 	}
 	return pan115FilePageView(directoryID, page), nil
+}
+
+// DirectoryPath 返回目录在 115 中的完整路径（含根目录与目录自身），供目录选择器展示与面包屑导航。
+// 115 的文件列表接口只回传条目，路径统一由目录信息接口解析，避免前端自行拼接出不一致的路径。
+func (s *Pan115Service) DirectoryPath(ctx context.Context, directoryID string) ([]domain.Pan115Directory, error) {
+	directoryID = strings.TrimSpace(directoryID)
+	if directoryID == "" || directoryID == pan115RootDirectoryID {
+		return []domain.Pan115Directory{{ID: pan115RootDirectoryID, Name: pan115RootDirectoryName}}, nil
+	}
+	var path []domain.Pan115Directory
+	err := s.withToken(ctx, func(token string) error {
+		info, err := s.client.Info(ctx, token, directoryID)
+		if err != nil {
+			return err
+		}
+		// 115 的目录信息只回传上级目录，末级要补上目录自身，面包屑才能定位到当前目录。
+		path = append(pan115DirectoryView(info.Path), domain.Pan115Directory{ID: info.ID, Name: info.Name})
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return path, nil
+}
+
+// PlayURL 把 115 文件标识解析为带时效的播放直链：先取文件信息得到提取码，再换取下载地址。
+// userAgent 由播放端提供：115 会把直链绑定到换取直链时的 User-Agent，播放端必须使用同一个 UA。
+func (s *Pan115Service) PlayURL(ctx context.Context, fileID, userAgent string) (string, error) {
+	fileID = strings.TrimSpace(fileID)
+	if fileID == "" {
+		return "", fmt.Errorf("%w: 文件标识不能为空", ErrPan115InvalidInput)
+	}
+	var address string
+	err := s.withToken(ctx, func(token string) error {
+		info, err := s.client.Info(ctx, token, fileID)
+		if err != nil {
+			return err
+		}
+		if info.IsDirectory {
+			return fmt.Errorf("%w: 该标识是目录，无法播放", ErrPan115InvalidInput)
+		}
+		if strings.TrimSpace(info.PickCode) == "" {
+			return fmt.Errorf("%w: 未能获取文件的 115 提取码", ErrPan115InvalidInput)
+		}
+		found, err := s.client.DownloadURL(ctx, token, info.PickCode, userAgent)
+		if err != nil {
+			return err
+		}
+		address = found
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+	return address, nil
 }
 
 // AddOffline 提交一个磁力或下载地址到 115 离线下载，返回 115 侧的信息哈希。
@@ -545,17 +604,22 @@ func pan115FilePageView(directoryID string, page pan115.FilePage) domain.Pan115F
 			PickCode:    file.PickCode,
 		}
 	}
-	path := make([]domain.Pan115Directory, len(page.Path))
-	for index, item := range page.Path {
-		path[index] = domain.Pan115Directory{ID: item.ID, Name: item.Name}
-	}
 	return domain.Pan115FilePage{
 		DirectoryID: directoryID,
-		Path:        path,
+		Path:        pan115DirectoryView(page.Path),
 		Files:       files,
 		Total:       page.Total,
 		HasMore:     page.HasMore,
 	}
+}
+
+// pan115DirectoryView 把协议层的目录路径转换成对外结构。
+func pan115DirectoryView(path []pan115.Directory) []domain.Pan115Directory {
+	directories := make([]domain.Pan115Directory, len(path))
+	for index, item := range path {
+		directories[index] = domain.Pan115Directory{ID: item.ID, Name: item.Name}
+	}
+	return directories
 }
 
 func pan115OfflinePageView(page int, result pan115.OfflinePage) domain.Pan115OfflinePage {

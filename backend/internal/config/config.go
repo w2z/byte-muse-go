@@ -9,12 +9,18 @@ import (
 	"time"
 )
 
-const defaultWebStaticDir = "/app/web"
+const (
+	defaultWebStaticDir = "/app/web"
+	// defaultStrmRoot 是容器内 strm 根目录的默认挂载点，与 README、Compose 的 /strm 一致。
+	defaultStrmRoot = "/strm"
+)
 
 // Config contains non-secret process configuration.
 type Config struct {
 	HTTPAddress     string
 	WebStaticDir    string
+	// StrmRoot 是本地 strm 文件根目录；设置页只能浏览该目录以下的内容。
+	StrmRoot        string
 	ShutdownTimeout time.Duration
 	Version         string
 	// ReleaseRepo 是发布仓库的 owner/name，检查更新时读取其 version.json。
@@ -41,6 +47,10 @@ func Load() (Config, error) {
 	if staticDir == "" {
 		staticDir = defaultWebStaticDir
 	}
+	strmRoot := strings.TrimSpace(os.Getenv("STRM_ROOT"))
+	if strmRoot == "" {
+		strmRoot = defaultStrmRoot
+	}
 	driver := envOrDefault("DATABASE_DRIVER", "sqlite")
 	if driver != "sqlite" && driver != "postgres" && driver != "mysql" {
 		return Config{}, fmt.Errorf("unsupported DATABASE_DRIVER %q", driver)
@@ -59,6 +69,7 @@ func Load() (Config, error) {
 	return Config{
 		HTTPAddress:     httpAddress,
 		WebStaticDir:    staticDir,
+		StrmRoot:        strmRoot,
 		ShutdownTimeout: shutdownTimeout,
 		Version:         envOrDefault("BYTEMUSE_VERSION", "dev"),
 		ReleaseRepo:     envOrDefault("BYTEMUSE_RELEASE_REPO", "w2z/byte-muse-go"),

@@ -13,17 +13,21 @@ import (
 
 // pan115ClientStub 记录调用并返回预设结果，使扫码、刷新与离线受理可在无网络环境下验证。
 type pan115ClientStub struct {
-	login      *pan115.Login
-	loginState pan115.LoginState
-	tokens     pan115.Tokens
-	account    pan115.Account
-	quota      pan115.OfflineQuota
-	page       pan115.FilePage
-	offline    pan115.OfflinePage
-	addHash    string
-	addErr     error
-	quotaErr   error
-	refreshErr error
+	login       *pan115.Login
+	loginState  pan115.LoginState
+	tokens      pan115.Tokens
+	account     pan115.Account
+	quota       pan115.OfflineQuota
+	page        pan115.FilePage
+	offline     pan115.OfflinePage
+	addHash     string
+	addErr      error
+	quotaErr    error
+	refreshErr  error
+	info        pan115.FileInfo
+	infoErr     error
+	download    string
+	downloadErr error
 
 	exchangeCalls int
 	refreshCalls  int
@@ -36,6 +40,9 @@ type pan115ClientStub struct {
 	addDirectory  string
 	offlinePages  []int
 	removed       []string
+	infoFileID    string
+	downloadPick  string
+	downloadUA    string
 }
 
 func (s *pan115ClientStub) BeginLogin(context.Context) (*pan115.Login, error) {
@@ -96,6 +103,22 @@ func (s *pan115ClientStub) OfflineTasks(_ context.Context, _ string, page int) (
 func (s *pan115ClientStub) RemoveOffline(_ context.Context, _ string, hash string) error {
 	s.removed = append(s.removed, hash)
 	return nil
+}
+
+func (s *pan115ClientStub) Info(_ context.Context, _ string, fileID string) (pan115.FileInfo, error) {
+	s.infoFileID = fileID
+	if s.infoErr != nil {
+		return pan115.FileInfo{}, s.infoErr
+	}
+	return s.info, nil
+}
+
+func (s *pan115ClientStub) DownloadURL(_ context.Context, _ string, pickCode, userAgent string) (string, error) {
+	s.downloadPick, s.downloadUA = pickCode, userAgent
+	if s.downloadErr != nil {
+		return "", s.downloadErr
+	}
+	return s.download, nil
 }
 
 func (s *pan115ClientStub) Close() {}
@@ -405,5 +428,45 @@ func TestPan115FilesDefaultsToRootAndBoundsLimit(t *testing.T) {
 	}
 	if len(page.Path) != 1 || page.Path[0].Name != "根目录" {
 		t.Fatalf("目录路径 = %+v", page.Path)
+	}
+}
+
+// TestPan115DirectoryPathAppendsCurrentDirectory 验证目录路径由上级链加目录自身组成。
+// 115 的目录信息只回传上级目录，缺末级会让目录选择器的面包屑无法定位当前目录。
+func TestPan115DirectoryPathAppendsCurrentDirectory(t *testing.T) {
+	client := &pan115ClientStub{info: pan115.FileInfo{
+		File: pan115.File{ID: "d2", Name: "套图", IsDirectory: true},
+		Path: []pan115.Directory{{ID: "0", Name: "根目录"}, {ID: "d1", Name: "存档"}},
+	}}
+	secret := strings.Repeat("x", 32)
+	service := newPan115TestService(t, pan115BoundAccounts(t, secret), client, pan115TestSettings(""), secret)
+
+	path, err := service.DirectoryPath(context.Background(), "d2")
+	if err != nil {
+		t.Fatalf("读取目录路径失败: %v", err)
+	}
+	if client.infoFileID != "d2" {
+		t.Fatalf("目录信息请求标识 = %q，期望 d2", client.infoFileID)
+	}
+	if len(path) != 3 || path[1].Name != "存档" || path[2].ID != "d2" || path[2].Name != "套图" {
+		t.Fatalf("目录路径 = %+v", path)
+	}
+}
+
+// TestPan115DirectoryPathForRoot 验证根目录直接返回固定路径，不额外请求 115 接口。
+func TestPan115DirectoryPathForRoot(t *testing.T) {
+	client := &pan115ClientStub{}
+	secret := strings.Repeat("x", 32)
+	service := newPan115TestService(t, pan115BoundAccounts(t, secret), client, pan115TestSettings(""), secret)
+
+	path, err := service.DirectoryPath(context.Background(), "")
+	if err != nil {
+		t.Fatalf("读取根目录路径失败: %v", err)
+	}
+	if client.infoFileID != "" {
+		t.Fatalf("根目录不应请求目录信息，实际请求 %q", client.infoFileID)
+	}
+	if len(path) != 1 || path[0].ID != "0" || path[0].Name != "根目录" {
+		t.Fatalf("根目录路径 = %+v", path)
 	}
 }

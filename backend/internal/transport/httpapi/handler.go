@@ -50,7 +50,9 @@ type Dependencies struct {
 	WeChatCallback ports.CallbackVerifier
 	// ChannelMessages 处理渠道入站消息；轮询与回调共用同一实现。
 	ChannelMessages ports.ChannelMessageHandler
-	StaticDir       string
+	// Strm 提供网盘目录的 strm 生成、本地 strm 目录浏览与播放地址解析。
+	Strm      *application.StrmService
+	StaticDir string
 }
 
 // publicAuthPaths 是不要求既有会话即可访问的认证入口：登录本身，以及用过期会话换取新会话的续签。
@@ -66,6 +68,8 @@ func New(dependencies Dependencies) http.Handler {
 	api := chi.NewRouter()
 	api.Get("/health/live", live)
 	api.Get("/health/ready", ready(dependencies.Readiness))
+	// strm 播放地址：Emby 等播放器直接请求，没有会话；路径由服务端生成，不可枚举。
+	api.HandleFunc("/files/play/*", playStrmFile(dependencies.Strm))
 	api.Route("/api/v1", func(router chi.Router) {
 		router.Get("/collection/sources", collectionSources(dependencies.Collection))
 		router.Post("/collection/runs", runCollection(dependencies.Collection))
@@ -111,12 +115,21 @@ func New(dependencies Dependencies) http.Handler {
 		router.Get("/pan115/offline/tasks", listPan115OfflineTasks(dependencies.Pan115))
 		router.Post("/pan115/offline/tasks", addPan115OfflineTask(dependencies.Pan115))
 		router.Delete("/pan115/offline/tasks/{hash}", removePan115OfflineTask(dependencies.Pan115))
+		router.Get("/strm/directories", listStrmDirectories(dependencies.Strm))
+		router.Post("/strm/directories", createStrmDirectory(dependencies.Strm))
+		router.Get("/strm/clouddrive/directories", listStrmCloudDriveDirectories(dependencies.Strm))
+		router.Post("/strm/scan", scanStrm(dependencies.Strm))
 		router.Get("/message", wechatVerify(dependencies))
 		router.Post("/message", wechatReceive(dependencies))
 	})
 
 	spa := spaHandler(dependencies.StaticDir)
 	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		// strm 播放地址由 Emby 等播放器直接请求，没有会话；能否播放由地址本身是否可知决定。
+		if strings.HasPrefix(request.URL.Path, "/files/play/") {
+			api.ServeHTTP(response, request)
+			return
+		}
 		if strings.HasPrefix(request.URL.Path, "/api/") || strings.HasPrefix(request.URL.Path, "/health/") {
 			if strings.HasPrefix(request.URL.Path, "/api/v1") {
 				if _, public := publicAuthPaths[request.URL.Path]; !public && !authenticated(request, dependencies.Auth) {

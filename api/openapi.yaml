@@ -1077,6 +1077,187 @@ paths:
           content:
             application/json:
               schema: {$ref: '#/components/schemas/Error'}
+  /strm/directories:
+    get:
+      operationId: listStrmDirectories
+      summary: 浏览本地 strm 目录
+      description: 列出容器内 strm 根目录下某个目录的直接子目录，供设置页选择 strm 生成目录。浏览范围固定为 strm 根目录，根目录以上的路径会被拒绝；每次请求实时读盘，外部新建的目录重新请求即可看到。
+      parameters:
+        - {in: cookie, name: bytemuse_session, required: true, schema: {type: string}, description: 登录签发的管理员会话 Cookie}
+        - {in: query, name: path, schema: {type: string}, description: '相对 strm 根目录的路径，以 / 开头；省略或空串表示根目录'}
+      responses:
+        '200':
+          description: 当前目录的直接子目录；不返回文件
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/StrmDirectoryPage'}
+              example: {path: /, directories: [{name: movies, path: /movies}]}
+        '400':
+          description: 路径非法、超出 strm 根目录或目录不存在
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '401':
+          description: 未登录或会话失效
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '503':
+          description: strm 服务未装配
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+    post:
+      operationId: createStrmDirectory
+      summary: 新建本地 strm 目录
+      description: 在 strm 根目录内的指定父目录下新建一级目录；父目录必须已存在，目录名不能包含路径分隔符，同名目录已存在时返回 400。只创建一级，避免一次请求产生隐式目录树。
+      parameters:
+        - {in: cookie, name: bytemuse_session, required: true, schema: {type: string}, description: 登录签发的管理员会话 Cookie}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [path, name]
+              additionalProperties: false
+              properties:
+                path: {type: string, description: '父目录相对 strm 根目录的路径，以 / 开头；省略或空串表示根目录'}
+                name: {type: string, description: 新目录名称；不能为空，不能是 . 或 ..，不能包含路径分隔符}
+            example: {path: /, name: movies}
+      responses:
+        '201':
+          description: 已创建的目录
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/StrmDirectory'}
+              example: {name: movies, path: /movies}
+        '400':
+          description: 目录名非法、目录已存在、上级目录不存在或路径超出 strm 根目录
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '401':
+          description: 未登录或会话失效
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '503':
+          description: strm 服务未装配
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+  /strm/clouddrive/directories:
+    get:
+      operationId: listStrmCloudDriveDirectories
+      summary: 浏览 CloudDrive2 目录
+      description: 列出 CloudDrive2 网盘中某个目录的直接子目录，供设置页选择 strm 映射的网盘路径。数据来自网盘，不受本地 strm 根目录限制；只返回目录。
+      parameters:
+        - {in: cookie, name: bytemuse_session, required: true, schema: {type: string}, description: 登录签发的管理员会话 Cookie}
+        - {in: query, name: path, schema: {type: string}, description: '网盘绝对路径，以 / 开头；省略或空串表示网盘根目录'}
+      responses:
+        '200':
+          description: 当前网盘目录的直接子目录
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/StrmDirectoryPage'}
+              example: {path: /115, directories: [{name: 电影, path: /115/电影}]}
+        '401':
+          description: 未登录或会话失效
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '409':
+          description: CloudDrive2 尚未配置
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+              example: {code: strm_not_configured, message: 'CloudDrive2 尚未配置'}
+        '502':
+          description: 'CloudDrive2 返回错误；message 为本地生成的脱敏中文说明'
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '503':
+          description: strm 服务未装配
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+  /strm/scan:
+    post:
+      operationId: scanStrm
+      summary: 生成 strm 文件
+      description: 按设置项 STRM_PATHS 把网盘目录镜像成本地 strm 文件，文件内容为 {基址}/files/play/{网盘类型}/{文件标识}。重复执行幂等，内容一致时不改写磁盘。基址取 STRM_PLAY_BASE，为空时使用本次请求的来源地址；STRM_EMBY_REFRESH 为 true 且已配置 Emby 地址与密钥时额外刷新媒体库。单条映射失败不影响其他映射，失败原因通过 message 返回。
+      parameters:
+        - {in: cookie, name: bytemuse_session, required: true, schema: {type: string}, description: 登录签发的管理员会话 Cookie}
+      responses:
+        '200':
+          description: 本次生成的汇总结果；无失败映射时 mappings[].message 为空串
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/StrmScanResult'}
+              example: {mappings: [{kind: '115', path: /电影, local_path: /movies, files: 12, created: 12, unchanged: 0, failed: 0, message: ''}], files: 12, created: 12, failed: 0, emby: {attempted: false, refreshed: false, message: ''}}
+        '400':
+          description: STRM_PATHS 配置非法
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '401':
+          description: 未登录或会话失效
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '409':
+          description: 尚未配置网盘映射、缺少访问基址或网盘服务未就绪
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '503':
+          description: strm 服务未装配
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+  /files/play/{kind}/{fileId}:
+    servers:
+      - url: /
+    get:
+      operationId: playStrmFile
+      summary: 解析并跳转网盘播放地址
+      description: 'strm 文件里的播放地址入口，不要求登录会话：实际地址为 {ByteMuse 地址}/files/play/{kind}/{fileId}，位于 /api/v1 之外。115 返回 302 跳转到绑定换取时 User-Agent 的直链；CloudDrive2 直链要求固定请求头时由服务端代理转发。CloudDrive2 的文件标识是网盘绝对路径，按 / 拆段后逐段 URL 编码，因此 fileId 会占用多个路径段。'
+      security: []
+      parameters:
+        - {in: path, name: kind, required: true, schema: {type: string, enum: ['115', 'cd2']}, description: '网盘类型；115 为 115 网盘，cd2 为 CloudDrive2'}
+        - {in: path, name: fileId, required: true, schema: {type: string}, description: '网盘文件标识；115 为文件 ID，CloudDrive2 为网盘绝对路径'}
+      responses:
+        '302':
+          description: 重定向到网盘直链
+        '200':
+          description: 服务端代理转发网盘直链，用于直链要求固定 User-Agent 或附加请求头的情况
+        '400':
+          description: 网盘类型或文件标识非法
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '404':
+          description: 网盘中不存在该文件
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '409':
+          description: 网盘服务未就绪、115 未绑定或 CloudDrive2 未配置
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '502':
+          description: 网盘未返回可用的播放地址
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '503':
+          description: strm 服务未装配
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
   /message:
     get:
       operationId: verifyWeChatCallback
@@ -1979,5 +2160,59 @@ components:
       properties:
         uri: {type: string, description: 磁力链接或下载地址，去除首尾空格后必须非空}
         directory_id: {type: string, description: '保存目录 ID；省略或空串时使用设置中的「离线下载保存目录」，该设置也为空时保存到根目录'}
+    StrmMapping:
+      type: object
+      required: [kind, id, path, local_path]
+      description: 一条「网盘目录 → 本地 strm 目录」映射，对应设置项 STRM_PATHS 的数组元素
+      properties:
+        kind: {type: string, enum: ['115', 'cd2'], description: '网盘类型；115 为 115 网盘，cd2 为 CloudDrive2，取值同时用作播放地址的路径段'}
+        id: {type: string, description: '网盘目录标识，扫描与播放的权威依据；115 为目录 ID，CloudDrive2 为目录绝对路径'}
+        path: {type: string, description: 网盘目录展示路径；只用于界面展示，不参与扫描与播放}
+        local_path: {type: string, description: '本地 strm 目录，以 / 开头，相对容器内 strm 根目录；不能超出该根目录'}
+    StrmDirectory:
+      type: object
+      required: [name, path]
+      description: 一个可选择的目录
+      properties:
+        name: {type: string, description: 目录名称}
+        path: {type: string, description: '目录路径；本地 strm 目录相对 strm 根目录，CloudDrive2 目录为网盘绝对路径'}
+    StrmDirectoryPage:
+      type: object
+      required: [path, directories]
+      description: 一次目录浏览结果；只包含子目录，不包含文件
+      properties:
+        path: {type: string, description: '当前目录路径；本地 strm 目录相对 strm 根目录，CloudDrive2 目录为网盘绝对路径'}
+        directories: {type: array, items: {$ref: '#/components/schemas/StrmDirectory'}, description: '当前目录的直接子目录；无子目录为空数组'}
+    StrmScanMapping:
+      type: object
+      required: [kind, path, local_path, files, created, unchanged, failed, message]
+      description: 单条映射的生成结果；message 为空串表示该映射没有可报告的问题
+      properties:
+        kind: {type: string, enum: ['115', 'cd2'], description: '网盘类型；115 为 115 网盘，cd2 为 CloudDrive2'}
+        path: {type: string, description: 网盘目录展示路径}
+        local_path: {type: string, description: 本地 strm 目录}
+        files: {type: integer, minimum: 0, description: 该映射命中的媒体文件数；只统计媒体扩展名}
+        created: {type: integer, minimum: 0, description: 本次新建的 strm 文件数}
+        unchanged: {type: integer, minimum: 0, description: 内容一致、未改写磁盘的 strm 文件数}
+        failed: {type: integer, minimum: 0, description: 写入失败的 strm 文件数}
+        message: {type: string, description: 该映射的错误说明；正常时为空串}
+    StrmEmbyResult:
+      type: object
+      required: [attempted, refreshed, message]
+      description: 生成 strm 之后的 Emby 媒体库刷新结果
+      properties:
+        attempted: {type: boolean, description: '是否真的发起了刷新请求；未开启自动刷新或未配置 Emby 时为 false'}
+        refreshed: {type: boolean, description: Emby 是否返回成功状态码}
+        message: {type: string, description: 跳过或失败的原因；成功且无说明时为空串}
+    StrmScanResult:
+      type: object
+      required: [mappings, files, created, failed, emby]
+      description: 一次 strm 生成的总结果
+      properties:
+        mappings: {type: array, items: {$ref: '#/components/schemas/StrmScanMapping'}, description: '各条映射的生成结果，顺序与 STRM_PATHS 一致'}
+        files: {type: integer, minimum: 0, description: 全部映射命中的媒体文件总数}
+        created: {type: integer, minimum: 0, description: 本次新建的 strm 文件总数}
+        failed: {type: integer, minimum: 0, description: 写入失败的 strm 文件总数}
+        emby: {$ref: '#/components/schemas/StrmEmbyResult'}
 security:
   - sessionCookie: []
