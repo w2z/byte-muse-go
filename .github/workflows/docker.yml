@@ -73,20 +73,32 @@ jobs:
           DIGEST: ${{ steps.push.outputs.digest }}
           REPO: ${{ github.repository }}
         run: |
-          jq -n --arg v "$VERSION" --arg c "$COMMIT" --arg s "$SHA" \
-                --arg b "$BUILT_AT" --arg d "$DIGEST" --arg r "$REPO" \
-            '{version:$v, commit:$c, short_commit:$s, built_at:$b,
-              image:("ghcr.io/" + $r), digest:$d,
-              tags:[$v, ("sha-" + $s), "latest"],
-              source:("https://github.com/" + $r),
-              note:"由 GitHub Actions 构建成功后自动写入，请勿手工修改"}' > version.json
+          write_version() {
+            jq -n --arg v "$VERSION" --arg c "$COMMIT" --arg s "$SHA" \
+                  --arg b "$BUILT_AT" --arg d "$DIGEST" --arg r "$REPO" \
+              '{version:$v, commit:$c, short_commit:$s, built_at:$b,
+                image:("ghcr.io/" + $r), digest:$d,
+                tags:[$v, ("sha-" + $s), "latest"],
+                source:("https://github.com/" + $r),
+                note:"由 GitHub Actions 构建成功后自动写入，请勿手工修改"}' > version.json
+          }
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add version.json
-          if git diff --cached --quiet; then
-            echo "version.json 无变化，跳过提交"
-          else
+          # 回写提交必须以远端最新提交为基线：并发构建会先后回写同一文件，直接用检出点提交会被非快进拒绝。
+          for attempt in 1 2 3; do
+            git fetch origin "${GITHUB_REF_NAME}"
+            git checkout -B publish-version FETCH_HEAD
+            write_version
+            git add version.json
+            if git diff --cached --quiet; then
+              echo "version.json 无变化，跳过提交"
+              exit 0
+            fi
             git commit -m "🔧 chore(发布): 更新 version.json 到 ${VERSION}"
-            # checkout 处于分离 HEAD，必须显式指定目标分支。
-            git push origin HEAD:"${GITHUB_REF_NAME}"
-          fi
+            if git push origin HEAD:"${GITHUB_REF_NAME}"; then
+              exit 0
+            fi
+            echo "推送被拒，重新对齐远端后重试（第 ${attempt} 次）"
+          done
+          echo "version.json 回写连续 3 次被拒，构建产物已推送但版本记录未更新"
+          exit 1
