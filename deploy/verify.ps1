@@ -74,6 +74,17 @@ foreach ($composeFile in $composeFiles) {
     if ($text -notmatch '(?m)^\s+cloudflarebypass:\s*$' -or $text -notmatch 'ghcr\.io/sarperavci/cloudflarebypassforscraping') {
         throw "$($composeFile.Name) 必须包含 cloudflarebypass 抓取增强服务"
     }
+    # 数据库方言模板自带数据库容器：DSN 主机名就是该服务名，写错会连不上并反复重启。
+    if ($composeFile.Name -match '\.postgres\.') {
+        if ($text -notmatch '(?m)^\s+postgres:\s*$' -or $text -notmatch '@postgres:5432/') {
+            throw "$($composeFile.Name) 必须包含内置 postgres 服务，且 DATABASE_DSN 指向 postgres:5432"
+        }
+    }
+    if ($composeFile.Name -match '\.mysql\.') {
+        if ($text -notmatch '(?m)^\s+mysql:\s*$' -or $text -notmatch '@tcp\(mysql:3306\)') {
+            throw "$($composeFile.Name) 必须包含内置 mysql 服务，且 DATABASE_DSN 指向 tcp(mysql:3306)"
+        }
+    }
 }
 
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
@@ -87,8 +98,14 @@ foreach ($composeFile in $composeFiles) {
         throw "$($composeFile.Name) 配置解析失败: $configuration"
     }
     $services = @($configuration | Where-Object { $_ -and $_.Trim() } | ForEach-Object { $_.Trim() } | Sort-Object)
-    if (($services -join ',') -ne 'byte-muse,cloudflarebypass') {
-        throw "$($composeFile.Name) 必须包含 byte-muse 与 cloudflarebypass 两个服务"
+    # 数据库方言模板额外带一个数据库服务；sqlite 用文件库，不需要。
+    $expected = switch -Regex ($composeFile.Name) {
+        '\.postgres\.' { 'byte-muse,cloudflarebypass,postgres'; break }
+        '\.mysql\.' { 'byte-muse,cloudflarebypass,mysql'; break }
+        default { 'byte-muse,cloudflarebypass' }
+    }
+    if (($services -join ',') -ne $expected) {
+        throw "$($composeFile.Name) 的服务必须正好是 $expected，实际为 $($services -join ',')"
     }
 }
 

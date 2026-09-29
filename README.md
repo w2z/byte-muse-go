@@ -1,11 +1,10 @@
 # ByteMuse Go
 
-ByteMuse 的 Go 重建版本。单个容器同时提供 Web UI、REST API 与后台调度器，支持 SQLite、PostgreSQL 和 MySQL。
+本项目是ByteMuse 使用AI进行 Go 的重建版本。单个容器同时提供 Web UI、REST API 与后台调度器，支持 SQLite、PostgreSQL 和 MySQL。
 
 - 镜像地址：`ghcr.io/w2z/byte-muse-go`
 - api公开链接: `https://s.apifox.cn/0d0f258c-8165-47ec-a98d-fbb718485c25`
 - 容器端口：`3750`；数据目录：`/data`；strm目录: `/strm`；默认时区：`Asia/Shanghai`
-- 版本与发布提交记录在 `version.json`，由 `deploy/version.ps1` 在代码提交时写入
 
 
 ## Docker 部署
@@ -36,7 +35,7 @@ docker run -d --name byte-muse \
 
 ## Docker Compose
 
-`deploy/` 下保留 `compose.sqlite.yaml`、`compose.postgres.yaml`、`compose.mysql.yaml` 三个模板，内容只差数据库两行；下面是默认 SQLite 的完整配置，PostgreSQL 与 MySQL 把注释中的两行替换进去即可。模板都直接写出配置值，不使用环境变量插值：应用服务固定命名 `byte-muse`，并附带 `cloudflarebypass` 抓取增强服务，两者接入同一 `bridge` 网络。代理地址与宿主机路径是占位符，`ADMIN_USERNAME`、`ADMIN_PASSWORD`、`SESSION_SECRET` 以及 PostgreSQL/MySQL 的 `DATABASE_DSN` 也是占位值，部署前在文件中替换：`SESSION_SECRET` 少于 32 字节、DSN 主机无法解析时，服务会直接拒绝启动。真实拓扑与凭据只留在部署机上。
+`deploy/` 下保留 `compose.sqlite.yaml`、`compose.postgres.yaml`、`compose.mysql.yaml` 三个模板：SQLite 用文件库，PostgreSQL 与 MySQL 模板额外内置同方言的数据库服务。下面是 SQLite 的完整配置，PostgreSQL 与 MySQL 按注释替换两行、并启用对应的数据库服务块即可。模板都直接写出配置值，不使用环境变量插值：应用服务固定命名 `byte-muse`，并附带 `cloudflarebypass` 抓取增强服务，各服务接入同一 `bridge` 网络。代理地址与宿主机路径是占位符，`ADMIN_USERNAME`、`ADMIN_PASSWORD`、`SESSION_SECRET` 以及数据库密码也是占位值，部署前在文件中替换：`SESSION_SECRET` 少于 32 字节时服务会直接拒绝启动。真实拓扑与凭据只留在部署机上。
 
 ```yaml
 services:
@@ -48,17 +47,21 @@ services:
       - bridge
     ports:
       - "3750:3750"
+    # PostgreSQL / MySQL 部署时启用：等数据库健康后再启动应用，避免迁移连不上反复重启。
+    # depends_on:
+    #   postgres:
+    #     condition: service_healthy
     environment:
       TZ: Asia/Shanghai
-      # 数据库三选一：默认 SQLite 用下面两行，PostgreSQL 与 MySQL 改用注释中的两行。
+      # 数据库三选一：默认 SQLite 用下面两行，PostgreSQL 与 MySQL 用注释中的两行替换。
       DATABASE_DRIVER: sqlite
       DATABASE_DSN: file:/data/bytemuse.db?_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)
-      # PostgreSQL：
+      # PostgreSQL：DSN 主机名就是下面 postgres 服务名
       # DATABASE_DRIVER: postgres
-      # DATABASE_DSN: postgres://bytemuse:请替换为数据库密码@请替换为数据库主机:5432/bytemuse?sslmode=disable
-      # MySQL：
+      # DATABASE_DSN: postgres://bytemuse:请替换为数据库密码@postgres:5432/bytemuse?sslmode=disable
+      # MySQL：DSN 主机名就是下面 mysql 服务名
       # DATABASE_DRIVER: mysql
-      # DATABASE_DSN: bytemuse:请替换为数据库密码@tcp(请替换为数据库主机:3306)/bytemuse?charset=utf8mb4&parseTime=true&loc=Local
+      # DATABASE_DSN: bytemuse:请替换为数据库密码@tcp(mysql:3306)/bytemuse?charset=utf8mb4&parseTime=true&loc=Local
       # 部署前必须替换下面三项：管理员账号密码，以及 32 字节以上随机会话密钥。
       # 占位值长度不足 32 字节，未替换时服务会直接拒绝启动。
       ADMIN_USERNAME: admin
@@ -69,6 +72,47 @@ services:
       # 宿主机目录需允许容器内 UID 65532 写入：chown -R 65532:65532 /path/to/byte-muse/data /path/to/byte-muse/strm
       - /path/to/byte-muse/data:/data
       - /path/to/byte-muse/strm:/strm
+  # PostgreSQL 部署时启用（deploy/compose.postgres.yaml 中已启用）：
+  # postgres:
+  #   image: postgres:17-alpine
+  #   container_name: byte-muse-postgres
+  #   restart: always
+  #   networks:
+  #     - bridge
+  #   environment:
+  #     POSTGRES_DB: bytemuse
+  #     POSTGRES_USER: bytemuse
+  #     POSTGRES_PASSWORD: 请替换为数据库密码
+  #     TZ: Asia/Shanghai
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "pg_isready -U bytemuse -d bytemuse"]
+  #     interval: 10s
+  #     timeout: 5s
+  #     retries: 10
+  #   volumes:
+  #     # PostgreSQL 数据目录；容器内以 UID 70 运行，宿主机目录需可写。
+  #     - /path/to/byte-muse/pgdata:/var/lib/postgresql/data
+  # MySQL 部署时启用（deploy/compose.mysql.yaml 中已启用）：
+  # mysql:
+  #   image: mysql:8.4
+  #   container_name: byte-muse-mysql
+  #   restart: always
+  #   networks:
+  #     - bridge
+  #   environment:
+  #     MYSQL_DATABASE: bytemuse
+  #     MYSQL_USER: bytemuse
+  #     MYSQL_PASSWORD: 请替换为数据库密码
+  #     MYSQL_ROOT_PASSWORD: 请替换为数据库root密码
+  #     TZ: Asia/Shanghai
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
+  #     interval: 10s
+  #     timeout: 5s
+  #     retries: 10
+  #   volumes:
+  #     # MySQL 数据目录；容器内以 UID 999 运行，宿主机目录需可写。
+  #     - /path/to/byte-muse/mysqldata:/var/lib/mysql
   # 抓取增强服务：设置页把 BYPASS_ENGINE 选为 cloudflare_bypass_for_scraping、BYPASS_URL 填 http://cloudflarebypass:8000
   cloudflarebypass:
     image: ghcr.io/sarperavci/cloudflarebypassforscraping:latest
