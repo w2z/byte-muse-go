@@ -78,7 +78,7 @@ jobs:
             '{version:$v, commit:$c, short_commit:$s, built_at:$b,
               image:("ghcr.io/" + $r), digest:$d,
               tags:[$v, ("sha-" + $s), "latest"],
-              source:"https://github.com/" + $r,
+              source:("https://github.com/" + $r),
               note:"由 GitHub Actions 构建成功后自动写入，请勿手工修改"}' > version.json
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -87,5 +87,6 @@ jobs:
             echo "version.json 无变化，跳过提交"
           else
             git commit -m "🔧 chore(发布): 更新 version.json 到 ${VERSION}"
-            git push
+            # checkout 处于分离 HEAD，必须显式指定目标分支。
+            git push origin HEAD:"${GITHUB_REF_NAME}"
           fi
