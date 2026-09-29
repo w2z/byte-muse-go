@@ -137,6 +137,22 @@ export type SystemSettings = {
   configured: Record<string, boolean>;
 };
 
+/** 顶栏版本标签数据：当前运行版本与发布仓库版本的比较结果。 */
+export type SystemVersion = {
+  /** 当前运行版本；未注入构建版本时为 dev。 */
+  current: string;
+  /** 发布仓库当前记录的版本；检查失败时为空串。 */
+  latest: string;
+  /** latest 高于 current 时为 true，前端据此提示升级。 */
+  has_update: boolean;
+  /** 发布仓库地址，用于跳转查看发布记录；检查失败时为空串。 */
+  release_url: string;
+  /** 本次结论的产生时间，UTC RFC 3339。 */
+  checked_at: string;
+  /** 远端检查的失败原因；已确认可用时为空串。 */
+  check_error: string;
+};
+
 export type Actor = {
   name: string;
   photo: string | null;

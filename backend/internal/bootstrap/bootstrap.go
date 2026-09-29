@@ -19,6 +19,7 @@ import (
 	"bytemuse/backend/internal/platform/collector"
 	"bytemuse/backend/internal/platform/database"
 	"bytemuse/backend/internal/platform/downloadclient"
+	"bytemuse/backend/internal/platform/release"
 	"bytemuse/backend/internal/ports"
 	runtimeapp "bytemuse/backend/internal/runtime"
 	"bytemuse/backend/internal/scheduler"
@@ -558,6 +559,8 @@ func (c *Commands) Serve(ctx context.Context) error {
 		Downloads:             downloadQueries,
 		Dashboard:             dashboardService,
 		Settings:              settingsService,
+		// 版本检查复用运行版本与发布仓库记录，顶栏标签与 Agent 运行环境提示取同一来源。
+		Version:               application.NewVersionService(c.config.Version, release.NewGitHubSource(c.config.ReleaseRepo, nil)),
 		Pan115:                pan115Service,
 		Scheduler:             manager,
 		Logs:                  logging.Default,

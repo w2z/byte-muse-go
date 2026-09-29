@@ -17,6 +17,8 @@ type Config struct {
 	WebStaticDir    string
 	ShutdownTimeout time.Duration
 	Version         string
+	// ReleaseRepo 是发布仓库的 owner/name，检查更新时读取其 version.json。
+	ReleaseRepo     string
 	AppEnvironment  string
 	DatabaseDriver  string
 	DatabaseDSN     string
@@ -59,6 +61,7 @@ func Load() (Config, error) {
 		WebStaticDir:    staticDir,
 		ShutdownTimeout: shutdownTimeout,
 		Version:         envOrDefault("BYTEMUSE_VERSION", "dev"),
+		ReleaseRepo:     envOrDefault("BYTEMUSE_RELEASE_REPO", "w2z/byte-muse-go"),
 		AppEnvironment:  envOrDefault("APP_ENV", "development"),
 		DatabaseDriver:  driver,
 		DatabaseDSN:     databaseDSN,

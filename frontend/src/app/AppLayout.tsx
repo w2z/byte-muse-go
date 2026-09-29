@@ -4,6 +4,7 @@ import { useLayoutEffect, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { Outlet, useLocation, useMatches, useNavigate } from "react-router-dom";
 import { UNAUTHORIZED_EVENT, apiRequest } from "../shared/api/client";
+import { VersionTag } from "../features/system/VersionTag";
 import { useSession } from "../shared/auth/session";
 import { useTheme } from "../shared/theme/theme";
 import { PageSurface } from "../shared/ui/PageSurface";
@@ -93,6 +94,7 @@ export function AppLayout() {
         <div className="header-actions">
           <Tooltip content={themeToggleLabel}><Button className="icon-button" type="secondary" shape="circle" aria-label={themeToggleLabel} onClick={toggleTheme}>{isDark ? <IconSun /> : <IconMoon />}</Button></Tooltip>
           <Tooltip content="系统设置"><Button className="icon-button" type="secondary" shape="circle" aria-label="系统设置" onClick={() => navigate("/settings")}><IconSettings /></Button></Tooltip>
+          <VersionTag />
           <Button className="logout-button" type="secondary" aria-label="退出登录" loading={logout.isPending} onClick={() => logout.mutate()}>退出登录</Button>
         </div>
       </Layout.Header>

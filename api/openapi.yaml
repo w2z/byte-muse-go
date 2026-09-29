@@ -748,6 +748,32 @@ paths:
             application/json:
               schema: {$ref: '#/components/schemas/Error'}
               example: {code: openai_test_failed, message: 'OpenAI 连接失败 (892ms)：鉴权失败（HTTP 401），请检查 API Key 和模型权限'}
+  /system/version:
+    get:
+      operationId: getSystemVersion
+      summary: 读取当前版本与发布仓库版本
+      description: 返回当前运行版本与发布仓库 version.json 记录的版本，供顶栏版本标签显示与升级提示。当前版本来自 BYTEMUSE_VERSION，未注入时为 dev。服务端按 10 分钟缓存成功结果、1 分钟缓存失败结果，避免耗尽 GitHub 未认证额度。远端检查失败不影响本接口：仍返回 200，失败原因放在 check_error。版本按点分数字段比较，dev 或非数字版本不判定升级。
+      parameters:
+        - {in: cookie, name: bytemuse_session, required: true, schema: {type: string}, description: 登录签发的管理员会话 Cookie，不在示例中填写真实值}
+      responses:
+        '200':
+          description: 当前版本与远端版本的比较结果；check_error 非空表示本次远端检查失败，此时 latest 与 release_url 为空串、has_update 为 false
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SystemVersion'
+              example: {current: 0.1.21, latest: 0.1.22, has_update: true, release_url: 'https://github.com/w2z/byte-muse-go', checked_at: '2026-09-29T12:00:00Z', check_error: ''}
+        '401':
+          description: 未登录或会话失效
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '503':
+          description: 版本检查未装配发布源
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+              example: {code: service_unavailable, message: 版本检查未就绪}
   /pan115/login/sessions:
     post:
       operationId: startPan115Login
@@ -1670,6 +1696,17 @@ components:
           type: integer
         media_count:
           type: integer
+    SystemVersion:
+      type: object
+      required: [current, latest, has_update, release_url, checked_at, check_error]
+      description: 检查更新结果；远端检查失败时 latest、release_url 为空串且 has_update 为 false，当前版本始终可用
+      properties:
+        current: {type: string, description: 当前运行版本，来自 BYTEMUSE_VERSION；未注入时为 dev}
+        latest: {type: string, description: '发布仓库 version.json 记录的版本；检查失败时为空串'}
+        has_update: {type: boolean, description: latest 按点分数字段高于 current 时为 true；current 为 dev 或含非数字字段时不判定升级}
+        release_url: {type: string, description: '发布仓库地址，取自 version.json 的 source；检查失败时为空串'}
+        checked_at: {type: string, format: date-time, description: 本次结论的产生时间，UTC RFC 3339}
+        check_error: {type: string, description: '远端检查的脱敏中文失败原因；已确认可用时为空串'}
     SystemSettings:
       type: object
       required: [database_driver, values, configured]

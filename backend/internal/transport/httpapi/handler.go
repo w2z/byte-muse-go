@@ -40,6 +40,8 @@ type Dependencies struct {
 	Downloads             *application.DownloadService
 	Dashboard             *application.DashboardService
 	Settings              *application.SettingsService
+	// Version 提供当前运行版本与发布仓库版本的比较结果，供顶栏版本标签使用。
+	Version               *application.VersionService
 	Pan115                *application.Pan115Service
 	Scheduler             *scheduler.Manager
 	Logs                  *logging.Logger
@@ -99,6 +101,7 @@ func New(dependencies Dependencies) http.Handler {
 		router.Get("/system/settings", getSystemSettings(dependencies.Settings))
 		router.Put("/system/settings", updateSystemSettings(dependencies.Settings))
 		router.Post("/system/settings/openai/test", testOpenAI)
+		router.Get("/system/version", systemVersion(dependencies.Version))
 		router.Post("/pan115/login/sessions", startPan115Login(dependencies.Pan115))
 		router.Get("/pan115/login/sessions/{sessionId}", pan115LoginStatus(dependencies.Pan115))
 		router.Delete("/pan115/login/sessions/{sessionId}", cancelPan115Login(dependencies.Pan115))
