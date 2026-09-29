@@ -1,15 +1,14 @@
 {
-  "version": "0.1.21",
-  "commit": "b8f14c41abeba24bb8fd305cc8cdc1c8cbdaf5b8",
-  "short_commit": "b8f14c4",
-  "built_at": "2026-09-29T11:58:15Z",
+  "version": "0.1.24",
+  "commit": "dae345e45e3ba06bb10588f334ee98fd704f2de8",
+  "short_commit": "dae345e",
+  "built_at": "2026-09-29T12:26:28Z",
   "image": "ghcr.io/w2z/byte-muse-go",
-  "digest": "sha256:77c4f0819cd44328391de4ff3831da85c29b3b8a42ce9168ff55be6d34a46033",
   "tags": [
-    "0.1.21",
-    "sha-b8f14c4",
+    "0.1.24",
+    "sha-dae345e",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
-  "note": "由 GitHub Actions 构建成功后自动写入，请勿手工修改"
+  "note": "由 deploy/version.ps1 在代码提交时写入，请勿手工修改"
 }
