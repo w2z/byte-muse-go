@@ -265,6 +265,7 @@ func downloadSubscribe(ctx context.Context, deps Deps) (any, error) {
 	if deps.SubscriptionDownloads == nil {
 		return "订阅下载服务不可用", nil
 	}
+	// 这是批量扫描全部订阅，来源按 schedule 处理：没找到资源不推送，避免一次调用刷出上百条失败通知。
 	count, err := deps.SubscriptionDownloads.RunActive(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("订阅下载执行失败: %w", err)

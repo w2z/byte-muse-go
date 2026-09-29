@@ -33,11 +33,11 @@ func TestSubscriptionDownloadQueueDeduplicatesAndSurvivesReopen(t *testing.T) {
 		t.Fatal(e)
 	}
 	q := NewSubscriptionDownloadRepository(s.SQLDB(), DialectSQLite)
-	first, e := q.Enqueue(ctx, "sub1")
+	first, e := q.Enqueue(ctx, "sub1", ports.DownloadOriginUser)
 	if e != nil {
 		t.Fatal(e)
 	}
-	again, e := q.Enqueue(ctx, "sub1")
+	again, e := q.Enqueue(ctx, "sub1", ports.DownloadOriginUser)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -63,6 +63,9 @@ func TestSubscriptionDownloadQueueDeduplicatesAndSurvivesReopen(t *testing.T) {
 	}
 	if claimed.Title != "film" || claimed.Cover != "https://img.example/banner.jpg" {
 		t.Fatalf("claim 文案与封面 = %#v", claimed)
+	}
+	if claimed.Origin != ports.DownloadOriginUser {
+		t.Fatalf("claim 发起方 = %q，期望 user", claimed.Origin)
 	}
 	if e = q.SetCandidate(ctx, *claimed, "Nyaa BT", "bt", "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567", "0123456789abcdef0123456789abcdef01234567", "qbittorrent", true); e != nil {
 		t.Fatal(e)
@@ -115,7 +118,7 @@ func TestSubscriptionDownloadConcurrentEnqueue(t *testing.T) {
 		go func(index int) {
 			defer wg.Done()
 			<-start
-			task, e := repo.Enqueue(ctx, "sub1")
+			task, e := repo.Enqueue(ctx, "sub1", ports.DownloadOriginUser)
 			ids[index], errors[index] = task.ID, e
 		}(i)
 	}

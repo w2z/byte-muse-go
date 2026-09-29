@@ -83,11 +83,11 @@ func TestSubscriptionDownloadFlowSubmitsOnceAndExposesSource(t *testing.T) {
 	service := application.NewSubscriptionDownloadService(taskRepo, search, map[string]application.MagnetDownloader{"qbittorrent": client}, func(context.Context) (map[string]string, error) {
 		return map[string]string{"BT_DEFAULT_DOWNLOADER": "qbittorrent", "DEFAULT_SORT": "seeders"}, nil
 	})
-	first, e := service.Enqueue(ctx, "sub1")
+	first, e := service.Enqueue(ctx, "sub1", ports.DownloadOriginUser)
 	if e != nil {
 		t.Fatal(e)
 	}
-	second, e := service.Enqueue(ctx, "sub1")
+	second, e := service.Enqueue(ctx, "sub1", ports.DownloadOriginUser)
 	if e != nil || second != first {
 		t.Fatalf("duplicate task %s %s %v", first, second, e)
 	}
@@ -137,7 +137,7 @@ func TestPrivateTorrentFlowUploadsFileOnlyOnce(t *testing.T) {
 		return map[string]string{"PT_DEFAULT_DOWNLOADER": "qbittorrent"}, nil
 	})
 	service.SetPrivateTorrentSource(source)
-	if _, e = service.Enqueue(ctx, "sub1"); e != nil {
+	if _, e = service.Enqueue(ctx, "sub1", ports.DownloadOriginUser); e != nil {
 		t.Fatal(e)
 	}
 	if e = service.Process(ctx, 10); e != nil {
@@ -172,7 +172,7 @@ func TestDefaultFilterAppliesWhenSubscriptionFilterEmpty(t *testing.T) {
 	service := application.NewSubscriptionDownloadService(NewSubscriptionDownloadRepository(s.SQLDB(), DialectSQLite), search, map[string]application.MagnetDownloader{"qbittorrent": client}, func(context.Context) (map[string]string, error) {
 		return map[string]string{"DEFAULT_FILTER": "{\"only_free\":true}", "BT_DEFAULT_DOWNLOADER": "qbittorrent"}, nil
 	})
-	if _, e = service.Enqueue(ctx, "sub1"); e != nil {
+	if _, e = service.Enqueue(ctx, "sub1", ports.DownloadOriginUser); e != nil {
 		t.Fatal(e)
 	}
 	if e = service.Process(ctx, 10); e != nil {

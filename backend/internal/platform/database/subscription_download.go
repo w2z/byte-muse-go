@@ -72,12 +72,23 @@ func (r *SubscriptionDownloadRepository) SaveTransferStates(ctx context.Context,
 }
 
 // Enqueue creates one pending task for an active subscription unless a nonfailed attempt already exists.
-func (r *SubscriptionDownloadRepository) Enqueue(ctx context.Context, subscriptionID string) (domain.DownloadTask, error) {
-	task, _, e := r.enqueue(ctx, subscriptionID)
+// origin 记录本次请求的发起方：用户请求命中已排队的定时任务时把来源升级为 user，
+// 避免用户显式发起的下载被定时任务先建立的任务吸收而失去失败通知。
+func (r *SubscriptionDownloadRepository) Enqueue(ctx context.Context, subscriptionID string, origin ports.DownloadOrigin) (domain.DownloadTask, error) {
+	task, _, e := r.enqueue(ctx, subscriptionID, origin)
 	return task, e
 }
 
-func (r *SubscriptionDownloadRepository) enqueue(ctx context.Context, subscriptionID string) (domain.DownloadTask, bool, error) {
+// normalizeOrigin 把发起方收敛到持久化词表：只有 user 是用户显式发起，其余一律按 schedule 处理。
+// 空值或其他取值来自调用方笔误时按定时任务落库，不会因为违反列约束让整个下载队列写入失败。
+func normalizeOrigin(origin ports.DownloadOrigin) ports.DownloadOrigin {
+	if origin == ports.DownloadOriginUser {
+		return ports.DownloadOriginUser
+	}
+	return ports.DownloadOriginSchedule
+}
+
+func (r *SubscriptionDownloadRepository) enqueue(ctx context.Context, subscriptionID string, origin ports.DownloadOrigin) (domain.DownloadTask, bool, error) {
 	tx, e := r.db.BeginTx(ctx, nil)
 	if e != nil {
 		return domain.DownloadTask{}, false, e
@@ -93,10 +104,16 @@ func (r *SubscriptionDownloadRepository) enqueue(ctx context.Context, subscripti
 	}
 	var item domain.DownloadTask
 	var createdAt, updatedAt any
-	e = tx.QueryRowContext(ctx, fmt.Sprintf("SELECT id,media_id,status,created_at,updated_at FROM download_tasks WHERE subscription_id=%s AND status IN ('queued','searching','unknown','submitted','downloading','completed') ORDER BY created_at DESC LIMIT 1", placeholder(r.dialect, 1)), subscriptionID).Scan(&item.ID, &item.MediaID, &item.Status, &createdAt, &updatedAt)
+	var existingOrigin ports.DownloadOrigin
+	e = tx.QueryRowContext(ctx, fmt.Sprintf("SELECT id,media_id,status,origin,created_at,updated_at FROM download_tasks WHERE subscription_id=%s AND status IN ('queued','searching','unknown','submitted','downloading','completed') ORDER BY created_at DESC LIMIT 1", placeholder(r.dialect, 1)), subscriptionID).Scan(&item.ID, &item.MediaID, &item.Status, &existingOrigin, &createdAt, &updatedAt)
 	if e == nil {
 		item.CreatedAt, _ = valueToTime(createdAt)
 		item.UpdatedAt, _ = valueToTime(updatedAt)
+		if normalizeOrigin(origin) == ports.DownloadOriginUser && normalizeOrigin(existingOrigin) != ports.DownloadOriginUser {
+			if _, e = tx.ExecContext(ctx, fmt.Sprintf("UPDATE download_tasks SET origin=%s WHERE id=%s", placeholder(r.dialect, 1), placeholder(r.dialect, 2)), ports.DownloadOriginUser, item.ID); e != nil {
+				return domain.DownloadTask{}, false, e
+			}
+		}
 		return item, false, tx.Commit()
 	}
 	if !errors.Is(e, sql.ErrNoRows) {
@@ -104,7 +121,7 @@ func (r *SubscriptionDownloadRepository) enqueue(ctx context.Context, subscripti
 	}
 	now := time.Now().UTC()
 	item = domain.DownloadTask{ID: newSortableID(), MediaID: mediaID, Status: domain.DownloadStatusQueued, CreatedAt: now, UpdatedAt: now}
-	_, e = tx.ExecContext(ctx, fmt.Sprintf("INSERT INTO download_tasks (id,media_id,subscription_id,status,created_at,updated_at) VALUES (%s)", placeholders(r.dialect, 6, 1)), item.ID, item.MediaID, subscriptionID, item.Status, encodeTime(now, r.dialect), encodeTime(now, r.dialect))
+	_, e = tx.ExecContext(ctx, fmt.Sprintf("INSERT INTO download_tasks (id,media_id,subscription_id,status,created_at,updated_at,origin) VALUES (%s)", placeholders(r.dialect, 7, 1)), item.ID, item.MediaID, subscriptionID, item.Status, encodeTime(now, r.dialect), encodeTime(now, r.dialect), string(normalizeOrigin(origin)))
 	if e != nil {
 		return domain.DownloadTask{}, false, e
 	}
@@ -112,6 +129,7 @@ func (r *SubscriptionDownloadRepository) enqueue(ctx context.Context, subscripti
 }
 
 // EnqueueActive schedules every active subscription without duplicating unfinished work.
+// 批量扫描统一按 schedule 来源落库：它的失败是正常状态，不推送通知。
 func (r *SubscriptionDownloadRepository) EnqueueActive(ctx context.Context) (int, error) {
 	rows, e := r.db.QueryContext(ctx, "SELECT id FROM subscriptions WHERE status='active' ORDER BY id")
 	if e != nil {
@@ -134,7 +152,7 @@ func (r *SubscriptionDownloadRepository) EnqueueActive(ctx context.Context) (int
 	}
 	count := 0
 	for _, id := range ids {
-		_, created, e := r.enqueue(ctx, id)
+		_, created, e := r.enqueue(ctx, id, ports.DownloadOriginSchedule)
 		if e != nil {
 			return count, e
 		}
@@ -152,10 +170,10 @@ func (r *SubscriptionDownloadRepository) Claim(ctx context.Context, now time.Tim
 		return nil, e
 	}
 	defer tx.Rollback()
-	query := fmt.Sprintf("SELECT d.id,d.media_id,m.code,COALESCE(NULLIF(m.translated_title,''),m.title,''),"+mediaCoverColumn("m")+",s.mode,s.filter_json FROM download_tasks d JOIN subscriptions s ON s.id=d.subscription_id AND s.status='active' JOIN media m ON m.id=d.media_id "+mediaCoverJoin("m")+" WHERE (d.status='queued' OR (d.status='searching' AND d.lease_until<%s)) ORDER BY d.created_at,d.id LIMIT 1", placeholder(r.dialect, 1))
+	query := fmt.Sprintf("SELECT d.id,d.media_id,m.code,COALESCE(NULLIF(m.translated_title,''),m.title,''),"+mediaCoverColumn("m")+",s.mode,s.filter_json,d.origin FROM download_tasks d JOIN subscriptions s ON s.id=d.subscription_id AND s.status='active' JOIN media m ON m.id=d.media_id "+mediaCoverJoin("m")+" WHERE (d.status='queued' OR (d.status='searching' AND d.lease_until<%s)) ORDER BY d.created_at,d.id LIMIT 1", placeholder(r.dialect, 1))
 	var a ports.SubscriptionDownloadAttempt
 	var filterJSON string
-	e = tx.QueryRowContext(ctx, query, now.UnixMilli()).Scan(&a.ID, &a.MediaID, &a.Code, &a.Title, &a.Cover, &a.Mode, &filterJSON)
+	e = tx.QueryRowContext(ctx, query, now.UnixMilli()).Scan(&a.ID, &a.MediaID, &a.Code, &a.Title, &a.Cover, &a.Mode, &filterJSON, &a.Origin)
 	if errors.Is(e, sql.ErrNoRows) {
 		return nil, nil
 	}

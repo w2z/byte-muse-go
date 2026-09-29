@@ -27,7 +27,22 @@ func MigrationPlan(dialect Dialect) []Migration {
 	default:
 		return nil
 	}
-	return append(plan, settingsMigration(dialect), activeSubscriptionMigration(dialect), defaultSettingsMigration(dialect), systemLogsMigration(dialect), logRetentionSettingMigration(dialect), cleanupCanceledSubscriptionsMigration(dialect), catalogQueryIndexesMigration(dialect), downloaderAndBypassSettingsMigration(dialect), collectionMigration(dialect), collectionQueueMigration(dialect), mediaTypeMigration(dialect), subscriptionDownloadMigration(dialect), downloadTransferMigration(dialect), ptSiteSettingsMigration(dialect), siteAuthSettingsMigration(dialect), tagSubscriptionMigration(dialect), bypassProxySettingMigration(dialect), actorSubscriptionMigration(dialect), translationModelSettingsMigration(dialect), notificationSettingsMigration(dialect), tagAliasMigration(dialect), pan115AccountMigration(dialect), pan115ScanPathsSettingMigration(dialect))
+	return append(plan, settingsMigration(dialect), activeSubscriptionMigration(dialect), defaultSettingsMigration(dialect), systemLogsMigration(dialect), logRetentionSettingMigration(dialect), cleanupCanceledSubscriptionsMigration(dialect), catalogQueryIndexesMigration(dialect), downloaderAndBypassSettingsMigration(dialect), collectionMigration(dialect), collectionQueueMigration(dialect), mediaTypeMigration(dialect), subscriptionDownloadMigration(dialect), downloadTransferMigration(dialect), ptSiteSettingsMigration(dialect), siteAuthSettingsMigration(dialect), tagSubscriptionMigration(dialect), bypassProxySettingMigration(dialect), actorSubscriptionMigration(dialect), translationModelSettingsMigration(dialect), notificationSettingsMigration(dialect), tagAliasMigration(dialect), pan115AccountMigration(dialect), pan115ScanPathsSettingMigration(dialect), downloadOriginMigration(dialect))
+}
+
+// downloadOriginMigration 记录每次下载尝试的发起方：VARCHAR(16)、NOT NULL、默认 'schedule'。
+// 取值只有 schedule（定时任务与后台批处理）和 user（用户显式发起）两种，列不可为空，因此没有空值语义。
+// 该列只决定搜索失败时是否推送通知；历史行沿用默认值 schedule，不回填、不重算，升级后立即停止历史刷屏。
+func downloadOriginMigration(dialect Dialect) Migration {
+	column := "ALTER TABLE download_tasks ADD COLUMN origin VARCHAR(16) NOT NULL DEFAULT 'schedule' CHECK (origin IN ('schedule','user'))"
+	if dialect == DialectMySQL {
+		column = "ALTER TABLE download_tasks ADD COLUMN origin VARCHAR(16) NOT NULL DEFAULT 'schedule' COMMENT '下载尝试发起方：schedule 定时任务、user 用户显式发起' CHECK (origin IN ('schedule','user'))"
+	}
+	statements := []string{column}
+	if dialect == DialectPostgres {
+		statements = append(statements, "COMMENT ON COLUMN download_tasks.origin IS '下载尝试发起方：schedule 定时任务、user 用户显式发起'")
+	}
+	return Migration{Version: 29, Name: "download_task_origin", Statements: statements}
 }
 
 // notificationSettingsMigration 为微信与 Telegram 各新增 6 个业务通知开关，两个渠道互不影响。

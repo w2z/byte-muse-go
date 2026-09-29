@@ -124,9 +124,14 @@ func (s *SubscriptionDownloadService) notifyDownloadFailed(ctx context.Context, 
 	})
 }
 
-// failSearch 结束一次失败的搜索并推送失败通知；落库原因与通知文案使用同一个字符串，两处不会漂移。
+// failSearch 结束一次失败的搜索；落库原因与通知文案使用同一个字符串，两处不会漂移。
+// 失败记录一律落库，但只有用户显式发起的尝试才推送通知：定时任务批量扫描没找到资源属于正常状态，
+// 每次扫描都推送只会变成刷屏。下载器报告的真实失败走 notifyTransferTransitions，不受这里影响。
 func (s *SubscriptionDownloadService) failSearch(ctx context.Context, a *ports.SubscriptionDownloadAttempt, reason string) {
 	_ = s.tasks.FinishSearch(ctx, *a, reason)
+	if a.Origin != ports.DownloadOriginUser {
+		return
+	}
 	s.notifyDownloadFailed(ctx, a.Code, a.Title, a.Cover, reason)
 }
 
@@ -157,13 +162,16 @@ func NewSubscriptionDownloadService(tasks ports.SubscriptionDownloadRepository, 
 	return &SubscriptionDownloadService{tasks: tasks, searcher: searcher, downloaders: downloaders, settings: settings}
 }
 
-// Enqueue schedules one active subscription and returns the existing task on repeated requests.
-func (s *SubscriptionDownloadService) Enqueue(ctx context.Context, id string) (string, error) {
-	task, e := s.tasks.Enqueue(ctx, id)
+// Enqueue 登记一条有效订阅的下载尝试，重复请求返回已存在的任务。
+// origin 是这次尝试的发起方，决定搜索失败后是否推送通知。
+func (s *SubscriptionDownloadService) Enqueue(ctx context.Context, id string, origin ports.DownloadOrigin) (string, error) {
+	task, e := s.tasks.Enqueue(ctx, id, origin)
 	return task.ID, e
 }
 
-// RunActive enqueues all active subscriptions and drains a bounded batch of durable tasks.
+// RunActive 登记全部有效订阅并处理一批任务。
+// 批量扫描的来源固定为 schedule：没找到资源属于正常状态，不能为每条订阅推送失败通知。
+// 只有用户针对具体番号显式发起的 Enqueue 才按 user 来源推送。
 func (s *SubscriptionDownloadService) RunActive(ctx context.Context) (int, error) {
 	n, e := s.tasks.EnqueueActive(ctx)
 	if e != nil {

@@ -138,7 +138,8 @@ func enqueueSubscriptionDownload(service *application.SubscriptionDownloadServic
 			writeError(response, http.StatusServiceUnavailable, "service_unavailable", "订阅下载未就绪")
 			return
 		}
-		id, e := service.Enqueue(request.Context(), chi.URLParam(request, "subscriptionId"))
+		// 后台手动触发属于用户显式发起的下载，失败通知必须推送。
+		id, e := service.Enqueue(request.Context(), chi.URLParam(request, "subscriptionId"), ports.DownloadOriginUser)
 		if e != nil {
 			writeApplicationError(response, e)
 			return

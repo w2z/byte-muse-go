@@ -389,6 +389,7 @@ func (c *Commands) Serve(ctx context.Context) error {
 		}
 		if jobs[i].Name == "订阅下载" {
 			jobs[i].Run = func(jobCtx context.Context) scheduler.JobResult {
+				// 定时任务批量扫描是系统行为，搜索失败只落库不推送，避免每次扫描都把无资源的订阅刷成通知。
 				count, e := downloadService.RunActive(jobCtx)
 				if e != nil {
 					logging.Error(logging.CategoryDownload, "订阅下载执行失败", "error", e.Error())

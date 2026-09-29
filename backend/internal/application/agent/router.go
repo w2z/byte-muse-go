@@ -164,6 +164,7 @@ func (r *Router) downloadSubscriptions(ctx context.Context) (string, error) {
 	if r.deps.SubscriptionDownloads == nil {
 		return "订阅下载服务不可用", nil
 	}
+	// 这是批量扫描全部订阅，来源按 schedule 处理：没找到资源不推送，避免一次命令刷出上百条失败通知。
 	count, err := r.deps.SubscriptionDownloads.RunActive(ctx)
 	if err != nil {
 		return "订阅下载执行失败：" + err.Error(), nil

@@ -182,7 +182,8 @@ func downloadCard(ctx context.Context, deps Deps, media domain.Media) string {
 	if deps.SubscriptionDownloads == nil {
 		return "订阅下载服务不可用"
 	}
-	if _, err := deps.SubscriptionDownloads.Enqueue(ctx, media.ActiveSubscription.ID); err != nil {
+	// 卡片按钮是用户显式点击，失败通知必须推送。
+	if _, err := deps.SubscriptionDownloads.Enqueue(ctx, media.ActiveSubscription.ID, ports.DownloadOriginUser); err != nil {
 		return "番号 " + media.Code + " 登记下载失败：" + err.Error()
 	}
 	return "番号 " + media.Code + " 已登记下载，当前状态以搜索与提交结果为准"
