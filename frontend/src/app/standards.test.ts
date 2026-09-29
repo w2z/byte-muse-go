@@ -92,8 +92,10 @@ describe("规范入口完整性", () => {
     const entry = readFileSync(resolve(root, "AGENTS.md"), "utf8");
     expect(Buffer.byteLength(entry, "utf8")).toBeLessThan(20 * 1024);
     for (const role of ["workflow", "frontend", "backend", "database"]) expect(entry).toContain("docs/agents/" + role + "/AGENTS.md");
+    // 行内代码中的格式示例（如提交信息模板 [TYPE](范围)）不是链接，先剔除再解析，避免把示例判成缺失路径。
+    expect(readFileSync(resolve(root, "AGENTS.md"), "utf8")).toContain("[TYPE](范围)");
     for (const file of [resolve(root, "AGENTS.md"), ...files(resolve(root, "docs/agents"))]) {
-      const text = readFileSync(file, "utf8");
+      const text = readFileSync(file, "utf8").replace(/`[^`\n]*`/g, "");
       for (const link of text.matchAll(/\]\(([^)#]+)(?:#[^)]*)?\)/g)) {
         if (!/^(?:https?:|mailto:)/.test(link[1])) expect(existsSync(resolve(dirname(file), link[1])), file + ": " + link[1]).toBe(true);
       }
