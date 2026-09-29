@@ -1,0 +1,2 @@
+# 提交钩子必须保持 LF：CRLF 会破坏 sh 的 shebang，导致克隆后钩子无法执行。
+.githooks/* text eol=lf

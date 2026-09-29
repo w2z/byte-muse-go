@@ -98,7 +98,7 @@ Docker 发布使用多阶段构建或等效的“构建环境与运行环境分�
 - 主仓库为 `https://github.com/w2z/byte-muse-go`，全部开发提交、测试、迁移、规范和部署定义，以及 `README.md`、`version.json`、docker 构建相关目录与文件（`Dockerfile`、`deploy/`、构建 workflow、`.dockerignore`）都由该仓库维护。
 - 另有一个自建 Gitea 远端保留同一份提交历史作为同步副本；两个远端必须保持一致，禁止只推其中一个造成历史分叉。
 - 两个远端都不得包含 `未加密代码/`、前后端构建产物、node_modules、真实配置或凭据；`未加密代码/` 由 `.gitignore` 排除，只在本地工作区保留。
-- `version.json` 由构建 workflow 回写，属于构建版本记录而非源码；源码提交不手工改写其中的版本号。
+- `version.json` 是发布版本记录，由 `deploy/version.ps1` 在代码提交后写入并随提交入库；它不是构建产物，也不由构建流程回写。
 - 推送前必须完成敏感信息检查：内网地址、自建服务地址、凭据、密钥、cookie、运行数据库一律不进入远端仓库。
 
 #### 4.9.2 提交信息格式
@@ -112,7 +112,8 @@ Docker 发布使用多阶段构建或等效的“构建环境与运行环境分�
 #### 4.9.3 自动提交与推送
 
 - 功能或修复完成后，由执行 Agent 自动生成提交信息、提交并推送到全部远端（`origin` 与同步副本），不需要用户手动提交。
-- 推送顺序固定为：先 `git fetch origin` 对齐 GitHub，再推 GitHub，最后推 Gitea。构建回写会往 GitHub 追加 `version.json` 提交，直接推送会被非快进拒绝。
+- 推送顺序固定为：先 `git fetch origin` 对齐 GitHub，再推 GitHub，最后推 Gitea；构建流程不再回写仓库，推送不会被版本记录提交顶成非快进。
+- 推送代码时必须带上对应的版本记录提交；缺少版本记录时 workflow 直接失败，不会发布镜像。
 - 推送后核对两个远端指向同一提交；任一远端落后时先对齐再重推，不允许长期分叉。
 - 一次提交只包含本任务改动，不夹带其他任务改动、构建产物、凭据、运行数据库或临时文件。
 - 提交前执行与变更匹配的规范检查、测试和构建，失败不提交；检查 `git status --short`，确认没有本次未声明的新增路径。
@@ -124,13 +125,15 @@ Docker 发布使用多阶段构建或等效的“构建环境与运行环境分�
 #### 4.9.4 自动构建、版本写入与并发
 
 - 主仓库推送后由 GitHub Actions 自动触发镜像构建，构建最新提交对应版本；镜像标签必须可追溯到具体提交，不以 latest 作为唯一可追溯版本。
-- 构建成功后把版本号和提交标识写入 `version.json` 并提交回仓库；版本号唯一、单调递增、可重复构建，版本规则为 `0.1.<提交计数>`，提交计数不含 `version.json` 回写提交，如需调整必须先与用户确认。
-- 构建触发使用 workflow 的 `paths` 白名单，只列出会改变镜像内容的构建输入：`backend/**`、`frontend/**`、`deploy/Dockerfile`、`.dockerignore`；新增构建输入必须同步更新白名单。
-- 文档与记录类改动不触发构建：`README.md`、`version.json`、`AGENTS.md`、`docs/**`、`api/` 接口契约、`deploy/` 下的 Compose 与校验脚本、`dev/` 本地脚本、`.github/**`、`.gitignore`；这些改动也不得手工触发构建补齐版本。
-- 文档类提交不产生构建，发布版本号之间可能不连续，属于预期行为；不得为补齐编号手工改写 `version.json`。
-- 版本回写提交只修改 `version.json`，该文件不在白名单内，回写不会再次触发构建形成循环。
+- 版本记录由 `deploy/version.ps1` 在代码提交后生成，规则为 `0.1.<提交计数>`，计数排除只修改 `version.json` 的提交；版本号唯一、单调递增、可重复构建，如需调整规则必须先与用户确认。
+- 版本记录由提交流程写入，构建流程只读取和校验，不回写仓库：workflow 不需要 `contents: write`，推送也不会被回写提交顶成非快进。
+- 代码提交后必须存在对应的版本记录提交：由 `.githooks/post-commit` 自动生成，也可在推送前手工执行 `deploy/version.ps1`；每个克隆执行一次 `git config core.hooksPath .githooks` 启用钩子。
+- 只有本次提交包含构建输入改动时才写入版本记录；文档、规范、Compose 等提交不更新版本号，因此发布版本号之间可能不连续，不得为补齐编号手工改写 `version.json`。
+- 构建触发使用 workflow 的 `paths` 白名单，只列出会改变镜像内容的构建输入：`backend/**`、`frontend/**`、`deploy/Dockerfile`、`.dockerignore`；新增构建输入必须同步更新白名单与 `deploy/version.ps1` 中的同名单。
+- 文档与记录类改动不触发构建：`README.md`、`version.json`、`AGENTS.md`、`docs/**`、`api/` 接口契约、`deploy/` 下的 Compose 与脚本、`dev/` 本地脚本、`.github/**`、`.gitignore`；这些改动也不得手工触发构建补齐版本。
+- workflow 校验 `version.json` 的版本必须等于当前提交应发布的版本，不一致或缺少 `short_commit` 时直接失败并提示运行 `deploy/version.ps1`，避免用旧版本号覆盖已有镜像标签。
+- 版本记录不含镜像摘要：摘要只能在构建完成后得知，查询方式为 `docker buildx imagetools inspect <镜像>:<版本>`。
 - 前端构建阶段读取根 `AGENTS.md` 与 `docs/` 执行规范检查，这两处改动不触发构建；规范链接有效性由本地 `npm run check:standards` 和下一次代码构建保证。
-- 回写提交必须以远端最新提交为基线并允许重试：并发构建会先后回写同一文件，直接以检出点提交会被非快进拒绝。
 - 同一分支同时只保留一个构建任务：新提交触发时取消仍在运行的旧构建，最终产出对应最新提交的镜像；实现方式为 workflow 的 `concurrency` 分组并开启 `cancel-in-progress`。
 - 取消旧构建不得删除已发布的镜像标签和 `version.json` 的历史版本。
 

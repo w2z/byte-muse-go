@@ -1,9 +1,9 @@
 name: build-image
 
-# 主仓库推送后自动构建镜像并把版本写回 version.json。
+# 主仓库推送后自动构建镜像。版本记录 version.json 由 deploy/version.ps1 在提交代码时写入，
+# 构建流程只读取和校验，不回写仓库，因此不需要 contents 写权限。
 # 触发条件只列出会改变镜像内容的构建输入：文档、规范、README.md、version.json、接口契约
 # 以及部署脚本、本地开发脚本的改动都不触发构建，避免纯文档提交占用构建资源。
-# version.json 不在白名单内：版本回写提交只改该文件，不会再次触发构建，避免自触发循环。
 on:
   push:
     branches: [main]
@@ -20,7 +20,7 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: write
+  contents: read
   packages: write
 
 jobs:
@@ -34,13 +34,22 @@ jobs:
           # 版本号取自提交计数，需要完整历史。
           fetch-depth: 0
 
-      - name: 计算版本
+      - name: 校验版本记录
         id: ver
         run: |
-          echo "version=0.1.$(git rev-list --count HEAD -- ':(exclude)version.json')" >> "$GITHUB_OUTPUT"
-          echo "sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
-          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-          echo "built_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+          expected="0.1.$(git rev-list --count HEAD -- ':(exclude)version.json')"
+          recorded=$(jq -r '.version // ""' version.json)
+          if [ "$recorded" != "$expected" ]; then
+            echo "::error::version.json 记录版本 $recorded，当前提交应发布 $expected；推送代码前先执行 deploy/version.ps1（或启用 .githooks 钩子）更新版本记录。"
+            exit 1
+          fi
+          sha=$(jq -r '.short_commit // ""' version.json)
+          if [ -z "$sha" ]; then
+            echo "::error::version.json 缺少 short_commit，无法生成 sha- 标签。"
+            exit 1
+          fi
+          echo "version=$recorded" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
 
       - name: 准备构建器
         uses: docker/setup-buildx-action@v3
@@ -68,42 +77,3 @@ jobs:
             ghcr.io/${{ github.repository }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
-
-      - name: 写回 version.json
-        env:
-          VERSION: ${{ steps.ver.outputs.version }}
-          COMMIT: ${{ steps.ver.outputs.commit }}
-          SHA: ${{ steps.ver.outputs.sha }}
-          BUILT_AT: ${{ steps.ver.outputs.built_at }}
-          DIGEST: ${{ steps.push.outputs.digest }}
-          REPO: ${{ github.repository }}
-        run: |
-          write_version() {
-            jq -n --arg v "$VERSION" --arg c "$COMMIT" --arg s "$SHA" \
-                  --arg b "$BUILT_AT" --arg d "$DIGEST" --arg r "$REPO" \
-              '{version:$v, commit:$c, short_commit:$s, built_at:$b,
-                image:("ghcr.io/" + $r), digest:$d,
-                tags:[$v, ("sha-" + $s), "latest"],
-                source:("https://github.com/" + $r),
-                note:"由 GitHub Actions 构建成功后自动写入，请勿手工修改"}' > version.json
-          }
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          # 回写提交必须以远端最新提交为基线：并发构建会先后回写同一文件，直接用检出点提交会被非快进拒绝。
-          for attempt in 1 2 3; do
-            git fetch origin "${GITHUB_REF_NAME}"
-            git checkout -B publish-version FETCH_HEAD
-            write_version
-            git add version.json
-            if git diff --cached --quiet; then
-              echo "version.json 无变化，跳过提交"
-              exit 0
-            fi
-            git commit -m "🔧 chore(发布): 更新 version.json 到 ${VERSION}"
-            if git push origin HEAD:"${GITHUB_REF_NAME}"; then
-              exit 0
-            fi
-            echo "推送被拒，重新对齐远端后重试（第 ${attempt} 次）"
-          done
-          echo "version.json 回写连续 3 次被拒，构建产物已推送但版本记录未更新"
-          exit 1

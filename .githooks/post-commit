@@ -1,0 +1,6 @@
+#!/bin/sh
+# 代码提交后自动写入发布版本记录 version.json。
+# 每个克隆执行一次即可启用：git config core.hooksPath .githooks
+# 脚本只在本次提交包含构建输入改动时更新版本记录，文档类提交不做任何修改。
+command -v pwsh >/dev/null 2>&1 || exit 0
+pwsh -NoProfile -File "$(git rev-parse --show-toplevel)/deploy/version.ps1" -Quiet

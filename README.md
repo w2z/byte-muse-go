@@ -4,7 +4,7 @@ ByteMuse 的 Go 重建版本。单个容器同时提供 Web UI、REST API 与后
 
 - 镜像地址：`ghcr.io/w2z/byte-muse-go`
 - 容器端口：`3750`；数据目录：`/data`；默认时区：`Asia/Shanghai`
-- 版本、提交与镜像摘要记录在 `version.json`
+- 版本与发布提交记录在 `version.json`，由 `deploy/version.ps1` 在代码提交时写入
 
 ## 镜像标签
 

@@ -34,10 +34,24 @@ docker buildx build --platform linux/amd64,linux/arm64 \
 
 前端产物与架构无关，只有 Go 二进制按 `TARGETARCH` 交叉编译。标签使用明确版本或不可变提交标识，`latest` 只能作为附加标签；镜像由 CI 或本地构建后推送到容器仓库，不写回源码仓库。
 
-自动构建：GitHub Actions 只在 `backend/`、`frontend/`、`deploy/Dockerfile`、`.dockerignore` 变更时构建镜像并把版本回写到 `version.json`；只改 `README.md`、`version.json`、`AGENTS.md`、`docs/`、`api/` 契约、Compose 与本地脚本时不会触发构建，`latest` 保持上一次代码构建的版本。
+自动构建：GitHub Actions 只在 `backend/`、`frontend/`、`deploy/Dockerfile`、`.dockerignore` 变更时构建镜像；只改 `README.md`、`version.json`、`AGENTS.md`、`docs/`、`api/` 契约、Compose 与本地脚本时不会触发构建，`latest` 保持上一次代码构建的版本。
 
 部署配置静态验证：
 
 ```powershell
 pwsh -NoProfile -File deploy/verify.ps1
 ```
+
+## 版本记录
+
+`version.json` 是发布版本记录，由 `deploy/version.ps1` 在代码提交后写入，构建流程只读取和校验，不回写仓库：
+
+```powershell
+pwsh -NoProfile -File deploy/version.ps1
+```
+
+- 版本号规则为 `0.1.<提交计数>`，计数排除只修改 `version.json` 的提交，因此同一次代码提交对应唯一版本，发布提交本身不改变版本号。
+- 只有本次提交包含构建输入（`backend/`、`frontend/`、`deploy/Dockerfile`、`.dockerignore`）时才更新；文档、规范、Compose 等提交不写版本记录。
+- 提交后自动执行：每个克隆执行一次 `git config core.hooksPath .githooks` 启用 `.githooks/post-commit` 钩子。
+- 镜像摘要不在记录内：摘要只能在构建完成后得知，需要时用 `docker buildx imagetools inspect ghcr.io/w2z/byte-muse-go:<版本>` 查询。
+- 推送代码前缺少版本记录时，workflow 会直接失败并提示，不会用旧版本号覆盖已有镜像标签。
