@@ -14,7 +14,6 @@ services:
     environment:
       TZ: Asia/Shanghai
       DATABASE_DRIVER: postgres
-      # 连接下面的 postgres_byte_muse_go 服务：主机名用服务名，端口必须写容器端口 5432，不是宿主机发布端口。
       # 改用外部数据库时才替换主机、端口与密码。
       DATABASE_DSN: postgres://bytemuse:请替换为数据库密码@postgres_byte_muse_go:5432/bytemuse?sslmode=disable
       # 部署前必须替换下面三项：管理员账号密码，以及 32 字节以上随机会话密钥。
@@ -28,7 +27,6 @@ services:
       - /path/to/byte-muse/data:/data
       - /path/to/byte-muse/strm:/strm
   # 内置 PostgreSQL：与应用同一 bridge 网络，服务名 postgres_byte_muse_go 即 DSN 主机名。
-  # 冒号右侧是容器端口 5432，必须与上面 DSN 的端口一致，不可修改；左侧宿主机端口被占用时只改左侧。
   postgres_byte_muse_go:
     image: postgres:17-alpine
     container_name: postgres_byte_muse_go

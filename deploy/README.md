@@ -17,7 +17,7 @@
 - 镜像来源：Compose 直接写明 `image: ghcr.io/w2z/byte-muse-go:latest`，`docker compose up -d` 拉取已发布镜像；本地构建用 `docker build -f deploy/Dockerfile -t bytemuse-go:local .`，不由 Compose 构建。
 - 运行版本：镜像通过构建参数 `BYTEMUSE_VERSION` 注入版本，未注入时为 `dev`。
 - 数据目录：只挂载 `/data` 与 `/strm`；镜像里的 `/app` 存放服务二进制与前端产物，挂载覆盖后容器无法启动。容器以非 root 用户 `nonroot`（UID/GID 65532）运行，绑定宿主机目录前需保证该 UID 可写，例如 `chown -R 65532:65532 /path/to/byte-muse/data /path/to/byte-muse/strm`。
-- 内置数据库：`postgres_byte_muse_go`（容器内 UID 70）与 `mysql_byte_muse_go`（容器内 UID 999）分别需要 `pgdata`（`/var/lib/postgresql/data`）和 `mysqldata`（`/var/lib/mysql`）可写；应用用 `depends_on: condition: service_healthy` 等数据库健康后再启动，避免迁移连不上反复重启。内置数据库把标准端口发布到宿主机（PostgreSQL `5432`、MySQL `3306`）供数据库客户端连接，宿主端口冲突时只改冒号左侧的值；应用仍通过服务名在 Compose 网络内访问。
+- 内置数据库：`postgres_byte_muse_go`（容器内 UID 70）与 `mysql_byte_muse_go`（容器内 UID 999）分别需要 `pgdata`（`/var/lib/postgresql/data`）和 `mysqldata`（`/var/lib/mysql`）可写；应用用 `depends_on: condition: service_healthy` 等数据库健康后再启动，避免迁移连不上反复重启。
 - 仓库内不留内网信息：三个 Compose 文件里的代理地址与宿主机路径都是占位符，真实拓扑放在部署机的本地未跟踪文件 `deploy/compose.<方言>.local.yaml`（已在 `.gitignore` 中忽略），避免公开仓库泄露内网地址。
 - 健康检查：镜像内置 `HEALTHCHECK` 调用 `/app/bytemuse doctor`，Compose 不重复定义；数据库不可用时容器状态为 `unhealthy`。
 
