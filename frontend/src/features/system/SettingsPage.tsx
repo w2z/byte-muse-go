@@ -97,7 +97,7 @@ const mainSiteOptions: SettingOption[] = [
 ];
 
 const imageModeOptions: SettingOption[] = [
-  { value: "INVISIBLE", label: "无图" },
+  { value: "INVISIBLE", label: "默认" },
   { value: "VISIBLE", label: "有图" },
   { value: "BLUR", label: "模糊" },
 ];
