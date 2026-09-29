@@ -134,6 +134,10 @@ body button.arco-btn[class]:focus-visible { box-shadow: none; }
 .header-version { display: inline-flex; align-items: center; justify-content: flex-end; min-width: 82px; }
 .header-version-link { display: inline-flex; color: inherit; text-decoration: none; }
 .header-version-tag { margin: 0; font-variant-numeric: tabular-nums; user-select: none; }
+/* 版本角标：Badge 默认 inline-block，改 inline-flex 避免基线间隙影响标签垂直居中。 */
+.header-version-badge { display: inline-flex; }
+/* Arco 角标默认用 --color-bg-2 描边，改为顶栏底色，明暗主题下都不会出现灰色光圈。 */
+.header-version-badge .arco-badge-dot { box-shadow: 0 0 0 2px var(--panel); }
 .logout-button { min-width: 88px; }
 .mobile-brand { display: none; }
 

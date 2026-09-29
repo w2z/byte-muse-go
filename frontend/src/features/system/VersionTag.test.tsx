@@ -38,6 +38,7 @@ it("显示带 v 前缀的当前版本，无更新时保持默认背景", async (
   expect(tag?.className).not.toContain("checkable");
   expect(container.querySelector(".arco-icon-github")).not.toBeNull();
   expect(container.querySelector(".header-version-link")).toBeNull();
+  expect(container.querySelector(".arco-badge-dot")).toBeNull();
 });
 
 it("发现新版本时使用 orangered 并链接发布仓库", async () => {
@@ -47,6 +48,7 @@ it("发现新版本时使用 orangered 并链接发布仓库", async () => {
   expect(await screen.findByText("v0.1.21")).toBeInTheDocument();
   expect(container.querySelector(".arco-tag")?.className).toContain("arco-tag-orangered");
   expect(container.querySelector(".header-version-link")).toHaveAttribute("href", "https://github.com/w2z/byte-muse-go");
+  expect(container.querySelector(".arco-badge-dot")).not.toBeNull();
 });
 
 it("检查更新失败时仍显示当前版本，并保留占位容器", async () => {
