@@ -7,15 +7,15 @@ services:
       - bridge
     ports:
       - "3750:3750"
-    # 数据库未就绪时先不启动应用：迁移在启动阶段执行，连不上会反复重启。
+    # 数据库未就绪时先不启动应用：迁移在启动阶段执行，连不上会反复重启。depends_on 引用服务名，DSN 用容器名。
     depends_on:
       mysql:
         condition: service_healthy
     environment:
       TZ: Asia/Shanghai
       DATABASE_DRIVER: mysql
-      # 连接下面的 mysql 服务，服务名就是 DSN 主机名；改用外部数据库时替换主机、端口与密码。
-      DATABASE_DSN: bytemuse:请替换为数据库密码@tcp(mysql:3306)/bytemuse?charset=utf8mb4&parseTime=true&loc=Local
+      # 连接下面的 mysql 容器，容器名 mysql_byte_muse_go 就是 DSN 主机名；改用外部数据库时替换主机、端口与密码。
+      DATABASE_DSN: bytemuse:请替换为数据库密码@tcp(mysql_byte_muse_go:3306)/bytemuse?charset=utf8mb4&parseTime=true&loc=Local
       # 部署前必须替换下面三项：管理员账号密码，以及 32 字节以上随机会话密钥。
       # 占位值长度不足 32 字节，未替换时服务会直接拒绝启动。
       ADMIN_USERNAME: admin
@@ -26,7 +26,7 @@ services:
       # 宿主机目录需允许容器内 UID 65532 写入：chown -R 65532:65532 /path/to/byte-muse/data /path/to/byte-muse/strm
       - /path/to/byte-muse/data:/data
       - /path/to/byte-muse/strm:/strm
-  # 内置 MySQL：与应用同一 bridge 网络，服务名 mysql 即 DSN 主机名，不对宿主机发布端口。
+  # 内置 MySQL：与应用同一 bridge 网络，容器名 mysql_byte_muse_go 即 DSN 主机名，不对宿主机发布端口。
   mysql:
     image: mysql:8.4
     container_name: mysql_byte_muse_go
@@ -47,7 +47,7 @@ services:
     volumes:
       # MySQL 数据目录；容器内以 UID 999 运行，宿主机目录需可写。
       - /path/to/byte-muse/mysqldata:/var/lib/mysql
-  # 抓取增强服务：设置页把 BYPASS_ENGINE 选为 cloudflare_bypass_for_scraping、BYPASS_URL 填 http://cloudflarebypass:8000
+  # 抓取增强服务：设置页把 BYPASS_ENGINE 选为 cloudflare_bypass_for_scraping、BYPASS_URL 填 http://cloudflarebypass_byte_muse_go:8000
   cloudflarebypass:
     image: ghcr.io/sarperavci/cloudflarebypassforscraping:latest
     container_name: cloudflarebypass_byte_muse_go

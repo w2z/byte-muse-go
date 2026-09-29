@@ -77,18 +77,18 @@ foreach ($composeFile in $composeFiles) {
     if ($text -notmatch '(?m)^\s+cloudflarebypass:\s*$' -or $text -notmatch 'ghcr\.io/sarperavci/cloudflarebypassforscraping') {
         throw "$($composeFile.Name) 必须包含 cloudflarebypass 抓取增强服务"
     }
-    # 数据库方言模板自带数据库容器：DSN 主机名就是该服务名，写错会连不上并反复重启。
+    # 数据库方言模板自带数据库容器：DSN 主机名就是该容器名，写错会连不上并反复重启。
     if ($composeFile.Name -match '\.postgres\.') {
-        if ($text -notmatch '(?m)^\s+postgres:\s*$' -or $text -notmatch '@postgres:5432/') {
-            throw "$($composeFile.Name) 必须包含内置 postgres 服务，且 DATABASE_DSN 指向 postgres:5432"
+        if ($text -notmatch '(?m)^\s+postgres:\s*$' -or $text -notmatch '@postgres_byte_muse_go:5432/') {
+            throw "$($composeFile.Name) 必须包含内置 postgres 服务，且 DATABASE_DSN 指向 postgres_byte_muse_go:5432"
         }
         if ($text -notmatch '(?m)^\s+container_name:\s*postgres_byte_muse_go\s*$') {
             throw "$($composeFile.Name) 必须固定数据库容器名为 postgres_byte_muse_go"
         }
     }
     if ($composeFile.Name -match '\.mysql\.') {
-        if ($text -notmatch '(?m)^\s+mysql:\s*$' -or $text -notmatch '@tcp\(mysql:3306\)') {
-            throw "$($composeFile.Name) 必须包含内置 mysql 服务，且 DATABASE_DSN 指向 tcp(mysql:3306)"
+        if ($text -notmatch '(?m)^\s+mysql:\s*$' -or $text -notmatch '@tcp\(mysql_byte_muse_go:3306\)') {
+            throw "$($composeFile.Name) 必须包含内置 mysql 服务，且 DATABASE_DSN 指向 tcp(mysql_byte_muse_go:3306)"
         }
         if ($text -notmatch '(?m)^\s+container_name:\s*mysql_byte_muse_go\s*$') {
             throw "$($composeFile.Name) 必须固定数据库容器名为 mysql_byte_muse_go"
