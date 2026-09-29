@@ -110,9 +110,12 @@ func TestPan115AccountMigrationUpgrade(t *testing.T) {
 	if err = store.SQLDB().QueryRowContext(ctx, "SELECT setting_value FROM app_settings WHERE setting_key = ?", "PT_DEFAULT_DOWNLOADER").Scan(&value); err != nil || value != "历史下载器" {
 		t.Fatalf("历史配置被改写: %q err=%v", value, err)
 	}
+	// 期望版本取自迁移计划本身，避免每新增一条迁移都要同步修改这个断言。
+	plan := MigrationPlan(DialectSQLite)
+	latest := plan[len(plan)-1].Version
 	var version int64
-	if err = store.SQLDB().QueryRowContext(ctx, "SELECT max(version) FROM schema_migrations").Scan(&version); err != nil || version != 27 {
-		t.Fatalf("最大迁移版本=%d err=%v", version, err)
+	if err = store.SQLDB().QueryRowContext(ctx, "SELECT max(version) FROM schema_migrations").Scan(&version); err != nil || version != latest {
+		t.Fatalf("最大迁移版本=%d err=%v，期望 %d", version, err, latest)
 	}
 	if _, found, e := NewPan115AccountRepository(store.SQLDB(), DialectSQLite).Load(ctx); e != nil || found {
 		t.Fatalf("升级后应为未绑定: found=%v err=%v", found, e)
