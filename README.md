@@ -35,13 +35,13 @@ docker run -d --name byte-muse \
 
 ## Docker Compose
 
-`deploy/` 下保留 `compose.sqlite.yaml`、`compose.postgres.yaml`、`compose.mysql.yaml` 三个模板：SQLite 用文件库，PostgreSQL 与 MySQL 模板额外内置同方言的数据库服务。下面是 SQLite 的完整配置，PostgreSQL 与 MySQL 按注释替换两行、并启用对应的数据库服务块即可。模板都直接写出配置值，不使用环境变量插值：应用服务固定命名 `byte-muse`，并附带 `cloudflarebypass` 抓取增强服务，各服务接入同一 `bridge` 网络。代理地址与宿主机路径是占位符，`ADMIN_USERNAME`、`ADMIN_PASSWORD`、`SESSION_SECRET` 以及数据库密码也是占位值，部署前在文件中替换：`SESSION_SECRET` 少于 32 字节时服务会直接拒绝启动。真实拓扑与凭据只留在部署机上。
+`deploy/` 下保留 `compose.sqlite.yaml`、`compose.postgres.yaml`、`compose.mysql.yaml` 三个模板：SQLite 用文件库，PostgreSQL 与 MySQL 模板额外内置同方言的数据库服务。下面是 SQLite 的完整配置，PostgreSQL 与 MySQL 按注释替换两行、并启用对应的数据库服务块即可。模板都直接写出配置值，不使用环境变量插值：应用容器固定命名 `byte-muse-go`（Compose 服务名仍是 `byte-muse`），并附带 `cloudflarebypass` 抓取增强服务，各服务接入同一 `bridge` 网络。代理地址与宿主机路径是占位符，`ADMIN_USERNAME`、`ADMIN_PASSWORD`、`SESSION_SECRET` 以及数据库密码也是占位值，部署前在文件中替换：`SESSION_SECRET` 少于 32 字节时服务会直接拒绝启动。真实拓扑与凭据只留在部署机上。
 
 ```yaml
 services:
   byte-muse:
     image: ghcr.io/w2z/byte-muse-go:latest
-    container_name: byte-muse
+    container_name: byte-muse-go
     restart: always
     networks:
       - bridge
