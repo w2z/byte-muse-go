@@ -70,8 +70,8 @@ func parseGfriends(raw []byte) ([]ports.ActorProfile, error) {
 				return nil, ErrParse
 			}
 			base := strings.TrimSuffix(target.Path, path.Ext(target.Path))
-			name := photoVariant.ReplaceAllString(strings.TrimPrefix(base, "AI-Fix-"), "")
-			alias := photoVariant.ReplaceAllString(strings.TrimSuffix(aliasFile, path.Ext(aliasFile)), "")
+			name := strings.TrimSpace(photoVariant.ReplaceAllString(strings.TrimPrefix(base, "AI-Fix-"), ""))
+			alias := strings.TrimSpace(photoVariant.ReplaceAllString(strings.TrimSuffix(aliasFile, path.Ext(aliasFile)), ""))
 			if strings.TrimSpace(name) == "" {
 				return nil, ErrParse
 			}

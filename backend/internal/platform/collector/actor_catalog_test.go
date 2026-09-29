@@ -25,6 +25,13 @@ func TestGfriendsPriorityAliasesAndVariants(t *testing.T) {
 	}
 }
 
+func TestGfriendsTrimsActorNamesAndAliases(t *testing.T) {
+	items, err := parseGfriends([]byte(`{"Content":{"x":{" alias.jpg":" 演员甲 .jpg"}}}`))
+	if err != nil || len(items) != 1 || items[0].Name != "演员甲" || len(items[0].Aliases) != 1 || items[0].Aliases[0] != "alias" {
+		t.Fatalf("%+v %v", items, err)
+	}
+}
+
 func TestHotActorsOnlyMonthlySection(t *testing.T) {
 	card := func(name string) string {
 		return `<div class="actor-box"><a href="/actors/abc" title="` + name + `, Alias"><strong>` + name + `</strong><img class="avatar" src="https://example.org/a.jpg"></a></div>`
