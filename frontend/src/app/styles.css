@@ -575,6 +575,13 @@ button.code-card-still-cell:hover img { opacity: .85; }
 .settings-sort-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; margin: 0; padding: 0; list-style: none; }
 .settings-sort-row { display: flex; min-height: 44px; align-items: center; justify-content: space-between; gap: 16px; padding: 6px 10px 6px 14px; color: var(--ink-2); background: var(--panel-deep); border: 1px solid var(--line-soft); border-radius: var(--content-radius); font-size: var(--control-font-size); }
 .settings-sort-actions { display: flex; gap: 6px; }
+/* 115 网盘账号面板：二维码、账号信息与操作按钮纵向排列，沿用字段间的 8px/12px 间距。 */
+.settings-pan115-block { display: flex; min-width: 0; flex-direction: column; gap: 12px; }
+.settings-pan115-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.settings-pan115-qrcode { width: 200px; height: 200px; padding: 8px; background: #fff; border: 1px solid var(--line); border-radius: var(--content-radius); }
+.settings-pan115-account { display: flex; min-width: 0; align-items: center; gap: 12px; }
+.settings-pan115-avatar { width: 44px; height: 44px; flex: 0 0 auto; border-radius: 50%; object-fit: cover; }
+.settings-pan115-account-text { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
 /* 底部操作栏：sticky 贴在滚动容器底部（页面撑满可视高度时即视口底部）。
    横向用负外边距抵消内容区的 20px 左右内边距，拉通铺满整个内容区宽度 ——
    展开 40px 后正好等于内容区可视宽度（clientWidth 已扣掉纵向滚动条），不会撑出横向滚动。

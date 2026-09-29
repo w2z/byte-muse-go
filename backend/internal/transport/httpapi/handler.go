@@ -40,6 +40,7 @@ type Dependencies struct {
 	Downloads             *application.DownloadService
 	Dashboard             *application.DashboardService
 	Settings              *application.SettingsService
+	Pan115                *application.Pan115Service
 	Scheduler             *scheduler.Manager
 	Logs                  *logging.Logger
 	Readiness             ports.ReadinessProbe
@@ -98,6 +99,15 @@ func New(dependencies Dependencies) http.Handler {
 		router.Get("/system/settings", getSystemSettings(dependencies.Settings))
 		router.Put("/system/settings", updateSystemSettings(dependencies.Settings))
 		router.Post("/system/settings/openai/test", testOpenAI)
+		router.Post("/pan115/login/sessions", startPan115Login(dependencies.Pan115))
+		router.Get("/pan115/login/sessions/{sessionId}", pan115LoginStatus(dependencies.Pan115))
+		router.Delete("/pan115/login/sessions/{sessionId}", cancelPan115Login(dependencies.Pan115))
+		router.Get("/pan115/account", pan115Account(dependencies.Pan115))
+		router.Delete("/pan115/account", unlinkPan115(dependencies.Pan115))
+		router.Get("/pan115/files", listPan115Files(dependencies.Pan115))
+		router.Get("/pan115/offline/tasks", listPan115OfflineTasks(dependencies.Pan115))
+		router.Post("/pan115/offline/tasks", addPan115OfflineTask(dependencies.Pan115))
+		router.Delete("/pan115/offline/tasks/{hash}", removePan115OfflineTask(dependencies.Pan115))
 		router.Get("/message", wechatVerify(dependencies))
 		router.Post("/message", wechatReceive(dependencies))
 	})

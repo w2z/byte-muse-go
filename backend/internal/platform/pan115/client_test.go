@@ -1,0 +1,301 @@
+package pan115
+
+import (
+	"context"
+	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+)
+
+// pngSignature 是 PNG 文件头，用于让 http.DetectContentType 识别二维码图片。
+var pngSignature = []byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A}
+
+// newTestClient 返回指向测试服务器的客户端，并关闭节流以免拖慢测试。
+func newTestClient(t *testing.T, handler http.HandlerFunc) *Client {
+	t.Helper()
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+	client := New(server.Client())
+	client.gap = 0
+	client.passport = server.URL
+	client.qrcode = server.URL
+	client.api = server.URL
+	return client
+}
+
+func writeJSON(t *testing.T, w http.ResponseWriter, body string) {
+	t.Helper()
+	w.Header().Set("Content-Type", "application/json")
+	if _, err := io.WriteString(w, body); err != nil {
+		t.Errorf("写入响应失败: %v", err)
+	}
+}
+
+// TestLoginStatusNormalizesProviderStates 验证只有 115 明确定义的状态才改变登录结论，
+// 未识别或缺失的状态必须停留在「等待中」，不能中断用户仍在进行的扫码。
+func TestLoginStatusNormalizesProviderStates(t *testing.T) {
+	cases := []struct {
+		body string
+		want LoginState
+	}{
+		{`{"state":1,"code":0,"data":{"status":0}}`, LoginWaiting},
+		{`{"state":1,"code":0,"data":{"status":1}}`, LoginScanned},
+		{`{"state":1,"code":0,"data":{"status":2}}`, LoginAuthorized},
+		{`{"state":1,"code":0,"data":{"status":-1}}`, LoginExpired},
+		{`{"state":1,"code":0,"data":{"status":-2}}`, LoginCanceled},
+		{`{"state":1,"code":0,"data":{"status":99}}`, LoginWaiting},
+		{`{"state":1,"code":0,"data":{}}`, LoginWaiting},
+	}
+	for _, testCase := range cases {
+		body := testCase.body
+		client := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) { writeJSON(t, w, body) })
+		got, err := client.LoginStatus(context.Background(), &Login{uid: "uid", issuedAt: 1, sign: "sign"})
+		if err != nil {
+			t.Fatalf("响应 %s 返回错误: %v", body, err)
+		}
+		if got != testCase.want {
+			t.Fatalf("响应 %s 映射为 %q，期望 %q", body, got, testCase.want)
+		}
+	}
+}
+
+// TestLoginStatusSendsSignatureAsQuery 验证状态查询把 uid/time/sign 放在查询串里。
+// 115 按查询串校验签名，放进请求体会返回 40199002 key invalid，使扫码永远无法被确认。
+func TestLoginStatusSendsSignatureAsQuery(t *testing.T) {
+	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/get/status/" {
+			t.Errorf("请求 = %s %s，期望 GET /get/status/", r.Method, r.URL.Path)
+		}
+		if r.ContentLength > 0 {
+			t.Errorf("状态查询不应携带请求体，实际 Content-Length = %d", r.ContentLength)
+		}
+		query := r.URL.Query()
+		if query.Get("uid") != "uid-1" || query.Get("time") != "1700000000" || query.Get("sign") != "sign-1" {
+			t.Errorf("查询串 = %q，期望携带 uid/time/sign", r.URL.RawQuery)
+		}
+		writeJSON(t, w, `{"state":1,"code":0,"data":{"status":1}}`)
+	})
+	state, err := client.LoginStatus(context.Background(), &Login{uid: "uid-1", issuedAt: 1700000000, sign: "sign-1"})
+	if err != nil {
+		t.Fatalf("查询扫码状态失败: %v", err)
+	}
+	if state != LoginScanned {
+		t.Fatalf("扫码状态 = %q，期望 %q", state, LoginScanned)
+	}
+}
+
+// TestBeginLoginRequiresPNGQRCode 验证设备码字段校验与二维码内容类型校验。
+func TestBeginLoginRequiresPNGQRCode(t *testing.T) {
+	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/open/authDeviceCode"):
+			if err := r.ParseForm(); err != nil {
+				t.Errorf("解析表单失败: %v", err)
+			}
+			if r.PostForm.Get("client_id") != openListAppID || r.PostForm.Get("code_challenge_method") != "sha256" {
+				t.Errorf("设备码请求缺少公开应用标识或校验方法: %v", r.PostForm)
+			}
+			writeJSON(t, w, `{"state":1,"code":0,"data":{"uid":"uid-1","time":1700000000,"sign":"sign-1"}}`)
+		case strings.HasSuffix(r.URL.Path, "/api/1.0/web/1.0/qrcode"):
+			if r.URL.Query().Get("uid") != "uid-1" {
+				t.Errorf("二维码请求未携带 uid: %s", r.URL.RawQuery)
+			}
+			w.Header().Set("Content-Type", "image/png")
+			_, _ = w.Write(pngSignature)
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	login, err := client.BeginLogin(context.Background())
+	if err != nil {
+		t.Fatalf("开始登录失败: %v", err)
+	}
+	if string(login.QRCode) != string(pngSignature) {
+		t.Fatalf("二维码内容 = %v，期望 PNG 头", login.QRCode)
+	}
+}
+
+// TestBeginLoginRejectsMissingDeviceCode 验证缺少设备码字段时直接失败，不返回不可用的登录会话。
+func TestBeginLoginRejectsMissingDeviceCode(t *testing.T) {
+	client := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(t, w, `{"state":1,"code":0,"data":{"uid":"","time":0,"sign":""}}`)
+	})
+	if _, err := client.BeginLogin(context.Background()); err == nil {
+		t.Fatal("缺少设备码字段时应当报错")
+	}
+}
+
+// TestBeginLoginRejectsNonPNGQRCode 验证非图片响应不会被当作二维码返回。
+func TestBeginLoginRejectsNonPNGQRCode(t *testing.T) {
+	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/open/authDeviceCode") {
+			writeJSON(t, w, `{"state":1,"code":0,"data":{"uid":"uid-1","time":1700000000,"sign":"sign-1"}}`)
+			return
+		}
+		writeJSON(t, w, `{"state":0,"code":1,"message":"boom"}`)
+	})
+	if _, err := client.BeginLogin(context.Background()); err == nil {
+		t.Fatal("非 PNG 响应时应当报错")
+	}
+}
+
+// TestRequestTokensRejectsIncompleteResponse 验证令牌响应缺少凭据或有效期时不落库。
+func TestRequestTokensRejectsIncompleteResponse(t *testing.T) {
+	client := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(t, w, `{"state":1,"code":0,"data":{"access_token":"a","refresh_token":"","expires_in":0}}`)
+	})
+	if _, err := client.RefreshToken(context.Background(), "refresh"); err == nil {
+		t.Fatal("令牌响应不完整时应当报错")
+	}
+}
+
+// TestAccountParsesSpace 验证账号与容量字段的解析。
+func TestAccountParsesSpace(t *testing.T) {
+	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer token-1" {
+			t.Errorf("Authorization = %q，期望 Bearer token-1", got)
+		}
+		writeJSON(t, w, `{"state":true,"code":0,"data":{"user_id":12345,"user_name":"张三","user_face_m":"https://img/face.png","vip_info":{"level_name":"VIP"},"rt_space_info":{"all_total":{"size":1099511627776,"size_format":"1.0TB"},"all_use":{"size":"1024","size_format":"1.0KB"},"all_remain":{"size":1099511626752,"size_format":"1.0TB"}}}}`)
+	})
+	account, err := client.Account(context.Background(), "token-1")
+	if err != nil {
+		t.Fatalf("读取账号失败: %v", err)
+	}
+	if account.ID != "12345" || account.Name != "张三" || account.Level != "VIP" {
+		t.Fatalf("账号解析结果 = %+v", account)
+	}
+	if account.Space.Total.Size != 1099511627776 || account.Space.Used.Size != 1024 || account.Space.Used.Formatted != "1.0KB" {
+		t.Fatalf("容量解析结果 = %+v", account.Space)
+	}
+}
+
+// TestListRejectsMismatchedDirectory 验证 115 返回的目录与请求不一致时报错，
+// 避免把别的目录内容当作已挂载目录。
+func TestListRejectsMismatchedDirectory(t *testing.T) {
+	client := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(t, w, `{"state":true,"code":0,"data":{"cid":"999","count":"1","data":[],"path":[{"cid":"0","name":"根目录"},{"cid":"999","name":"其他目录"}]}}`)
+	})
+	if _, err := client.List(context.Background(), "token", "123", 0, 100); err == nil {
+		t.Fatal("目录不一致时应当报错")
+	}
+}
+
+// TestListParsesEntries 验证目录条目与分页字段解析。
+func TestListParsesEntries(t *testing.T) {
+	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		query := r.URL.Query()
+		if query.Get("cid") != "123" || query.Get("offset") != "0" || query.Get("limit") != "2" || query.Get("show_dir") != "1" {
+			t.Errorf("文件列表请求参数不符合契约: %s", r.URL.RawQuery)
+		}
+		writeJSON(t, w, `{"state":true,"code":0,"data":{"cid":"123","count":"3","data":[{"fid":"f1","pid":"123","fn":"子目录","fc":"0","fs":"0","pc":""},{"fid":"f2","pid":"123","fn":"影片.mp4","fc":"1","fs":"2048","pc":"pc-2"}],"path":[{"cid":"0","name":"根目录"},{"cid":"123","name":"媒体库"}]}}`)
+	})
+	page, err := client.List(context.Background(), "token", "123", 0, 2)
+	if err != nil {
+		t.Fatalf("读取目录失败: %v", err)
+	}
+	if page.Total != 3 || !page.HasMore || len(page.Path) != 2 || page.Path[1].Name != "媒体库" {
+		t.Fatalf("目录分页结果 = %+v", page)
+	}
+	if !page.Files[0].IsDirectory || page.Files[0].Name != "子目录" {
+		t.Fatalf("目录条目解析错误: %+v", page.Files[0])
+	}
+	if page.Files[1].IsDirectory || page.Files[1].Size != 2048 || page.Files[1].PickCode != "pc-2" {
+		t.Fatalf("文件条目解析错误: %+v", page.Files[1])
+	}
+}
+
+// TestAddOfflineUsesMultipartAndReportsDuplicate 验证离线提交使用 multipart 编码，
+// 并把「已存在」识别为可安全忽略的结果。
+func TestAddOfflineUsesMultipartAndReportsDuplicate(t *testing.T) {
+	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/form-data") {
+			t.Errorf("Content-Type = %q，期望 multipart/form-data", r.Header.Get("Content-Type"))
+		}
+		if err := r.ParseMultipartForm(1 << 20); err != nil {
+			t.Fatalf("解析 multipart 失败: %v", err)
+		}
+		if r.Form.Get("urls") != "magnet:?xt=urn:btih:abc" || r.Form.Get("wp_path_id") != "123" {
+			t.Errorf("离线提交表单 = %v", r.Form)
+		}
+		writeJSON(t, w, `{"state":true,"code":0,"data":[{"state":true,"code":0,"info_hash":"ABC"}]}`)
+	})
+	hash, err := client.AddOffline(context.Background(), "token", "magnet:?xt=urn:btih:abc", "123")
+	if err != nil {
+		t.Fatalf("提交离线任务失败: %v", err)
+	}
+	if hash != "ABC" {
+		t.Fatalf("离线任务哈希 = %q，期望 ABC", hash)
+	}
+
+	duplicate := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(t, w, `{"state":true,"code":0,"data":[{"state":false,"code":10008,"message":"任务已存在"}]}`)
+	})
+	if _, err := duplicate.AddOffline(context.Background(), "token", "magnet:?xt=urn:btih:abc", "123"); !errors.Is(err, ErrOfflineExists) {
+		t.Fatalf("重复提交错误 = %v，期望 ErrOfflineExists", err)
+	}
+}
+
+// TestOfflineTasksNormalizesProgress 验证进度的小数、越界与数字字符串都能归一化。
+func TestOfflineTasksNormalizesProgress(t *testing.T) {
+	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("page") != "2" {
+			t.Errorf("离线任务页码 = %q，期望 2", r.URL.Query().Get("page"))
+		}
+		writeJSON(t, w, `{"state":true,"code":0,"data":{"page_count":3,"tasks":[{"info_hash":"h1","status":2,"percentDone":12.5,"file_id":"f1","wp_path_id":"123"},{"info_hash":"h2","status":1,"percentDone":"150","file_id":"","wp_path_id":"123"},{"info_hash":"h3","status":1,"percentDone":-3,"file_id":"","wp_path_id":"123"}]}}`)
+	})
+	page, err := client.OfflineTasks(context.Background(), "token", 2)
+	if err != nil {
+		t.Fatalf("读取离线任务失败: %v", err)
+	}
+	if page.PageCount != 3 || len(page.Tasks) != 3 {
+		t.Fatalf("离线任务分页 = %+v", page)
+	}
+	if page.Tasks[0].Progress != 12 || page.Tasks[1].Progress != 100 || page.Tasks[2].Progress != 0 {
+		t.Fatalf("离线进度归一化错误: %+v", page.Tasks)
+	}
+	if page.Tasks[0].FileID != "f1" || page.Tasks[0].Status != 2 {
+		t.Fatalf("离线任务字段错误: %+v", page.Tasks[0])
+	}
+}
+
+// TestUnauthorizedDetection 验证 HTTP 401 与业务错误码都能识别为令牌失效。
+func TestUnauthorizedDetection(t *testing.T) {
+	rejected := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	})
+	_, err := rejected.Account(context.Background(), "token")
+	if !errors.Is(err, ErrUnauthorized) || !Unauthorized(err) {
+		t.Fatalf("HTTP 401 错误 = %v，期望识别为令牌失效", err)
+	}
+
+	expired := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(t, w, `{"state":false,"code":40140123,"message":"访问令牌已过期"}`)
+	})
+	_, err = expired.Account(context.Background(), "token")
+	if !Unauthorized(err) {
+		t.Fatalf("业务错误码错误 = %v，期望识别为令牌失效", err)
+	}
+
+	other := &APIError{Code: 10008, Message: "任务已存在"}
+	if Unauthorized(other) {
+		t.Fatal("无关错误码不应被识别为令牌失效")
+	}
+}
+
+// TestAPIErrorCarriesProviderMessage 验证业务错误保留 115 的错误码与消息。
+func TestAPIErrorCarriesProviderMessage(t *testing.T) {
+	client := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(t, w, `{"state":false,"code":430004,"message":"文件不存在"}`)
+	})
+	_, err := client.OfflineTasks(context.Background(), "token", 1)
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("错误类型 = %v，期望 APIError", err)
+	}
+	if apiErr.Code != 430004 || apiErr.Message != "文件不存在" {
+		t.Fatalf("业务错误 = %+v", apiErr)
+	}
+}

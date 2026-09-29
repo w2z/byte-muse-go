@@ -22,13 +22,14 @@ const (
 	DownloaderTransmission DownloaderKind = "transmission"
 	DownloaderThunder      DownloaderKind = "thunder"
 	DownloaderCloudDrive2  DownloaderKind = "clouddrive2"
+	DownloaderPan115       DownloaderKind = "pan115"
 )
 
 var ErrDownloaderNotAllowed = errors.New("downloader is not allowed for source")
 
 var (
 	ptDefaultDownloaders = []DownloaderKind{DownloaderQbittorrent, DownloaderTransmission}
-	btDefaultDownloaders = []DownloaderKind{DownloaderQbittorrent, DownloaderTransmission, DownloaderAria2, DownloaderThunder}
+	btDefaultDownloaders = []DownloaderKind{DownloaderQbittorrent, DownloaderTransmission, DownloaderAria2, DownloaderThunder, DownloaderPan115}
 )
 
 // ValidateDownloader is the single policy used before a resource is submitted.
@@ -39,7 +40,7 @@ func ValidateDownloader(source SourceKind, downloader DownloaderKind) error {
 		return fmt.Errorf("invalid source kind %q", source)
 	}
 	switch downloader {
-	case DownloaderAria2, DownloaderQbittorrent, DownloaderTransmission, DownloaderThunder, DownloaderCloudDrive2:
+	case DownloaderAria2, DownloaderQbittorrent, DownloaderTransmission, DownloaderThunder, DownloaderCloudDrive2, DownloaderPan115:
 	default:
 		return fmt.Errorf("invalid downloader kind %q", downloader)
 	}

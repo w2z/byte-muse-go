@@ -2,15 +2,9 @@ package application
 
 import (
 	"context"
-	"crypto/aes"
-	"crypto/cipher"
-	"crypto/rand"
-	"crypto/sha256"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log"
 	"strconv"
 	"strings"
@@ -48,7 +42,8 @@ var imageModes = []string{"INVISIBLE", "VISIBLE", "BLUR"}
 var bypassEngines = []string{"cloudflare_bypass_for_scraping", "flaresolverr", "scrapling"}
 
 var ptDefaultDownloaderOptions = []string{"qbittorrent", "transmission"}
-var btDefaultDownloaderOptions = []string{"qbittorrent", "transmission", "aria2", "thunder"}
+// btDefaultDownloaderOptions 是 BT 默认下载器的可选值；115 只接受磁力与直链，不接受私有种子文件。
+var btDefaultDownloaderOptions = []string{"qbittorrent", "transmission", "aria2", "thunder", "pan115"}
 
 // siteAuthTypes 是站点凭据模式；空值默认使用密钥。
 var siteAuthTypes = []string{"key", "cookie"}
@@ -165,6 +160,9 @@ var writableSettings = map[string]settingSpec{
 	"CLOUDNAS_PASSWORD": {secret: true, kind: settingText},
 	"CLOUDNAS_SAVEPATH": {kind: settingText},
 
+	// 115 网盘：账号与令牌由扫码登录管理并单独落库，这里只保存离线下载的目标目录。
+	"PAN115_SAVE_PATH": {kind: settingText},
+
 	// 过滤
 	"DEFAULT_FILTER": {kind: settingJSON},
 
@@ -222,7 +220,7 @@ var writableSettings = map[string]settingSpec{
 type SettingsService struct {
 	repository      ports.SettingsRepository
 	databaseDriver  string
-	aead            cipher.AEAD
+	secrets         *secretCipher
 	scheduleApplier ScheduleApplier
 }
 
@@ -240,16 +238,11 @@ func NewSettingsService(repository ports.SettingsRepository, databaseDriver stri
 	if repository == nil {
 		return nil, fmt.Errorf("settings repository is required")
 	}
-	key := sha256.Sum256([]byte(secret))
-	block, err := aes.NewCipher(key[:])
+	secrets, err := newSecretCipher(secret)
 	if err != nil {
-		return nil, fmt.Errorf("create settings cipher: %w", err)
+		return nil, err
 	}
-	aead, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, fmt.Errorf("create settings AEAD: %w", err)
-	}
-	return &SettingsService{repository: repository, databaseDriver: databaseDriver, aead: aead}, nil
+	return &SettingsService{repository: repository, databaseDriver: databaseDriver, secrets: secrets}, nil
 }
 
 // Get returns all persisted values, decrypting sensitive values for the authenticated settings consumer.
@@ -419,30 +412,9 @@ func containsValue(values []string, target string) bool {
 }
 
 func (s *SettingsService) encrypt(value string) (string, error) {
-	nonce := make([]byte, s.aead.NonceSize())
-	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
-		return "", fmt.Errorf("create settings nonce: %w", err)
-	}
-	sealed := s.aead.Seal(nil, nonce, []byte(value), nil)
-	return base64.RawStdEncoding.EncodeToString(append(nonce, sealed...)), nil
+	return s.secrets.encrypt(value)
 }
 
 func (s *SettingsService) decrypt(value string) (string, error) {
-	encoded := strings.TrimSpace(value)
-	if encoded == "" {
-		return "", nil
-	}
-	raw, err := base64.RawStdEncoding.DecodeString(encoded)
-	if err != nil {
-		return "", fmt.Errorf("decode encrypted setting: %w", err)
-	}
-	nonceSize := s.aead.NonceSize()
-	if len(raw) < nonceSize {
-		return "", errors.New("encrypted setting is too short")
-	}
-	plain, err := s.aead.Open(nil, raw[:nonceSize], raw[nonceSize:], nil)
-	if err != nil {
-		return "", fmt.Errorf("open encrypted setting: %w", err)
-	}
-	return string(plain), nil
+	return s.secrets.decrypt(value)
 }

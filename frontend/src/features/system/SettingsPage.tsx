@@ -7,6 +7,7 @@ import type { SystemSettings } from "../../shared/api/types";
 import { ContentCard } from "../../shared/ui/ContentCard";
 import { PageState } from "../../shared/ui/PageState";
 import { useFeedbackMessage } from "../../shared/ui/FeedbackMessage";
+import { Pan115LoginPanel } from "./Pan115LoginPanel";
 
 type FieldKind = "text" | "textarea" | "bool" | "int" | "enum" | "json" | "sort";
 type SettingOption = {
@@ -50,6 +51,8 @@ type SettingGroup = {
   title: string;
   fields: SettingField[];
   tabs?: SettingTab[];
+  /** 该分组顶部展示 115 扫码绑定面板；面板自身不参与设置草稿与保存。 */
+  pan115Login?: boolean;
   /** 分组底部的备注，用于说明该组配置的适用范围。 */
   note?: string;
 };
@@ -173,11 +176,13 @@ const groups: SettingGroup[] = [
         key: "BT_DEFAULT_DOWNLOADER",
         label: "BT默认下载器",
         kind: "enum",
+        description: "选择 115 网盘前需先在「网盘」分类扫码绑定账号，未绑定时订阅会以「默认下载器未配置」失败",
         options: [
           { value: "qbittorrent", label: "qBittorrent" },
           { value: "transmission", label: "Transmission" },
           { value: "aria2", label: "aria2" },
           { value: "thunder", label: "迅雷" },
+          { value: "pan115", label: "115网盘" },
         ],
       },
     ],
@@ -410,6 +415,20 @@ const groups: SettingGroup[] = [
         description: "位于 Requests Headers",
         kind: "text",
         secret: true,
+      },
+    ],
+  },
+  {
+    code: "pan115",
+    title: "115网盘",
+    pan115Login: true,
+    fields: [
+      {
+        key: "PAN115_SAVE_PATH",
+        label: "离线下载保存目录",
+        kind: "text",
+        placeholder: "115 目录 ID，留空保存到根目录",
+        description: "填写 115 网盘目录 ID；留空表示离线下载保存到根目录",
       },
     ],
   },
@@ -723,7 +742,12 @@ const categories: SettingCategory[] = [
   {
     code: "downloader",
     title: "下载器",
-    groupCodes: ["downloader-defaults", "qbittorrent", "transmission", "aria2", "thunder", "clouddrive2"],
+    groupCodes: ["downloader-defaults", "qbittorrent", "transmission", "aria2", "thunder"],
+  },
+  {
+    code: "netdisk",
+    title: "网盘",
+    groupCodes: ["pan115", "clouddrive2"],
   },
 ];
 
@@ -1477,6 +1501,7 @@ export function SettingsPage() {
             ) : null}
             <section className="settings-group-section">
               <div className="settings-fields">
+                {activeGroup.pan115Login ? <Pan115LoginPanel /> : null}
                 {renderFieldSequence(activeFields)}
                 {activeTest ? (
                   <div className="settings-field">

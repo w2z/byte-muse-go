@@ -748,6 +748,309 @@ paths:
             application/json:
               schema: {$ref: '#/components/schemas/Error'}
               example: {code: openai_test_failed, message: 'OpenAI 连接失败 (892ms)：鉴权失败（HTTP 401），请检查 API Key 和模型权限'}
+  /pan115/login/sessions:
+    post:
+      operationId: startPan115Login
+      summary: 申请 115 扫码登录
+      description: 向 115 申请设备码并返回可直接渲染的二维码 PNG data URL。二维码 5 分钟内有效；服务端内存中同时最多保留 32 个扫码会话，超出时淘汰最早的一个。设备码与 PKCE 校验值只存在于内存，不落库也不返回，因此二维码会话不是可重放的凭据。需要登录会话。
+      parameters:
+        - {in: cookie, name: bytemuse_session, required: true, schema: {type: string}, description: 登录签发的管理员会话 Cookie，不在示例中填写真实值}
+      responses:
+        '201':
+          description: 已创建扫码会话；session_id 用于轮询状态与主动取消
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Pan115LoginSession'}
+              example: {session_id: 3f1c2f9d8b7a6c5e4d3b2a1908172635445566778899aabbccddeeff00112233, qr_code: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAGQAAABkCAYAAABw4pVUAAAA', expires_at: '2026-09-29T10:05:00Z'}
+        '401':
+          description: 未登录或会话失效
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '502':
+          description: '115 返回错误或暂时不可用；message 为本地生成的脱敏中文说明'
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+              example: {code: pan115_unavailable, message: 115 网盘暂时不可用，请稍后重试}
+        '503':
+          description: 115 网盘服务未装配
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+  /pan115/login/sessions/{sessionId}:
+    get:
+      operationId: getPan115LoginStatus
+      summary: 查询 115 扫码状态
+      description: 轮询扫码状态。首次返回 authorized 时立即用设备码换取令牌、读取账号快照并加密落库，之后重复查询返回同一账号快照。会话不存在、已消费或已被清理返回 404，前端应重新申请二维码。
+      parameters:
+        - {in: cookie, name: bytemuse_session, required: true, schema: {type: string}, description: 登录签发的管理员会话 Cookie}
+        - {in: path, name: sessionId, required: true, schema: {type: string}, description: 申请接口返回的 session_id}
+      responses:
+        '200':
+          description: 当前扫码状态；authorized 时附带账号快照
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Pan115LoginResult'}
+              example: {status: authorized, account: {id: '12345678', name: 115 用户, avatar: 'https://example.com/avatar.png', level: VIP, space: {total: {size: 5497558138880, formatted: 5.0TB}, used: {size: 1099511627776, formatted: 1.0TB}, remaining: {size: 4398046511104, formatted: 4.0TB}}}}
+        '401':
+          description: 未登录或会话失效
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '404':
+          description: 扫码会话不存在或已过期，请重新获取二维码
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+              example: {code: pan115_login_unknown, message: 115 扫码会话不存在或已过期，请重新获取二维码}
+        '502':
+          description: '115 返回错误或暂时不可用；message 为本地生成的脱敏中文说明'
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '503':
+          description: 115 网盘服务未装配
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+    delete:
+      operationId: cancelPan115Login
+      summary: 取消 115 扫码会话
+      description: 结束一次扫码会话，使二维码立即失效，避免页面关闭后仍可被扫描。会话不存在时同样返回 204。
+      parameters:
+        - {in: cookie, name: bytemuse_session, required: true, schema: {type: string}, description: 登录签发的管理员会话 Cookie}
+        - {in: path, name: sessionId, required: true, schema: {type: string}, description: 申请接口返回的 session_id}
+      responses:
+        '204':
+          description: 会话已结束；重复取消同样返回 204
+        '401':
+          description: 未登录或会话失效
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+  /pan115/account:
+    get:
+      operationId: getPan115Account
+      summary: 读取 115 绑定状态
+      description: 已绑定时用本地令牌读取账号资料与容量；未绑定时返回 linked=false，不视为错误。令牌失效时先刷新一次再读取，刷新令牌被吊销则清除绑定并返回 linked=false。
+      parameters:
+        - {in: cookie, name: bytemuse_session, required: true, schema: {type: string}, description: 登录签发的管理员会话 Cookie}
+      responses:
+        '200':
+          description: 当前绑定状态；未绑定时 account 为 null
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Pan115AccountResponse'}
+              example: {linked: true, account: {id: '12345678', name: 115 用户, avatar: '', level: VIP, space: {total: {size: 5497558138880, formatted: 5.0TB}, used: {size: 1099511627776, formatted: 1.0TB}, remaining: {size: 4398046511104, formatted: 4.0TB}}}}
+        '401':
+          description: 未登录或会话失效
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '502':
+          description: '115 返回错误或暂时不可用；message 为本地生成的脱敏中文说明'
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '503':
+          description: 115 网盘服务未装配
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+    delete:
+      operationId: unlinkPan115
+      summary: 解除 115 绑定
+      description: 删除本地加密令牌，使 115 回到未登录状态。只影响本地绑定，不撤销 115 侧的授权记录。
+      parameters:
+        - {in: cookie, name: bytemuse_session, required: true, schema: {type: string}, description: 登录签发的管理员会话 Cookie}
+      responses:
+        '204':
+          description: 已解除绑定；重复解绑同样返回 204
+        '401':
+          description: 未登录或会话失效
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '500':
+          description: 删除绑定失败
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '503':
+          description: 115 网盘服务未装配
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+  /pan115/files:
+    get:
+      operationId: listPan115Files
+      summary: 浏览 115 目录
+      description: 读取一个 115 目录，供设置页选择离线下载的保存目录。只读，不创建、不修改、不删除任何文件。directory_id 省略或为空时读取根目录。
+      parameters:
+        - {in: cookie, name: bytemuse_session, required: true, schema: {type: string}, description: 登录签发的管理员会话 Cookie}
+        - {in: query, name: directory_id, schema: {type: string}, description: 115 目录 ID；省略或空串读取根目录}
+        - {in: query, name: offset, schema: {type: integer, minimum: 0, default: 0}, description: 分页偏移，必须是非负整数}
+        - {in: query, name: limit, schema: {type: integer, minimum: 1, maximum: 1000, default: 100}, description: 每页条数；省略或超出 1..1000 时按 100 处理}
+      responses:
+        '200':
+          description: 一页目录内容；path 为根目录到当前目录的完整路径
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Pan115FilePage'}
+              example: {directory_id: '0', path: [], files: [{id: '341789', parent_id: '0', name: 影片目录, is_directory: true, size: 0, pick_code: ''}], total: 1, has_more: false}
+        '400':
+          description: offset 或 limit 无效
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '401':
+          description: 未登录或会话失效
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '409':
+          description: 115 尚未绑定账号
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+              example: {code: pan115_not_linked, message: 115 网盘尚未绑定账号，请先在设置中扫码登录}
+        '502':
+          description: '115 返回错误或暂时不可用；message 为本地生成的脱敏中文说明'
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '503':
+          description: 115 网盘服务未装配
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+  /pan115/offline/tasks:
+    get:
+      operationId: listPan115OfflineTasks
+      summary: 查询 115 离线任务
+      description: 读取一页 115 离线任务；progress 已归一化为 0-100。只读，不改变任务状态。
+      parameters:
+        - {in: cookie, name: bytemuse_session, required: true, schema: {type: string}, description: 登录签发的管理员会话 Cookie}
+        - {in: query, name: page, schema: {type: integer, minimum: 1, default: 1}, description: 页码，从 1 开始；小于 1 按 1 处理}
+      responses:
+        '200':
+          description: 一页离线任务
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Pan115OfflinePage'}
+              example: {page: 1, page_count: 1, tasks: [{hash: 0123456789abcdef0123456789abcdef01234567, status: 1, progress: 100, file_id: '341790', directory_id: '0'}]}
+        '400':
+          description: page 不是正整数
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '401':
+          description: 未登录或会话失效
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '409':
+          description: 115 尚未绑定账号
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '502':
+          description: '115 返回错误或暂时不可用；message 为本地生成的脱敏中文说明'
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '503':
+          description: 115 网盘服务未装配
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+    post:
+      operationId: addPan115OfflineTask
+      summary: 提交 115 离线任务
+      description: 手动提交一个磁力链接或下载地址到 115 离线下载。directory_id 省略或为空时使用设置中的「离线下载保存目录」，该设置也为空时保存到根目录。重复提交同一磁力返回 409，message 说明 115 已存在该任务；订阅下载链路把该结果视为提交成功。
+      parameters:
+        - {in: cookie, name: bytemuse_session, required: true, schema: {type: string}, description: 登录签发的管理员会话 Cookie}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/Pan115OfflineTaskRequest'}
+            example: {uri: 'magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567', directory_id: ''}
+      responses:
+        '201':
+          description: 已受理；hash 为 115 返回的信息哈希
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [hash]
+                properties:
+                  hash: {type: string, description: 115 离线任务的信息哈希}
+              example: {hash: 0123456789abcdef0123456789abcdef01234567}
+        '400':
+          description: 磁力链接或下载地址为空，或请求体不是有效的离线任务
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+              example: {code: invalid_request, message: 磁力链接或下载地址不能为空}
+        '401':
+          description: 未登录或会话失效
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '409':
+          description: 115 尚未绑定账号，或 115 已存在该离线任务
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+              example: {code: pan115_offline_exists, message: 115 已存在该离线任务}
+        '502':
+          description: '115 返回错误或暂时不可用；message 为本地生成的脱敏中文说明'
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '503':
+          description: 115 网盘服务未装配
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+  /pan115/offline/tasks/{hash}:
+    delete:
+      operationId: removePan115OfflineTask
+      summary: 删除 115 离线任务记录
+      description: 删除一条 115 离线任务记录，不删除已下载到网盘的源文件。
+      parameters:
+        - {in: cookie, name: bytemuse_session, required: true, schema: {type: string}, description: 登录签发的管理员会话 Cookie}
+        - {in: path, name: hash, required: true, schema: {type: string}, description: 离线任务的信息哈希}
+      responses:
+        '204':
+          description: 已删除任务记录
+        '400':
+          description: 信息哈希为空
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '401':
+          description: 未登录或会话失效
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '409':
+          description: 115 尚未绑定账号
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '502':
+          description: '115 返回错误或暂时不可用；message 为本地生成的脱敏中文说明'
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '503':
+          description: 115 网盘服务未装配
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
   /message:
     get:
       operationId: verifyWeChatCallback
@@ -1382,14 +1685,15 @@ components:
           description: >-
             设置值。键名与旧版 template.env、对标站 /config 一致；敏感值也会在已登录管理员会话中回显，
             按对标站设置页分组维护：站点、Emby、Plex、Jellyfin、微信、Telegram、Qbittorrent、
-            Transmission、aria2、迅雷、CloudDrive2、过滤、排序、定时任务、翻译、Agent、其他。
+            Transmission、aria2、迅雷、CloudDrive2、115网盘、过滤、排序、定时任务、翻译、Agent、其他。
             布尔取值固定为 true / false；数字为非负整数字符串；DEFAULT_FILTER 为过滤规则 JSON 字符串；
             DEFAULT_SORT 为逗号分隔的排序标签（uc、!uc、seeders、chinese、uhd、!uhd、site、free）；
             PTFANS_AUTH_TYPE、ROUSIPRO_AUTH_TYPE、NICEPT_AUTH_TYPE 为 key（密钥）或 cookie（Cookie），默认 key，空值使用密钥；
             PTFANS_API_KEY、ROUSIPRO_API_KEY、NICEPT_API_KEY 是分别加密保存的密钥，空值表示未配置；
             三站支持密钥分页搜索和种子下载；密钥与 Cookie 独立保存，切换模式不清除另一种凭据，密钥模式不回退 Cookie。
             PTTime 仅使用 PTT_COOKIE 搜索和下载，不使用受限 RSS。PTT_AUTH_TYPE、PTT_PASSKEY、PTT_UID 为兼容历史配置保留，运行时不读取，设置页不再提供。
-            MAIN_SITE 取 ALL / 馒头 / BT / PTT / NicePT / PTFans / RousiPro；PTFANS_COOKIE 用于 PTFans 9KG 专区，ROUSIPRO_COOKIE 用于 RousiPro 9KG 目录，均为加密保存的管理员凭据，空值表示未配置；旧 ROUSI_COOKIE 不再显示或接受写入。IMAGE_MODE 取 INVISIBLE / VISIBLE / BLUR；PT_DEFAULT_DOWNLOADER 取 qbittorrent / transmission；BT_DEFAULT_DOWNLOADER 取 qbittorrent / transmission / aria2 / thunder（不含 CloudDrive2）；BYPASS_ENGINE 取 cloudflare_bypass_for_scraping / flaresolverr / scrapling，空值表示关闭；BYPASS_URL 为所选增强服务地址；LOG_RETENTION_DAYS 为日志保留天数，默认 30，0 或空值表示不自动删除；TRANSLATION_ENGINE 取 none / openai / google / baidu / deeplx；DEEPLX_URL 为 DeepLX 服务地址，可只填服务地址（例如 http://127.0.0.1:1188）或直接填 /translate 完整地址；TRANSLATION_PROMPT 仅在 OpenAI 翻译时作为翻译 system prompt，留空使用内置提示词；翻译的 OpenAI 兼容配置独立保存在 TRANSLATION_OPENAI_URL、TRANSLATION_OPENAI_MODEL、TRANSLATION_OPENAI_API_KEY，与对话 Agent 的配置互不影响，三者任一为空时 OpenAI 翻译引擎视为未配置，设置页禁用 OpenAI 选项并把已选引擎回落为 none；AGENT_ENABLE 为 true 时启用 Telegram 与企业微信的对话 Agent，默认 false；Agent 使用 OPENAI_URL、OPENAI_MODEL、OPENAI_API_KEY，三者任一为空时对话入口返回未启用提示，斜杠命令与番号订阅不受影响；AGENT_SYSTEM_PROMPT 仅用于渠道 Agent 对话，留空使用内置提示词。
+            MAIN_SITE 取 ALL / 馒头 / BT / PTT / NicePT / PTFans / RousiPro；PTFANS_COOKIE 用于 PTFans 9KG 专区，ROUSIPRO_COOKIE 用于 RousiPro 9KG 目录，均为加密保存的管理员凭据，空值表示未配置；旧 ROUSI_COOKIE 不再显示或接受写入。IMAGE_MODE 取 INVISIBLE / VISIBLE / BLUR；PT_DEFAULT_DOWNLOADER 取 qbittorrent / transmission；BT_DEFAULT_DOWNLOADER 取 qbittorrent / transmission / aria2 / thunder / pan115（不含 CloudDrive2）；BYPASS_ENGINE 取 cloudflare_bypass_for_scraping / flaresolverr / scrapling，空值表示关闭；BYPASS_URL 为所选增强服务地址；LOG_RETENTION_DAYS 为日志保留天数，默认 30，0 或空值表示不自动删除；TRANSLATION_ENGINE 取 none / openai / google / baidu / deeplx；DEEPLX_URL 为 DeepLX 服务地址，可只填服务地址（例如 http://127.0.0.1:1188）或直接填 /translate 完整地址；TRANSLATION_PROMPT 仅在 OpenAI 翻译时作为翻译 system prompt，留空使用内置提示词；翻译的 OpenAI 兼容配置独立保存在 TRANSLATION_OPENAI_URL、TRANSLATION_OPENAI_MODEL、TRANSLATION_OPENAI_API_KEY，与对话 Agent 的配置互不影响，三者任一为空时 OpenAI 翻译引擎视为未配置，设置页禁用 OpenAI 选项并把已选引擎回落为 none；AGENT_ENABLE 为 true 时启用 Telegram 与企业微信的对话 Agent，默认 false；Agent 使用 OPENAI_URL、OPENAI_MODEL、OPENAI_API_KEY，三者任一为空时对话入口返回未启用提示，斜杠命令与番号订阅不受影响；AGENT_SYSTEM_PROMPT 仅用于渠道 Agent 对话，留空使用内置提示词。
+            PAN115_SAVE_PATH 为 115 网盘离线下载的保存目录 ID，空值表示保存到根目录；115 账号、令牌与离线任务由 /pan115 接口管理，令牌加密落库，不通过设置接口读写。
             GOOGLE_API_KEY 为 Google Cloud Translation API 密钥，留空时 Google 引擎改用免密钥接口（无需申请，按来源 IP 限流）；填写后走官方接口，配额与计费按 key 所属项目结算。
             BAIDU_APP_ID 与 BAIDU_API_KEY 为百度翻译开放平台的 APPID 与开发者密钥（密钥），请求按 MD5(appid+q+salt+密钥) 计算 sign 签名，需先在开放平台开通文本翻译服务，二者任一为空时百度引擎视为未配置。
             微信与 Telegram 各自独立的消息通知开关：前缀分别为 WECHAT_NOTIFY_ 与 TELEGRAM_NOTIFY_，
@@ -1527,5 +1831,104 @@ components:
     LibraryStatus:
       type: string
       enum: [unknown, absent, present]
+    Pan115LoginSession:
+      type: object
+      required: [session_id, qr_code, expires_at]
+      description: 一次扫码登录的启动结果；二维码 5 分钟内有效
+      properties:
+        session_id: {type: string, description: 会话标识，用于轮询扫码状态与主动取消}
+        qr_code: {type: string, description: '可直接放入 img src 的 data:image/png;base64 二维码'}
+        expires_at: {type: string, format: date-time, description: 二维码失效时间，为申请时刻起 5 分钟}
+    Pan115LoginResult:
+      type: object
+      required: [status]
+      description: 一次扫码状态查询结果；仅 authorized 携带账号快照
+      properties:
+        status: {type: string, enum: [waiting, scanned, authorized, expired, canceled], description: 'waiting 等待扫码；scanned 已扫码待确认；authorized 已授权并完成本地绑定；expired 二维码过期；canceled 用户取消'}
+        account: {oneOf: [{$ref: '#/components/schemas/Pan115Account'}, {type: 'null'}], description: 授权后的账号快照；其他状态为 null}
+    Pan115SpaceAmount:
+      type: object
+      required: [size, formatted]
+      description: 单个容量数值
+      properties:
+        size: {type: integer, format: int64, description: 字节数；115 未返回该字段时为 0}
+        formatted: {type: string, description: '115 提供的展示文本，例如 5.0TB；缺失时为空串'}
+    Pan115Account:
+      type: object
+      required: [id, name, avatar, level, space]
+      description: 115 账号对外快照，只含展示字段，不含任何令牌
+      properties:
+        id: {type: string, description: 115 用户 ID}
+        name: {type: string, description: 115 昵称}
+        avatar: {type: string, description: 头像地址；缺失时为空串}
+        level: {type: string, description: 会员等级展示文本；缺失时为空串}
+        space:
+          type: object
+          required: [total, used, remaining]
+          description: 容量快照
+          properties:
+            total: {$ref: '#/components/schemas/Pan115SpaceAmount'}
+            used: {$ref: '#/components/schemas/Pan115SpaceAmount'}
+            remaining: {$ref: '#/components/schemas/Pan115SpaceAmount'}
+    Pan115AccountResponse:
+      type: object
+      required: [linked]
+      description: 当前 115 绑定状态
+      properties:
+        linked: {type: boolean, description: 是否已绑定 115 账号}
+        account: {oneOf: [{$ref: '#/components/schemas/Pan115Account'}, {type: 'null'}], description: 已绑定时返回账号快照；未绑定为 null}
+    Pan115Directory:
+      type: object
+      required: [id, name]
+      description: 115 目录路径上的一级
+      properties:
+        id: {type: string, description: 目录 ID；根目录为 0}
+        name: {type: string, description: 目录名称}
+    Pan115File:
+      type: object
+      required: [id, parent_id, name, is_directory, size, pick_code]
+      description: 115 目录里的一个条目；pick_code 供后续播放直链使用，本身不含凭据
+      properties:
+        id: {type: string, description: 文件或目录 ID}
+        parent_id: {type: string, description: 所属目录 ID}
+        name: {type: string, description: 条目名称}
+        is_directory: {type: boolean, description: 是否为目录}
+        size: {type: integer, format: int64, description: 字节数；目录为 0}
+        pick_code: {type: string, description: 115 提取码，用于生成播放直链；目录为空串}
+    Pan115FilePage:
+      type: object
+      required: [directory_id, path, files, total, has_more]
+      description: 一页 115 目录内容
+      properties:
+        directory_id: {type: string, description: 当前目录 ID；根目录为 0}
+        path: {type: array, items: {$ref: '#/components/schemas/Pan115Directory'}, description: '根目录到当前目录的完整路径；根目录为空数组'}
+        files: {type: array, items: {$ref: '#/components/schemas/Pan115File'}, description: '当前页条目；无内容为空数组'}
+        total: {type: integer, minimum: 0, description: 当前目录条目总数}
+        has_more: {type: boolean, description: 是否还有下一页}
+    Pan115OfflineTask:
+      type: object
+      required: [hash, status, progress, file_id, directory_id]
+      description: 115 离线任务的一次快照
+      properties:
+        hash: {type: string, description: 信息哈希}
+        status: {type: integer, description: 115 原始任务状态码}
+        progress: {type: integer, minimum: 0, maximum: 100, description: 归一化后的完成百分比}
+        file_id: {type: string, description: 完成后在网盘中的文件 ID；未完成时为空串}
+        directory_id: {type: string, description: 保存目录 ID}
+    Pan115OfflinePage:
+      type: object
+      required: [page, page_count, tasks]
+      description: 一页 115 离线任务
+      properties:
+        page: {type: integer, minimum: 1, description: 当前页码}
+        page_count: {type: integer, minimum: 0, description: 总页数}
+        tasks: {type: array, items: {$ref: '#/components/schemas/Pan115OfflineTask'}, description: '当前页任务；无任务为空数组'}
+    Pan115OfflineTaskRequest:
+      type: object
+      required: [uri]
+      description: 手动提交的 115 离线任务
+      properties:
+        uri: {type: string, description: 磁力链接或下载地址，去除首尾空格后必须非空}
+        directory_id: {type: string, description: '保存目录 ID；省略或空串时使用设置中的「离线下载保存目录」，该设置也为空时保存到根目录'}
 security:
   - sessionCookie: []

@@ -326,6 +326,13 @@ func (c *Commands) Serve(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("create settings service: %w", err)
 	}
+	// 115 网盘服务：扫码登录、账号绑定、目录浏览与离线下载受理；
+	// 设置页与订阅下载链路复用同一实例，令牌刷新只有一处实现。
+	pan115Service, err := application.NewPan115Service(database.NewPan115AccountRepository(store.SQLDB(), database.Dialect(c.config.DatabaseDriver)), settingsValues(settingsService), nil, c.config.SessionSecret)
+	if err != nil {
+		return fmt.Errorf("create 115 service: %w", err)
+	}
+	defer pan115Service.Close()
 	// 对话回复与业务通知共用同一个渠道解析器，不另建第二套发送逻辑。
 	channels := newChannelRegistry(settingsService)
 	notifier := application.NewNotificationService(settingsValues(settingsService), channels)
@@ -356,10 +363,18 @@ func (c *Commands) Serve(ctx context.Context) error {
 		if len(privateSources) > 0 {
 			private = application.PrivateTorrentSources{Sources: privateSources}
 		}
-		return searcher, private, map[string]application.MagnetDownloader{
+		downloaders := map[string]application.MagnetDownloader{
 			"qbittorrent": downloadclient.NewQbittorrent(values["QBITTORRENT_URL"], values["QBITTORRENT_USERNAME"], values["QBITTORRENT_PASSWORD"], values["QBITTORRENT_DOWNLOAD_PATH"], values["QBITTORRENT_CATEGORY"], nil),
 			"thunder":     downloadclient.NewThunder(values["THUNDER_URL"], values["THUNDER_FILE_ID"], values["THUNDER_AUTHORIZATION"], nil),
 		}
+		// 115 只在已绑定账号时注册：未登录时让调度明确报「默认下载器未配置」，
+		// 而不是把每个订阅任务都记成一次失败的 115 调用。
+		if linked, e := pan115Service.Linked(context.Background()); e != nil {
+			logging.Error(logging.CategorySystem, "读取 115 绑定状态失败，本次不注册 115 下载器")
+		} else if linked {
+			downloaders["pan115"] = pan115Service.Downloader(values["PAN115_SAVE_PATH"])
+		}
+		return searcher, private, downloaders
 	})
 	for i := range jobs {
 		if jobs[i].Name == "标签追新" {
@@ -543,6 +558,7 @@ func (c *Commands) Serve(ctx context.Context) error {
 		Downloads:             downloadQueries,
 		Dashboard:             dashboardService,
 		Settings:              settingsService,
+		Pan115:                pan115Service,
 		Scheduler:             manager,
 		Logs:                  logging.Default,
 		Readiness:             store.ReadinessProbe(),

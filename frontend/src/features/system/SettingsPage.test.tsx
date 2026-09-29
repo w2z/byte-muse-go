@@ -417,3 +417,104 @@ describe("设置页字段布局", () => {
     expect(values.WECHAT_NOTIFY_SUBSCRIBE).toBe("true");
   });
 });
+
+describe("网盘设置", () => {
+  beforeEach(() => vi.clearAllMocks());
+  afterEach(cleanup);
+
+  const boundAccount = {
+    id: "1",
+    name: "115 用户",
+    avatar: "",
+    level: "VIP",
+    space: {
+      total: { size: 0, formatted: "5TB" },
+      used: { size: 0, formatted: "1TB" },
+      remaining: { size: 0, formatted: "4TB" },
+    },
+  };
+
+  it("网盘分类用二级页签展示 115 网盘与 CloudDrive2，CloudDrive2 不再属于下载器", async () => {
+    const user = userEvent.setup();
+    renderSettings();
+
+    await user.click(await screen.findByRole("tab", { name: "下载器" }));
+    expect(screen.queryByRole("tab", { name: "CloudDrive2" })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("tab", { name: "网盘" }));
+    expect(screen.getByRole("tab", { name: "115网盘" })).toBeInTheDocument();
+    expect(screen.getByLabelText("离线下载保存目录")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("tab", { name: "CloudDrive2" }));
+    expect(screen.getByLabelText("CD2地址")).toBeInTheDocument();
+    expect(screen.getByLabelText("CD2保存路径")).toBeInTheDocument();
+    expect(screen.queryByLabelText("离线下载保存目录")).not.toBeInTheDocument();
+  });
+
+  it("BT 默认下载器提供 115 网盘选项，PT 默认下载器不提供", async () => {
+    const user = userEvent.setup();
+    renderSettings();
+
+    await user.click(await screen.findByRole("tab", { name: "下载器" }));
+    // 115 只接受磁力与直链，只属于 BT 默认下载器；PT 组仍只有 qBittorrent 与 Transmission。
+    expect(screen.getAllByRole("radio", { name: "115网盘" })).toHaveLength(1);
+    expect(screen.getByText(/选择 115 网盘前需先在「网盘」分类扫码绑定账号/)).toBeInTheDocument();
+  });
+
+  it("扫码登录展示二维码，授权后展示账号并可解除绑定", async () => {
+    const user = userEvent.setup();
+    let linked = false;
+    vi.mocked(apiRequest).mockImplementation(async (path, options) => {
+      if (path === "/system/settings") return { database_driver: "sqlite", values: {}, configured: {} };
+      if (path === "/pan115/account" && options?.method === "DELETE") {
+        linked = false;
+        return undefined;
+      }
+      if (path === "/pan115/account") return { linked, account: linked ? boundAccount : null };
+      if (path === "/pan115/login/sessions" && options?.method === "POST") {
+        return { session_id: "session-1", qr_code: "data:image/png;base64,AAA", expires_at: "2026-09-29T10:00:00Z" };
+      }
+      if (path === "/pan115/login/sessions/session-1" && options?.method === "DELETE") return undefined;
+      if (path === "/pan115/login/sessions/session-1") {
+        linked = true;
+        return { status: "authorized", account: boundAccount };
+      }
+      throw new Error(`未处理的请求 ${path}`);
+    });
+
+    renderSettings();
+    await user.click(await screen.findByRole("tab", { name: "网盘" }));
+    await user.click(await screen.findByRole("button", { name: "扫码登录" }));
+
+    expect(await screen.findByAltText("115 登录二维码")).toHaveAttribute("src", "data:image/png;base64,AAA");
+    // 授权成功后结束轮询、刷新账号快照并展示绑定信息。
+    expect(await screen.findByText("115 用户")).toBeInTheDocument();
+    expect(screen.queryByAltText("115 登录二维码")).not.toBeInTheDocument();
+    expect(screen.getByText(/已用 1TB \/ 5TB/)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "解除绑定" }));
+    expect(await screen.findByRole("button", { name: "扫码登录" })).toBeInTheDocument();
+  });
+
+  it("二维码过期后提示失效并允许重新获取", async () => {
+    const user = userEvent.setup();
+    vi.mocked(apiRequest).mockImplementation(async (path, options) => {
+      if (path === "/system/settings") return { database_driver: "sqlite", values: {}, configured: {} };
+      if (path === "/pan115/account") return { linked: false, account: null };
+      if (path === "/pan115/login/sessions" && options?.method === "POST") {
+        return { session_id: "session-1", qr_code: "data:image/png;base64,AAA", expires_at: "2026-09-29T10:00:00Z" };
+      }
+      if (path === "/pan115/login/sessions/session-1" && options?.method === "DELETE") return undefined;
+      if (path === "/pan115/login/sessions/session-1") return { status: "expired", account: null };
+      throw new Error(`未处理的请求 ${path}`);
+    });
+
+    renderSettings();
+    await user.click(await screen.findByRole("tab", { name: "网盘" }));
+    await user.click(await screen.findByRole("button", { name: "扫码登录" }));
+
+    expect(await screen.findByText("二维码已过期，请重新获取二维码")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "重新获取二维码" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "取消" })).not.toBeInTheDocument();
+  });
+});
