@@ -1,6 +1,6 @@
 services:
   bytemuse:
-    image: bytemuse-go:local
+    image: ${BYTEMUSE_IMAGE:-bytemuse-go:local}
     build:
       context: ..
       dockerfile: deploy/Dockerfile
@@ -9,6 +9,7 @@ services:
       - "18043:3750"
     environment:
       APP_ENV: production
+      TZ: ${TZ:-Asia/Shanghai}
       HTTP_ADDR: :3750
       WEB_STATIC_DIR: /app/web
       DATABASE_DRIVER: mysql
