@@ -10,7 +10,7 @@
 
 ## 运行时约定
 
-- 容器与网络：应用容器固定命名 `byte-muse-go`（Compose 服务名仍是 `byte-muse`），增强服务容器固定命名 `cloudflarebypass_byte_muse_go`（服务名仍是 `cloudflarebypass`），两者都接入 Compose 定义的 `bridge` 网络，设置页可以直接用 `http://cloudflarebypass:8000` 访问增强服务。
+- 容器与网络：容器名统一加 `_byte_muse_go` 后缀、Compose 服务名保持原名——应用 `byte-muse-go`（服务名 `byte-muse`）、抓取增强 `cloudflarebypass_byte_muse_go`（服务名 `cloudflarebypass`）、内置数据库 `postgres_byte_muse_go` / `mysql_byte_muse_go`（服务名 `postgres` / `mysql`）；各服务接入 Compose 定义的 `bridge` 网络，设置页可以直接用 `http://cloudflarebypass:8000` 访问增强服务。
 - 抓取增强：设置页把 `BYPASS_ENGINE` 选为 `cloudflare_bypass_for_scraping`、`BYPASS_URL` 填 `http://cloudflarebypass:8000`；该服务只做页面增强，不保存源站凭据。
 - 会话 Cookie：只有 `APP_ENV=production` 才要求 HTTPS 传输。Compose 未设置该变量，纯 HTTP 访问时可以正常登录；部署在 HTTPS 反向代理之后时再自行加上。
 - 定时任务：调度器在 `serve` 进程内运行，Cron 表达式按容器本地时间解释，设置页默认排期为 20:00、21:00、21:30、22:00。镜像固定 `TZ=Asia/Shanghai` 并自带时区数据；时区与使用方不一致时排期会整体偏移，日志清理（`0 0 * * *`）同样受影响。

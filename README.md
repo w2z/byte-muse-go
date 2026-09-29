@@ -19,7 +19,7 @@
 #   -e DATABASE_DRIVER=mysql \
 #   -e DATABASE_DSN='bytemuse:请替换为数据库密码@tcp(请替换为数据库主机:3306)/bytemuse?charset=utf8mb4&parseTime=true&loc=Local' \
 
-docker run -d --name byte-muse \
+docker run -d --name byte-muse-go \
   --restart always \
   -p 3750:3750 \
   -e TZ=Asia/Shanghai \
@@ -35,7 +35,7 @@ docker run -d --name byte-muse \
 
 ## Docker Compose
 
-`deploy/` 下保留 `compose.sqlite.yaml`、`compose.postgres.yaml`、`compose.mysql.yaml` 三个模板：SQLite 用文件库，PostgreSQL 与 MySQL 模板额外内置同方言的数据库服务。下面是 SQLite 的完整配置，PostgreSQL 与 MySQL 按注释替换两行、并启用对应的数据库服务块即可。模板都直接写出配置值，不使用环境变量插值：应用容器固定命名 `byte-muse-go`（Compose 服务名仍是 `byte-muse`），并附带 `cloudflarebypass` 抓取增强服务，各服务接入同一 `bridge` 网络。代理地址与宿主机路径是占位符，`ADMIN_USERNAME`、`ADMIN_PASSWORD`、`SESSION_SECRET` 以及数据库密码也是占位值，部署前在文件中替换：`SESSION_SECRET` 少于 32 字节时服务会直接拒绝启动。真实拓扑与凭据只留在部署机上。
+`deploy/` 下保留 `compose.sqlite.yaml`、`compose.postgres.yaml`、`compose.mysql.yaml` 三个模板：SQLite 用文件库，PostgreSQL 与 MySQL 模板额外内置同方言的数据库服务。下面是 SQLite 的完整配置，PostgreSQL 与 MySQL 按注释替换两行、并启用对应的数据库服务块即可。模板都直接写出配置值，不使用环境变量插值：容器名统一加 `_byte_muse_go` 后缀，Compose 服务名保持原名——应用 `byte-muse-go`（服务名 `byte-muse`）、抓取增强 `cloudflarebypass_byte_muse_go`（服务名 `cloudflarebypass`）、内置数据库 `postgres_byte_muse_go` / `mysql_byte_muse_go`（服务名 `postgres` / `mysql`）；各服务接入同一 `bridge` 网络，`DATABASE_DSN` 与 `BYPASS_URL` 用服务名访问即可。代理地址与宿主机路径是占位符，`ADMIN_USERNAME`、`ADMIN_PASSWORD`、`SESSION_SECRET` 以及数据库密码也是占位值，部署前在文件中替换：`SESSION_SECRET` 少于 32 字节时服务会直接拒绝启动。真实拓扑与凭据只留在部署机上。
 
 ```yaml
 services:
