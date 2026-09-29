@@ -1,0 +1,11 @@
+{
+  "version": null,
+  "commit": null,
+  "short_commit": null,
+  "built_at": null,
+  "image": "ghcr.io/w2z/byte-muse-go",
+  "digest": null,
+  "tags": [],
+  "source": "https://github.com/w2z/byte-muse-go",
+  "note": "由 GitHub Actions 构建成功后自动写入，请勿手工修改"
+}

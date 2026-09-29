@@ -14,7 +14,7 @@ bytemuse serve
 └── 后台调度器
 ```
 
-容器启动时先执行幂等数据库迁移，再启动服务。`migrate status|up` 仅作为人工排障入口，不需要额外 worker 容器。
+容器启动时先执行幂等数据库迁移，再启动服务。`migrate status|up` 仅作为人工排障入口，不需要额外 worker 容器。定时任务由同一进程的调度器执行，Cron 表达式按容器本地时间解释，镜像默认 `TZ=Asia/Shanghai`；镜像、卷权限和 Compose 用法见 [deploy/README.md](deploy/README.md)。
 
 ## 数据库
 
@@ -76,9 +76,30 @@ DATABASE_DSN=file:/data/bytemuse.db?_pragma=foreign_keys(1)&_pragma=journal_mode
 
 常规回归：在 backend 运行 `go test ./...`。真实外站核验需显式设置 `BYTEMUSE_LIVE_COLLECTION=1` 后运行 `go test ./internal/platform/collector -run TestLiveCollection -v`；该测试不保存真实数据，受站点网络与访问策略影响，失败不能当作解析测试通过。
 
+## 容器镜像与发布
+
+镜像由本仓库的 GitHub Actions 使用 `deploy/Dockerfile` 构建并推送到 `ghcr.io/w2z/byte-muse-go`。构建定义只有这一份，不在其他仓库复制，避免出现第二份权威定义。
+
+| 标签 | 说明 |
+| --- | --- |
+| `0.1.<提交计数>` | 版本号，同一提交恒定，随提交递增 |
+| `sha-<短提交>` | 按提交定位 |
+| `latest` | 最新一次成功构建 |
+
+```bash
+docker pull ghcr.io/w2z/byte-muse-go:latest
+docker run -d --name bytemuse -p 3750:3750 -v bytemuse-data:/data ghcr.io/w2z/byte-muse-go:latest
+```
+
+- 每次提交到 `main` 自动触发构建；构建成功后把版本、提交和镜像摘要写入仓库根目录的 `version.json`，该文件由流程维护，不手工修改。
+- 同一时间只保留一个构建任务：新提交会取消仍在运行的旧构建，最终产出对应最新提交的镜像。
+- 版本号规则为 `0.1.<提交计数>`，提交计数不包含 `version.json` 的回写提交，因此同一提交的版本号恒定。
+- 也可在 Actions 页面手动触发 `workflow_dispatch`。
+- 源码同时推送到自建 Gitea 远端，两个远端保持同一份提交历史；推送顺序为先拉取 GitHub、再推 GitHub、再推 Gitea，避免 `version.json` 回写提交造成分叉。
+- Compose、卷权限与运行时约定见 [deploy/README.md](deploy/README.md)。
 ## 开发协作规范
 
-新对话与执行 Agent 从 [AGENTS.md](AGENTS.md) 开始，按任务读取 docs/agents 下的专项规范；历史证据独立存放，不作为现行指令。前端新增 `npm run check:standards`，检查筛选栅格及规范入口，`npm run build` 会先自动执行该检查；`npm test` 同样包含规范测试。该检查不替代浏览器验收，尚未配置远端 CI 合并保护。
+新对话与执行 Agent 从 [AGENTS.md](AGENTS.md) 开始，按任务读取 docs/agents 下的专项规范；历史证据独立存放，不作为现行指令。前端新增 `npm run check:standards`，检查筛选栅格及规范入口，`npm run build` 会先自动执行该检查；`npm test` 同样包含规范测试。该检查不替代浏览器验收，尚未配置远端 CI 合并保护。提交信息遵循 `[EMOJI] [TYPE](范围): [修改说明]`，功能完成后由执行 Agent 自动提交并推送全部远端，不需要人工提交。
 
 ## 开发
 
