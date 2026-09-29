@@ -20,6 +20,10 @@ func CollectionSources() []CollectionSource {
 	return []CollectionSource{
 		{ID: "javdb", Kinds: []string{"search", "detail", "rank"}},
 		{ID: "netflav", Kinds: []string{"search", "detail"}},
+		{ID: "javlibrary", Kinds: []string{"rank"}},
+		{ID: "avbase", Kinds: []string{"search", "actor"}},
+		{ID: "jable", Kinds: []string{"search"}},
+		{ID: "supjav", Kinds: []string{"search"}},
 	}
 }
 
@@ -29,7 +33,7 @@ func CollectionRankPeriods(source string) []string {
 	case "javdb":
 		return []string{"daily", "weekly", "monthly"}
 	case "javlibrary":
-		return []string{"wanted", "bestrated", "newrelease", "newentries"}
+		return []string{"wanted"}
 	default:
 		return nil
 	}

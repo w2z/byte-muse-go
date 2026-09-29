@@ -42,6 +42,61 @@ func TestBypassProxySetting(t *testing.T) {
 	}
 }
 
+// TestSettingsScheduleTimeValidation 校验定时任务键只接受标准 5 段 cron，避免非法表达式在下次启动时拖垮调度器。
+func TestSettingsScheduleTimeValidation(t *testing.T) {
+	repo := &settingsMemoryRepository{}
+	svc, err := NewSettingsService(repo, "sqlite", strings.Repeat("x", 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	keys := []string{"RANK_SCHEDULE_TIME", "ACTOR_SCHEDULE_TIME", "TAG_SCHEDULE_TIME", "DOWNLOAD_SCHEDULE_TIME"}
+	for _, key := range keys {
+		for _, valid := range []string{"0 20 * * *", "30 21 * * *", "@daily", ""} {
+			if _, err := svc.Update(ctx, map[string]string{key: valid}); err != nil {
+				t.Fatalf("%s should accept %q: %v", key, valid, err)
+			}
+		}
+		for _, invalid := range []string{"99 99 * * *", "0 20 * *", "every day", "0 20 * * * *"} {
+			if _, err := svc.Update(ctx, map[string]string{key: invalid}); !errors.Is(err, ErrInvalidSetting) {
+				t.Fatalf("%s should reject %q, got %v", key, invalid, err)
+			}
+		}
+	}
+}
+
+// TestSettingsUpdateNotifiesScheduleApplier 验证保存设置后把最新值交给调度同步回调，使定时任务
+// 表达式无需重启后端即可生效；同步失败不能把已经落库的保存报成失败。
+func TestSettingsUpdateNotifiesScheduleApplier(t *testing.T) {
+	repo := &settingsMemoryRepository{}
+	svc, err := NewSettingsService(repo, "sqlite", strings.Repeat("x", 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var applied map[string]string
+	calls := 0
+	svc.SetScheduleApplier(func(values map[string]string) error {
+		calls++
+		applied = values
+		return nil
+	})
+	if _, err := svc.Update(context.Background(), map[string]string{"RANK_SCHEDULE_TIME": "0 3 * * *"}); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 || applied["RANK_SCHEDULE_TIME"] != "0 3 * * *" {
+		t.Fatalf("schedule applier not invoked with saved values: calls=%d values=%v", calls, applied)
+	}
+
+	svc.SetScheduleApplier(func(map[string]string) error { return errors.New("scheduler unavailable") })
+	saved, err := svc.Update(context.Background(), map[string]string{"RANK_SCHEDULE_TIME": "0 4 * * *"})
+	if err != nil {
+		t.Fatalf("schedule sync failure must not fail the save: %v", err)
+	}
+	if saved.Values["RANK_SCHEDULE_TIME"] != "0 4 * * *" {
+		t.Fatalf("saved value = %q", saved.Values["RANK_SCHEDULE_TIME"])
+	}
+}
+
 // TestSettingsPromptCapacity 防止长中文提示词被普通配置长度限制拒绝，并核对完整回读和清空。
 func TestSettingsPromptCapacity(t *testing.T) {
 	for _, key := range []string{"AGENT_SYSTEM_PROMPT", "TRANSLATION_PROMPT"} {

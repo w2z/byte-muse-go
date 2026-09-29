@@ -3,6 +3,7 @@ package collector
 import (
 	"bytemuse/backend/internal/ports"
 	"context"
+	"strings"
 	"testing"
 )
 
@@ -17,10 +18,18 @@ func TestAVBaseActorAndDate(t *testing.T) {
 	}
 }
 
+// TestRegistryAllowsAVBaseActor 锁定演员作品采集为已验收能力，避免被误判为未开放操作。
+func TestRegistryAllowsAVBaseActor(t *testing.T) {
+	f := &pageFetcher{body: `<script id="__NEXT_DATA__">{"page":"/talents/[name]","props":{"pageProps":{"page":1,"total":0,"works":[]}}}</script>`}
+	if _, e := NewRegistry(f).Collect(context.Background(), ports.CollectionRequest{Source: "avbase", Kind: "actor", Query: "演员甲", Page: 1}); e != nil || !strings.Contains(f.url, "/talents/") {
+		t.Fatalf("avbase actor=%v %s", e, f.url)
+	}
+}
+
 // TestAVBaseMetadata 验证 SSR 类型、显式 work_id、演员和日本本地发行日期。
 func TestAVBaseMetadata(t *testing.T) {
 	f := &pageFetcher{body: `<script id="__NEXT_DATA__">{"page":"/works","props":{"pageProps":{"page":1,"total":1,"works":[{"work_id":"TEST-001","title":"样例","min_date":"Mon Sep 28 2026 09:00:00 GMT+0900 (Japan Standard Time)","actors":[{"name":"演员甲","image_url":"https://img.example/a.jpg"}],"tags":[{"name":"标签甲"}],"products":[{"image_url":"https://img.example/c.jpg"}]}]}}}</script>`}
-	b, e := collectUnreleasedFixture(context.Background(), f, ports.CollectionRequest{Source: "avbase", Kind: "search", Query: "TEST", Page: 1})
+	b, e := NewRegistry(f).Collect(context.Background(), ports.CollectionRequest{Source: "avbase", Kind: "search", Query: "TEST", Page: 1})
 	if e != nil || len(b.Items) != 1 {
 		t.Fatalf("%+v %v", b, e)
 	}

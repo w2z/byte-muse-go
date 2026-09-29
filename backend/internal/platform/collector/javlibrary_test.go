@@ -9,7 +9,7 @@ import (
 // TestLibraryPages 保证新版 html 身份、显式番号及分页不受标题变动影响。
 func TestLibraryPages(t *testing.T) {
 	f := &pageFetcher{body: `<div class="videothumblist"><div class="video"><a href="./javabc.html"><div class="id">TEST-001</div><img src="https://img.example/1.jpg"><div class="title">测试</div></a></div></div><div class="page_selector"><a href="?page=2">下一页</a></div>`}
-	b, e := collectUnreleasedFixture(context.Background(), f, ports.CollectionRequest{Source: "javlibrary", Kind: "rank", Period: "wanted", Page: 1})
+	b, e := NewRegistry(f).Collect(context.Background(), ports.CollectionRequest{Source: "javlibrary", Kind: "rank", Period: "wanted", Page: 1})
 	if e != nil || len(b.Items) != 1 {
 		t.Fatalf("%+v %v", b, e)
 	}

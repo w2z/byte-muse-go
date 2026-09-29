@@ -8,12 +8,13 @@ servers:
 paths:
   /tags: {"get":{"operationId":"listTags","summary":"查询标签目录","description":"查询源站字典与影片已有标签的并集，包含无关联影片的源站标签。按关联影片数降序、名称升序分页。未知分类返回未分类；名称保留原文。读取不触发采集、订阅或下载。","parameters":[{"in":"cookie","name":"bytemuse_session","required":true,"description":"登录签发的 HttpOnly 会话 Cookie","schema":{"type":"string"}},{"in":"query","name":"page","description":"页码，从 1 开始","schema":{"type":"integer","minimum":1,"default":1}},{"in":"query","name":"page_size","description":"每页条数，最多 500；全部标签页面可选 100、200、300、400、500，默认 100","schema":{"type":"integer","minimum":1,"maximum":500,"default":15}},{"in":"query","name":"search","description":"标签名的字面子串；去掉首尾空格，省略或空串表示不限","schema":{"type":"string"}},{"in":"query","name":"subscription","description":"all 全部（默认）、active 已订阅、none 未订阅","schema":{"type":"string","enum":["all","active","none"],"default":"all"}},{"in":"query","name":"category","description":"标签类型；省略或空串不限","schema":{"type":"string","enum":["主题","角色","服装","体型","行为","玩法","类别","未分类"]}}],"responses":{"200":{"description":"标签分页目录；total 为匹配标签数，media_count 为关联影片数，不等同于媒体库已入库数量","content":{"application/json":{"schema":{"type":"object","required":["page","page_size","total","items"],"properties":{"page":{"type":"integer","description":"当前页码"},"page_size":{"type":"integer","description":"每页条数"},"total":{"type":"integer","description":"匹配标签总数"},"items":{"type":"array","description":"当前页标签；无结果为 []","items":{"type":"object","required":["name","category","media_count","limit_date"],"properties":{"name":{"type":"string","description":"标签名称，去掉首尾空格，非空"},"media_count":{"type":"integer","minimum":0,"description":"去重关联影片数量"},"category":{"type":"string","enum":["主题","角色","服装","体型","行为","玩法","类别","未分类"],"description":"来源字典分类；无可靠映射为未分类"},"limit_date":{"type":"string","nullable":true,"format":"date","description":"追新起始日 YYYY-MM-DD，包含当天；null 表示未订阅"}}}}}},"example":{"page":1,"page_size":15,"total":1,"items":[{"name":"制服","category":"服装","media_count":3,"limit_date":"2026-09-28"}]}}}},"400":{"description":"分页、订阅状态或分类无效","content":{"application/json":{"schema":{"type":"object","required":["code","message"],"properties":{"code":{"type":"string","description":"错误代码"},"message":{"type":"string","description":"中文错误说明"}}}}}},"401":{"description":"未登录或会话失效","content":{"application/json":{"schema":{"type":"object","required":["code","message"],"properties":{"code":{"type":"string","description":"错误代码"},"message":{"type":"string","description":"中文错误说明"}}}}}},"500":{"description":"查询失败","content":{"application/json":{"schema":{"type":"object","required":["code","message"],"properties":{"code":{"type":"string","description":"错误代码"},"message":{"type":"string","description":"中文错误说明"}}}}}},"503":{"description":"标签目录未就绪","content":{"application/json":{"schema":{"type":"object","required":["code","message"],"properties":{"code":{"type":"string","description":"错误代码"},"message":{"type":"string","description":"中文错误说明"}}}}}}}}}
   /tags/{tagName}/subscription: {"put":{"operationId":"saveTagSubscription","summary":"创建或编辑标签订阅","description":"保存日期后匹配本地目录，含起始日；未知发行日期不匹配。自动创建 strict 影片订阅，下载仍由现有流程执行。已入库、有已提交或未知下载记录、已有活动订阅的影片不重复订阅。处理台账防止恢复用户取消的影片订阅。规则保存后若追新失败返回 500，规则仍保留，后续 TAG_SCHEDULE_TIME 任务继续。","parameters":[{"in":"cookie","name":"bytemuse_session","required":true,"description":"登录签发的 HttpOnly 会话 Cookie","schema":{"type":"string"}},{"in":"path","name":"tagName","required":true,"description":"完整标签名称，路径需 URL 编码","schema":{"type":"string"}}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","required":["limit_date"],"properties":{"limit_date":{"type":"string","format":"date","description":"有效 YYYY-MM-DD 起始日期，不可空"}}},"example":{"limit_date":"2026-09-28"}}}},"responses":{"200":{"description":"保存后的标签状态","content":{"application/json":{"schema":{"type":"object","required":["name","category","media_count","limit_date"],"properties":{"name":{"type":"string","description":"标签名称，去掉首尾空格，非空"},"media_count":{"type":"integer","minimum":0,"description":"去重关联影片数量"},"category":{"type":"string","enum":["主题","角色","服装","体型","行为","玩法","类别","未分类"],"description":"来源字典分类；无可靠映射为未分类"},"limit_date":{"type":"string","nullable":true,"format":"date","description":"追新起始日 YYYY-MM-DD，包含当天；null 表示未订阅"}}},"example":{"name":"制服","category":"服装","media_count":3,"limit_date":"2026-09-28"}}}},"400":{"description":"请求体或限制日期无效","content":{"application/json":{"schema":{"type":"object","required":["code","message"],"properties":{"code":{"type":"string","description":"错误代码"},"message":{"type":"string","description":"中文错误说明"}}}}}},"401":{"description":"未登录或会话失效","content":{"application/json":{"schema":{"type":"object","required":["code","message"],"properties":{"code":{"type":"string","description":"错误代码"},"message":{"type":"string","description":"中文错误说明"}}}}}},"404":{"description":"标签不存在","content":{"application/json":{"schema":{"type":"object","required":["code","message"],"properties":{"code":{"type":"string","description":"错误代码"},"message":{"type":"string","description":"中文错误说明"}}}}}},"500":{"description":"规则保存或追新失败；tag_follow_pending 表示规则已保存，可重试或等待后续任务","content":{"application/json":{"schema":{"type":"object","required":["code","message"],"properties":{"code":{"type":"string","description":"错误代码"},"message":{"type":"string","description":"中文错误说明"}}}}}},"503":{"description":"标签目录未就绪","content":{"application/json":{"schema":{"type":"object","required":["code","message"],"properties":{"code":{"type":"string","description":"错误代码"},"message":{"type":"string","description":"中文错误说明"}}}}}}}},"delete":{"operationId":"cancelTagSubscription","summary":"取消标签订阅","description":"幂等清空标签起始日期，停止追新，保留已有影片订阅、下载历史与处理台账。","parameters":[{"in":"cookie","name":"bytemuse_session","required":true,"description":"登录签发的 HttpOnly 会话 Cookie","schema":{"type":"string"}},{"in":"path","name":"tagName","required":true,"description":"完整标签名称，路径需 URL 编码","schema":{"type":"string"}}],"responses":{"200":{"description":"保存后的标签状态","content":{"application/json":{"schema":{"type":"object","required":["name","category","media_count","limit_date"],"properties":{"name":{"type":"string","description":"标签名称，去掉首尾空格，非空"},"media_count":{"type":"integer","minimum":0,"description":"去重关联影片数量"},"category":{"type":"string","enum":["主题","角色","服装","体型","行为","玩法","类别","未分类"],"description":"来源字典分类；无可靠映射为未分类"},"limit_date":{"type":"string","nullable":true,"format":"date","description":"追新起始日 YYYY-MM-DD，包含当天；null 表示未订阅"}}},"example":{"name":"制服","category":"服装","media_count":3,"limit_date":null}}}},"400":{"description":"请求参数无效","content":{"application/json":{"schema":{"type":"object","required":["code","message"],"properties":{"code":{"type":"string","description":"错误代码"},"message":{"type":"string","description":"中文错误说明"}}}}}},"401":{"description":"未登录或会话失效","content":{"application/json":{"schema":{"type":"object","required":["code","message"],"properties":{"code":{"type":"string","description":"错误代码"},"message":{"type":"string","description":"中文错误说明"}}}}}},"404":{"description":"标签不存在","content":{"application/json":{"schema":{"type":"object","required":["code","message"],"properties":{"code":{"type":"string","description":"错误代码"},"message":{"type":"string","description":"中文错误说明"}}}}}},"500":{"description":"取消标签规则失败","content":{"application/json":{"schema":{"type":"object","required":["code","message"],"properties":{"code":{"type":"string","description":"错误代码"},"message":{"type":"string","description":"中文错误说明"}}}}}},"503":{"description":"标签目录未就绪","content":{"application/json":{"schema":{"type":"object","required":["code","message"],"properties":{"code":{"type":"string","description":"错误代码"},"message":{"type":"string","description":"中文错误说明"}}}}}}}}}
-  /collection/sources: {"get":{"operationId":"listCollectionSources","summary":"查询采集来源能力","responses":{"200":{"description":"当前可调用的数据源能力；不代表外站实时可达","content":{"application/json":{"schema":{"type":"array","items":{"$ref":"#/components/schemas/CollectionSource"}},"examples":{"sources":{"summary":"已实现来源列表","value":[{"id":"javdb","kinds":["search","detail","rank"]},{"id":"netflav","kinds":["search","detail"]}]}}}}},"401":{"description":"未登录","content":{"application/json":{"schema":{"type":"object","required":["code","message"],"properties":{"code":{"type":"string","description":"稳定错误代码"},"message":{"type":"string","description":"中文错误说明"}}}}}},"503":{"description":"采集服务未装配","content":{"application/json":{"schema":{"type":"object","required":["code","message"],"properties":{"code":{"type":"string","description":"稳定错误代码"},"message":{"type":"string","description":"中文错误说明"}}}}}}},"description":"仅开放既有 JavDB 与实网验证通过的 Netflav。JavLibrary、AVBase、JavBus、Jable、SupJav 后台访问受阻，暂不加入；Avgle 不可用不添加，ThisAV 明确排除。JavDB 保留既有能力，访问受阻时返回 source_blocked，不能当作空数据。需要登录 Cookie。","parameters":[{"in":"cookie","name":"bytemuse_session","required":true,"description":"登录签发的 HttpOnly 会话 Cookie，不在文档中填写真实值","schema":{"type":"string"}}]}}
-  /collection/runs: {"post":{"operationId":"enqueueCollection","summary":"异步提交采集任务","description":"COLLECT-02：仅接受已启用的 JavDB、Netflav。返回 202 仅表示持久化受理。JavDB 榜单自动采完所有分页；search/detail 仅采指定页。每个视频独立事务保存，成功不会被其他视频失败回滚。翻译在独立后台任务执行，不触发订阅判断或下载。每阶段最多 3 次尝试，失败任务保留。完整非空且视频全部成功的榜单才切换，空结果及失败保留旧榜。通过 Location 或 GET /collection/runs/{runId} 查看实际进度。需要登录 Cookie。","parameters":[{"in":"cookie","name":"bytemuse_session","required":true,"description":"登录签发的 HttpOnly 会话 Cookie，不在文档中填写真实值","schema":{"type":"string"}}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/CollectionRequest"},"example":{"source":"javdb","kind":"rank","period":"daily","page":1}}}},"responses":{"202":{"description":"已入队，未保证采集成功","headers":{"Location":{"description":"批次状态地址，包含 /api/v1","schema":{"type":"string"}}},"content":{"application/json":{"schema":{"$ref":"#/components/schemas/CollectionRun"},"example":{"run_id":"0123456789abcdef0123456789abcdef","request":{"source":"javdb","kind":"rank","period":"daily","page":1},"status":"queued","crawl_status":"queued","pages":0,"discovered":0,"saved":0,"failed":0,"pending":0,"translated":0,"translation_failed":0,"translation_pending":0,"rank_published":false,"counts":{"fetched":0,"new":0,"existing":0,"inserted":0,"media_inserted":0,"actors_inserted":0},"created_at":"2026-09-28T02:00:00Z"}}}},"400":{"description":"来源、类型或参数无效","content":{"application/json":{"schema":{"type":"object","required":["code","message"],"properties":{"code":{"type":"string","description":"错误代码"},"message":{"type":"string","description":"中文说明"}}}}}},"401":{"description":"未登录","content":{"application/json":{"schema":{"type":"object","required":["code","message"],"properties":{"code":{"type":"string","description":"错误代码"},"message":{"type":"string","description":"中文说明"}}}}}},"500":{"description":"任务登记失败","content":{"application/json":{"schema":{"type":"object","required":["code","message"],"properties":{"code":{"type":"string","description":"错误代码"},"message":{"type":"string","description":"中文说明"}}}}}},"503":{"description":"采集服务未装配","content":{"application/json":{"schema":{"type":"object","required":["code","message"],"properties":{"code":{"type":"string","description":"错误代码"},"message":{"type":"string","description":"中文说明"}}}}}}}}}
+  /collection/sources: {"get":{"operationId":"listCollectionSources","summary":"查询采集来源能力","responses":{"200":{"description":"当前可调用的数据源能力；不代表外站实时可达","content":{"application/json":{"schema":{"type":"array","items":{"$ref":"#/components/schemas/CollectionSource"}},"examples":{"sources":{"summary":"已实现来源列表","value":[{"id":"javdb","kinds":["search","detail","rank"]},{"id":"netflav","kinds":["search","detail"]},{"id":"javlibrary","kinds":["rank"]},{"id":"avbase","kinds":["search","actor"]},{"id":"jable","kinds":["search"]},{"id":"supjav","kinds":["search"]}]}}}}},"401":{"description":"未登录","content":{"application/json":{"schema":{"type":"object","required":["code","message"],"properties":{"code":{"type":"string","description":"稳定错误代码"},"message":{"type":"string","description":"中文错误说明"}}}}}},"503":{"description":"采集服务未装配","content":{"application/json":{"schema":{"type":"object","required":["code","message"],"properties":{"code":{"type":"string","description":"稳定错误代码"},"message":{"type":"string","description":"中文错误说明"}}}}}}},"description":"COLLECT-03：开放 JavDB search/detail/rank、Netflav search/detail、JavLibrary rank（仅 wanted 最想要榜）、AVBase search/actor（actor 为演员作品，query 传演员名）、Jable/SupJav search。仅开放已验证能力；JavBus 人工验证未通过、Avgle 不可用、ThisAV 明确排除。来源目录不是实时健康检测；访问失败明确报错，不当作空数据。需要登录 Cookie。","parameters":[{"in":"cookie","name":"bytemuse_session","required":true,"description":"登录签发的 HttpOnly 会话 Cookie，不在文档中填写真实值","schema":{"type":"string"}}]}}
+  /collection/runs: {"post":{"operationId":"enqueueCollection","summary":"异步提交采集任务","description":"COLLECT-03：仅接受 /collection/sources 公布的来源和能力。JavDB 榜单周期 daily/weekly/monthly；JavLibrary 仅 wanted。返回 202 仅表示持久化受理。榜单自动采完所有分页；search/detail 仅采指定页，不自动展开详情。每个视频独立事务保存，成功不被其他视频失败回滚；无可靠番号只保存来源快照，不猜测关联影片。翻译在独立后台任务执行，不触发订阅判断或下载。每阶段最多 3 次尝试，失败任务保留。完整非空且视频全部成功的榜单才切换，空结果及失败保留旧榜，不同来源榜单互不覆盖。通过 Location 或 GET /collection/runs/{runId} 查看进度。需要登录 Cookie。","parameters":[{"in":"cookie","name":"bytemuse_session","required":true,"description":"登录签发的 HttpOnly 会话 Cookie，不在文档中填写真实值","schema":{"type":"string"}}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/CollectionRequest"},"example":{"source":"javdb","kind":"rank","period":"daily","page":1}}}},"responses":{"202":{"description":"已入队，未保证采集成功","headers":{"Location":{"description":"批次状态地址，包含 /api/v1","schema":{"type":"string"}}},"content":{"application/json":{"schema":{"$ref":"#/components/schemas/CollectionRun"},"example":{"run_id":"0123456789abcdef0123456789abcdef","request":{"source":"javdb","kind":"rank","period":"daily","page":1},"status":"queued","crawl_status":"queued","pages":0,"discovered":0,"saved":0,"failed":0,"pending":0,"translated":0,"translation_failed":0,"translation_pending":0,"rank_published":false,"counts":{"fetched":0,"new":0,"existing":0,"inserted":0,"media_inserted":0,"actors_inserted":0},"created_at":"2026-09-28T02:00:00Z"}}}},"400":{"description":"来源、类型或参数无效","content":{"application/json":{"schema":{"type":"object","required":["code","message"],"properties":{"code":{"type":"string","description":"错误代码"},"message":{"type":"string","description":"中文说明"}}}}}},"401":{"description":"未登录","content":{"application/json":{"schema":{"type":"object","required":["code","message"],"properties":{"code":{"type":"string","description":"错误代码"},"message":{"type":"string","description":"中文说明"}}}}}},"500":{"description":"任务登记失败","content":{"application/json":{"schema":{"type":"object","required":["code","message"],"properties":{"code":{"type":"string","description":"错误代码"},"message":{"type":"string","description":"中文说明"}}}}}},"503":{"description":"采集服务未装配","content":{"application/json":{"schema":{"type":"object","required":["code","message"],"properties":{"code":{"type":"string","description":"错误代码"},"message":{"type":"string","description":"中文说明"}}}}}}}}}
   /collection/runs/{runId}: {"get":{"operationId":"getCollectionRun","summary":"查询异步采集批次进度","description":"只读查询持久化状态；单个视频失败不影响其他视频。未启用翻译时不创建翻译任务。错误代码不包含上游正文或凭据。 CF 验证按 BYPASS_ENGINE/BYPASS_URL 尝试一次增强；普通 403、限流、登录页不自动增强。登录要求、增强失败与源站拒绝通过 error 区分。","parameters":[{"in":"cookie","name":"bytemuse_session","required":true,"description":"登录签发的 HttpOnly 会话 Cookie，不在文档中填写真实值","schema":{"type":"string"}},{"in":"path","name":"runId","required":true,"schema":{"type":"string"},"description":"提交接口返回的 run_id"}],"responses":{"200":{"description":"当前各阶段状态及累计计数","content":{"application/json":{"schema":{"$ref":"#/components/schemas/CollectionRun"},"example":{"run_id":"0123456789abcdef0123456789abcdef","request":{"source":"javdb","kind":"rank","period":"daily","page":1},"status":"completed","crawl_status":"done","pages":2,"discovered":40,"saved":40,"failed":0,"pending":0,"translated":0,"translation_failed":0,"translation_pending":0,"rank_published":true,"counts":{"fetched":40,"new":40,"existing":0,"inserted":40,"media_inserted":40,"actors_inserted":0},"created_at":"2026-09-28T02:00:00Z"}}}},"401":{"description":"未登录","content":{"application/json":{"schema":{"type":"object","required":["code","message"],"properties":{"code":{"type":"string","description":"错误代码"},"message":{"type":"string","description":"中文说明"}}}}}},"404":{"description":"批次不存在","content":{"application/json":{"schema":{"type":"object","required":["code","message"],"properties":{"code":{"type":"string","description":"错误代码"},"message":{"type":"string","description":"中文说明"}}}}}},"500":{"description":"读取状态失败","content":{"application/json":{"schema":{"type":"object","required":["code","message"],"properties":{"code":{"type":"string","description":"错误代码"},"message":{"type":"string","description":"中文说明"}}}}}},"503":{"description":"采集服务未装配","content":{"application/json":{"schema":{"type":"object","required":["code","message"],"properties":{"code":{"type":"string","description":"错误代码"},"message":{"type":"string","description":"中文说明"}}}}}}}}}
   /auth/login:
     post:
       operationId: login
+      summary: 登录
       security: []
       requestBody:
         required: true
@@ -60,6 +61,7 @@ paths:
   /dashboard:
     get:
       operationId: getDashboard
+      summary: 查询仪表盘概览
       responses:
         '200':
           description: 仪表盘汇总
@@ -70,6 +72,7 @@ paths:
   /media:
     get:
       operationId: listMedia
+      summary: 查询媒体库
       parameters:
         - $ref: '#/components/parameters/Page'
         - $ref: '#/components/parameters/PageSize'
@@ -182,6 +185,7 @@ paths:
     get:
       operationId: listReleaseToday
       summary: 查询今日上新
+      description: 仅查询数据库中发布日期等于服务当前本地日期的媒体，不注入 Mock 或演示数据。
       parameters:
         - $ref: '#/components/parameters/Page'
         - $ref: '#/components/parameters/PageSize'
@@ -196,6 +200,7 @@ paths:
     get:
       operationId: listRecommendations
       summary: 查询推荐
+      description: 使用已订阅、已完成或已入库媒体建立偏好画像，对发行日期处于前后一个月窗口内的未订阅媒体打分：标签 ×1、演员 ×5（仅候选影片演员数不超过 3 时计入）、系列 ×2、厂牌 ×2，每个维度取出现次数最多的前 10 个值参与加权；仅返回得分大于 0 的结果，按得分、发行日期降序、内部 ID 升序排列。没有偏好数据时返回空列表，不注入 Mock 或演示数据。
       parameters:
         - $ref: '#/components/parameters/Page'
         - $ref: '#/components/parameters/PageSize'
@@ -246,6 +251,7 @@ paths:
     put:
       operationId: saveActorSubscription
       summary: 创建或编辑演员订阅
+      description: 保存日期后匹配本地已入库影片并自动建立 strict 影片订阅：仅订阅发行日期严格晚于截止日期、番号不含 VR、演员数不超过 MAX_ACTOR、且未在库或已有活动订阅/下载记录的影片。处理台账防止恢复用户取消的影片订阅。规则保存后若追新失败返回 500，规则仍保留，后续 ACTOR_SCHEDULE_TIME 任务继续；该任务同时按已订阅演员入队 AVBase 演员作品采集。
       requestBody:
         required: true
         content:
@@ -259,6 +265,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Actor'
+        '500':
+          description: 演员规则已保存但追新未完成（actor_follow_pending）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '400':
           description: 日期不是 YYYY-MM-DD 格式
           content:
@@ -283,6 +295,7 @@ paths:
   /subscriptions:
     get:
       operationId: listSubscriptions
+      summary: 查询订阅列表
       parameters:
         - $ref: '#/components/parameters/Page'
         - $ref: '#/components/parameters/PageSize'
@@ -300,6 +313,7 @@ paths:
                 $ref: '#/components/schemas/SubscriptionPage'
     post:
       operationId: createSubscription
+      summary: 创建订阅
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
@@ -346,7 +360,7 @@ paths:
     post:
       operationId: enqueueSubscriptionDownload
       summary: 为活动订阅登记资源搜索与下载任务
-      description: 重复请求返回已有任务；任务由后台处理。当前已验证的 BT 来源是 Nyaa BT（sukebei.nyaa.si）。
+      description: 将活动订阅登记为持久化任务，由后台搜索 PT（已接入馒头）和 Nyaa BT（sukebei.nyaa.si）资源。重复请求返回已有任务；202 不代表下载器已受理。需要登录。
       parameters:
         - $ref: '#/components/parameters/SubscriptionId'
       responses:
@@ -498,15 +512,39 @@ paths:
       responses:
         '202':
           description: 任务已开始执行
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [message]
+                properties:
+                  message: {type: string, description: 固定为“任务已开始执行”}
+              example: {message: 任务已开始执行}
+        '400':
+          description: 任务名称无效
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
         '404':
           description: 定时任务不存在
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
         '409':
           description: 任务正在执行中
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '503':
+          description: 调度器尚未就绪
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
   /logs:
     get:
       operationId: listLogs
       summary: 查询持久化系统日志
-      description: 查询数据库中持久化的系统日志；服务重启后日志仍然保留。
+      description: 查询数据库中持久化的系统日志，支持分页、分类、级别、关键词和时间段筛选；服务重启后日志仍然保留。附加字段按原值保存，不进行敏感值脱敏。
       parameters:
         - name: page
           in: query
@@ -618,6 +656,7 @@ paths:
   /system/settings:
     get:
       operationId: getSystemSettings
+      summary: 读取系统设置
       description: 已登录管理员读取站点鉴权类型与独立凭据；PTFans、NicePT、RousiPro 支持密钥或 Cookie 搜索取种，PTTime 仅使用 Cookie。
       parameters:
         - {in: cookie, name: bytemuse_session, required: true, schema: {type: string}, description: 登录签发的管理员会话 Cookie，不在示例中填写真实值}
@@ -634,7 +673,8 @@ paths:
                 configured: {PTFANS_API_KEY: true, PTFANS_COOKIE: true}
     put:
       operationId: updateSystemSettings
-      description: 原子保存当前分组；密钥与 Cookie 分别加密保存，切换类型不清除隐藏凭据。AGENT_SYSTEM_PROMPT 和 TRANSLATION_PROMPT 各允许最多 61440 个 UTF-8 字节，其他值最多 8192 字节；超限返回 400 invalid_setting，message 包含字段名、字节上限和当前字节数，整批不写入。
+      summary: 保存系统设置
+      description: 原子保存当前分组；密钥与 Cookie 分别加密保存，切换类型不清除隐藏凭据。AGENT_SYSTEM_PROMPT 和 TRANSLATION_PROMPT 各允许最多 61440 个 UTF-8 字节，其他值最多 8192 字节；按去除首尾空白前的输入计算，超限返回 400 invalid_setting，message 包含字段名、字节上限和当前字节数，整批不写入且不截断。
       parameters:
         - {in: cookie, name: bytemuse_session, required: true, schema: {type: string}, description: 登录签发的管理员会话 Cookie，不在示例中填写真实值}
       requestBody:
@@ -666,7 +706,7 @@ paths:
     post:
       operationId: testOpenAI
       summary: 测试 OpenAI 连接
-      description: 使用当前表单草稿发起一次简短 chat/completions 请求，收到非空回复才成功。无需保存或启用 Agent，不读写设置，不返回模型原文或密钥；30 秒超时，不重试，不跟随重定向。
+      description: 使用当前表单草稿发起一次简短 chat/completions 请求，收到非空回复才成功。无需保存或启用 Agent，不读写设置，不返回模型原文或密钥；30 秒超时，不重试，不跟随重定向。配置或请求体错误返回 400，上游鉴权、额度、模型、超时、网络与响应校验失败统一返回 502，失败原因均为本地生成的脱敏中文说明。
       parameters:
         - {in: cookie, name: bytemuse_session, required: true, schema: {type: string}, description: 登录签发的管理员会话 Cookie}
       requestBody:
@@ -708,9 +748,72 @@ paths:
             application/json:
               schema: {$ref: '#/components/schemas/Error'}
               example: {code: openai_test_failed, message: 'OpenAI 连接失败 (892ms)：鉴权失败（HTTP 401），请检查 API Key 和模型权限'}
+  /message:
+    get:
+      operationId: verifyWeChatCallback
+      summary: 企业微信回调地址校验
+      description: 企业微信在保存回调 URL 时发起。用 msg_signature、timestamp、nonce 校验签名，解密 echostr 后原样回写明文。不要求登录会话，安全性由回调签名与 AES 解密保证。未配置 WECHAT_TOKEN、WECHAT_ENCODING_AES_KEY 或 WECHAT_CORP_ID 时返回 503。
+      parameters:
+        - {name: msg_signature, in: query, required: true, description: 企业微信回调签名，sha1 十六进制小写, schema: {type: string}}
+        - {name: timestamp, in: query, required: true, description: 回调时间戳（秒）, schema: {type: string}}
+        - {name: nonce, in: query, required: true, description: 回调随机串, schema: {type: string}}
+        - {name: echostr, in: query, required: true, description: 加密的回显字符串，解密后原样回写, schema: {type: string}}
+      responses:
+        '200':
+          description: 校验成功，响应体为解密后的明文 echostr
+          content:
+            text/plain:
+              schema: {type: string}
+              example: '1616140317555161061'
+        '400':
+          description: 参数缺失、签名校验失败或解密失败
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+              example: {code: wechat_verify_failed, message: 回调校验失败}
+        '503':
+          description: 企业微信回调未配置
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+              example: {code: wechat_not_configured, message: 企业微信回调未配置}
+    post:
+      operationId: receiveWeChatMessage
+      summary: 接收企业微信应用消息
+      description: 解密企业微信应用消息并交给渠道 Agent。支持 MsgType=text 的文本消息，以及 MsgType=event 且 Event=template_card_event 的模板卡片按钮点击（EventKey 即按钮载荷，形如 bm:pause:SSIS-001）；其他消息返回 200 且不产生回复。发送番号返回带封面与操作按钮的模板卡片，按钮点击执行订阅、取消订阅、开始下载、暂停、继续、重试等确定性业务，该流程不经过 AI 对话；只有中文自然语言提问才进入 Agent 对话。企业微信要求 5 秒内响应，因此本接口先返回空响应，回复通过应用消息接口异步发送，形态可能是文本、图文或模板卡片。不要求登录会话，安全性由回调签名与 AES 解密保证。
+      parameters:
+        - {name: msg_signature, in: query, required: true, description: 企业微信回调签名，sha1 十六进制小写, schema: {type: string}}
+        - {name: timestamp, in: query, required: true, description: 回调时间戳（秒）, schema: {type: string}}
+        - {name: nonce, in: query, required: true, description: 回调随机串, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/xml:
+            schema: {type: string}
+            example: '<xml><ToUserName><![CDATA[ww1234567890abcdef]]></ToUserName><Encrypt><![CDATA[base64-encrypted-payload]]></Encrypt><AgentID><![CDATA[1000002]]></AgentID></xml>'
+      responses:
+        '200':
+          description: 已受理。响应体为空，回复不在此响应返回
+          content:
+            text/plain:
+              schema: {type: string}
+              example: ''
+        '400':
+          description: 请求体超限、签名校验失败或解密失败
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+              example: {code: wechat_decrypt_failed, message: 回调校验失败}
+        '503':
+          description: 企业微信回调未配置
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+              example: {code: wechat_not_configured, message: 企业微信回调未配置}
   /health/live:
     get:
       operationId: live
+      summary: 存活探针
       security: []
       responses:
         '200':
@@ -722,6 +825,7 @@ paths:
   /health/ready:
     get:
       operationId: ready
+      summary: 就绪探针
       security: []
       responses:
         '200':
@@ -803,14 +907,14 @@ components:
           schema:
             $ref: '#/components/schemas/Error'
   schemas:
-    CollectionRequest: {"type":"object","required":["source","kind"],"additionalProperties":false,"properties":{"source":{"type":"string","enum":["javdb","netflav"],"description":"数据来源；支持能力以 /collection/sources 为准"},"kind":{"type":"string","enum":["search","detail","rank"],"description":"search 关键词；detail 站内影片 ID；rank JavDB 有码影片榜。能力组合以 /collection/sources 为准"},"query":{"type":"string","maxLength":200,"description":"非 rank 必填；detail 为站内 source_id，不能是 URL"},"period":{"type":"string","enum":["daily","weekly","monthly"],"description":"JavDB 有码榜周期：daily 日榜、weekly 周榜、monthly 月榜"},"page":{"type":"integer","minimum":0,"maximum":100,"default":1,"description":"省略或 0 按 1；rank 只能从第 1 页启动并自动采至末页，内部翻页无 100 页限制；search 手动单页 1..100；detail 仅 1"}}}
+    CollectionRequest: {"type":"object","required":["source","kind"],"additionalProperties":false,"properties":{"source":{"type":"string","enum":["javdb","netflav","javlibrary","avbase","jable","supjav"],"description":"数据来源；支持能力以 /collection/sources 为准"},"kind":{"type":"string","enum":["search","detail","rank","actor"],"description":"search 关键词搜索；detail 站内影片 ID；rank 影片榜单；actor 演员作品（AVBase /talents，query 为演员名）。来源与能力组合严格以 /collection/sources 为准，未公布的组合拒绝受理"},"query":{"type":"string","maxLength":200,"description":"非 rank 必填；detail 为站内 source_id，不能是 URL"},"period":{"type":"string","enum":["daily","weekly","monthly","wanted"],"description":"rank 必填：JavDB daily 日榜、weekly 周榜、monthly 月榜；JavLibrary 仅 wanted 最想要榜。其他榜单未开放"},"page":{"type":"integer","minimum":0,"maximum":100,"default":1,"description":"省略或 0 按 1；rank 只能从第 1 页启动并自动采至末页，内部翻页无 100 页限制；search 手动单页 1..100；detail 仅 1"}}}
     CollectedActor: {"type":"object","required":["name"],"properties":{"name":{"type":"string","description":"站点提供的演员名称"},"photo":{"type":"string","description":"演员头像地址；缺失时省略"}}}
     CollectedMedia: {"type":"object","required":["source_id","url","title","actors","tags"],"properties":{"source_id":{"type":"string","description":"来源站点内的稳定 ID，与 source 联合唯一"},"url":{"type":"string","description":"来源详情页地址"},"code":{"type":"string","description":"可靠番号；未识别时省略，不根据标题强行关联影片"},"title":{"type":"string","description":"原始标题"},"poster_url":{"type":"string","description":"封面地址；缺失时省略"},"release_date":{"type":"string","description":"发行日期 YYYY-MM-DD；无法确认时省略"},"duration_minutes":{"type":"integer","description":"时长，单位分钟；缺失时省略"},"actors":{"type":"array","items":{"$ref":"#/components/schemas/CollectedActor"},"description":"演员资料；未知时为空数组"},"tags":{"type":"array","items":{"type":"string"},"description":"站点标签；未知时为空数组"},"video_type":{"type":"string","enum":["censored","uncensored","uncensored_cracked","leaked"],"description":"明确的影片单值类型：有码、无码、无码破解、流出；未知时省略，不猜测，不覆盖既有影片分类"}}}
     CollectionSource: {"type":"object","required":["id","kinds"],"properties":{"id":{"type":"string","description":"来源标识"},"kinds":{"type":"array","items":{"type":"string"},"description":"实际已实现的查询类型"}}}
     CollectionBatch: {"type":"object","required":["items","actors","has_more"],"properties":{"items":{"type":"array","items":{"$ref":"#/components/schemas/CollectedMedia"},"description":"本页影片来源记录"},"actors":{"type":"array","items":{"$ref":"#/components/schemas/CollectedActor"},"description":"本页独立演员资料"},"has_more":{"type":"boolean","description":"站点明确提供下一页；不会自动追页"}}}
     CollectionCounts: {"type":"object","required":["fetched","new","existing","inserted","media_inserted","actors_inserted"],"properties":{"fetched":{"type":"integer","minimum":0,"description":"按来源 ID 去重后的有效影片记录数"},"new":{"type":"integer","minimum":0,"description":"按来源 ID 去重后的新记录数"},"existing":{"type":"integer","minimum":0,"description":"按来源 ID 去重后的已有记录数"},"inserted":{"type":"integer","minimum":0,"description":"事务成功插入的来源记录数"},"media_inserted":{"type":"integer","minimum":0,"description":"新建影片目录数；无番号记录不计入"},"actors_inserted":{"type":"integer","minimum":0,"description":"新建演员数；保留已有演员订阅日期"}}}
     CollectionResult: {"type":"object","required":["request","batch","counts","completed_at"],"properties":{"request":{"$ref":"#/components/schemas/CollectionRequest"},"batch":{"$ref":"#/components/schemas/CollectionBatch"},"counts":{"$ref":"#/components/schemas/CollectionCounts"},"completed_at":{"type":"string","format":"date-time","description":"事务提交完成时间，UTC RFC3339"}}}
-CollectionRun: {"type":"object","required":["run_id","request","status","crawl_status","rank_published","counts","created_at","pages","discovered","saved","failed","pending","translated","translation_failed","translation_pending"],"properties":{"run_id":{"type":"string","description":"持久化采集批次 ID"},"request":{"$ref":"#/components/schemas/CollectionRequest"},"status":{"type":"string","enum":["queued","running","completed","partial_failed","failed"],"description":"整体状态；failed 表示分页最终失败，此时已排队视频仍继续处理；partial_failed 表示入库或翻译有最终失败"},"crawl_status":{"type":"string","enum":["queued","done","failed"],"description":"分页采集状态；done 不代表视频或翻译已完成"},"rank_published":{"type":"boolean","description":"该批次曾完整发布榜单；不表示仍是最新榜单"},"error":{"type":"string","description":"最近可见的脱敏阶段错误代码；无错误省略。source_cookie_required：明确登录要求，需有效登录 Cookie；source_blocked：仍有验证或普通拒绝访问，不一定需要 Cookie；bypass_unavailable：增强服务未知失败或返回无效结果；bypass_timeout：增强等待超时；bypass_captcha_required：增强明确要求人工验证码；bypass_proxy_failed：浏览器代理连接或认证失败；bypass_browser_failed：远程浏览器启动失败或崩溃；bypass_session_failed：远程会话失效；bypass_target_unavailable：浏览器访问目标站点的网络错误；source_interactive_verification：源站要求人工年龄或驾驶验证；bypass_config_invalid：增强地址无效或协议未支持；source_unavailable：源站网络/服务错误；source_rate_limited：源站限流；source_format_changed：页面结构变化。错误不包含 Cookie、原始页面或服务错误正文"},"counts":{"$ref":"#/components/schemas/CollectionCounts"},"created_at":{"type":"string","format":"date-time","description":"批次创建时间，UTC"},"pages":{"type":"integer","minimum":0,"description":"已成功解析并登记的页数"},"discovered":{"type":"integer","minimum":0,"description":"按站内 ID 去重后的已发现视频数"},"saved":{"type":"integer","minimum":0,"description":"已独立事务保存的视频数，包含已有影片"},"failed":{"type":"integer","minimum":0,"description":"最终失败的视频数"},"pending":{"type":"integer","minimum":0,"description":"待入库或正在重试的视频数"},"translated":{"type":"integer","minimum":0,"description":"已完成翻译阶段数，含处理前已有译文而跳过的任务"},"translation_failed":{"type":"integer","minimum":0,"description":"最终失败的翻译任务数"},"translation_pending":{"type":"integer","minimum":0,"description":"待翻译或正在重试的任务数"}}}
+    CollectionRun: {"type":"object","required":["run_id","request","status","crawl_status","rank_published","counts","created_at","pages","discovered","saved","failed","pending","translated","translation_failed","translation_pending"],"properties":{"run_id":{"type":"string","description":"持久化采集批次 ID"},"request":{"$ref":"#/components/schemas/CollectionRequest"},"status":{"type":"string","enum":["queued","running","completed","partial_failed","failed"],"description":"整体状态；failed 表示分页最终失败，此时已排队视频仍继续处理；partial_failed 表示入库或翻译有最终失败"},"crawl_status":{"type":"string","enum":["queued","done","failed"],"description":"分页采集状态；done 不代表视频或翻译已完成"},"rank_published":{"type":"boolean","description":"该批次曾完整发布榜单；不表示仍是最新榜单"},"error":{"type":"string","description":"最近可见的脱敏阶段错误代码；无错误省略。source_cookie_required：明确登录要求，需有效登录 Cookie；source_blocked：仍有验证或普通拒绝访问，不一定需要 Cookie；bypass_unavailable：增强服务未知失败或返回无效结果；bypass_timeout：增强等待超时；bypass_captcha_required：增强明确要求人工验证码；bypass_proxy_failed：浏览器代理连接或认证失败；bypass_browser_failed：远程浏览器启动失败或崩溃；bypass_session_failed：远程会话失效；bypass_target_unavailable：浏览器访问目标站点的网络错误；source_interactive_verification：源站要求人工年龄或驾驶验证；bypass_config_invalid：增强地址无效或协议未支持；source_unavailable：源站网络/服务错误；source_rate_limited：源站限流；source_format_changed：页面结构变化。错误不包含 Cookie、原始页面或服务错误正文"},"counts":{"$ref":"#/components/schemas/CollectionCounts"},"created_at":{"type":"string","format":"date-time","description":"批次创建时间，UTC"},"pages":{"type":"integer","minimum":0,"description":"已成功解析并登记的页数"},"discovered":{"type":"integer","minimum":0,"description":"按站内 ID 去重后的已发现视频数"},"saved":{"type":"integer","minimum":0,"description":"已独立事务保存的视频数，包含已有影片"},"failed":{"type":"integer","minimum":0,"description":"最终失败的视频数"},"pending":{"type":"integer","minimum":0,"description":"待入库或正在重试的视频数"},"translated":{"type":"integer","minimum":0,"description":"已完成翻译阶段数，含处理前已有译文而跳过的任务"},"translation_failed":{"type":"integer","minimum":0,"description":"最终失败的翻译任务数"},"translation_pending":{"type":"integer","minimum":0,"description":"待翻译或正在重试的任务数"}}}
     LoginRequest:
       type: object
       required: [username, password]
@@ -1042,7 +1146,7 @@ CollectionRun: {"type":"object","required":["run_id","request","status","crawl_s
           minimum: 1
           description: 乐观锁版本；每次编辑成功后加一，取消接口返回删除前的快照且不再持久化该记录
         media:
-          description: 订阅列表内嵌的媒体卡片数据；单条写操作响应可省略
+          description: 订阅内嵌的媒体卡片数据；订阅列表、创建、编辑与取消订阅的响应统一包含该字段，客户端无需再按 media_id 反查
           $ref: '#/components/schemas/Media'
     SubscriptionSummary:
       type: object
@@ -1285,9 +1389,22 @@ CollectionRun: {"type":"object","required":["run_id","request","status","crawl_s
             PTFANS_API_KEY、ROUSIPRO_API_KEY、NICEPT_API_KEY 是分别加密保存的密钥，空值表示未配置；
             三站支持密钥分页搜索和种子下载；密钥与 Cookie 独立保存，切换模式不清除另一种凭据，密钥模式不回退 Cookie。
             PTTime 仅使用 PTT_COOKIE 搜索和下载，不使用受限 RSS。PTT_AUTH_TYPE、PTT_PASSKEY、PTT_UID 为兼容历史配置保留，运行时不读取，设置页不再提供。
-            MAIN_SITE 取 ALL / 馒头 / BT / PTT / NicePT / PTFans / RousiPro；PTFANS_COOKIE 用于 PTFans 9KG 专区，ROUSIPRO_COOKIE 用于 RousiPro 9KG 目录，均为加密保存的管理员凭据，空值表示未配置；旧 ROUSI_COOKIE 不再显示或接受写入。IMAGE_MODE 取 INVISIBLE / VISIBLE / BLUR；PT_DEFAULT_DOWNLOADER 取 qbittorrent / transmission；BT_DEFAULT_DOWNLOADER 取 qbittorrent / transmission / aria2 / thunder（不含 CloudDrive2）；BYPASS_ENGINE 取 cloudflare_bypass_for_scraping / flaresolverr / scrapling，空值表示关闭；BYPASS_URL 为所选增强服务地址；LOG_RETENTION_DAYS 为日志保留天数，默认 30，0 或空值表示不自动删除；TRANSLATION_ENGINE 取 none / openai / google / baidu / deeplx；DEEPLX_URL 为 DeepLX 服务地址（例如 http://127.0.0.1:1188）；TRANSLATION_PROMPT 仅在 OpenAI 翻译时作为翻译 system prompt，留空使用内置提示词；AGENT_SYSTEM_PROMPT 仅用于 Telegram/Agent 对话，留空使用内置提示词。
+            MAIN_SITE 取 ALL / 馒头 / BT / PTT / NicePT / PTFans / RousiPro；PTFANS_COOKIE 用于 PTFans 9KG 专区，ROUSIPRO_COOKIE 用于 RousiPro 9KG 目录，均为加密保存的管理员凭据，空值表示未配置；旧 ROUSI_COOKIE 不再显示或接受写入。IMAGE_MODE 取 INVISIBLE / VISIBLE / BLUR；PT_DEFAULT_DOWNLOADER 取 qbittorrent / transmission；BT_DEFAULT_DOWNLOADER 取 qbittorrent / transmission / aria2 / thunder（不含 CloudDrive2）；BYPASS_ENGINE 取 cloudflare_bypass_for_scraping / flaresolverr / scrapling，空值表示关闭；BYPASS_URL 为所选增强服务地址；LOG_RETENTION_DAYS 为日志保留天数，默认 30，0 或空值表示不自动删除；TRANSLATION_ENGINE 取 none / openai / google / baidu / deeplx；DEEPLX_URL 为 DeepLX 服务地址，可只填服务地址（例如 http://127.0.0.1:1188）或直接填 /translate 完整地址；TRANSLATION_PROMPT 仅在 OpenAI 翻译时作为翻译 system prompt，留空使用内置提示词；翻译的 OpenAI 兼容配置独立保存在 TRANSLATION_OPENAI_URL、TRANSLATION_OPENAI_MODEL、TRANSLATION_OPENAI_API_KEY，与对话 Agent 的配置互不影响，三者任一为空时 OpenAI 翻译引擎视为未配置，设置页禁用 OpenAI 选项并把已选引擎回落为 none；AGENT_ENABLE 为 true 时启用 Telegram 与企业微信的对话 Agent，默认 false；Agent 使用 OPENAI_URL、OPENAI_MODEL、OPENAI_API_KEY，三者任一为空时对话入口返回未启用提示，斜杠命令与番号订阅不受影响；AGENT_SYSTEM_PROMPT 仅用于渠道 Agent 对话，留空使用内置提示词。
+            GOOGLE_API_KEY 为 Google Cloud Translation API 密钥，留空时 Google 引擎改用免密钥接口（无需申请，按来源 IP 限流）；填写后走官方接口，配额与计费按 key 所属项目结算。
+            BAIDU_APP_ID 与 BAIDU_API_KEY 为百度翻译开放平台的 APPID 与开发者密钥（密钥），请求按 MD5(appid+q+salt+密钥) 计算 sign 签名，需先在开放平台开通文本翻译服务，二者任一为空时百度引擎视为未配置。
+            微信与 Telegram 各自独立的消息通知开关：前缀分别为 WECHAT_NOTIFY_ 与 TELEGRAM_NOTIFY_，
+            后缀取 SUBSCRIBE、SUBSCRIBE_FAILED、DOWNLOAD_START、DOWNLOAD_COMPLETE、DOWNLOAD_FAILED、AGENT_CHAT，
+            依次对应订阅成功、订阅失败、开始下载、下载完成、下载失败与 Agent 对话。
+            推送类通知默认 false，升级后不自动开启；AGENT_CHAT 默认 true，控制该渠道是否允许自然语言对话，关闭后斜杠命令与番号订阅仍可用。
+            推送目标分别取 WECHAT_TO_USER 与 TELEGRAM_CHAT_ID，目标为空或渠道未配置时跳过推送。
+            RANK_SCHEDULE_TIME、ACTOR_SCHEDULE_TIME、TAG_SCHEDULE_TIME、DOWNLOAD_SCHEDULE_TIME 为标准 5 段 cron
+            （分 时 日 月 周，如 0 20 * * * 表示每天 20:00），空值表示不注册该定时任务；非法表达式保存时返回 400 invalid_setting；保存后立即重排，无需重启后端。
           properties:
             PTT_AUTH_TYPE: {type: string, deprecated: true, enum: [key, cookie, ''], description: '历史兼容字段，不参与运行；PTTime 固定使用 PTT_COOKIE'}
+            RANK_SCHEDULE_TIME: {type: string, default: '0 20 * * *', example: '0 20 * * *', description: '榜单订阅定时任务，标准 5 段 cron（分 时 日 月 周）；空值表示不注册该任务，非法表达式保存时返回 400 invalid_setting；保存后立即重排，无需重启后端'}
+            ACTOR_SCHEDULE_TIME: {type: string, default: '0 21 * * *', example: '0 21 * * *', description: '演员订阅定时任务，标准 5 段 cron（分 时 日 月 周）；空值表示不注册该任务，非法表达式保存时返回 400 invalid_setting；保存后立即重排，无需重启后端'}
+            TAG_SCHEDULE_TIME: {type: string, default: '30 21 * * *', example: '30 21 * * *', description: '标签订阅定时任务，标准 5 段 cron（分 时 日 月 周）；空值表示不注册该任务，非法表达式保存时返回 400 invalid_setting；保存后立即重排，无需重启后端'}
+            DOWNLOAD_SCHEDULE_TIME: {type: string, default: '0 22 * * *', example: '0 22 * * *', description: '番号订阅定时任务，标准 5 段 cron（分 时 日 月 周），建议排在榜单与演员订阅之后；空值表示不注册该任务，非法表达式保存时返回 400 invalid_setting；保存后立即重排，无需重启后端'}
             BYPASS_USE_PROXY: {type: string, enum: ['true', 'false'], default: 'false', example: 'false', description: '爬虫增强是否使用系统 PROXY，默认关闭；增强为不使用时强制关闭。开启且 PROXY 非空时透传给增强服务访问源站，连接增强服务本身直连；配置启动时读取，保存后需重启生效'}
             PTFANS_AUTH_TYPE: {type: string, enum: [key, cookie, ''], default: key, description: 'PTFans 鉴权方式；空值默认密钥'}
             ROUSIPRO_AUTH_TYPE: {type: string, enum: [key, cookie, ''], default: key, description: 'RousiPro 鉴权方式；空值默认密钥'}
@@ -1297,6 +1414,21 @@ CollectionRun: {"type":"object","required":["run_id","request","status","crawl_s
             PTFANS_API_KEY: {type: string, default: '', description: 'PTFans 访问令牌；加密存储，空字符串清除，不是 Tracker PassKey'}
             ROUSIPRO_API_KEY: {type: string, default: '', description: 'RousiPro API Key；加密存储，空字符串清除'}
             NICEPT_API_KEY: {type: string, default: '', description: 'NicePT 访问令牌；加密存储，空字符串清除，不是 Tracker PassKey'}
+            TRANSLATION_OPENAI_URL: {type: string, default: '', description: '翻译模型接口地址（OpenAI 兼容），例如 http://127.0.0.1:8080/v1；与对话 Agent 的 OPENAI_URL 相互独立'}
+            TRANSLATION_OPENAI_MODEL: {type: string, default: '', description: '翻译模型名称；与对话 Agent 的 OPENAI_MODEL 相互独立'}
+            TRANSLATION_OPENAI_API_KEY: {type: string, default: '', description: '翻译模型 API Key；加密存储，空字符串清除，与对话 Agent 的 OPENAI_API_KEY 相互独立'}
+            WECHAT_NOTIFY_SUBSCRIBE: {type: string, enum: ['true', 'false'], default: 'false', example: 'false', description: '微信订阅成功通知开关，默认关闭'}
+            WECHAT_NOTIFY_SUBSCRIBE_FAILED: {type: string, enum: ['true', 'false'], default: 'false', example: 'false', description: '微信订阅失败通知开关，默认关闭'}
+            WECHAT_NOTIFY_DOWNLOAD_START: {type: string, enum: ['true', 'false'], default: 'false', example: 'false', description: '微信开始下载通知开关，默认关闭'}
+            WECHAT_NOTIFY_DOWNLOAD_COMPLETE: {type: string, enum: ['true', 'false'], default: 'false', example: 'false', description: '微信下载完成通知开关，默认关闭'}
+            WECHAT_NOTIFY_DOWNLOAD_FAILED: {type: string, enum: ['true', 'false'], default: 'false', example: 'false', description: '微信下载失败通知开关，默认关闭'}
+            WECHAT_NOTIFY_AGENT_CHAT: {type: string, enum: ['true', 'false'], default: 'true', example: 'true', description: '微信 Agent 对话开关，默认开启；关闭后自然语言对话被拒绝，斜杠命令与番号订阅不受影响'}
+            TELEGRAM_NOTIFY_SUBSCRIBE: {type: string, enum: ['true', 'false'], default: 'false', example: 'false', description: 'Telegram 订阅成功通知开关，默认关闭'}
+            TELEGRAM_NOTIFY_SUBSCRIBE_FAILED: {type: string, enum: ['true', 'false'], default: 'false', example: 'false', description: 'Telegram 订阅失败通知开关，默认关闭'}
+            TELEGRAM_NOTIFY_DOWNLOAD_START: {type: string, enum: ['true', 'false'], default: 'false', example: 'false', description: 'Telegram 开始下载通知开关，默认关闭'}
+            TELEGRAM_NOTIFY_DOWNLOAD_COMPLETE: {type: string, enum: ['true', 'false'], default: 'false', example: 'false', description: 'Telegram 下载完成通知开关，默认关闭'}
+            TELEGRAM_NOTIFY_DOWNLOAD_FAILED: {type: string, enum: ['true', 'false'], default: 'false', example: 'false', description: 'Telegram 下载失败通知开关，默认关闭'}
+            TELEGRAM_NOTIFY_AGENT_CHAT: {type: string, enum: ['true', 'false'], default: 'true', example: 'true', description: 'Telegram Agent 对话开关，默认开启；关闭后自然语言对话被拒绝，斜杠命令与番号订阅不受影响'}
         configured:
           type: object
           additionalProperties:
@@ -1317,10 +1449,19 @@ CollectionRun: {"type":"object","required":["run_id","request","status","crawl_s
             AGENT_SYSTEM_PROMPT 和 TRANSLATION_PROMPT 各允许最多 61440 个 UTF-8 字节，其他值最多 8192 字节；按去除首尾空白前的输入计算，超限拒绝整批且不截断。
             站点模式与两种凭据可同时提交；只修改模式不应清空另一种凭据，显式提交空字符串才清除密钥或 Cookie。
             BYPASS_ENGINE 的 cloudflare_bypass_for_scraping 在页面显示为 ByPass，协议值不变。BYPASS_USE_PROXY 默认 false；关闭增强时同一事务强制关闭代理开关，再次启用增强不会自动开启代理。Scrapling HTTP 协议尚未接入。
+            RANK_SCHEDULE_TIME、ACTOR_SCHEDULE_TIME、TAG_SCHEDULE_TIME、DOWNLOAD_SCHEDULE_TIME 只接受标准 5 段 cron（分 时 日 月 周），空字符串表示不注册该定时任务，非法表达式返回 400 invalid_setting；保存后立即重排，无需重启后端。
           properties:
+            RANK_SCHEDULE_TIME: {type: string, example: '0 20 * * *', description: '榜单订阅定时任务，标准 5 段 cron（分 时 日 月 周）；空字符串清除即不注册该任务；非法表达式返回 400 invalid_setting；保存后立即重排，无需重启后端'}
+            ACTOR_SCHEDULE_TIME: {type: string, example: '0 21 * * *', description: '演员订阅定时任务，标准 5 段 cron（分 时 日 月 周）；空字符串清除即不注册该任务；非法表达式返回 400 invalid_setting；保存后立即重排，无需重启后端'}
+            TAG_SCHEDULE_TIME: {type: string, example: '30 21 * * *', description: '标签订阅定时任务，标准 5 段 cron（分 时 日 月 周）；空字符串清除即不注册该任务；非法表达式返回 400 invalid_setting；保存后立即重排，无需重启后端'}
+            DOWNLOAD_SCHEDULE_TIME: {type: string, example: '0 22 * * *', description: '番号订阅定时任务，标准 5 段 cron（分 时 日 月 周），建议排在榜单与演员订阅之后；空字符串清除即不注册该任务；非法表达式返回 400 invalid_setting；保存后立即重排，无需重启后端'}
             BYPASS_USE_PROXY: {type: string, enum: ['true', 'false', ''], default: 'false', example: 'true', description: '是否向爬虫增强传递系统 PROXY；true 开启，false 或空字符串关闭。不提交保留原值，但 BYPASS_ENGINE 为空时强制保存 false。配置启动时读取，保存后需重启生效'}
             AGENT_SYSTEM_PROMPT: {type: string, description: 'Agent 自定义 System Prompt；最多 61440 个 UTF-8 字节；空字符串清除并使用内置提示词，不提交保留原值'}
+            AGENT_ENABLE: {type: string, enum: ['true', 'false', ''], default: 'false', example: 'false', description: '是否启用 Telegram / 企业微信对话 Agent；true 开启，false 或空字符串关闭。关闭时仍可使用斜杠命令和直接发送番号订阅'}
             TRANSLATION_PROMPT: {type: string, description: 'OpenAI 翻译提示词；最多 61440 个 UTF-8 字节；空字符串清除并使用内置提示词，不提交保留原值'}
+            TRANSLATION_OPENAI_URL: {type: string, description: '翻译模型接口地址（OpenAI 兼容）；与对话 Agent 的 OPENAI_URL 相互独立；空字符串清除，不提交保留原值'}
+            TRANSLATION_OPENAI_MODEL: {type: string, description: '翻译模型名称；与对话 Agent 的 OPENAI_MODEL 相互独立；空字符串清除，不提交保留原值'}
+            TRANSLATION_OPENAI_API_KEY: {type: string, description: '翻译模型 API Key；加密保存；空字符串清除，不提交保留原值；与对话 Agent 的 OPENAI_API_KEY 相互独立'}
             PTT_AUTH_TYPE: {type: string, deprecated: true, enum: [key, cookie, ''], description: '历史兼容字段，不参与运行；PTTime 固定使用 PTT_COOKIE'}
             PTFANS_AUTH_TYPE: {type: string, enum: [key, cookie, ''], description: 'PTFans 鉴权方式；空值默认密钥'}
             ROUSIPRO_AUTH_TYPE: {type: string, enum: [key, cookie, ''], description: 'RousiPro 鉴权方式；空值默认密钥'}
@@ -1330,6 +1471,18 @@ CollectionRun: {"type":"object","required":["run_id","request","status","crawl_s
             PTFANS_API_KEY: {type: string, description: 'PTFans 访问令牌；加密保存，空字符串清除；不提交则保留原值'}
             ROUSIPRO_API_KEY: {type: string, description: 'RousiPro API Key；加密保存，空字符串清除；不提交则保留原值'}
             NICEPT_API_KEY: {type: string, description: 'NicePT 访问令牌；加密保存，空字符串清除；不提交则保留原值'}
+            WECHAT_NOTIFY_SUBSCRIBE: {type: string, enum: ['true', 'false', ''], description: '微信订阅成功通知开关；true 开启，false 或空字符串关闭；不提交保留原值'}
+            WECHAT_NOTIFY_SUBSCRIBE_FAILED: {type: string, enum: ['true', 'false', ''], description: '微信订阅失败通知开关；true 开启，false 或空字符串关闭；不提交保留原值'}
+            WECHAT_NOTIFY_DOWNLOAD_START: {type: string, enum: ['true', 'false', ''], description: '微信开始下载通知开关；true 开启，false 或空字符串关闭；不提交保留原值'}
+            WECHAT_NOTIFY_DOWNLOAD_COMPLETE: {type: string, enum: ['true', 'false', ''], description: '微信下载完成通知开关；true 开启，false 或空字符串关闭；不提交保留原值'}
+            WECHAT_NOTIFY_DOWNLOAD_FAILED: {type: string, enum: ['true', 'false', ''], description: '微信下载失败通知开关；true 开启，false 或空字符串关闭；不提交保留原值'}
+            WECHAT_NOTIFY_AGENT_CHAT: {type: string, enum: ['true', 'false', ''], description: '微信 Agent 对话开关；true 开启，false 或空字符串关闭；不提交保留原值'}
+            TELEGRAM_NOTIFY_SUBSCRIBE: {type: string, enum: ['true', 'false', ''], description: 'Telegram 订阅成功通知开关；true 开启，false 或空字符串关闭；不提交保留原值'}
+            TELEGRAM_NOTIFY_SUBSCRIBE_FAILED: {type: string, enum: ['true', 'false', ''], description: 'Telegram 订阅失败通知开关；true 开启，false 或空字符串关闭；不提交保留原值'}
+            TELEGRAM_NOTIFY_DOWNLOAD_START: {type: string, enum: ['true', 'false', ''], description: 'Telegram 开始下载通知开关；true 开启，false 或空字符串关闭；不提交保留原值'}
+            TELEGRAM_NOTIFY_DOWNLOAD_COMPLETE: {type: string, enum: ['true', 'false', ''], description: 'Telegram 下载完成通知开关；true 开启，false 或空字符串关闭；不提交保留原值'}
+            TELEGRAM_NOTIFY_DOWNLOAD_FAILED: {type: string, enum: ['true', 'false', ''], description: 'Telegram 下载失败通知开关；true 开启，false 或空字符串关闭；不提交保留原值'}
+            TELEGRAM_NOTIFY_AGENT_CHAT: {type: string, enum: ['true', 'false', ''], description: 'Telegram Agent 对话开关；true 开启，false 或空字符串关闭；不提交保留原值'}
     Health:
       type: object
       required: [status]

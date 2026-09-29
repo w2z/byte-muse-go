@@ -3,7 +3,6 @@ package application
 import (
 	"context"
 	"errors"
-	"strings"
 	"sync"
 	"time"
 
@@ -103,8 +102,13 @@ func (s *CollectionService) ProcessOne(ctx context.Context, kind string, now tim
 					e = errors.New("translation_disabled")
 				} else {
 					value, e = s.translator.Translate(jobCtx, TranslationRequest{Text: title, TargetLanguage: "ZH-CN"})
-					if e == nil && strings.TrimSpace(value) == "" {
-						e = errors.New("translation_empty")
+					if e == nil {
+						sanitized, ok := SanitizeTranslatedTitle(title, value)
+						if !ok {
+							e = errors.New("translation_invalid")
+						} else {
+							value = sanitized
+						}
 					}
 				}
 			}

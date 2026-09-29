@@ -259,6 +259,11 @@ func (r *CollectionRepository) SaveVideo(ctx context.Context, w ports.Collection
 	if e := json.Unmarshal([]byte(w.Payload), &m); e != nil {
 		return e
 	}
+	// 队列快照保留来源原样，入库前在事务外按字典统一标签名。
+	mapping, e := r.resolveTags(ctx, ports.CollectionBatch{Items: []ports.CollectedMedia{m}})
+	if e != nil {
+		return e
+	}
 	tx, e := r.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
 	if e != nil {
 		return e
@@ -269,7 +274,7 @@ func (r *CollectionRepository) SaveVideo(ctx context.Context, w ports.Collection
 	}
 	req := w.Request
 	req.Kind = "item"
-	counts, e := r.saveCollectionTx(ctx, tx, req, ports.CollectionBatch{Items: []ports.CollectedMedia{m}})
+	counts, e := r.saveCollectionTx(ctx, tx, req, ports.CollectionBatch{Items: []ports.CollectedMedia{m}}, mapping)
 	if e != nil {
 		return e
 	}

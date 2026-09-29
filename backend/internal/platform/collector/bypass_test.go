@@ -248,7 +248,7 @@ func TestAuthenticatedFlareProxySession(t *testing.T) {
 	}
 }
 
-// TestLiveEnhancedCollection 仅显式启用时验证所有候选解析器；不注册来源、不写入业务数据库。
+// liveEnhancerFetcher 仅用于显式远程浏览器诊断。
 type liveEnhancerFetcher struct{ client *bypassClient }
 
 // Get 允许显式诊断对照远程浏览器，不改变生产环境仅 CF 才增强的规则。
@@ -256,6 +256,7 @@ func (f liveEnhancerFetcher) Get(ctx context.Context, target string) ([]byte, er
 	return f.client.get(ctx, target)
 }
 
+// TestLiveEnhancedCollection 验证正式注册路径；未启用来源仅诊断解析器，不写业务库。
 func TestLiveEnhancedCollection(t *testing.T) {
 	if os.Getenv("BYTEMUSE_LIVE_COLLECTION") != "1" || os.Getenv("BYTEMUSE_BYPASS_URL") == "" {
 		t.Skip("需要显式增强实网核验")
@@ -282,8 +283,8 @@ func TestLiveEnhancedCollection(t *testing.T) {
 			defer cancel()
 			var b ports.CollectionBatch
 			var err error
-			if req.Source == "javdb" {
-				b, err = collectJavDB(ctx, fetcher, req)
+			if ports.ValidCollectionSource(req.Source) {
+				b, err = NewRegistry(fetcher).Collect(ctx, req)
 			} else {
 				b, err = collectUnreleasedFixture(ctx, fetcher, req)
 			}

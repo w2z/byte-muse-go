@@ -9,6 +9,56 @@ import (
 	"testing"
 )
 
+// TestQbittorrentAcceptsNoContentLogin 覆盖 qBittorrent 5.x 登录返回 204 空响应的情况：
+// 旧实现只接受 200 + "Ok."，会让状态同步和提交全部失败。
+func TestQbittorrentAcceptsNoContentLogin(t *testing.T) {
+	added := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v2/auth/login":
+			http.SetCookie(w, &http.Cookie{Name: "QBT_SID_8081", Value: "session", Path: "/"})
+			w.WriteHeader(http.StatusNoContent)
+		case "/api/v2/torrents/info":
+			if cookie, e := r.Cookie("QBT_SID_8081"); e != nil || cookie.Value != "session" {
+				t.Error("missing session cookie")
+			}
+			_, _ = w.Write([]byte("[{\"hash\":\"0123456789abcdef0123456789abcdef01234567\"}]"))
+		case "/api/v2/torrents/add":
+			added++
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+	client := NewQbittorrent(server.URL, "user", "pass", "/media", "ByteMuse", server.Client())
+	found, e := client.HasHash(context.Background(), "0123456789abcdef0123456789abcdef01234567")
+	if e != nil || !found {
+		t.Fatalf("found=%v error=%v", found, e)
+	}
+	if e = client.Submit(context.Background(), "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567"); e != nil {
+		t.Fatal(e)
+	}
+	if added != 1 {
+		t.Fatalf("add calls=%d", added)
+	}
+}
+
+// TestQbittorrentRejectsFailedLogin 保证放宽状态码后仍然拒绝显式的失败响应。
+func TestQbittorrentRejectsFailedLogin(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v2/auth/login" {
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+		_, _ = w.Write([]byte("Fails."))
+	}))
+	defer server.Close()
+	client := NewQbittorrent(server.URL, "user", "wrong", "", "", server.Client())
+	if _, e := client.HasHash(context.Background(), "0123456789abcdef0123456789abcdef01234567"); e == nil {
+		t.Fatal("failed login must be rejected")
+	}
+}
+
 func TestQbittorrentRechecksHashBeforeSubmission(t *testing.T) {
 	added := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

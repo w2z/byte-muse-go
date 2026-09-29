@@ -99,7 +99,8 @@ func NewQbittorrent(origin, username, password, path, category string, client *h
 	return &Qbittorrent{origin: strings.TrimRight(origin, "/"), username: username, password: password, path: path, category: category, client: &clone}
 }
 
-func (c *Qbittorrent) request(ctx context.Context, method, path string, form url.Values) ([]byte, error) {
+// requestRaw 返回状态码与受限长度的响应体，供需要区分具体 2xx 语义的调用方使用。
+func (c *Qbittorrent) requestRaw(ctx context.Context, method, path string, form url.Values) (int, []byte, error) {
 	target := c.origin + path
 	var body io.Reader
 	if form != nil {
@@ -107,38 +108,55 @@ func (c *Qbittorrent) request(ctx context.Context, method, path string, form url
 	}
 	req, e := http.NewRequestWithContext(ctx, method, target, body)
 	if e != nil {
-		return nil, e
+		return 0, nil, e
 	}
 	if form != nil {
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	}
 	response, e := c.client.Do(req)
 	if e != nil {
-		return nil, e
+		return 0, nil, e
 	}
 	defer response.Body.Close()
-	if response.StatusCode != 200 {
-		return nil, fmt.Errorf("qBittorrent HTTP %d", response.StatusCode)
-	}
 	raw, e := io.ReadAll(io.LimitReader(response.Body, (2<<20)+1))
+	if e != nil {
+		return 0, nil, e
+	}
+	if len(raw) > 2<<20 {
+		return 0, nil, fmt.Errorf("qBittorrent response too large")
+	}
+	return response.StatusCode, raw, nil
+}
+
+// request 只接受 2xx；调用方按需校验响应体。qBittorrent 5.x 的登录成功返回 204 空响应，
+// 其余接口仍返回 200，因此这里不把状态码固定为 200。
+func (c *Qbittorrent) request(ctx context.Context, method, path string, form url.Values) ([]byte, error) {
+	status, raw, e := c.requestRaw(ctx, method, path, form)
 	if e != nil {
 		return nil, e
 	}
-	if len(raw) > 2<<20 {
-		return nil, fmt.Errorf("qBittorrent response too large")
+	if status < 200 || status >= 300 {
+		return nil, fmt.Errorf("qBittorrent HTTP %d", status)
 	}
 	return raw, nil
+}
+
+// qbAcceptedBody 判断写操作是否成功：qBittorrent 4.x/5.x 返回 "Ok."，5.x 登录返回空响应，
+// 其余非空内容（例如 "Fails."）一律视为失败。
+func qbAcceptedBody(raw []byte) bool {
+	body := strings.TrimSpace(string(raw))
+	return body == "" || body == "Ok."
 }
 
 func (c *Qbittorrent) login(ctx context.Context) error {
 	if c.origin == "" || c.username == "" || c.password == "" {
 		return fmt.Errorf("qBittorrent is not configured")
 	}
-	raw, e := c.request(ctx, http.MethodPost, "/api/v2/auth/login", url.Values{"username": {c.username}, "password": {c.password}})
+	status, raw, e := c.requestRaw(ctx, http.MethodPost, "/api/v2/auth/login", url.Values{"username": {c.username}, "password": {c.password}})
 	if e != nil {
 		return e
 	}
-	if strings.TrimSpace(string(raw)) != "Ok." {
+	if status < 200 || status >= 300 || !qbAcceptedBody(raw) {
 		return fmt.Errorf("qBittorrent login rejected")
 	}
 	return nil
@@ -180,7 +198,7 @@ func (c *Qbittorrent) Submit(ctx context.Context, magnet string) error {
 	if e != nil {
 		return e
 	}
-	if strings.TrimSpace(string(raw)) != "Ok." {
+	if !qbAcceptedBody(raw) {
 		return fmt.Errorf("qBittorrent add rejected")
 	}
 	return nil
@@ -225,7 +243,7 @@ func (c *Qbittorrent) SubmitTorrent(ctx context.Context, torrent []byte) error {
 	if e != nil {
 		return e
 	}
-	if response.StatusCode != 200 || strings.TrimSpace(string(raw)) != "Ok." {
+	if response.StatusCode < 200 || response.StatusCode >= 300 || !qbAcceptedBody(raw) {
 		return fmt.Errorf("qBittorrent torrent add rejected")
 	}
 	return nil

@@ -31,6 +31,42 @@ function renderSettings() {
 }
 
 describe("设置页字段布局", () => {
+  it("点击布尔选项文字可反复切换草稿，重置恢复原值", async () => {
+    const user = userEvent.setup();
+    renderSettings();
+    await user.click(await screen.findByRole("tab", { name: "消息渠道" }));
+    const control = screen.getByRole("switch", { name: "订阅成功" });
+    await user.click(screen.getByText("订阅成功"));
+    expect(control).toBeChecked();
+    await user.click(screen.getByText("订阅成功"));
+    expect(control).not.toBeChecked();
+    await user.click(screen.getByText("订阅成功"));
+    await user.click(screen.getByRole("button", { name: "重置" }));
+    expect(control).not.toBeChecked();
+    expect(vi.mocked(apiRequest).mock.calls.some(([, options]) => options?.method === "PUT")).toBe(false);
+  });
+
+  it("点击过滤选项文字与单选文字更新草稿，禁用开关文字不触发切换", async () => {
+    const user = userEvent.setup();
+    renderSettings();
+    await user.click(await screen.findByRole("tab", { name: /^过滤$/ }));
+    const filter = screen.getByRole("switch", { name: "仅中文" });
+    await user.click(screen.getByText("仅中文"));
+    expect(filter).toBeChecked();
+    await user.click(screen.getByText("仅中文"));
+    expect(filter).not.toBeChecked();
+    await user.click(screen.getByRole("tab", { name: /^站点$/ }));
+    const auth = screen.getByRole("group", { name: "PTFans 鉴权方式" });
+    await user.click(within(auth).getByText("密钥"));
+    expect(within(auth).getByRole("radio", { name: "密钥" })).toBeChecked();
+    await user.click(within(auth).getByText("Cookie"));
+    expect(within(auth).getByRole("radio", { name: "Cookie" })).toBeChecked();
+    await user.click(screen.getByRole("tab", { name: "其他" }));
+    await user.click(screen.getByText("爬虫增强是否使用代理"));
+    expect(screen.getByRole("switch", { name: "爬虫增强是否使用代理" })).toBeDisabled();
+    expect(screen.getByRole("switch", { name: "爬虫增强是否使用代理" })).not.toBeChecked();
+  });
+
   it("代理开关保存后重新加载保持选择，关闭增强保存为 false", async () => {
     const user = userEvent.setup();
     let values: Record<string, string> = { BYPASS_ENGINE: "flaresolverr", BYPASS_USE_PROXY: "false" };
@@ -55,12 +91,13 @@ describe("设置页字段布局", () => {
   });
 
   it.each([
-    ["Agent", "自定义 System Prompt（留空使用内置提示词）"],
-    ["翻译", "自定义翻译 Prompt"],
+    ["对话 Agent", "自定义 System Prompt（留空使用内置提示词）"],
+    ["翻译模型", "翻译 Prompt"],
   ])("%s 提示词框内计数并截断超限字符，保存完整 emoji", async (tab, label) => {
     const user = userEvent.setup();
     renderSettings();
-    await user.click(await screen.findByRole("tab", { name: tab }));
+    await user.click(await screen.findByRole("tab", { name: "AI 模型" }));
+    await user.click(screen.getByRole("tab", { name: tab }));
     const input = screen.getByLabelText(label);
     expect(input).toHaveAccessibleDescription("0/15360");
     fireEvent.change(input, { target: { value: "中😀a\n" } });
@@ -87,7 +124,8 @@ describe("设置页字段布局", () => {
       ? new Promise((resolve) => { finish = resolve; })
       : { database_driver: "sqlite", values: {}, configured: {} });
     renderSettings();
-    await user.click(await screen.findByRole("tab", { name: "Agent" }));
+    await user.click(await screen.findByRole("tab", { name: "AI 模型" }));
+    await user.click(screen.getByRole("tab", { name: "对话 Agent" }));
     await user.type(screen.getByLabelText("模型名称"), "draft-model");
     await user.type(screen.getByLabelText("接口地址（OpenAI 兼容）"), "https://example.com/v1");
     await user.type(screen.getByLabelText("API Key"), "test-key");
@@ -109,6 +147,80 @@ describe("设置页字段布局", () => {
     vi.mocked(apiRequest).mockRejectedValueOnce(new Error("网络连接失败"));
     await user.click(button);
     await waitFor(() => expect(screen.getByRole("status").textContent).toMatch(/^OpenAI 连接失败 [(][0-9]+ms[)]：网络连接失败$/));
+  });
+
+  it("翻译模型页签用未保存草稿独立测试，不复用对话配置", async () => {
+    const user = userEvent.setup();
+    vi.mocked(apiRequest).mockImplementation(async (_path, options) => options?.method === "POST"
+      ? { message: "OpenAI 连接成功 (120ms)" }
+      : {
+        database_driver: "sqlite",
+        values: { OPENAI_URL: "https://agent.example/v1", OPENAI_MODEL: "agent-model", OPENAI_API_KEY: "agent-key" },
+        configured: {},
+      });
+    renderSettings();
+    await user.click(await screen.findByRole("tab", { name: "AI 模型" }));
+    await user.click(screen.getByRole("tab", { name: "翻译模型" }));
+    await user.type(screen.getByLabelText("模型名称"), "translate-model");
+    await user.type(screen.getByLabelText("接口地址（OpenAI 兼容）"), "https://translate.example/v1");
+    await user.type(screen.getByLabelText("API Key"), "translate-key");
+    await user.click(screen.getByRole("button", { name: "测试翻译模型" }));
+    const posts = vi.mocked(apiRequest).mock.calls.filter(([, options]) => options?.method === "POST");
+    expect(posts).toHaveLength(1);
+    expect(JSON.parse(String(posts[0][1]?.body))).toEqual({
+      url: "https://translate.example/v1",
+      model: "translate-model",
+      api_key: "translate-key",
+    });
+    expect(vi.mocked(apiRequest).mock.calls.some(([, options]) => options?.method === "PUT")).toBe(false);
+    expect(await screen.findByRole("status")).toHaveTextContent("OpenAI 连接成功 (120ms)");
+  });
+
+  it("保存 AI 模型分组会同时提交对话与翻译两套配置", async () => {
+    const user = userEvent.setup();
+    let values: Record<string, string> = {};
+    vi.mocked(apiRequest).mockImplementation(async (_path, options) => {
+      if (options?.method === "PUT") values = { ...values, ...JSON.parse(String(options.body)).values };
+      return { database_driver: "sqlite", values: { ...values }, configured: {} };
+    });
+    renderSettings();
+    await user.click(await screen.findByRole("tab", { name: "AI 模型" }));
+    await user.type(screen.getByLabelText("接口地址（OpenAI 兼容）"), "https://agent.example/v1");
+    await user.click(screen.getByRole("tab", { name: "翻译模型" }));
+    await user.type(screen.getByLabelText("接口地址（OpenAI 兼容）"), "https://translate.example/v1");
+    await user.click(screen.getByRole("button", { name: "保存设置" }));
+    await waitFor(() => expect(values.OPENAI_URL).toBe("https://agent.example/v1"));
+    expect(values.TRANSLATION_OPENAI_URL).toBe("https://translate.example/v1");
+  });
+
+  it("翻译模型配置不全时禁用 OpenAI 翻译引擎，删除配置后回落默认引擎并随分组保存提交", async () => {
+    const user = userEvent.setup();
+    let values: Record<string, string> = {
+      TRANSLATION_ENGINE: "openai",
+      TRANSLATION_OPENAI_URL: "https://translate.example/v1",
+      TRANSLATION_OPENAI_MODEL: "translate-model",
+      TRANSLATION_OPENAI_API_KEY: "translate-key",
+    };
+    vi.mocked(apiRequest).mockImplementation(async (_path, options) => {
+      if (options?.method === "PUT") values = { ...values, ...JSON.parse(String(options.body)).values };
+      return { database_driver: "sqlite", values: { ...values }, configured: {} };
+    });
+    renderSettings();
+    await user.click(await screen.findByRole("tab", { name: "翻译" }));
+    expect(screen.getByRole("radio", { name: "OpenAI" })).toBeEnabled();
+    expect(screen.getByRole("radio", { name: "OpenAI" })).toBeChecked();
+    // 在「AI 模型 → 翻译模型」删除模型名称后，OpenAI 选项不可选，当前选择立即回落默认引擎。
+    await user.click(screen.getByRole("tab", { name: "AI 模型" }));
+    await user.click(screen.getByRole("tab", { name: "翻译模型" }));
+    await user.clear(screen.getByLabelText("模型名称"));
+    await user.click(screen.getByRole("tab", { name: "翻译" }));
+    expect(screen.getByRole("radio", { name: "OpenAI" })).toBeDisabled();
+    expect(screen.getByRole("radio", { name: "关闭" })).toBeChecked();
+    // 保存「AI 模型」分组也要把回落结果一并提交，避免设置值仍停留在 openai。
+    await user.click(screen.getByRole("tab", { name: "AI 模型" }));
+    await user.click(screen.getByRole("button", { name: "保存设置" }));
+    await waitFor(() => expect(values.TRANSLATION_ENGINE).toBe("none"));
+    expect(values.TRANSLATION_OPENAI_MODEL).toBe("");
   });
 
   beforeEach(() => {
@@ -266,5 +378,42 @@ describe("设置页字段布局", () => {
     await waitFor(() => expect(vi.mocked(apiRequest).mock.calls.some(([, options]) => options?.method === "PUT")).toBe(true));
     const save = vi.mocked(apiRequest).mock.calls.find(([, options]) => options?.method === "PUT");
     expect(JSON.parse(String(save?.[1]?.body)).values).toMatchObject({ BYPASS_ENGINE: "cloudflare_bypass_for_scraping", BYPASS_USE_PROXY: "true" });
+  });
+
+  it("微信与 Telegram 各自独立控制消息通知开关，底部备注说明适用范围", async () => {
+    const user = userEvent.setup();
+    let values: Record<string, string> = {};
+    vi.mocked(apiRequest).mockImplementation(async (_path, options) => {
+      if (options?.method === "PUT") values = { ...values, ...JSON.parse(String(options.body)).values };
+      return { database_driver: "sqlite", values: { ...values }, configured: {} };
+    });
+    const notifyLabels = ["订阅成功", "订阅失败", "开始下载", "下载完成", "下载失败", "Agent对话"];
+
+    renderSettings();
+    await user.click(await screen.findByRole("tab", { name: "消息渠道" }));
+    expect(screen.getByRole("heading", { name: "消息" })).toBeInTheDocument();
+    expect(screen.getByText("该设置只针对于微信、TG")).toBeInTheDocument();
+    // 6 个开关必须在同一个横向行容器内，而不是各占一行。
+    expect(document.querySelector(".settings-inline-row")?.querySelectorAll('[role="switch"]')).toHaveLength(
+      notifyLabels.length,
+    );
+    for (const label of notifyLabels) expect(screen.getByRole("switch", { name: label })).not.toBeChecked();
+
+    await user.click(screen.getByRole("switch", { name: "订阅成功" }));
+    await user.click(screen.getByRole("switch", { name: "下载完成" }));
+    await user.click(screen.getByRole("button", { name: "保存设置" }));
+    await waitFor(() => expect(values.WECHAT_NOTIFY_SUBSCRIBE).toBe("true"));
+    expect(values.WECHAT_NOTIFY_DOWNLOAD_COMPLETE).toBe("true");
+    expect(values.WECHAT_NOTIFY_DOWNLOAD_FAILED).toBe("false");
+
+    // 切到 Telegram：同一批开关必须保持各自独立的取值。
+    await user.click(screen.getByRole("tab", { name: "Telegram" }));
+    expect(screen.getByText("该设置只针对于微信、TG")).toBeInTheDocument();
+    for (const label of notifyLabels) expect(screen.getByRole("switch", { name: label })).not.toBeChecked();
+    await user.click(screen.getByRole("switch", { name: "Agent对话" }));
+    await user.click(screen.getByRole("button", { name: "保存设置" }));
+    await waitFor(() => expect(values.TELEGRAM_NOTIFY_AGENT_CHAT).toBe("true"));
+    expect(values.TELEGRAM_NOTIFY_SUBSCRIBE).toBe("false");
+    expect(values.WECHAT_NOTIFY_SUBSCRIBE).toBe("true");
   });
 });

@@ -81,6 +81,53 @@ type SubscriptionDownloadService struct {
 	downloaders    map[string]MagnetDownloader
 	settings       func(context.Context) (map[string]string, error)
 	runtimeFactory func(map[string]string) (ResourceSearcher, PrivateTorrentSource, map[string]MagnetDownloader)
+	notifier       Notifier
+}
+
+// SetNotifier 注入业务通知出口；未注入时下载流程不发送任何通知。
+func (s *SubscriptionDownloadService) SetNotifier(notifier Notifier) { s.notifier = notifier }
+
+// notifyDownloadStart 通知订阅下载已提交；标题与正文只包含番号、标题与站点，
+// 配图使用任务快照里的封面，都不含任何凭据。
+func (s *SubscriptionDownloadService) notifyDownloadStart(ctx context.Context, code, title, site, cover string) {
+	if s.notifier == nil {
+		return
+	}
+	lines := make([]string, 0, 2)
+	if value := strings.TrimSpace(title); value != "" {
+		lines = append(lines, value)
+	}
+	if value := strings.TrimSpace(site); value != "" {
+		lines = append(lines, "站点："+value)
+	}
+	s.notifier.Notify(ctx, NotificationDownloadStart, NotificationMessage{
+		Title:    NotificationHeadline(code, "开始下载"),
+		Text:     strings.Join(lines, "\n"),
+		CoverURL: cover,
+	})
+}
+
+// notifyDownloadFailed 通知订阅下载任务失败；reason 与落库的失败原因保持一致。
+func (s *SubscriptionDownloadService) notifyDownloadFailed(ctx context.Context, code, title, cover, reason string) {
+	if s.notifier == nil {
+		return
+	}
+	lines := make([]string, 0, 2)
+	if value := strings.TrimSpace(title); value != "" {
+		lines = append(lines, value)
+	}
+	lines = append(lines, "原因："+reason)
+	s.notifier.Notify(ctx, NotificationDownloadFailed, NotificationMessage{
+		Title:    NotificationHeadline(code, "下载失败"),
+		Text:     strings.Join(lines, "\n"),
+		CoverURL: cover,
+	})
+}
+
+// failSearch 结束一次失败的搜索并推送失败通知；落库原因与通知文案使用同一个字符串，两处不会漂移。
+func (s *SubscriptionDownloadService) failSearch(ctx context.Context, a *ports.SubscriptionDownloadAttempt, reason string) {
+	_ = s.tasks.FinishSearch(ctx, *a, reason)
+	s.notifyDownloadFailed(ctx, a.Code, a.Title, a.Cover, reason)
 }
 
 // SetRuntimeFactory rebuilds site and downloader clients from the current settings snapshot for each batch.
@@ -153,6 +200,7 @@ func (s *SubscriptionDownloadService) Process(ctx context.Context, limit int) er
 			if e = s.tasks.FinishSubmission(ctx, *p, true, ""); e != nil {
 				return e
 			}
+			s.notifyDownloadStart(ctx, p.Code, p.Title, p.Site, p.Cover)
 		} else {
 			_ = s.tasks.ReleasePending(ctx, *p, "未发现资源，需人工确认后重试")
 		}
@@ -167,19 +215,19 @@ func (s *SubscriptionDownloadService) Process(ctx context.Context, limit int) er
 		}
 		items, e := searcher.Search(ctx, a.Code)
 		if e != nil {
-			_ = s.tasks.FinishSearch(ctx, *a, "资源站搜索失败")
+			s.failSearch(ctx, a, "资源站搜索失败")
 			continue
 		}
 		filter := a.Filter
 		if len(filter) == 0 && settings["DEFAULT_FILTER"] != "" {
 			if e = json.Unmarshal([]byte(settings["DEFAULT_FILTER"]), &filter); e != nil {
-				_ = s.tasks.FinishSearch(ctx, *a, "默认过滤配置无效")
+				s.failSearch(ctx, a, "默认过滤配置无效")
 				continue
 			}
 		}
 		selected, passed := selectResource(items, a.Mode, filter, settings["DEFAULT_SORT"], settings["MAIN_SITE"])
 		if selected == nil {
-			_ = s.tasks.FinishSearch(ctx, *a, "暂未找到符合条件的资源")
+			s.failSearch(ctx, a, "暂未找到符合条件的资源")
 			continue
 		}
 		downloader := strings.TrimSpace(settings["BT_DEFAULT_DOWNLOADER"])
@@ -190,24 +238,24 @@ func (s *SubscriptionDownloadService) Process(ctx context.Context, limit int) er
 			downloader = "qbittorrent"
 		}
 		if e = ValidateDefaultDownloader(SourceKind(selected.Kind), DownloaderKind(downloader)); e != nil {
-			_ = s.tasks.FinishSearch(ctx, *a, "默认下载器不支持该资源")
+			s.failSearch(ctx, a, "默认下载器不支持该资源")
 			continue
 		}
 		if downloaders[downloader] == nil {
-			_ = s.tasks.FinishSearch(ctx, *a, "默认下载器未配置")
+			s.failSearch(ctx, a, "默认下载器未配置")
 			continue
 		}
 		var torrentFile []byte
 		if selected.Kind == "pt" {
 			_, ok := downloaders[downloader].(TorrentFileDownloader)
 			if private == nil || !ok {
-				_ = s.tasks.FinishSearch(ctx, *a, "PT 下载器或站点未配置")
+				s.failSearch(ctx, a, "PT 下载器或站点未配置")
 				continue
 			}
 			var hash string
 			torrentFile, hash, e = private.Download(ctx, selected.URI)
 			if e != nil {
-				_ = s.tasks.FinishSearch(ctx, *a, "PT 种子文件获取失败")
+				s.failSearch(ctx, a, "PT 种子文件获取失败")
 				continue
 			}
 			selected.InfoHash = hash
@@ -235,6 +283,7 @@ func (s *SubscriptionDownloadService) Process(ctx context.Context, limit int) er
 			if e = s.tasks.FinishSubmission(ctx, p, true, ""); e != nil {
 				return e
 			}
+			s.notifyDownloadStart(ctx, a.Code, a.Title, selected.Site, a.Cover)
 		}
 	}
 	return nil

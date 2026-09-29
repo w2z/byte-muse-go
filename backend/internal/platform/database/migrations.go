@@ -27,7 +27,69 @@ func MigrationPlan(dialect Dialect) []Migration {
 	default:
 		return nil
 	}
-	return append(plan, settingsMigration(dialect), activeSubscriptionMigration(dialect), defaultSettingsMigration(dialect), systemLogsMigration(dialect), logRetentionSettingMigration(dialect), cleanupCanceledSubscriptionsMigration(dialect), catalogQueryIndexesMigration(dialect), downloaderAndBypassSettingsMigration(dialect), collectionMigration(dialect), collectionQueueMigration(dialect), mediaTypeMigration(dialect), subscriptionDownloadMigration(dialect), downloadTransferMigration(dialect), ptSiteSettingsMigration(dialect), siteAuthSettingsMigration(dialect), tagSubscriptionMigration(dialect), bypassProxySettingMigration(dialect))
+	return append(plan, settingsMigration(dialect), activeSubscriptionMigration(dialect), defaultSettingsMigration(dialect), systemLogsMigration(dialect), logRetentionSettingMigration(dialect), cleanupCanceledSubscriptionsMigration(dialect), catalogQueryIndexesMigration(dialect), downloaderAndBypassSettingsMigration(dialect), collectionMigration(dialect), collectionQueueMigration(dialect), mediaTypeMigration(dialect), subscriptionDownloadMigration(dialect), downloadTransferMigration(dialect), ptSiteSettingsMigration(dialect), siteAuthSettingsMigration(dialect), tagSubscriptionMigration(dialect), bypassProxySettingMigration(dialect), actorSubscriptionMigration(dialect), translationModelSettingsMigration(dialect), notificationSettingsMigration(dialect), tagAliasMigration(dialect))
+}
+
+// notificationSettingsMigration 为微信与 Telegram 各新增 6 个业务通知开关，两个渠道互不影响。
+// 5 个推送类通知是新增行为，默认关闭，避免升级后未经确认就向渠道推送；
+// 「Agent 对话」只是给已有渠道对话增加按渠道关闭的能力，默认开启以保持升级前后行为一致。
+// 只新增键值，不改表结构、不覆盖已有配置；重复执行安全。
+func notificationSettingsMigration(dialect Dialect) Migration {
+	now := currentTimestampExpression(dialect)
+	values := make([]string, 0, 12)
+	for _, item := range []struct{ key, value string }{
+		{"WECHAT_NOTIFY_SUBSCRIBE", "false"},
+		{"WECHAT_NOTIFY_SUBSCRIBE_FAILED", "false"},
+		{"WECHAT_NOTIFY_DOWNLOAD_START", "false"},
+		{"WECHAT_NOTIFY_DOWNLOAD_COMPLETE", "false"},
+		{"WECHAT_NOTIFY_DOWNLOAD_FAILED", "false"},
+		{"WECHAT_NOTIFY_AGENT_CHAT", "true"},
+		{"TELEGRAM_NOTIFY_SUBSCRIBE", "false"},
+		{"TELEGRAM_NOTIFY_SUBSCRIBE_FAILED", "false"},
+		{"TELEGRAM_NOTIFY_DOWNLOAD_START", "false"},
+		{"TELEGRAM_NOTIFY_DOWNLOAD_COMPLETE", "false"},
+		{"TELEGRAM_NOTIFY_DOWNLOAD_FAILED", "false"},
+		{"TELEGRAM_NOTIFY_AGENT_CHAT", "true"},
+	} {
+		values = append(values, fmt.Sprintf("(%s, %s, FALSE, %s)", sqlLiteral(item.key), sqlLiteral(item.value), now))
+	}
+	statement := "INSERT INTO app_settings (setting_key, setting_value, is_secret, updated_at) VALUES " + strings.Join(values, ", ")
+	if dialect == DialectMySQL {
+		statement = strings.Replace(statement, "INSERT INTO", "INSERT IGNORE INTO", 1)
+	} else {
+		statement += " ON CONFLICT (setting_key) DO NOTHING"
+	}
+	return Migration{Version: 24, Name: "channel_notification_settings", Statements: []string{statement}}
+}
+
+// translationModelSettingsMigration 把翻译模型从对话 Agent 的 OpenAI 配置中拆成独立配置。
+// 拆分本身会改变现有安装的行为，因此翻译引擎已是 openai 时先把当前生效的 Agent 配置复制一份，
+// 保证升级前后翻译使用的接口、模型与密钥完全一致；目标键已存在时不覆盖，重复执行安全。
+// API Key 与 Agent 使用同一 SESSION_SECRET 加密，直接复制密文即可解密。
+func translationModelSettingsMigration(dialect Dialect) Migration {
+	now := currentTimestampExpression(dialect)
+	statements := make([]string, 0, 4)
+	for _, copy := range [][3]string{
+		{"OPENAI_URL", "TRANSLATION_OPENAI_URL", "FALSE"},
+		{"OPENAI_MODEL", "TRANSLATION_OPENAI_MODEL", "FALSE"},
+		{"OPENAI_API_KEY", "TRANSLATION_OPENAI_API_KEY", "TRUE"},
+	} {
+		statements = append(statements, fmt.Sprintf(
+			"INSERT INTO app_settings (setting_key, setting_value, is_secret, updated_at) SELECT %s, setting_value, %s, %s FROM app_settings WHERE setting_key = %s AND (SELECT setting_value FROM app_settings WHERE setting_key = 'TRANSLATION_ENGINE') = 'openai' AND NOT EXISTS (SELECT 1 FROM app_settings WHERE setting_key = %s)",
+			sqlLiteral(copy[1]), copy[2], now, sqlLiteral(copy[0]), sqlLiteral(copy[1])))
+	}
+	values := []string{
+		fmt.Sprintf("('TRANSLATION_OPENAI_URL', '', FALSE, %s)", now),
+		fmt.Sprintf("('TRANSLATION_OPENAI_MODEL', '', FALSE, %s)", now),
+		fmt.Sprintf("('TRANSLATION_OPENAI_API_KEY', '', TRUE, %s)", now),
+	}
+	insert := "INSERT INTO app_settings (setting_key, setting_value, is_secret, updated_at) VALUES " + strings.Join(values, ", ")
+	if dialect == DialectMySQL {
+		insert = strings.Replace(insert, "INSERT INTO", "INSERT IGNORE INTO", 1)
+	} else {
+		insert += " ON CONFLICT (setting_key) DO NOTHING"
+	}
+	return Migration{Version: 23, Name: "translation_model_settings", Statements: append(statements, insert)}
 }
 
 // bypassProxySettingMigration 新增非敏感字符串布尔配置，默认 false；空值视为关闭。

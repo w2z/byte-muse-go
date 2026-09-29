@@ -30,6 +30,7 @@ func collectionMigration(d Dialect) Migration {
 type CollectionRepository struct {
 	db      *sql.DB
 	dialect Dialect
+	tags    ports.TagNameResolver
 }
 
 // NewCollectionRepository 绑定已完成迁移的数据库。
@@ -37,14 +38,39 @@ func NewCollectionRepository(db *sql.DB, dialect Dialect) *CollectionRepository 
 	return &CollectionRepository{db: db, dialect: dialect}
 }
 
+// SetTagResolver 装配标签归一化入口；未装配时按原样写入标签，保持未启用翻译时的既有行为。
+func (r *CollectionRepository) SetTagResolver(resolver ports.TagNameResolver) { r.tags = resolver }
+
+// resolveTags 在事务外统一本次采集的标签名。
+// 翻译与字典登记都会访问数据库或外部引擎，不能在持有写事务时执行，否则会长时间占用唯一写锁。
+func (r *CollectionRepository) resolveTags(ctx context.Context, b ports.CollectionBatch) (map[string]string, error) {
+	if r.tags == nil {
+		return nil, nil
+	}
+	names := []string{}
+	for _, item := range b.Items {
+		for _, tag := range item.Tags {
+			names = append(names, splitRecommendationValues(tag)...)
+		}
+	}
+	if len(names) == 0 {
+		return nil, nil
+	}
+	return r.tags.Resolve(ctx, names)
+}
+
 // SaveCollection 在同一事务内去重、建档、更新来源快照；任一步失败全部回滚。
 func (r *CollectionRepository) SaveCollection(ctx context.Context, req ports.CollectionRequest, b ports.CollectionBatch) (ports.CollectionCounts, error) {
+	mapping, e := r.resolveTags(ctx, b)
+	if e != nil {
+		return ports.CollectionCounts{}, e
+	}
 	tx, e := r.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
 	if e != nil {
 		return ports.CollectionCounts{}, e
 	}
 	defer tx.Rollback()
-	counts, e := r.saveCollectionTx(ctx, tx, req, b)
+	counts, e := r.saveCollectionTx(ctx, tx, req, b, mapping)
 	if e != nil {
 		return ports.CollectionCounts{}, e
 	}
@@ -55,7 +81,7 @@ func (r *CollectionRepository) SaveCollection(ctx context.Context, req ports.Col
 }
 
 // saveCollectionTx 为同步兼容调用与队列逐项处理提供唯一资料写入规则。
-func (r *CollectionRepository) saveCollectionTx(ctx context.Context, tx *sql.Tx, req ports.CollectionRequest, b ports.CollectionBatch) (ports.CollectionCounts, error) {
+func (r *CollectionRepository) saveCollectionTx(ctx context.Context, tx *sql.Tx, req ports.CollectionRequest, b ports.CollectionBatch, mapping map[string]string) (ports.CollectionCounts, error) {
 	empty := ports.CollectionCounts{}
 	if !ports.ValidCollectionSource(req.Source) {
 		return empty, fmt.Errorf("invalid collection source")
@@ -122,7 +148,7 @@ func (r *CollectionRepository) saveCollectionTx(ctx context.Context, tx *sql.Tx,
 			return empty, e
 		}
 		if e == nil {
-			if e = r.mergeMediaTagsTx(ctx, tx, id, code, m.Tags); e != nil {
+			if e = r.mergeMediaTagsTx(ctx, tx, id, code, m.Tags, mapping); e != nil {
 				return empty, e
 			}
 			continue
@@ -141,7 +167,7 @@ func (r *CollectionRepository) saveCollectionTx(ctx context.Context, tx *sql.Tx,
 		for _, a := range m.Actors {
 			names = append(names, a.Name)
 		}
-		_, e = tx.ExecContext(ctx, "INSERT INTO legacy_media_metadata (media_id,code,genres,casts,legacy_status,legacy_mode) VALUES ("+placeholders(r.dialect, 6, 1)+")", id, code, appendCollectedTags("", m.Tags), strings.Join(names, ","), "UN_SUBSCRIBE", "STRICT")
+		_, e = tx.ExecContext(ctx, "INSERT INTO legacy_media_metadata (media_id,code,genres,casts,legacy_status,legacy_mode) VALUES ("+placeholders(r.dialect, 6, 1)+")", id, code, mergeMediaTags("", m.Tags, mapping), strings.Join(names, ","), "UN_SUBSCRIBE", "STRICT")
 		if e != nil {
 			return empty, e
 		}
@@ -174,20 +200,20 @@ func (r *CollectionRepository) saveCollectionTx(ctx context.Context, tx *sql.Tx,
 
 // mergeMediaTagsTx 仅补本次命中影片的标签；与来源快照共用可串行化事务，避免并发覆盖。
 // 缺失兼容资料行时只写标签，空旧状态表示未知，不伪造影片的历史订阅状态。
-func (r *CollectionRepository) mergeMediaTagsTx(ctx context.Context, tx *sql.Tx, id, code string, tags []string) error {
-	if appendCollectedTags("", tags) == "" {
+func (r *CollectionRepository) mergeMediaTagsTx(ctx context.Context, tx *sql.Tx, id, code string, tags []string, mapping map[string]string) error {
+	if mergeMediaTags("", tags, mapping) == "" {
 		return nil
 	}
 	var old sql.NullString
 	err := tx.QueryRowContext(ctx, "SELECT genres FROM legacy_media_metadata WHERE media_id = "+placeholder(r.dialect, 1), id).Scan(&old)
 	if err == sql.ErrNoRows {
-		_, err = tx.ExecContext(ctx, "INSERT INTO legacy_media_metadata (media_id,code,genres,legacy_status,legacy_mode) VALUES ("+placeholders(r.dialect, 5, 1)+")", id, code, appendCollectedTags("", tags), "", "")
+		_, err = tx.ExecContext(ctx, "INSERT INTO legacy_media_metadata (media_id,code,genres,legacy_status,legacy_mode) VALUES ("+placeholders(r.dialect, 5, 1)+")", id, code, mergeMediaTags("", tags, mapping), "", "")
 		return err
 	}
 	if err != nil {
 		return err
 	}
-	merged := appendCollectedTags(old.String, tags)
+	merged := mergeMediaTags(old.String, tags, mapping)
 	if merged == old.String {
 		return nil
 	}
@@ -195,25 +221,53 @@ func (r *CollectionRepository) mergeMediaTagsTx(ctx context.Context, tx *sql.Tx,
 	return err
 }
 
-// appendCollectedTags 按现有逗号分隔格式去空、去重并追加；保留人工已有文本及顺序。
-// 只做精确名称去重，不猜测跨语言别名；来源快照始终保留适配器给出的标签数组。
-func appendCollectedTags(existing string, tags []string) string {
+// mergeMediaTags 按现有逗号分隔格式去空、去重并追加标签，保留出现顺序。
+// mapping 为 nil 时保留人工已有文本原文，只追加新标签；有映射时先把已有文本与本次标签统一到权威名，
+// 让同一标签的不同写法在写入时即合并，避免重复标签继续入库。来源快照始终保留适配器给出的标签数组。
+func mergeMediaTags(existing string, tags []string, mapping map[string]string) string {
+	result := existing
+	if mapping != nil {
+		result = strings.Join(canonicalTagList(existing, mapping), ",")
+	}
 	seen := map[string]bool{}
-	for _, tag := range splitRecommendationValues(existing) {
+	for _, tag := range splitRecommendationValues(result) {
 		seen[tag] = true
 	}
-	result := existing
 	for _, value := range tags {
 		for _, tag := range splitRecommendationValues(value) {
-			if seen[tag] {
+			name := canonicalTagName(tag, mapping)
+			if name == "" || seen[name] {
 				continue
 			}
-			seen[tag] = true
-			if result != "" && !strings.HasSuffix(result, ",") {
+			seen[name] = true
+			if result != "" {
 				result += ","
 			}
-			result += tag
+			result += name
 		}
 	}
 	return result
+}
+
+// canonicalTagList 把已有标签文本按权威名重写并去重，保留原始出现顺序。
+func canonicalTagList(existing string, mapping map[string]string) []string {
+	seen := map[string]bool{}
+	values := []string{}
+	for _, tag := range splitRecommendationValues(existing) {
+		name := canonicalTagName(tag, mapping)
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		values = append(values, name)
+	}
+	return values
+}
+
+// canonicalTagName 返回标签的权威名；字典未覆盖时保留原值，不猜测跨语言别名。
+func canonicalTagName(tag string, mapping map[string]string) string {
+	if name, ok := mapping[tag]; ok && strings.TrimSpace(name) != "" {
+		return name
+	}
+	return tag
 }

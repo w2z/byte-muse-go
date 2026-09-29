@@ -12,13 +12,13 @@ import (
 	"time"
 
 	"bytemuse/backend/internal/application"
+	"bytemuse/backend/internal/application/agent"
 	"bytemuse/backend/internal/auth"
 	"bytemuse/backend/internal/config"
 	"bytemuse/backend/internal/logging"
 	"bytemuse/backend/internal/platform/collector"
 	"bytemuse/backend/internal/platform/database"
 	"bytemuse/backend/internal/platform/downloadclient"
-	"bytemuse/backend/internal/platform/torrentsearch"
 	"bytemuse/backend/internal/ports"
 	runtimeapp "bytemuse/backend/internal/runtime"
 	"bytemuse/backend/internal/scheduler"
@@ -103,6 +103,137 @@ func (c *Commands) LegacyRanks(ctx context.Context, legacyPath string) error {
 	return nil
 }
 
+// VideoTypes backfills media.video_type from evidence already stored in the database.
+func (c *Commands) VideoTypes(ctx context.Context) error {
+	store, err := c.openStore(ctx)
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+	if err := store.Migrate(ctx); err != nil {
+		return fmt.Errorf("migrate database: %w", err)
+	}
+	result, err := database.BackfillVideoTypes(ctx, store, database.Dialect(c.config.DatabaseDriver))
+	if err != nil {
+		return err
+	}
+	fmt.Printf("扫描未分类影片: %d，写入分类: %d，仍无法判定: %d\n", result.Scanned, result.Classified, result.Unclassified)
+	return nil
+}
+
+// TranslationCleanup clears persisted titles that fail the shared translation validation rule.
+func (c *Commands) TranslationCleanup(ctx context.Context) error {
+	store, err := c.openStore(ctx)
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+	if err := store.Migrate(ctx); err != nil {
+		return fmt.Errorf("migrate database: %w", err)
+	}
+	result, err := database.ResetInvalidTranslations(ctx, store, database.Dialect(c.config.DatabaseDriver), func(title, translated string) bool {
+		_, ok := application.SanitizeTranslatedTitle(title, translated)
+		return ok
+	})
+	if err != nil {
+		return err
+	}
+	fmt.Printf("扫描已有译文: %d，清除无效译文: %d\n", result.Scanned, result.Reset)
+	return nil
+}
+
+// translationConfigFromSettings 由设置快照构造翻译配置。
+// 翻译模型与对话 Agent 各自持有独立的 OpenAI 兼容配置，两者不共享接口、模型或密钥。
+func translationConfigFromSettings(values map[string]string) application.TranslationConfig {
+	return application.TranslationConfig{
+		Engine:            application.TranslationEngine(values["TRANSLATION_ENGINE"]),
+		OpenAIURL:         values["TRANSLATION_OPENAI_URL"],
+		OpenAIModel:       values["TRANSLATION_OPENAI_MODEL"],
+		OpenAIAPIKey:      values["TRANSLATION_OPENAI_API_KEY"],
+		TranslationPrompt: values["TRANSLATION_PROMPT"],
+		GoogleAPIKey:      values["GOOGLE_API_KEY"],
+		BaiduAppID:        values["BAIDU_APP_ID"],
+		BaiduAPIKey:       values["BAIDU_API_KEY"],
+		DeepLXURL:         values["DEEPLX_URL"],
+	}
+}
+
+// TranslationFill translates titles that still have no translation using the configured engine.
+func (c *Commands) TranslationFill(ctx context.Context, limit int) error {
+	store, err := c.openStore(ctx)
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+	if err := store.Migrate(ctx); err != nil {
+		return fmt.Errorf("migrate database: %w", err)
+	}
+	settingsService, err := application.NewSettingsService(database.NewSettingsRepository(store.SQLDB(), database.Dialect(c.config.DatabaseDriver)), c.config.DatabaseDriver, c.config.SessionSecret)
+	if err != nil {
+		return fmt.Errorf("create settings service: %w", err)
+	}
+	values, err := settingsService.Get(ctx)
+	if err != nil {
+		return fmt.Errorf("read translation settings: %w", err)
+	}
+	service, err := application.NewTranslationService(translationConfigFromSettings(values.Values), nil)
+	if err != nil {
+		return fmt.Errorf("create translation service: %w", err)
+	}
+	result, err := database.BackfillTranslations(ctx, store, database.Dialect(c.config.DatabaseDriver), limit, func(jobCtx context.Context, title string) (string, error) {
+		value, e := service.Translate(jobCtx, application.TranslationRequest{Text: title, TargetLanguage: "ZH-CN"})
+		if e != nil {
+			return "", e
+		}
+		sanitized, ok := application.SanitizeTranslatedTitle(title, value)
+		if !ok {
+			return "", errors.New("translation_invalid")
+		}
+		return sanitized, nil
+	})
+	if err != nil {
+		return err
+	}
+	fmt.Printf("尝试翻译: %d，成功: %d，失败: %d\n", result.Attempted, result.Translated, result.Failed)
+	return nil
+}
+
+// TagNormalize 把库内已有标签统一为权威简体中文名并去重，供升级后一次性收敛历史标签。
+// 这里用 Normalize 而不是 Resolve：对标站字典本身是繁体，只有把字典里的既有名称也翻译一遍，
+// 繁体、日文与英文写法才能收敛到同一个简体权威名。翻译引擎不可用时直接失败，不静默跳过。
+func (c *Commands) TagNormalize(ctx context.Context) error {
+	store, err := c.openStore(ctx)
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+	if err := store.Migrate(ctx); err != nil {
+		return fmt.Errorf("migrate database: %w", err)
+	}
+	settingsService, err := application.NewSettingsService(database.NewSettingsRepository(store.SQLDB(), database.Dialect(c.config.DatabaseDriver)), c.config.DatabaseDriver, c.config.SessionSecret)
+	if err != nil {
+		return fmt.Errorf("create settings service: %w", err)
+	}
+	values, err := settingsService.Get(ctx)
+	if err != nil {
+		return fmt.Errorf("read translation settings: %w", err)
+	}
+	translator, err := application.NewTranslationService(translationConfigFromSettings(values.Values), nil)
+	if err != nil {
+		return fmt.Errorf("create translation service: %w", err)
+	}
+	tagNames := application.NewTagNameService(database.NewTagNameRepository(store.SQLDB(), database.Dialect(c.config.DatabaseDriver)), translator)
+	if err := tagNames.Probe(ctx); err != nil {
+		return fmt.Errorf("翻译引擎不可用，未改写任何标签: %w", err)
+	}
+	result, err := database.NormalizeStoredTags(ctx, store, database.Dialect(c.config.DatabaseDriver), tagNames.Normalize)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("扫描标签名: %d，字典重命名/合并: %d，字典补齐: %d，影片标签行: %d，追新规则: %d，追新台账: %d\n", result.Names, result.CatalogMerged, result.CatalogAdded, result.GenreRows, result.Rules, result.Matches)
+	return nil
+}
+
 // MigrationStatus reports current only when the latest known migration has been recorded.
 func (c *Commands) MigrationStatus(ctx context.Context) (string, error) {
 	store, err := c.openStore(ctx)
@@ -137,6 +268,41 @@ func (c *Commands) Doctor(ctx context.Context) error {
 	return nil
 }
 
+// settingsValues 把设置服务适配成执行时读取配置的函数；调用方每次读取最新值，不缓存凭据。
+func settingsValues(settings *application.SettingsService) func(context.Context) (map[string]string, error) {
+	return func(ctx context.Context) (map[string]string, error) {
+		current, err := settings.Get(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return current.Values, nil
+	}
+}
+
+// notifyTransferTransitions 把下载器报告的终态跃迁转成下载完成/失败通知。
+// 只有 transfer_status 真正变化的任务才会出现在 transitions 中，因此同一次跃迁只通知一次。
+func notifyTransferTransitions(ctx context.Context, notifier application.Notifier, transitions []ports.TransferTransition) {
+	if notifier == nil {
+		return
+	}
+	for _, item := range transitions {
+		switch item.Status {
+		case "completed":
+			notifier.Notify(ctx, application.NotificationDownloadComplete, application.NotificationMessage{
+				Title:    application.NotificationHeadline(item.Code, "已完成下载"),
+				Text:     item.Title,
+				CoverURL: item.Cover,
+			})
+		case "failed":
+			notifier.Notify(ctx, application.NotificationDownloadFailed, application.NotificationMessage{
+				Title:    application.NotificationHeadline(item.Code, "下载失败"),
+				Text:     "原因：下载器报告任务失败",
+				CoverURL: item.Cover,
+			})
+		}
+	}
+}
+
 // Serve prepares persistent state, then runs HTTP, SPA, and the process scheduler together.
 func (c *Commands) Serve(ctx context.Context) error {
 	if err := c.config.ValidateServe(); err != nil {
@@ -160,34 +326,39 @@ func (c *Commands) Serve(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("create settings service: %w", err)
 	}
+	// 对话回复与业务通知共用同一个渠道解析器，不另建第二套发送逻辑。
+	channels := newChannelRegistry(settingsService)
+	notifier := application.NewNotificationService(settingsValues(settingsService), channels)
 	translationSettings, err := settingsService.Get(ctx)
 	if err != nil {
 		return fmt.Errorf("read translation settings: %w", err)
 	}
-	jobs := configuredJobs(translationSettings.Values)
+	jobs := configuredJobs()
 	tagService := application.NewTagService(database.NewTagRepository(store.SQLDB(), database.Dialect(c.config.DatabaseDriver)))
+	actorService := application.NewActorService(database.NewActorRepository(store.SQLDB(), database.Dialect(c.config.DatabaseDriver)))
+	actorService.SetSettingsLoader(func(loadCtx context.Context) (map[string]string, error) {
+		current, e := settingsService.Get(loadCtx)
+		return current.Values, e
+	})
 	collectionClient, err := collector.NewClientWithProxy(translationSettings.Values["PROXY"])
 	if err != nil {
 		return fmt.Errorf("采集代理配置无效")
 	}
 	collectionClient.ConfigureBypass(translationSettings.Values["BYPASS_ENGINE"], translationSettings.Values["BYPASS_URL"], translationSettings.Values["BYPASS_USE_PROXY"] == "true")
-	collectionService := application.NewQueuedCollectionService(collector.NewRegistry(collectionClient), database.NewCollectionRepository(store.SQLDB(), database.Dialect(c.config.DatabaseDriver)), nil)
+	collectionRepository := database.NewCollectionRepository(store.SQLDB(), database.Dialect(c.config.DatabaseDriver))
+	collectionService := application.NewQueuedCollectionService(collector.NewRegistry(collectionClient), collectionRepository, nil)
 	downloadRepository := database.NewSubscriptionDownloadRepository(store.SQLDB(), database.Dialect(c.config.DatabaseDriver))
-	downloadService := application.NewSubscriptionDownloadService(downloadRepository, nil, nil, func(ctx context.Context) (map[string]string, error) {
-		settings, e := settingsService.Get(ctx)
-		return settings.Values, e
-	})
+	downloadService := application.NewSubscriptionDownloadService(downloadRepository, nil, nil, settingsValues(settingsService))
+	downloadService.SetNotifier(notifier)
 	downloadService.SetRuntimeFactory(func(values map[string]string) (application.ResourceSearcher, application.PrivateTorrentSource, map[string]application.MagnetDownloader) {
-		sources := []application.ResourceSearcher{torrentsearch.NewNyaaSearcher(nil, "")}
-		privateSearchers, privateSources := configuredPrivateSites(values, nil)
-		sources = append(sources, privateSearchers...)
-		var searcher application.ResourceSearcher = application.MultiResourceSearcher{Sources: sources}
+		searcher, privateSources := newResourceSearcher(values)
 		var private application.PrivateTorrentSource
 		if len(privateSources) > 0 {
 			private = application.PrivateTorrentSources{Sources: privateSources}
 		}
 		return searcher, private, map[string]application.MagnetDownloader{
 			"qbittorrent": downloadclient.NewQbittorrent(values["QBITTORRENT_URL"], values["QBITTORRENT_USERNAME"], values["QBITTORRENT_PASSWORD"], values["QBITTORRENT_DOWNLOAD_PATH"], values["QBITTORRENT_CATEGORY"], nil),
+			"thunder":     downloadclient.NewThunder(values["THUNDER_URL"], values["THUNDER_FILE_ID"], values["THUNDER_AUTHORIZATION"], nil),
 		}
 	})
 	for i := range jobs {
@@ -209,9 +380,12 @@ func (c *Commands) Serve(ctx context.Context) error {
 				return scheduler.JobResult{"queued": count}
 			}
 		}
+		if jobs[i].Name == "同步热门演员" {
+			jobs[i].Run = actorFollowJob(actorService, collectionService)
+		}
 	}
 	// 日志清理按服务所在时区每天零点执行，保留天数仍在执行时读取。
-	jobs = append(jobs, scheduler.Job{Name: "清理系统日志", Spec: "0 0 * * *", Run: func(jobCtx context.Context) scheduler.JobResult {
+	jobs = append(jobs, scheduler.Job{Name: logCleanupTaskName, Spec: logCleanupSpec, Run: func(jobCtx context.Context) scheduler.JobResult {
 		settings, err := settingsService.Get(jobCtx)
 		if err != nil {
 			logging.Error(logging.CategorySystem, "读取日志保留设置失败", "error", err.Error())
@@ -240,19 +414,26 @@ func (c *Commands) Serve(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("create scheduler: %w", err)
 	}
-	translationService, err := application.NewTranslationService(application.TranslationConfig{
-		Engine:    application.TranslationEngine(translationSettings.Values["TRANSLATION_ENGINE"]),
-		OpenAIURL: translationSettings.Values["OPENAI_URL"], OpenAIModel: translationSettings.Values["OPENAI_MODEL"], OpenAIAPIKey: translationSettings.Values["OPENAI_API_KEY"],
-		TranslationPrompt: translationSettings.Values["TRANSLATION_PROMPT"],
-		GoogleAPIKey:      translationSettings.Values["GOOGLE_API_KEY"], BaiduAppID: translationSettings.Values["BAIDU_APP_ID"], BaiduAPIKey: translationSettings.Values["BAIDU_API_KEY"], DeepLXURL: translationSettings.Values["DEEPLX_URL"],
-	}, nil)
+	// 定时任务表达式来自设置；保存设置时由 scheduleApplier 即时重排，不需要重启后端。
+	if err := manager.Apply(scheduleSpecs(translationSettings.Values)); err != nil {
+		return fmt.Errorf("注册定时任务: %w", err)
+	}
+	settingsService.SetScheduleApplier(func(values map[string]string) error {
+		return manager.Apply(scheduleSpecs(values))
+	})
+	translationService, err := application.NewTranslationService(translationConfigFromSettings(translationSettings.Values), nil)
 	if err != nil {
 		return fmt.Errorf("create translation service: %w", err)
 	}
 	mediaRepository := store.Media()
+	// 标签入库先查字典，缺失时翻译成简体中文再登记；翻译未启用时只做字典命中，不写入未翻译的权威名。
+	var tagTranslator application.TranslationClient = translationService
 	if translationSettings.Values["TRANSLATION_ENGINE"] != "" && translationSettings.Values["TRANSLATION_ENGINE"] != "none" {
 		collectionService.SetTranslator(translationService)
+	} else {
+		tagTranslator = nil
 	}
+	collectionRepository.SetTagResolver(application.NewTagNameService(database.NewTagNameRepository(store.SQLDB(), database.Dialect(c.config.DatabaseDriver)), tagTranslator))
 	workerCtx, cancelWorkers := context.WithCancel(ctx)
 	workersDone := make(chan struct{})
 	go func() { defer close(workersDone); collectionService.Work(workerCtx) }()
@@ -279,9 +460,12 @@ func (c *Commands) Serve(ctx context.Context) error {
 		for _, state := range states {
 			updates = append(updates, ports.TransferState{Hash: state.Hash, Status: state.Status, AddedAt: state.AddedAt, CompletedAt: state.CompletedAt, ObservedAt: observedAt})
 		}
-		if err := downloadRepository.SaveTransferStates(syncCtx, updates); err != nil {
+		transitions, err := downloadRepository.SaveTransferStates(syncCtx, updates)
+		if err != nil {
 			logging.Error(logging.CategoryDownload, "下载状态保存失败", "error", err.Error())
+			return
 		}
+		notifyTransferTransitions(syncCtx, notifier, transitions)
 	}
 	go func() {
 		defer close(downloadWorkerDone)
@@ -313,49 +497,107 @@ func (c *Commands) Serve(ctx context.Context) error {
 		values := current.Values
 		return map[string]ports.DownloadController{"qbittorrent": downloadclient.NewQbittorrent(values["QBITTORRENT_URL"], values["QBITTORRENT_USERNAME"], values["QBITTORRENT_PASSWORD"], values["QBITTORRENT_DOWNLOAD_PATH"], values["QBITTORRENT_CATEGORY"], nil)}, nil
 	})
+	catalogService := application.NewCatalogService(mediaRepository)
+	catalogQueries := application.NewCatalogQueryService(database.NewCatalogQueryRepository(store.SQLDB(), database.Dialect(c.config.DatabaseDriver)))
+	subscriptionService := application.NewSubscriptionService(store.Subscriptions())
+	subscriptionService.SetNotifier(notifier)
+	dashboardService := application.NewDashboardService(store.Media(), store.Subscriptions(), store.Downloads())
+	// 渠道 Agent 复用与 HTTP 完全相同的应用服务，不另建业务规则。
+	agentDeps := agent.Deps{
+		Catalog:               catalogService,
+		Queries:               catalogQueries,
+		Actors:                actorService,
+		Tags:                  tagService,
+		Subscriptions:         subscriptionService,
+		SubscriptionDownloads: downloadService,
+		Downloads:             downloadQueries,
+		Dashboard:             dashboardService,
+		Scheduler:             manager,
+		Logs:                  logging.Default,
+		Torrents:              settingsResourceSearcher{settings: settingsService},
+		Version:               c.config.Version,
+		Channels:              channels,
+		Notifier:              notifier,
+	}
+	registry := agent.NewRegistry(agent.BuiltinTools(agentDeps)...)
+	orchestrator := agent.NewOrchestrator(agentDeps, settingsValues(settingsService), registry)
+	router := agent.NewRouter(orchestrator, agentDeps)
+	// 轮询与 HTTP 回调共用同一个渠道处理器：业务分流与回复投递（文本、卡片、按钮刷新）只实现一次。
+	dispatcher := agent.NewDispatcher(router, channels)
+	channelWorkerCtx, cancelChannelWorker := context.WithCancel(ctx)
+	channelWorkerDone := make(chan struct{})
+	go func() {
+		defer close(channelWorkerDone)
+		RunChannelSupervisor(channelWorkerCtx, settingsService, dispatcher)
+	}()
+	defer func() { cancelChannelWorker(); <-channelWorkerDone }()
 	handler := httpapi.New(httpapi.Dependencies{
 		Collection:            collectionService,
 		Auth:                  authService,
-		Catalog:               application.NewCatalogService(mediaRepository),
-		CatalogQueries:        application.NewCatalogQueryService(database.NewCatalogQueryRepository(store.SQLDB(), database.Dialect(c.config.DatabaseDriver))),
-		Actors:                application.NewActorService(database.NewActorRepository(store.SQLDB(), database.Dialect(c.config.DatabaseDriver))),
+		Catalog:               catalogService,
+		CatalogQueries:        catalogQueries,
+		Actors:                actorService,
 		Tags:                  tagService,
-		Subscriptions:         application.NewSubscriptionService(store.Subscriptions()),
+		Subscriptions:         subscriptionService,
 		SubscriptionDownloads: downloadService,
 		Downloads:             downloadQueries,
-		Dashboard:             application.NewDashboardService(store.Media(), store.Subscriptions(), store.Downloads()),
+		Dashboard:             dashboardService,
 		Settings:              settingsService,
 		Scheduler:             manager,
 		Logs:                  logging.Default,
 		Readiness:             store.ReadinessProbe(),
+		WeChatCallback:        newWeChatCallback(settingsService),
+		ChannelMessages:       dispatcher,
 		StaticDir:             c.config.WebStaticDir,
 	})
 	server := &http.Server{Addr: c.config.HTTPAddress, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
 	return runtimeapp.New(server, manager, c.config.ShutdownTimeout).Run(ctx)
 }
 
-// configuredJobs registers every configured cron entry. Domain executors are added as their
+// scheduleDefinitions 是设置键与调度任务名的唯一映射，注册、重排与说明都据此对齐。
+var scheduleDefinitions = []struct{ name, key string }{
+	{"同步榜单", "RANK_SCHEDULE_TIME"},
+	{"同步热门演员", "ACTOR_SCHEDULE_TIME"},
+	{"标签追新", "TAG_SCHEDULE_TIME"},
+	{"订阅下载", "DOWNLOAD_SCHEDULE_TIME"},
+}
+
+// 日志清理是系统固定任务，表达式不来自设置。它必须始终出现在调度期望集合中，
+// 否则 Apply 会把它当作“未配置”而取消排期。
+const (
+	logCleanupTaskName = "清理系统日志"
+	logCleanupSpec     = "0 0 * * *"
+)
+
+// configuredJobs registers every configurable cron task. Domain executors are added as their
 // integrations land; until then a trigger is still observable and never silently discarded.
-func configuredJobs(values map[string]string) []scheduler.Job {
-	definitions := []struct{ name, key string }{
-		{"同步榜单", "RANK_SCHEDULE_TIME"},
-		{"同步热门演员", "ACTOR_SCHEDULE_TIME"},
-		{"标签追新", "TAG_SCHEDULE_TIME"},
-		{"订阅下载", "DOWNLOAD_SCHEDULE_TIME"},
-	}
-	jobs := make([]scheduler.Job, 0, len(definitions))
-	for _, definition := range definitions {
-		spec := strings.TrimSpace(values[definition.key])
-		if spec == "" {
-			continue
-		}
+// Cron expressions are deliberately absent here: they live in settings and reach the
+// scheduler through scheduleSpecs plus Manager.Apply, so saving settings reschedules a task
+// immediately instead of on the next process start.
+func configuredJobs() []scheduler.Job {
+	jobs := make([]scheduler.Job, 0, len(scheduleDefinitions))
+	for _, definition := range scheduleDefinitions {
 		name := definition.name
-		jobs = append(jobs, scheduler.Job{Name: name, Spec: spec, Run: func(context.Context) scheduler.JobResult {
+		jobs = append(jobs, scheduler.Job{Name: name, Run: func(context.Context) scheduler.JobResult {
 			logging.Info(logging.CategoryOther, "定时任务已触发，业务执行器尚未接入", "task", name)
 			return nil
 		}})
 	}
 	return jobs
+}
+
+// scheduleSpecs 返回调度器的完整期望排期：四个可配置任务取自设置（空值表示不排期），
+// 日志清理是固定任务，始终排期。Apply 以“未出现在 map 中即取消排期”为准，
+// 因此这里必须给出完整集合，不能只给可配置任务。
+func scheduleSpecs(values map[string]string) map[string]string {
+	specs := make(map[string]string, len(scheduleDefinitions)+1)
+	for _, definition := range scheduleDefinitions {
+		if spec := strings.TrimSpace(values[definition.key]); spec != "" {
+			specs[definition.name] = spec
+		}
+	}
+	specs[logCleanupTaskName] = logCleanupSpec
+	return specs
 }
 
 func (c *Commands) openStore(ctx context.Context) (database.Store, error) {

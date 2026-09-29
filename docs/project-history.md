@@ -103,7 +103,7 @@ ByteMuse 是自托管的 PT 订阅与媒体库编排工具。旧版能力包括�
 
 ## 十二、项目动态记录
 
-- DOWNLOAD-MEDIA-PREVIEW（2026-09-29）：按最终确认，顶部封面保留完整大图，图片资料中的封面与海报显示可放大的缩略图，抽屉剧照自动换行向下排列。剧照点击选中项后复用原卡片预览与 DragScrollRow 底部单行缩略图条，点选和箭头共用当前索引；撤回预览层多行布局。仅修改既有 CodeCard、测试及本记录，不新增路径，不改 API 或数据。20 项相关测试、11 项规范检查、类型检查与构建通过；真实 10 张剧照加载、第三张打开、第五张点选、预览保持单行、390px 抽屉换行且无横向溢出通过。
+- DOWNLOAD-MEDIA-PREVIEW（2026-09-29）：按最终确认，顶部封面保留完整大图；图片资料中的封面、海报为可点击放大的缩略图；抽屉剧照改为统一 16:9 裁切缩略图（桌面 112×63、窄屏 96×54，object-fit: cover）并向下自动换行，不再按原图比例参差排布。点某张缩略图即从该张进入受控 Arco Image.PreviewGroup，预览层保持原样：底部 DragScrollRow 单行缩略图条，点选与左右箭头共用当前索引。BLUR 模式只显示模糊缩略图且不提供放大入口，INVISIBLE 不渲染图片。仅修改既有 CodeCard、CodeCard 测试、公共样式及本记录，不新增路径，不改 API 或数据。20 项相关测试、11 项规范检查、类型检查与构建通过；真实 JUR-868 的 10 张剧照全部加载，抽屉网格换行、点击第 3 张放大到第 3 张、底部缩略图条保持单行且第 3 张高亮、关闭预览保留抽屉、390px 三列无横向溢出均已核验。
 
 - DOWNLOAD-MEDIA-STILLS（2026-09-29）：详情侧栏在图片资料下方显示已有剧照缩略图，空数组不渲染区域；复用 Arco Image.PreviewGroup，支持放大和左右切换，遵守 VISIBLE/BLUR/INVISIBLE 图片设置。主 Agent 仅修改既有 CodeCard、对应测试及本记录；允许创建路径：无，禁止临时产物入库。19 项相关测试及前端构建通过；真实 JUR-868 的 10 张剧照全部加载，切换第二张、关闭预览保留侧栏、390px 两列且无横向溢出已核验。无 API、数据库或历史数据变更；保留既有 React 19 ref 警告。
 
@@ -316,3 +316,157 @@ ByteMuse 是自托管的 PT 订阅与媒体库编排工具。旧版能力包括�
 - 外部操作与历史数据授权范围：
 - 当前状态：未开始、已实现、已测试、已联调、已验收或阻塞。
 - 验证证据、未验证事项和剩余风险：
+
+#### MESSAGING-01：Telegram 与企业微信对话、菜单与 Agent（2026-09-29）
+
+- 目标：外部渠道（Telegram、企业微信）实现斜杠命令菜单、直接发送番号订阅与 OpenAI function calling Agent 对话；优先 Telegram。
+- 负责人：主 Agent 冻结共享契约与启动装配；Telegram 适配、企业微信适配、Agent 工具集按独立文件并行实现。
+- 允许新增：backend/internal/ports/messaging.go、internal/application/agent/、internal/platform/telegram/、internal/platform/wechat/、internal/transport/httpapi/channels.go、internal/bootstrap/channels.go 及配套测试；允许修改 handler.go 路由与依赖、bootstrap.go 装配、api/openapi.yaml。前端设置页字段已存在，未改动前端。
+- 契约 MESSAGING-01：InboundMessage{Channel,ChatID,UserID,Text} 为渠道统一入口，ChannelSender 为统一发送出口，CallbackVerifier 负责企业微信 GET 校验与 POST 解密，ChannelMessageHandler 由长轮询与 HTTP 回调共用。业务分流只在 application/agent 的 Router 实现一次：斜杠命令 → Agent 对话 → 番号订阅 → 未启用指引。
+- 渠道行为：Telegram 长轮询 getUpdates，启动或配置变化时注册 setMyCommands 菜单，白名单非空时拒绝名单外用户；企业微信走 /api/v1/message 回调，不要求登录会话，安全性由回调签名与 AES 解密保证，先返回空响应再异步处理以满足 5 秒响应时限。
+- 配置：统一读取 app_settings 的 TELEGRAM_*、WECHAT_*、OPENAI_*、AGENT_ENABLE；保存设置后无需重启即可生效（渠道监督器每 15 秒对齐，回调处理器每次请求实时解析）。
+- 当前状态：已实现，通过本地单元测试与受控 HTTP 集成验证；未做真实第三方联调，未部署。
+- 验证证据：go build ./...、go vet ./...、go test ./... 全部通过。Telegram 与企业微信适配层单测覆盖长消息分片、access_token 缓存与刷新、签名与 AES 解密边界、picurl 降级；新增 Dispatcher 端到端测试覆盖「入站消息 → 模型 → 工具 → 最终回复 → 渠道投递」、send_message 主动推送、斜杠命令菜单与未启用降级；新增 HTTP 回调测试覆盖未配置 503、GET 校验原样回写、POST 解密投递与篡改拒绝；新增装配测试覆盖发送器解析与凭据变更重建、设置驱动的回调处理器、白名单解析与未配置空转。OpenAPI 与 Apifox（项目 8873619）已同步 /message 的 GET/POST 两个接口和 AGENT_ENABLE 字段并回读确认。
+- 未验证事项与剩余风险：无真实 Bot Token 与企业微信 corpid/secret/agentid，真实 Telegram、企业微信端到端链路未联调；Agent 工具的数据库读写仅经假仓储验证。2026-09-29 12:39 已重启本地后端，未配置时 GET /api/v1/message 实测返回 503，路由已在运行实例中生效。
+
+#### ACTOR-FOLLOW-01：演员追新订阅（2026-09-29）
+
+- 目标：演员保存或修改限制日期后，用本地已入库影片按旧版规则自动建立追新订阅，并由「同步热门演员」定时任务持续补抓作品。
+- 规则来源：未加密代码/最终源码/app/services/__init__.py 的 subscribe_code_by_actor（casts 非空、release_date 严格晚于 actor.limit_date、番号不含 VR、该片演员数不超过 MAX_ACTOR、服务器无此文件）。旧源码保持只读。
+- 允许修改：新增 backend/internal/platform/database/actor_follow.go、actor_follow_test.go、backend/internal/bootstrap/actor.go；修改 ports/actor.go、ports/collection.go、application/actor.go、transport/httpapi/handler.go、platform/database/migrations.go、collector 适配与测试、application/agent 假仓储、api/openapi.yaml 及本记录。无前端改动，无历史数据回填。
+- 契约：PUT /actors/{actorName}/subscription 保存后立即追新，追新未完成返回 500 actor_follow_pending；POST /tasks/同步热门演员/run 触发 actorFollowJob。AVBase 采集新增 kind=actor（/talents/{name}?page=N）。迁移 22 新增台账 actor_subscription_matches(actor_name,media_id,processed_at)。
+- 实现要点：ActiveNames 取 limit_date 非空演员逐个入队 avbase/actor 采集；Follow 分批（LIMIT 200）取候选，逐影片在 Serializable 事务内锁 actors/media 行、复核受保护状态与 library_status 后按 strict 订阅写入并登记台账，因此重复执行幂等且不会恢复用户手动取消的订阅；MAX_ACTOR 缺失或非法回退 3，0 表示不限制演员数。
+- 验证证据：go test ./...、go vet ./...、go build ./... 通过；actor_follow_test 覆盖严格晚于截止日、VR 排除、演员数上限、重复执行幂等、退订不恢复、放宽上限只补新增、旧库升级与历史数据不变。
+- 实网验收：dev/bytemuse.db 应用迁移 22 与 23 后重启本地后端，手动触发「同步热门演员」；47 个 avbase/actor 采集批次全部 done，台账 753 行、按规则新增 strict 订阅 197 条（活动订阅 10511→10708），入库影片 46949→47218。触发前在线备份位于系统 TEMP/bytemuse-backup-20260929-123838.db。
+- 未验证与剩余风险：PostgreSQL/MySQL 未做真实库验收；AVBase 演员作品分页上限与源站改版未评估；本次执行按功能预期在开发库新增订阅，生产库执行前需确认 MAX_ACTOR 与订阅范围。
+
+#### TRANSLATION-FILL-01：翻译设置迁移冲突与补全写锁修复（2026-09-29）
+
+- 现象一：演员追新与翻译模型拆分两个并行任务同时占用迁移版本 22，执行器按版本号判断是否已应用，导致 dev/bytemuse.db 已记录 22=actor_subscriptions 后 translation_model_settings 被静默跳过，TRANSLATION_OPENAI_URL/MODEL/API_KEY 三个设置键从未创建。
+- 现象二：译文补全命令在 12:41 与 12:45 两次以 save translated title: database is locked (5) (SQLITE_BUSY) 整批中断，剩余 34134 条未翻译。
+- 处理：保留已应用的 actor_subscriptions=22，翻译迁移改为 23；新增 backend/internal/platform/database/migrations_test.go 断言三个方言的迁移版本号唯一且严格递增；BackfillTranslations 的逐条写入改为有界退避重试（最多 6 次、0.5s 递增），并新增 isWriteConflict 分类与单测。
+- 验证：副本升级 21/22→23 通过且重复执行幂等，三个翻译设置键按 TRANSLATION_ENGINE=openai 从 OPENAI_* 复制；开发库升级后 GET /api/v1/system/settings 实测返回同一 URL 与模型；重启后的补全进程在采集并发写入下持续运行无中断。go test ./...、go vet ./...、go build ./...、gofmt 全部通过。
+- 未验证与剩余风险：译文补全仍在进行（重启时 13153/47218），未全部完成；SQLITE_BUSY 重试只覆盖译文写入路径，其他 CLI 写操作仍会直接失败；PostgreSQL/MySQL 未验证该重试分支。
+
+#### SETTINGS-01：翻译模型与对话 Agent 配置分离（2026-09-29）
+
+- 目标：把翻译使用的 OpenAI 兼容接口、模型、密钥与 Prompt 从对话 Agent 的 OPENAI_* 中拆出，在「AI 模型」分组内用页签分别配置，使 Agent 可换用支持 function calling 的模型，而翻译继续使用原模型。
+- 允许修改：application/settings.go 新增 TRANSLATION_OPENAI_URL、TRANSLATION_OPENAI_MODEL、TRANSLATION_OPENAI_API_KEY 三个键；platform/database/migrations.go 新增迁移 23；bootstrap.go 翻译装配改读新键；前端 SettingsPage 增加分组内页签与样式；api/openapi.yaml 与本文档同步。对话 Agent 的 OPENAI_* 语义与既有翻译引擎选择未变。
+- 契约 SETTINGS-01：翻译引擎取 openai 时使用 TRANSLATION_OPENAI_*，其余引擎不受影响；对话 Agent 始终使用 OPENAI_*；两套配置互不覆盖。设置页页签只决定展示哪组字段，草稿、变更判断与保存始终覆盖整个分组。
+- 迁移 23（translation_model_settings）：仅当 TRANSLATION_ENGINE='openai' 时把当前生效的 OPENAI_URL、OPENAI_MODEL、OPENAI_API_KEY 复制为 TRANSLATION_OPENAI_*，保证升级前后翻译行为不变；目标键已存在时不覆盖，重复执行安全；API Key 与 Agent 共用 SESSION_SECRET 加密，直接复制密文。
+- 当前状态：已实现，后端与前端测试通过，已在真实 dev 库与真实浏览器完成联调；未部署。
+- 验证证据：go build ./...、go vet ./...、go test ./... 通过；npm run check:standards、npm test、npm run typecheck、npm run build 通过。dev/bytemuse.db 已应用迁移 23 并复制出 TRANSLATION_OPENAI_*（地址与模型同 OPENAI_* 一致，密钥密文长度一致）。真实浏览器在 390/576/768/1280/1920px 验证「AI 模型」两个页签切换、字段正确、两个测试按钮分别返回「OpenAI 连接成功」；实测只改翻译模型名保存后 OPENAI_MODEL 不变，随后已还原原值。
+- 未验证事项与剩余风险：翻译服务在启动时装配（collectionService.SetTranslator 仅允许后台消费者启动前调用），修改翻译配置需重启后端才用于采集自动翻译，已在翻译模型页签标注；对话 Agent 配置每次请求实时读取，无需重启。OpenAPI 已同步；当前环境无可用 Apifox MCP 工具，未同步 Apifox。
+
+#### CRON-SCHEDULE-01：定时任务 cron 恢复每日执行并新增保存校验（2026-09-29）
+
+- 现象：dev/bytemuse.db 的 RANK_SCHEDULE_TIME、ACTOR_SCHEDULE_TIME、DOWNLOAD_SCHEDULE_TIME 被写成 `* * 5 * *`、`* * 3 * *`、`* * 2 * *`。5 段 cron 是「分 时 日 月 周」，这三个值表示每月 5/3/2 日全天每分钟触发，与旧版 template.env 默认的每天 20:00/21:00/22:00 不一致；表达式本身合法，所以调度器启动不报错，属于静默语义错误。TAG_SCHEDULE_TIME 仍为默认 `30 21 * * *`，未被改坏。
+- 处理一（校验）：internal/application/settings.go 新增 settingCron 取值域，四个 *_SCHEDULE_TIME 由 settingText 改为 settingCron，保存时用 github.com/robfig/cron/v3 的 ParseStandard 校验标准 5 段表达式（与 internal/scheduler 的解析器一致）；非法表达式返回 400 invalid_setting，空值仍表示不注册该定时任务。此前任意字符串都能写入，一旦写入非法值，下次启动 scheduler.New 注册失败会导致后端起不来。
+- 处理二（数据）：通过 PUT /api/v1/system/settings 将三个键恢复为 `0 20 * * *`、`0 21 * * *`、`0 22 * * *`，TAG_SCHEDULE_TIME 保持 `30 21 * * *`。修改前用 VACUUM INTO 在线备份到系统 TEMP/bytemuse-backup-cronfix-20260929-131229.db。
+- 处理三（前端）：SettingsPage 定时任务分组为四个 cron 字段补充「5 段 cron（分 时 日 月 周）」格式说明与示例。
+- 处理四（契约）：api/openapi.yaml 的 SystemSettings 与 SystemSettingsUpdate 两个 Schema 补充四个键的类型、默认值、示例与取值说明；Apifox 项目 8873619 的 316776654、316817665 已同步并回读确认。
+- 验证证据：go test ./...、go vet ./...、go build ./...、gofmt -l internal cmd 全部通过；npm run check:standards、npm test（75 个）、npm run typecheck、npm run build 通过；重启本地后端后 GET /api/v1/tasks 返回 cron 为 同步榜单 `0 20 * * *`、同步热门演员 `0 21 * * *`、标签追新 `30 21 * * *`、订阅下载 `0 22 * * *`、清理系统日志 `0 0 * * *`；PUT 非法值 `99 99 * * *`、`* * 5 *`、`not a cron` 均返回 400 invalid_setting，合法值返回 200。
+- 未验证与剩余风险：本次只在 SQLite 开发库验收，PostgreSQL/MySQL 未单独验证该校验分支。定时任务原先在启动时按设置注册，修改 cron 后必须重启后端才生效，该限制已由 CRON-SCHEDULE-02 解除。
+
+#### CRON-SCHEDULE-02：定时任务保存后即时重排，无需重启后端（2026-09-29）
+
+- 现象：定时任务只在 bootstrap 的 scheduler.New 时按设置注册，PUT /api/v1/system/settings 保存 *_SCHEDULE_TIME 后进程内排期不变，必须重启后端才生效；设置页也标注了该限制。
+- 处理一（调度器）：internal/scheduler/scheduler.go 把 Job.Spec 语义改为「初始表达式」，空值表示只注册不排期；jobState 新增 spec 与 entryID；新增 Manager.Apply(specs) 运行时增量重排，先整批校验未知任务名与 cron.ParseStandard 表达式，任一项失败整批拒绝且不改动现有排期；空值或未出现在 specs 中的任务取消排期，但保留 lastRun/running 状态与 RunNow 能力。Tasks() 改为返回当前排期。
+- 处理二（设置）：internal/application/settings.go 新增 ScheduleApplier 回调与 SetScheduleApplier；Update 在落库并 Get 后调用回调，同步失败只记录警告日志，不把已成功的保存报成失败。
+- 处理三（装配）：internal/bootstrap/bootstrap.go 的 scheduleDefinitions 成为设置键与任务名的唯一映射，configuredJobs 不再携带静态表达式，新增 scheduleSpecs 生成期望排期；scheduler.New 后立即 Apply 一次，并把 manager.Apply 注入 settingsService。日志清理是固定任务，用 logCleanupTaskName / logCleanupSpec 常量始终包含在 scheduleSpecs 中，避免被 Apply 当作未配置而取消排期。
+- 契约 CRON-SCHEDULE-02：Apply 是幂等的全量对齐，表达式未变化时不重建 cron entry；四个 *_SCHEDULE_TIME 空值表示不排期，非法表达式保存即返回 400 invalid_setting；日志清理固定 `0 0 * * *`，不通过设置修改。
+- 验证证据：gofmt -l internal cmd 无输出；go build ./...、go vet ./...、go test -count=1 ./... 通过；新增 internal/scheduler 的 TestApplyReconcilesSpecs、TestApplyWorksWhileRunning，internal/application 的 TestSettingsUpdateNotifiesScheduleApplier，internal/bootstrap 的 TestScheduleSpecsAlwaysIncludesLogCleanup、TestScheduleReconcileKeepsLogCleanup。重启本地后端后 GET /api/v1/tasks 基线为 同步榜单 `0 20 * * *`、同步热门演员 `0 21 * * *`、标签追新 `30 21 * * *`、订阅下载 `0 22 * * *`、清理系统日志 `0 0 * * *`；PUT RANK_SCHEDULE_TIME=`*/5 * * * *` 后不重启立即 GET /api/v1/tasks，同步榜单变为 `*/5 * * * *`，其余任务与清理系统日志不变；PUT `99 99 * * *` 与 `0 20 * *` 均返回 400 invalid_setting 且排期不变；恢复 RANK_SCHEDULE_TIME=`0 20 * * *` 后 tasks 立即回到基线，数据库四个键与修改前一致。api/openapi.yaml 的 SystemSettings 与 SystemSettingsUpdate 已同步「保存后立即重排，无需重启后端」文案，Apifox 项目 8873619 的 316776654、316817665 已写入并回读确认。
+- 未验证与剩余风险：只在 SQLite 开发库与本地源码运行验收，PostgreSQL/MySQL 未单独验证该重排分支；调度同步失败时只记警告，仍靠重启按落库设置重新注册兜底。
+
+#### NOTIFY-01：消息渠道按渠道独立的通知与对话开关（2026-09-29）
+
+- 目标：在设置页「消息渠道」的「微信」「Telegram」两个分组末尾各增加 6 个开关（两渠道各自独立），后端按开关推送业务通知或控制该渠道的自然语言对话；开关横向排成一行，名称按用户确认去掉「通知」二字，两个分组底部均注明「该设置只针对于微信、TG」。
+- 允许修改：新增 backend/internal/application/notification.go 及 notification_test.go、subscription_notify_test.go、platform/database/notification_settings_test.go、platform/database/transfer_transition_test.go、application/agent/router_test.go；修改 application/settings.go、application/services.go、application/subscription_download.go、application/agent/{router,business,tool}.go、ports/{messaging,subscription_download}.go、platform/database/{migrations,subscription_download}.go、bootstrap/bootstrap.go、transport/httpapi/download_control_test.go、frontend/src/features/system/SettingsPage.tsx 及 SettingsPage.test.tsx、frontend/src/app/styles.css、api/openapi.yaml 及本记录。禁止新增其他项目路径和临时产物。
+- 契约 NOTIFY-01：开关键 = 渠道前缀 + 事件后缀，前缀取 WECHAT / TELEGRAM，后缀取 NOTIFY_SUBSCRIBE、NOTIFY_SUBSCRIBE_FAILED、NOTIFY_DOWNLOAD_START、NOTIFY_DOWNLOAD_COMPLETE、NOTIFY_DOWNLOAD_FAILED、NOTIFY_AGENT_CHAT，共 12 个；权威定义在 application/notification.go 的 notificationChannels 与 notificationEvents，设置页、迁移种子与推送实现共用同一份定义，渠道与事件顺序即界面顺序。
+- 默认值与语义：5 个推送类开关默认 false，升级后不会在用户未确认的情况下推送；NOTIFY_AGENT_CHAT 默认 true，表示该渠道是否允许自然语言对话，关闭后回复关闭提示，斜杠命令与直接发送番号订阅不受影响。推送目标取 WECHAT_TO_USER 与 TELEGRAM_CHAT_ID，目标为空或渠道未配置时跳过；通知失败只记录日志，不影响业务流程。
+- 实现要点：Notifier 是通知唯一出口，NotificationService 复用 channelRegistry.Sender，不另建发送逻辑；订阅成功/失败在 SubscriptionService.Create 内触发（失败文案含原因，与落库原因同源），开始下载在提交下载器成功后触发，下载完成与下载失败由 SaveTransferStates 的 transfer_status 跃迁触发（仅当旧值不等于新值且新值为 completed/failed 时通知一次，重复同步不重复通知）。
+- 迁移 24（channel_notification_settings）：仅新增 12 个设置键，不改表结构、不覆盖已有配置；MySQL 用 INSERT IGNORE，SQLite/PostgreSQL 用 ON CONFLICT DO NOTHING，重复执行安全。
+- 前端：SettingField 增加 section 分节标题与 inline 行内标记、SettingGroup 增加 note 分组备注；连续标记 inline 的字段由 renderFieldSequence 合并进同一个 .settings-inline-row 容器横向排列，空间不足时自动换行并保持左对齐，行内与单行开关统一沿用页面既有的「名称在左、开关在右」写法；设置键后缀仍为 NOTIFY_*，只有界面名称去掉「通知」；控件沿用页面既有 Arco Switch，未引入新控件类型；分组备注移出字段网格改为分组级元素，与上一行间距按字段说明的 8px 取值。
+- 验证证据：gofmt -l 无输出，go build ./...、go vet ./...、go test -count=1 ./... 全部通过；npm run check:standards（11 项）、npm test（75 项）、npm run typecheck、npm run build 通过。dev/bytemuse.db 已应用迁移 24 并 seed 12 个键且默认值正确；重启本地后端后浏览器在 390/576/768/1280/1920px 确认「消息」小标题、6 个开关与底部备注渲染、无横向溢出；用户真实视口下 6 个开关同处一行（表单列 720px，实际占用 669px），窄列自动换行为 2–3 行且左对齐；备注与开关行间距实测 8px，与站点设置表单的字段说明一致；真实保存往返验证微信分组开关写回数据库、Telegram 分组保持独立，验收中改动的开关已恢复默认值。
+- 未验证与剩余风险：未主动触发订阅或下载以产生真实渠道推送，第三方通知端到端未联调；api/openapi.yaml 的 SystemSettings 与 SystemSettingsUpdate 已同步 12 个键，当前环境无可用 Apifox MCP 工具，未同步 Apifox；迁移只在 SQLite 开发库验收，PostgreSQL/MySQL 未做真实库迁移；推送类开关默认关闭，需用户在设置页手动开启后才会推送。
+
+#### TRANSLATION-GUARD-01：OpenAI 翻译引擎未配置时的禁用与回落（2026-09-29）
+
+- 目标：「AI 模型 → 翻译模型」的接口、模型、密钥未填全（Prompt 除外）时，翻译分组的 OpenAI 选项不可选；若此前已选 openai 再删除翻译模型配置，翻译引擎自动回落默认值。
+- 契约 TRANSLATION-GUARD-01：OpenAI 翻译依赖 TRANSLATION_OPENAI_URL、TRANSLATION_OPENAI_MODEL、TRANSLATION_OPENAI_API_KEY，三者任一为空即视为未配置，TRANSLATION_PROMPT 不参与判定；该判定与后端 NewTranslationService 的 openai 分支及 bootstrap.translationConfigFromSettings 一致。前端只做展示与即时反馈，后端装配判定仍是唯一权威。
+- 允许修改：frontend/src/features/system/SettingsPage.tsx 及 SettingsPage.test.tsx、api/openapi.yaml 及本记录。无后端改动，无迁移，无历史数据回填。
+- 实现要点：SettingOption 新增 requires 依赖键；TRANSLATION_ENGINE 的 openai 选项声明 translationOpenAIKeys，渲染时用 hasRequiredValues 决定 disabled。applyTranslationEngineGuard 统一收敛不变式——引擎为 openai 且依赖不全时回落 none；草稿同步（服务端返回值）与单字段编辑（setValue）都经过它，因此删除任一项配置后引擎立即回落。buildPayload 增加跨分组提交：引擎值与基线不一致时一并写入 payload，保证在「AI 模型」分组删除翻译模型配置并保存时，回落结果随该分组一起落库，不会出现设置值与实际装配不一致。
+- 语义说明：界面上「关闭」对应 none，即用户口语的「自动/默认」；未配置齐全时回落 none，与后端 none（不启用翻译）一致。
+- 顺带修复：布尔字段的 .settings-toggle-row 此前实际渲染为开关在左、文字在右，本次把 label 移到 Switch 之前，与「文字在左」的既有约定及消息渠道开关保持一致；文字点击经 label 的 htmlFor 仍能切换开关。
+- 验证证据：npm run check:standards（11 项）、npm test（78 项）、npm run typecheck、npm run build 全部通过。真实浏览器在设置页验证：三项齐全时 OpenAI 可选且选中；逐项清空模型名称 / 接口地址 / API Key 时 OpenAI 立即 disabled、none 选中，三种清空路径均通过；点「重置」还原后 OpenAI 恢复选中。dev/bytemuse.db 的 app_settings 翻译配置未被改动。同源 iframe 探针在 390/576/768/1280/1920px 确认无横向溢出。
+- 未验证与剩余风险：api/openapi.yaml 已补充该语义描述，当前环境无可用 Apifox MCP 工具，未同步 Apifox；翻译服务在启动时按设置装配，改动翻译配置后需重启后端才对采集翻译生效；回落只在设置页与后端装配两层保证，直接改数据库写入非法组合仍会由后端报 incomplete。
+
+#### CARD-01：渠道番号卡片与按钮操作（2026-09-29）
+
+- 目标：用户在消息渠道发送番号后，先收到一张「上方封面、下方操作按钮」的卡片，按钮随当前状态变化（已入库未订阅显示订阅、下载中显示暂停、已暂停显示继续、失败显示重试），点击按钮才执行对应操作；番号与按钮这条链路不接入 AI。
+- 契约 CARD-01：按钮载荷统一为 bm:<动作>:<番号>，动作集合为 sub / unsub / dl / pause / resume / retry，标识使用归一化番号而不是内部 ID，重复点击或过期卡片只会按番号重新取当前状态。按钮与状态映射的唯一权威是 agent.cardButtons；按钮是否允许由既有 task.AvailableActions（application.downloadActions）判定，卡片不重复实现下载器状态规则。回复统一为 ports.Reply{Text, Card, Refresh}，由 agent.Dispatcher 投递；卡片投递失败时降级为文本并回到「直接订阅」的原有行为（Router.CardFailed）。已入库番号在 Agent 开启时也优先返回卡片，未入库的类番号文本保持原有分流（交给 Agent 对话或给出提示），避免把普通英文文本误判成番号。
+- 允许修改：新增 backend/internal/ports/messaging.go、internal/application/agent/card.go、internal/platform/telegram、internal/platform/wechat、internal/bootstrap/channels.go、internal/transport/httpapi/channels.go 及各自测试；修改 internal/application/agent/router.go、dispatcher.go、services.go、internal/platform/database/repository.go、internal/ports/repositories.go、internal/bootstrap/bootstrap.go、api/openapi.yaml 和本记录。无数据库迁移，无历史数据回填，前端无改动。
+- 渠道能力：Telegram 使用内联键盘（reply_markup.inline_keyboard）与 callback_data，每行两个按钮，按钮点击经 callback_query 更新送回（getUpdates 的 allowed_updates 已加入 callback_query），并调用 answerCallbackQuery 结束客户端加载态；动作执行后用 editMessageReplyMarkup 刷新原消息按钮，封面缺失或 sendPhoto 被拒时降级为带按钮的 sendMessage，caption 按 1024 rune 截断。企业微信使用模板卡片（msgtype=template_card、card_type=button_interaction，按钮 1–6 个），按钮点击以 Event=template_card_event、EventKey=按钮载荷回调；平台更新已发送卡片需要发送时返回的 response_code，而点击回调不携带该值，因此 ReplaceButtons 在该渠道按接口约定返回 nil，不额外维护映射表。
+- 实现要点：ports.ChannelSender 增加 SendCard 与 ReplaceButtons；ports.InboundMessage 增加 Action（按钮点击时 Text 为空）；ports.DownloadListQuery 增加 MediaID，DownloadService 增加 LatestForMedia，使卡片能按「某部影片的最近一条下载任务」给出可执行操作；Telegram 轮询器不再自行发送回复，改为持有 ports.ChannelMessageHandler，与 HTTP 回调共用同一个 Dispatcher，业务分流与投递只实现一次；通道开关 NOTIFY_AGENT_CHAT 只约束自然语言对话，番号卡片不受其影响。
+- 验证证据：gofmt -l 无输出；go build ./...、go vet ./... 无输出；go test -count=1 ./... 全部通过（含 agent 卡片用例：载荷往返与非法载荷拒绝、七种状态下的按钮映射、卡片与文本降级、订阅/取消订阅/暂停的动作执行与按钮刷新；telegram：sendPhoto+内联键盘、封面失败降级、caption 截断、editMessageReplyMarkup、answerCallbackQuery、callback_query 解析与回执；wechat：模板卡片请求体、缺少封面、按钮数量越界、文案截断、ReplaceButtons 空操作、模板卡片事件解析）。按钮动作走的是既有 DownloadService.Control 链路，暂停用例断言下载器实际收到 pause 且回查状态写回后按钮刷新为「继续」。
+- 未验证与剩余风险：真实 Telegram / 企业微信联调未执行，需要用户向机器人发送番号、企业微信侧配置回调后才能确认端到端；企业微信模板卡片在真机上未验证，且点击后无法刷新按钮（平台限制，按钮可能显示过期状态，重复点击只按番号重新取当前状态）；在用后端未重启，源码改动需重启后才生效；本机无 gcc，-race 无法运行；api/openapi.yaml 已同步 /message 的按钮事件语义，当前环境无可用 Apifox MCP 工具，未同步 Apifox。
+#### NOTIFY-02：推送封面与防剧透设置接线（2026-09-29）
+
+- 现象：「消息渠道」里的 Telegram「推送防剧透」和微信「微信封面推送」保存后没有任何可观察效果。
+- 根因（代码确认）：TELEGRAM_SPOILER 只有设置项声明、设置页标签与迁移默认值三处，全仓库没有任何消费方；WECHAT_BANNER 只在 wechat.Client.SendPhoto 里被读取，而 NotificationService.Notify 只调用 SendText，推送链路从不发图片，SendPhoto 实际是死代码，开关自然无效。
+- 对标语义（未加密代码/最终源码）：推送一律是「封面 + 文案」的图文消息；TG 用 has_spoiler=TELEGRAM_SPOILER 让封面先在客户端打码，微信用 picurl = 本次封面 if WECHAT_BANNER else WECHAT_PHOTO（WECHAT_PHOTO 即「推送横幅图地址」）。
+- 契约 NOTIFY-02：通知载荷改为 application.NotificationMessage{Text, CoverURL}；有封面走渠道 SendPhoto，没有封面回落 SendText，发送方式只在 application.sendNotification 分流一次，渠道差异由适配器承担。封面取值规则只有一处：Go 侧 application.MediaCover（横幅图优先、缺失回退海报图），SQL 侧 platform/database.mediaCoverColumn 与之同名同义，用于下载任务查询。TG 的 has_spoiler 只作用于推送图文消息，交互式番号卡片不打码（用户主动发送番号，卡片封面不应被遮挡）。
+- 允许修改：internal/application/notification.go、services.go、subscription_download.go、internal/ports/subscription_download.go、internal/platform/database/repository.go、subscription_download.go、internal/platform/telegram/client.go、internal/bootstrap/bootstrap.go、channels.go 及各自测试；api/openapi.yaml 未改（/system/settings 未逐键声明这两个键，无契约变化）。无数据库迁移，无历史数据回填，前端无改动。
+- 实现要点：SubscriptionDownloadAttempt / PendingSubmission / TransferTransition 增加 Cover，三条任务查询（SaveTransferStates 的 current、Claim、ClaimPending）补 mediaCoverColumn("m") 并连接 legacy_media_metadata（以 media_id 为主键，一次主键查找）；telegram.NewClient 增加 spoiler 参数，渠道注册表把 TELEGRAM_SPOILER 纳入发送器签名，保存设置后无需重启即可生效；轮询器只读更新与回执，不携带防剧透配置。
+- 顺带修掉的真实缺口：sqlSubscriptionRepository.Create 过去只返回订阅行，不带 Media，而订阅成功通知的标题与封面都取自 item.Media，因此线上那条推送实际只有番号、没有标题也没有配图（测试用替身返回了 Media，所以此前没暴露）。现在 Create 与 List 一样调用 attachMedia 带出影片快照；订阅此时已提交，快照只影响文案与配图，读取失败只记日志，不把已成功的创建报成失败。POST /subscriptions 的响应因此与 GET /subscriptions 一样包含 media，属既有字段的补齐。
+- 验证证据：gofmt -l internal cmd 无输出；go build ./...、go vet ./... 无输出；go test -count=1 ./... 全部通过（新增：TestNotifySendsPhotoOnlyWhenCoverPresent 覆盖「有封面走图文、无封面走纯文本」、TestMediaCoverPrefersBannerThenPoster 覆盖横幅优先/回退海报/空白横幅/都缺失、TestSendPhotoAppliesSpoilerSetting 断言开启时请求体带 has_spoiler=true 且关闭时不含该字段、TestChannelRegistryRebuildsTelegramSenderOnSpoilerChange 断言开关变化后重建发送器、TestSubscriptionCreateReturnsMediaSnapshot 断言创建订阅带出影片快照；transfer_transition 与 subscription_download 两个真实 SQLite 用例新增封面断言，覆盖横幅优先与海报回退，并顺带验证 legacy_media_metadata 连接可用）。订阅通知用例已断言封面随通知下发。
+- 未验证与剩余风险：真实 Telegram / 企业微信推送未联调（需要用户侧机器人与企业微信应用凭据）；封面按 URL 交给平台抓取，源站若拒绝平台抓图会降级为纯文本（TG 与微信适配器都会回落，不会丢文案）；本机无 gcc，-race 无法运行；当前环境无可用 Apifox MCP 工具，未同步 Apifox。
+
+#### NOTIFY-03：图文消息标题必填与企业微信推送取证（2026-09-29）
+
+- 现象（NOTIFY-02 之后复检）：Telegram 推送已能带封面，但企业微信一侧仍可能表现为「开关没作用」。
+- 根因（代码确认）：NotificationMessage 只有 Text，sendNotification 把 SendPhoto 的 title 传成空串；企业微信 news 消息的 articles[].title 是必填项，空标题会被平台拒绝整条图文消息。对标实现里标题始终非空（番号{code}已加入订阅列表 / 番号{code}开始下载 / 番号{code}已完成下载），正文才是影片标题或站点信息。
+- 契约 NOTIFY-03：NotificationMessage 增加 Title；sendNotification 把 Title 与 Text 分开交给渠道（Telegram 拼 caption，企业微信填 news.title/description），无封面时用 NotificationPlainText 合成纯文本；NotificationHeadline 生成「番号X + 动作」标题，番号缺失时只保留动作，保证标题始终非空。原 NotificationLabel 由 NotificationHeadline 取代并删除，避免两套文案拼装口径并存。
+- 允许修改：internal/application/notification.go、services.go、subscription_download.go、internal/bootstrap/bootstrap.go 及各自测试、internal/platform/wechat/client_test.go。无数据库迁移，无历史数据回填，前端无改动，api/openapi.yaml 无契约变化（通知文案不进接口契约）。
+- 实现要点：各触发点标题统一为「番号X已加入订阅列表」「番号X订阅失败」「番号X开始下载」「番号X已完成下载」「番号X下载失败」，正文分别为影片标题、站点、失败原因。
+- 可观测性：Notify 成功新增 INFO 日志「消息通知已发送」（字段 channel/event/with_cover）。此前只有失败才留痕，静默成功与「开关没接线」无法区分，这正是本次问题难以自查的原因。
+- 验证证据（真实联调，不是只跑构建）：① 用后台已配置的 bot token 直接调用 sendPhoto 发同一张封面到 TELEGRAM_CHAT_ID，带 has_spoiler=true 时返回 ok=true 且 has_media_spoiler=true，不带该字段时该属性缺失，证明「推送防剧透」确实改变平台侧行为；② 通过 POST /subscriptions 真实创建订阅（OFJE-697），运行中的后端日志出现 {"msg":"消息通知已发送","channel":"tg","event":"subscribe","with_cover":true}，证明开关启用、渠道解析、封面取值、SendPhoto 分流整条链路生效；③ POST /subscriptions 响应包含 media 快照（code/title/banner_url/poster_url），证明 Create 带出影片快照的修复已生效；④ 测试数据已清理：两个测试订阅均取消，订阅总数回到 10708，两个番号回到 subscription_status=none。
+- 静态检查：gofmt -l internal cmd 无输出；go build ./...、go vet ./... 无输出；go test -count=1 ./... 12 个包全部 ok。新增 TestNotificationHeadlineAlwaysKeepsAction、TestNotificationPlainTextJoinsTitleAndText、TestDownloadNotificationsCarryTitleAndCover；wechat 的 TestSendPhotoPictureSelection 增加 news 标题/正文断言，锁住「标题不得为空」。
+- 未验证与剩余风险：企业微信无法真机验收——WECHAT_CORP_ID 与 WECHAT_AGENT_ID 为空，渠道未配置，后端会跳过该渠道（既不报错也不发送）。即使补齐凭据，WECHAT_BANNER=false 且 WECHAT_PHOTO 为空时 picurl 为空，图文消息仍会按对标语义降级为纯文本；要收到带封面的图文消息，需要打开「微信封面推送」（用影片封面）或填写「微信默认推送图片」（用固定图）。封面按 URL 交给平台抓取，源站若拒绝平台抓图会降级为纯文本。本机无 gcc，-race 无法运行；当前环境无可用 Apifox MCP 工具，未同步 Apifox。
+
+#### NOTIFY-04：订阅日志统一用番号标识（2026-09-29）
+
+- 现象：系统日志里出现「订阅编号」，订阅列表与下载任务列表也只报数量，用户在界面上找不到日志对应的影片。
+- 根因（代码确认）：订阅创建/编辑/取消的日志用 subscription_id 或 media_id 标识对象。两者都是不对用户暴露的内部主键，与任何界面元素都无法对应；查询类日志只有 count。
+- 契约 NOTIFY-04：订阅相关日志一律用番号（media.code）标识对象；番号取不到时省略该字段，绝不回退到内部 ID——快照读取失败时日志只说明「影片信息获取失败」并带原因，推送退化为不带番号的标题。application.subscriptionLogAttrs 是订阅日志属性的唯一拼装点。订阅创建、编辑、取消的响应统一内嵌 media 快照（含 code），客户端与通知不再按 media_id 反查。查询类日志在 count 之后追加 codes 列表，前端压缩为「（A、B）」。
+- 允许修改：internal/application/services.go、platform/database/repository.go、transport/httpapi/handler.go、application/agent/card.go；新增 internal/application/subscription_log_test.go，扩展 platform/database/subscription_create_test.go，调整 internal/application/subscription_notify_test.go 的仓储替身；frontend/src/features/system/logMessage.ts 及 logMessage.test.ts；api/openapi.yaml 的 Subscription.media 描述。无数据库迁移，无历史数据回填。
+- 实现要点：仓储层 Create/Cancel/Update 改为与 List 同一返回形状（带 media 快照），快照读取失败只记日志、不把已提交的操作报成失败，日志改为「订阅已保存/订阅已取消/订阅已编辑，影片信息获取失败」加原因，不再写 media_id；通知在番号缺失时只保留动作，不回退到 media_id；HTTP handler 删除重复的订阅日志，服务层是订阅日志的唯一出口；logMessage.ts 把 code 标签改为「番号」，删除 subscription_id 与 media_id 标签（旧格式行也不再展示这两个字段），并新增 created/channel/event/with_cover 标签。
+- 验证证据（真实联调）：以番号 OFJE-697 走完 创建 → 编辑 → 取消 → 取消不存在的订阅（404），运行中的后端 GET /logs 实际返回 `[订阅查询] 订阅已保存 attrs={"code":"OFJE-697","created":true}`、`[订阅查询] 订阅已编辑 attrs={"code":"OFJE-697"}`、`[订阅查询] 订阅已取消 attrs={"code":"OFJE-697"}`、`[订阅查询] 取消订阅失败 attrs={"error":"subscription not found"}`，均不含订阅 ID 与 media_id；同批 `[通知] 消息通知已发送 attrs={"channel":"tg","event":"subscribe","with_cover":true}`。测试订阅已取消，数据无残留。
+- 静态检查：gofmt -l internal cmd 无输出；go build ./...、go vet ./... 无输出；go test -count=1 ./... 12 个包全部 ok（新增 TestSubscriptionLogsUseCodeInsteadOfInternalIDs、TestSubscriptionLogsRecordFailureReason、TestSubscriptionSnapshotFailureLogsWithoutInternalID）；前端 npm run check:standards 11 项、logMessage 用例 11 项、npm test 80 项、typecheck 与 build 全部通过。api/openapi.yaml 与 Apifox 项目 8873619 的 Subscription 模型（316776647）已同步 media 字段描述并回读确认。
+- 浏览器验收（2026-09-29，Chrome 实机打开 http://127.0.0.1:5173/logs）：首屏 15:19:21 起的记录显示「订阅已保存，番号：OFJE-697，新建：是」「订阅已编辑，番号：OFJE-697」「订阅已取消，番号：OFJE-697」「取消订阅失败，原因：subscription not found」「消息通知已发送，渠道：tg，事件：subscribe，带封面：是」「影片详情查询完成，番号：OFJE-697」；全页文本检索不再出现 subscription_id 与「订阅编号」；15:09:46 的旧格式行只显示「订阅已取消」「订阅记录已删除」，不再露出英文原始字段名。 2026-09-29 复检：15:09:26 与 15:07:59 的旧格式「订阅已保存，新建：是」也不再显示「媒体编号」，全页检索无 subscription_id、订阅编号、媒体编号。
+- 未验证与剩余风险：PostgreSQL/MySQL 未单独验证带出快照的新分支；快照读取失败与 media 缺失都只是防御分支——开发库实测 10708 条订阅全部能关联到 media，media.code 均非空（47218 条），且 subscriptions.media_id 外键为 ON DELETE RESTRICT，media 缺失当前不可达；快照失败路径由单元测试用故障注入覆盖，未在真实库上制造该故障。
+
+#### TAG-01：标签统一简体中文并去重（2026-09-29）
+
+- 现象：标签页存在重复标签——同一标签的繁体写法与简体写法并存（如 `舔陰` 与 `舔阴`、`單體作品` 与 `单体作品`），部分影片的标签串内部还重复列出同一标签（78 行）；采集新增标签时也不校验库内是否已有等价标签。
+- 根因（数据确认）：`tag_catalog` 的 305 条是对标站的繁体字典；影片标签存 `legacy_media_metadata.genres`（逗号分隔文本），采集直接写入来源原文，入库前没有「是否已存在」的判定，也没有繁简归一，因此同一标签以繁体、简体、日文、英文多种写法各存一份。
+- 契约 TAG-01：标签权威名只有一个来源——`TagNameService`（字典 + 别名 + 翻译）。入库时先查字典与别名，命中直接复用；未命中才翻译成简体中文并登记，来源写法记为别名。`tag_catalog` 是权威名字典，`tag_aliases`（迁移 25，alias 为主键，canonical 指向 `tag_catalog.name`）保存「来源写法 → 权威名」。归一化命令与采集入库共用同一套规则。
+- 实现要点：纯汉字标签走逐字繁简转换提示词，含假名或拉丁字母的标签走跨语言翻译提示词；模型输出经 `SanitizeTagName` 校验（空值、换行、噪声短语、句末标点、成对引号、逗号、`->` 与 `→`、纯汉字长度变化、超长），不合格就保留原文并记日志，单个标签问题不阻断入库；纯汉字标签整词结果被模型改写时（`舔陰 → 舔阴部`）逐字重试，只接受 1:1 的汉字结果。`normalizeTagName` 折叠空白与零宽字符，全角折叠只处理字母数字——全角逗号折叠成半角会与 `genres` 的分隔符冲突，把对标站字典里的「和服，喪服」改写成无法按标签解析的值。
+- 数据变更：`bytemuse migrate tag-normalize` 在单个事务内按同一映射重写 `tag_catalog`（按权威名合并，保留对标站人工分类，缺失的以「未分类」补齐）、`legacy_media_metadata.genres`（按出现顺序去重）、`tag_subscriptions`（合并时保留更早的起始日）与 `tag_subscription_matches`（按主键去重，保留首次处理时间）；解析阶段的别名登记独立提交，命令可重复执行，第二次不再调用翻译引擎。
+- 预演与验证（副本先验证，再改开发库）：副本预演与开发库实际执行结果一致——扫描标签名 917，字典重命名/合并 186，字典补齐 629，影片标签行 2254，追新规则 0，追新台账 0；`media`/`legacy_media_metadata`/`tag_subscriptions`/`tag_subscription_matches` 行数不变（47218/47218/1/3），标签出现次数 12480 → 12399，行内重复 78 行 → 0，去重标签 917 → 748，`tag_catalog` 305 → 748，影片标签全部命中字典（未命中 0），`PRAGMA integrity_check=ok`、`foreign_key_check` 为空。
+- 浏览器验收（2026-09-29，Chrome 实机 http://127.0.0.1:5173/tag）：全部标签页显示「共 748 条」，列表标签全部为简体中文且无重复；搜索「舔阴」返回 1 条（关联影片 16 部，类型行为），繁体「舔陰」返回 0 条；1920px 每行 5 个、390px 单列，390/576/768/1280/1920px 均无横向滚动。
+- 静态检查：gofmt -l 无输出；`go build ./...`、`go vet ./internal/platform/database/` 通过；`go test -count=1 ./internal/platform/database/` 通过；application 标签用例通过（用 overlay 屏蔽与本任务无关的既存编译失败）。
+- 未验证与剩余风险：仍有 3 个日文汉字专有名词未被转换（`小野塚小町`、`栞叶琉璃`、`犬走楓`），模型对这些名称返回原样或错字，按「无法处理则保留原文」处理，需要人工决定是否转换；`南ことり` 同样保留原文。`和服，丧服`、`新娘，年轻妻子` 这类来源自带的复合标签与 `genres` 中同样存在的 `和服、丧服`、`新娘、年轻妻子` 仍并存，拆分复合标签不在本次范围内。归一化改写了历史标签数据，执行前已做在线备份（`$env:TEMP\bytemuse-dev-before-tagnorm.db`，integrity ok）。执行期间另有任务（`bytemuse-tr2-20260929 migrate translation-fill`）在写同一个开发库，本次写入为短事务，未出现锁失败。本次无接口变更，`api/openapi.yaml` 与 Apifox 无需同步。
+
+#### NOTIFY-05：图片防剧透覆盖番号卡片并补齐通知日志（2026-09-29）
+
+- 现象：TG 的「推送防剧透」打开后，机器人发出的封面仍能直接看清；系统日志里也没有任何能说明防剧透是否生效的记录。
+- 根因（代码 + 真机确认，分三条）：推送链路本身是通的——`TELEGRAM_SPOILER=true` 时渠道注册表会重建带 spoiler 的客户端，`SendPhoto` 会附带 `has_spoiler`；用后台已配置的 token 直连 Telegram 复现同一请求体（JSON body + URL 封面），返回 `has_media_spoiler=true`。真正漏打码的是**番号卡片**：用户发送番号后由 `SendCard` 发出的那张「封面 + 按钮」消息完全不经过 spoiler，而它正是机器人最近发出的带封面消息。日志缺失有三处：卡片投递成功不记任何日志；通知只在发送成功时记一条「消息通知已发送」，不体现封面是否打码；开关未启用、推送目标为空、渠道未配置时完全静默。
+- 契约 NOTIFY-05：`TELEGRAM_SPOILER` 的语义是「机器人发出的所有图文消息封面是否打码」，不按发送场景分叉；`telegram.Client.applySpoiler` 是唯一实现点，`SendPhoto`（推送）与 `SendCard`（番号卡片）共用。通知层对每个渠道都必须给出结论：`消息通知已跳过`（reason = 事件开关未启用 / 推送目标未配置 / 渠道未配置）或 `消息通知已发送`；Telegram 适配器在真正发出图片后记 `Telegram 图文消息已发送`（kind = 推送通知 / 番号卡片，spoiler = 实际是否打码）。设置项标签由「推送防剧透」改为「图片防剧透」，与对标站 `TELEGRAM_SPOILER`（图片是否启用防剧透）一致。
+- 允许修改：internal/platform/telegram/client.go、card_test.go、client_test.go；internal/application/notification.go；frontend/src/features/system/logMessage.ts、logMessage.test.ts、SettingsPage.tsx；本记录。无数据库迁移，无接口契约变化（`/system/settings` 只回传 values 映射），`api/openapi.yaml` 与 Apifox 无需同步。
+- 实现要点：新增 `applySpoiler(payload)` 与 `logPhoto(kind)`；`SendCard` 的 sendPhoto 分支补打码与日志（降级为 sendMessage 时不记图片日志）；通知层用局部 `skip` 闭包统一记录跳过原因，跳过与发送都留痕；`logMessage.ts` 新增 kind / reason / spoiler 三个标签。
+- 企业微信现状（数据确认）：`WECHAT_CORP_ID` 与 `WECHAT_AGENT_ID` 为空，渠道未配置，所有微信推送被跳过；`WECHAT_BANNER=false` 且 `WECHAT_PHOTO` 为空，即使补齐凭据也会降级为纯文本。因此「微信封面推送没作用」是必然结果，与开关实现无关；本次改动让这种跳过在日志里可见（`消息通知已跳过，渠道：wx，原因：渠道未配置`）。
+- 验证证据（真实联调）：重启后端（16:08:41，`/health/ready`=ok）后用 API 新建 SSIS-082 订阅，运行中的后端实际写入 `[订阅查询] 订阅已保存 {"code":"SSIS-082","created":true}`、`[通知] Telegram 图文消息已发送 {"kind":"推送通知","spoiler":true}`、`[通知] 消息通知已发送 {"channel":"tg","event":"subscribe","with_cover":true}`、`[通知] 消息通知已跳过 {"channel":"wx","event":"subscribe","reason":"事件开关未启用"}`；测试订阅随后取消（status=canceled），数据无残留。真机 API 复现：sendPhoto 带 `has_spoiler` 与 `reply_markup.inline_keyboard`（卡片形态）返回 message_id=40、`has_media_spoiler=true`，证明平台接受「卡片 + 打码」组合；另有两条推送形态测试消息（message_id 37、38）同样返回 `has_media_spoiler=true`，用户可在 TG 客户端直接核对打码效果。
+- 静态检查：`gofmt -l internal cmd` 无输出；`go build ./...`、`go vet ./...` 无输出；`go test -count=1 ./...` 全部 ok（新增 TestSendCardAppliesSpoilerSetting）；前端 `npm run check:standards` 11 项、`npm test` 82 项、`typecheck` 与 `build` 全部通过。
+- 浏览器验收（2026-09-29，Chrome 实机 http://localhost:5173/logs 与 /settings）：日志页首屏显示「订阅已保存，番号：SSIS-082，新建：是」「Telegram 图文消息已发送，消息类型：推送通知，防剧透：是」「消息通知已发送，渠道：tg，事件：subscribe，带封面：是」「消息通知已跳过，渠道：wx，事件：subscribe，原因：事件开关未启用」「订阅已取消，番号：SSIS-082」；设置页「消息渠道 → Telegram」分组显示「图片防剧透」且处于勾选状态。
+- 未验证与剩余风险：番号卡片的真机入站路径未走通——本机无法向机器人发送消息（getUpdates 只能由真实 Telegram 客户端触发），卡片打码由单元测试（断言 has_spoiler）与真机 API 复现（同一请求体）共同覆盖，需用户在 TG 里发一次番号确认；企业微信渠道未配置，微信侧只验证到「跳过原因已入日志」，未验证真实图文消息，`WECHAT_PHOTO` 为空时微信封面推送仍需先补齐企业微信凭据与默认配图；若用户客户端不支持 Telegram 的 spoiler 效果，服务端已无法进一步保证显示层打码。

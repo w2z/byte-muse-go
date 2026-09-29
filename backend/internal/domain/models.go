@@ -83,7 +83,7 @@ func ResolveMediaDisplayStatus(library LibraryStatus, subscription SubscriptionS
 // ValidVideoType 校验单值影片分类；未知分类用 NULL 表示，不使用猜测值。
 func ValidVideoType(value string) bool {
 	switch value {
-	case "censored", "uncensored", "uncensored_cracked", "leaked":
+	case VideoTypeCensored, VideoTypeUncensored, VideoTypeUncensoredCracked, VideoTypeLeaked:
 		return true
 	}
 	return false

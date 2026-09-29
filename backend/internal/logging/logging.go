@@ -113,6 +113,15 @@ func (l *Logger) SetStore(store Store) {
 	l.mu.Unlock()
 }
 
+// Slog 暴露底层结构化日志器，供适配器层（如渠道轮询）复用同一输出格式与级别。
+// 调用方应通过 With("category", ...) 标注业务分类，避免出现与进程其余日志不同的文本格式。
+func (l *Logger) Slog() *slog.Logger {
+	if l == nil || l.logger == nil {
+		return slog.Default()
+	}
+	return l.logger
+}
+
 // Info records a normal business event.
 func (l *Logger) Info(category Category, message string, attrs ...any) {
 	l.log(slog.LevelInfo, category, message, attrs...)

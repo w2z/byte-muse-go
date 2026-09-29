@@ -230,6 +230,15 @@ h1 { margin: 0; color: var(--ink); font-size: 16px; font-weight: 500; letter-spa
 @media (max-width: 767px) {
   .code-card-still-thumb { width: 56px; height: 36px; }
 }
+/* 详情抽屉的剧照缩略图：统一 16:9 裁切并向下自动换行，避免原图比例不同导致排布参差。 */
+.code-card-still-grid { display: flex; flex-wrap: wrap; gap: 8px; }
+.code-card-still-cell { display: block; width: 112px; height: 63px; padding: 0; overflow: hidden; background: transparent; border: 0; border-radius: 4px; }
+.code-card-still-cell img { display: block; width: 100%; height: 100%; object-fit: cover; }
+button.code-card-still-cell { cursor: pointer; }
+button.code-card-still-cell:hover img { opacity: .85; }
+@media (max-width: 767px) {
+  .code-card-still-cell { width: 96px; height: 54px; }
+}
 .media-player { width: 100%; aspect-ratio: 16 / 9; overflow: hidden; background: #000; }
 .media-player-empty { display: grid; min-height: 240px; place-items: center; color: var(--muted); background: var(--panel-deep); }
 /* 全局操作反馈：参考 Ant Design Message 顶部居中提示，但保留项目 Arco token。
@@ -417,6 +426,13 @@ h1 { margin: 0; color: var(--ink); font-size: 16px; font-weight: 500; letter-spa
 .settings-group-tabs .arco-tabs-header-wrapper { justify-content: flex-start; }
 .settings-group-tabs .arco-tabs-header { flex-wrap: wrap; justify-content: flex-start; }
 .settings-group-tabs .arco-tabs-content { display: none; }
+/* 「AI 模型」分组内的页签：同一分组下切换对话与翻译两套互不影响的配置。 */
+.settings-model-tabs { padding: 0 0 18px; }
+.settings-model-tabs-bar { display: block; }
+.settings-model-tabs-bar > .arco-tabs-header-nav { margin: 0; }
+.settings-model-tabs-bar .arco-tabs-header-wrapper { justify-content: flex-start; }
+.settings-model-tabs-bar .arco-tabs-header { flex-wrap: wrap; justify-content: flex-start; }
+.settings-model-tabs-bar .arco-tabs-content { display: none; }
 .settings-group-section {
   padding: 20px 0;
   margin-bottom: 16px;
@@ -484,6 +500,14 @@ h1 { margin: 0; color: var(--ink); font-size: 16px; font-weight: 500; letter-spa
   line-height: 20px;
   overflow-wrap: anywhere;
 }
+/* 分组内成组字段的小标题，例如消息渠道里成组的“消息”开关。 */
+.settings-field-section { margin: 0; font-weight: 400; }
+/* 分组底部备注：说明该组配置的适用范围，与字段说明共用同一套弱化色和 8px 间距。 */
+.settings-group-note { margin: 8px 0 0; color: var(--muted); font-size: 12px; line-height: 20px; }
+/* 同一分节内的布尔开关排成一行，空间不足时自动换行并保持左对齐。 */
+.settings-inline-row { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; }
+.settings-field-inline { flex: 0 0 auto; }
+.settings-inline-row .settings-toggle-row { width: auto; }
 .settings-reference-links { display: flex; flex-wrap: wrap; gap: 4px 14px; }
 .settings-reference-links a { color: var(--primary); text-decoration: none; }
 .settings-reference-links a:hover { text-decoration: underline; }
@@ -505,6 +529,9 @@ h1 { margin: 0; color: var(--ink); font-size: 16px; font-weight: 500; letter-spa
   border-radius: 0;
 }
 .settings-toggle-row > .arco-switch { flex: 0 0 auto; margin-top: 1px; }
+/* 外置标签与关联开关保持相同的可点击、禁用光标提示。 */
+.settings-toggle-row > label { cursor: pointer; }
+.settings-toggle-row > [role="switch"]:disabled + label { cursor: not-allowed; }
 .settings-toggle-copy { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
 .settings-toggle-row > span,
 .settings-toggle-row .settings-field-label {

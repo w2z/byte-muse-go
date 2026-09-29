@@ -24,13 +24,17 @@ func NewSubscriptionDownloadRepository(db *sql.DB, dialect Dialect) *Subscriptio
 }
 
 // SaveTransferStates updates only matching qBittorrent tasks and never infers missing torrents as failures.
-func (r *SubscriptionDownloadRepository) SaveTransferStates(ctx context.Context, states []ports.TransferState) error {
+// 返回本次首次进入终态（completed / failed）的任务，供通知去重：轮询会重复上报同一状态，
+// 只有旧值与新值不同才算一次跃迁。
+func (r *SubscriptionDownloadRepository) SaveTransferStates(ctx context.Context, states []ports.TransferState) ([]ports.TransferTransition, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer tx.Rollback()
-	query := fmt.Sprintf("UPDATE download_tasks SET transfer_status=%s,added_at=COALESCE(added_at,%s),completed_at=COALESCE(completed_at,%s) WHERE downloader='qbittorrent' AND LOWER(info_hash)=%s AND status IN ('submitted','downloading','completed') AND lease_token IS NULL AND updated_at<=%s", placeholder(r.dialect, 1), placeholder(r.dialect, 2), placeholder(r.dialect, 3), placeholder(r.dialect, 4), placeholder(r.dialect, 5))
+	update := fmt.Sprintf("UPDATE download_tasks SET transfer_status=%s,added_at=COALESCE(added_at,%s),completed_at=COALESCE(completed_at,%s) WHERE downloader='qbittorrent' AND LOWER(info_hash)=%s AND status IN ('submitted','downloading','completed') AND lease_token IS NULL AND updated_at<=%s", placeholder(r.dialect, 1), placeholder(r.dialect, 2), placeholder(r.dialect, 3), placeholder(r.dialect, 4), placeholder(r.dialect, 5))
+	current := fmt.Sprintf("SELECT t.id,COALESCE(t.transfer_status,''),COALESCE(m.code,''),COALESCE(NULLIF(m.translated_title,''),m.title,''),"+mediaCoverColumn("m")+" FROM download_tasks t LEFT JOIN media m ON m.id=t.media_id "+mediaCoverJoin("m")+" WHERE t.downloader='qbittorrent' AND LOWER(t.info_hash)=%s AND t.status IN ('submitted','downloading','completed') AND t.lease_token IS NULL AND t.updated_at<=%s", placeholder(r.dialect, 1), placeholder(r.dialect, 2))
+	transitions := make([]ports.TransferTransition, 0, len(states))
 	for _, state := range states {
 		if state.Hash == "" {
 			continue
@@ -46,11 +50,25 @@ func (r *SubscriptionDownloadRepository) SaveTransferStates(ctx context.Context,
 		if observedAt.IsZero() {
 			observedAt = time.Now().UTC()
 		}
-		if _, err = tx.ExecContext(ctx, query, state.Status, added, completed, state.Hash, encodeTime(observedAt, r.dialect)); err != nil {
-			return err
+		var taskID, previous, code, title, cover string
+		scanErr := tx.QueryRowContext(ctx, current, state.Hash, encodeTime(observedAt, r.dialect)).Scan(&taskID, &previous, &code, &title, &cover)
+		if scanErr != nil && !errors.Is(scanErr, sql.ErrNoRows) {
+			return nil, scanErr
+		}
+		if _, err = tx.ExecContext(ctx, update, state.Status, added, completed, state.Hash, encodeTime(observedAt, r.dialect)); err != nil {
+			return nil, err
+		}
+		if scanErr != nil || previous == state.Status {
+			continue
+		}
+		if state.Status == "completed" || state.Status == "failed" {
+			transitions = append(transitions, ports.TransferTransition{TaskID: taskID, Code: code, Title: title, Cover: cover, Status: state.Status})
 		}
 	}
-	return tx.Commit()
+	if err = tx.Commit(); err != nil {
+		return nil, err
+	}
+	return transitions, nil
 }
 
 // Enqueue creates one pending task for an active subscription unless a nonfailed attempt already exists.
@@ -134,10 +152,10 @@ func (r *SubscriptionDownloadRepository) Claim(ctx context.Context, now time.Tim
 		return nil, e
 	}
 	defer tx.Rollback()
-	query := fmt.Sprintf("SELECT d.id,d.media_id,m.code,s.mode,s.filter_json FROM download_tasks d JOIN subscriptions s ON s.id=d.subscription_id AND s.status='active' JOIN media m ON m.id=d.media_id WHERE (d.status='queued' OR (d.status='searching' AND d.lease_until<%s)) ORDER BY d.created_at,d.id LIMIT 1", placeholder(r.dialect, 1))
+	query := fmt.Sprintf("SELECT d.id,d.media_id,m.code,COALESCE(NULLIF(m.translated_title,''),m.title,''),"+mediaCoverColumn("m")+",s.mode,s.filter_json FROM download_tasks d JOIN subscriptions s ON s.id=d.subscription_id AND s.status='active' JOIN media m ON m.id=d.media_id "+mediaCoverJoin("m")+" WHERE (d.status='queued' OR (d.status='searching' AND d.lease_until<%s)) ORDER BY d.created_at,d.id LIMIT 1", placeholder(r.dialect, 1))
 	var a ports.SubscriptionDownloadAttempt
 	var filterJSON string
-	e = tx.QueryRowContext(ctx, query, now.UnixMilli()).Scan(&a.ID, &a.MediaID, &a.Code, &a.Mode, &filterJSON)
+	e = tx.QueryRowContext(ctx, query, now.UnixMilli()).Scan(&a.ID, &a.MediaID, &a.Code, &a.Title, &a.Cover, &a.Mode, &filterJSON)
 	if errors.Is(e, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -206,8 +224,8 @@ func (r *SubscriptionDownloadRepository) ClaimPending(ctx context.Context, now t
 	}
 	defer tx.Rollback()
 	var p ports.PendingSubmission
-	q := fmt.Sprintf("SELECT id,resource_uri,info_hash,downloader FROM download_tasks WHERE status='unknown' AND (lease_until IS NULL OR lease_until<%s) ORDER BY updated_at,id LIMIT 1", placeholder(r.dialect, 1))
-	e = tx.QueryRowContext(ctx, q, now.UnixMilli()).Scan(&p.ID, &p.URI, &p.InfoHash, &p.Downloader)
+	q := fmt.Sprintf("SELECT d.id,d.resource_uri,d.info_hash,d.downloader,COALESCE(d.source_site,''),COALESCE(m.code,''),COALESCE(NULLIF(m.translated_title,''),m.title,''),"+mediaCoverColumn("m")+" FROM download_tasks d LEFT JOIN media m ON m.id=d.media_id "+mediaCoverJoin("m")+" WHERE d.status='unknown' AND (d.lease_until IS NULL OR d.lease_until<%s) ORDER BY d.updated_at,d.id LIMIT 1", placeholder(r.dialect, 1))
+	e = tx.QueryRowContext(ctx, q, now.UnixMilli()).Scan(&p.ID, &p.URI, &p.InfoHash, &p.Downloader, &p.Site, &p.Code, &p.Title, &p.Cover)
 	if errors.Is(e, sql.ErrNoRows) {
 		return nil, nil
 	}

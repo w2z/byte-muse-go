@@ -20,7 +20,7 @@ func TestAdditionalSourcePersistence(t *testing.T) {
 		t.Fatal(e)
 	}
 	q := NewCollectionRepository(s.SQLDB(), DialectSQLite)
-	for _, source := range []string{"javdb", "netflav"} {
+	for _, source := range []string{"javdb", "netflav", "javlibrary", "avbase", "jable", "supjav"} {
 		req := ports.CollectionRequest{Source: source, Kind: "search", Query: "TEST", Page: 1}
 		b := ports.CollectionBatch{Items: []ports.CollectedMedia{{SourceID: "one", Title: "样例", URL: "https://example.test/item", Tags: []string{"标签"}}}}
 		if _, e = q.SaveCollection(ctx, req, b); e != nil {
@@ -34,14 +34,14 @@ func TestAdditionalSourcePersistence(t *testing.T) {
 	if e = s.SQLDB().QueryRow(`SELECT COUNT(*) FROM media`).Scan(&n); e != nil || n != 0 {
 		t.Fatalf("media=%d err=%v", n, e)
 	}
-	for _, source := range []string{"thisav", "avgle", "javlibrary", "avbase", "javbus", "jable", "supjav"} {
+	for _, source := range []string{"thisav", "avgle", "javbus"} {
 		if _, e = q.SaveCollection(ctx, ports.CollectionRequest{Source: source}, ports.CollectionBatch{}); e == nil {
 			t.Fatalf("excluded source accepted: %s", source)
 		}
 	}
 }
 
-// TestSourceRankNamespace 验证既有 JavDB 榜单周期互不覆盖且不改变请求契约。
+// TestSourceRankNamespace 验证跨站榜单独立发布，不覆盖旧 JavDB 榜且不改变请求周期。
 func TestSourceRankNamespace(t *testing.T) {
 	ctx := context.Background()
 	s, e := Open(ctx, Config{Dialect: DialectSQLite, SQLitePath: filepath.Join(t.TempDir(), "ranks.db")})
@@ -53,7 +53,7 @@ func TestSourceRankNamespace(t *testing.T) {
 		t.Fatal(e)
 	}
 	q := NewCollectionRepository(s.SQLDB(), DialectSQLite)
-	for _, tc := range []struct{ source, period, key, code string }{{"javdb", "daily", "daily", "TEST-001"}, {"javdb", "weekly", "weekly", "TEST-002"}} {
+	for _, tc := range []struct{ source, period, key, code string }{{"javdb", "daily", "daily", "TEST-001"}, {"javdb", "weekly", "weekly", "TEST-002"}, {"javlibrary", "wanted", "javlibrary:wanted", "TEST-003"}} {
 		req := ports.CollectionRequest{Source: tc.source, Kind: "rank", Period: tc.period, Page: 1}
 		run, e := q.CreateRun(ctx, req)
 		if e != nil {
@@ -83,7 +83,7 @@ func TestSourceRankNamespace(t *testing.T) {
 	}
 	var n int
 	s.SQLDB().QueryRow(`SELECT COUNT(*) FROM rank_entries`).Scan(&n)
-	if n != 2 {
+	if n != 3 {
 		t.Fatal(n)
 	}
 }

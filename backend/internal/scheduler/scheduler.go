@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -19,6 +20,8 @@ import (
 type JobResult map[string]any
 
 // Job is one named cron callback. Run must honor context cancellation.
+// Spec is the initial cron expression; an empty Spec registers the task without
+// scheduling it until Apply supplies one.
 type Job struct {
 	Name string
 	Spec string
@@ -48,17 +51,22 @@ type Manager struct {
 
 type jobState struct {
 	job     Job
+	spec    string
+	entryID cron.EntryID
 	lastRun *time.Time
 	running atomic.Bool
 }
 
 // New validates and registers all background jobs without starting goroutines.
+// It schedules only the jobs that already carry a non-empty Spec; callers that keep
+// cron expressions in configuration apply them through Apply after construction.
 func New(jobs []Job) (*Manager, error) {
 	engine := cron.New()
 	manager := &Manager{engine: engine, jobs: make(map[string]*jobState, len(jobs))}
 	ctx, cancel := context.WithCancel(context.Background())
 	manager.ctx = ctx
 	manager.cancel = cancel
+	specs := make(map[string]string, len(jobs))
 	for _, job := range jobs {
 		if job.Name == "" || job.Run == nil {
 			cancel()
@@ -68,16 +76,55 @@ func New(jobs []Job) (*Manager, error) {
 			cancel()
 			return nil, fmt.Errorf("scheduler job name must be unique: %q", job.Name)
 		}
-		state := &jobState{job: job}
-		manager.jobs[job.Name] = state
-		if _, err := engine.AddFunc(job.Spec, func() {
-			manager.execute(ctx, state)
-		}); err != nil {
-			cancel()
-			return nil, fmt.Errorf("register scheduler job %q: %w", job.Name, err)
+		manager.jobs[job.Name] = &jobState{job: job}
+		if spec := strings.TrimSpace(job.Spec); spec != "" {
+			specs[job.Name] = spec
 		}
 	}
+	if err := manager.Apply(specs); err != nil {
+		cancel()
+		return nil, err
+	}
 	return manager, nil
+}
+
+// Apply reconciles the cron expression of every registered task without restarting the
+// engine, so a configuration change takes effect on the next trigger instead of the next
+// process start. An empty spec unschedules the task while keeping it manually runnable;
+// tasks missing from specs are unscheduled. Validation is all-or-nothing: an unknown task
+// name or an invalid expression is rejected before anything is changed, so a failed call
+// leaves the running schedule untouched.
+func (m *Manager) Apply(specs map[string]string) error {
+	schedules := make(map[string]cron.Schedule, len(specs))
+	for name, spec := range specs {
+		if _, exists := m.jobs[name]; !exists {
+			return fmt.Errorf("scheduler task is not registered: %q", name)
+		}
+		schedule, err := cron.ParseStandard(spec)
+		if err != nil {
+			return fmt.Errorf("register scheduler job %q: %w", name, err)
+		}
+		schedules[name] = schedule
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for name, state := range m.jobs {
+		schedule, scheduled := schedules[name]
+		if scheduled && state.entryID != 0 && state.spec == specs[name] {
+			continue
+		}
+		if state.entryID != 0 {
+			m.engine.Remove(state.entryID)
+			state.entryID = 0
+			state.spec = ""
+		}
+		if !scheduled {
+			continue
+		}
+		state.entryID = m.engine.Schedule(schedule, cron.FuncJob(func() { m.execute(m.ctx, state) }))
+		state.spec = specs[name]
+	}
+	return nil
 }
 
 // execute wraps all cron and manual executions with identical state tracking and logging.
@@ -149,7 +196,7 @@ func (m *Manager) Tasks() []TaskInfo {
 	m.mu.Lock()
 	items := make([]TaskInfo, 0, len(m.jobs))
 	for _, state := range m.jobs {
-		item := TaskInfo{Name: state.job.Name, Spec: state.job.Spec, Running: state.running.Load()}
+		item := TaskInfo{Name: state.job.Name, Spec: state.spec, Running: state.running.Load()}
 		if state.lastRun != nil {
 			lastRun := *state.lastRun
 			item.LastRun = &lastRun

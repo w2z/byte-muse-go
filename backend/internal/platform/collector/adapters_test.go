@@ -50,6 +50,25 @@ type pageFetcher struct {
 	url  string
 }
 
+// TestRegistryRejectsUnverifiedCapabilities 防止注册站点时意外开放未验收的操作和榜单。
+func TestRegistryRejectsUnverifiedCapabilities(t *testing.T) {
+	for _, req := range []ports.CollectionRequest{
+		{Source: "javlibrary", Kind: "search", Query: "TEST", Page: 1},
+		{Source: "javlibrary", Kind: "detail", Query: "javsample", Page: 1},
+		{Source: "javlibrary", Kind: "rank", Period: "bestrated", Page: 1},
+		{Source: "avbase", Kind: "date", Query: "2026-09-28", Page: 1},
+		{Source: "avbase", Kind: "detail", Query: "TEST-001", Page: 1},
+		{Source: "jable", Kind: "detail", Query: "sample", Page: 1},
+		{Source: "supjav", Kind: "detail", Query: "123", Page: 1},
+		{Source: "javbus", Kind: "search", Query: "TEST", Page: 1},
+	} {
+		f := &pageFetcher{}
+		if _, err := NewRegistry(f).Collect(context.Background(), req); err == nil || f.url != "" {
+			t.Fatalf("unverified request reached fetcher: %+v err=%v", req, err)
+		}
+	}
+}
+
 func TestRegistryAllowsRankPagesBeyondOneHundred(t *testing.T) {
 	f := &pageFetcher{body: `<div class="movie-list"></div>`}
 	_, e := NewRegistry(f).Collect(context.Background(), ports.CollectionRequest{Source: "javdb", Kind: "rank", Period: "daily", Page: 101})
@@ -95,8 +114,9 @@ func TestJavDBListUsesExplicitCodeAndDate(t *testing.T) {
 		t.Fatalf("rank type: %q", b.Items[0].VideoType)
 	}
 	b, e = NewRegistry(f).Collect(context.Background(), ports.CollectionRequest{Source: "javdb", Kind: "search", Query: "TEST", Page: 1})
-	if e != nil || b.Items[0].VideoType != "" {
-		t.Fatalf("search must not guess category: %+v %v", b, e)
+	// 搜索结果没有类别字段，交回统一分类规则；常规番号按行业常态归为有码。
+	if e != nil || b.Items[0].VideoType != "censored" {
+		t.Fatalf("search classification: %+v %v", b, e)
 	}
 }
 

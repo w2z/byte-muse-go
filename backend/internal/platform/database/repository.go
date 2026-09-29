@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"bytemuse/backend/internal/domain"
+	"bytemuse/backend/internal/logging"
 	"bytemuse/backend/internal/ports"
 )
 
@@ -202,7 +203,16 @@ func (r *sqlSubscriptionRepository) Create(ctx context.Context, request ports.Cr
 	if err := updateMediaSubscriptionStatus(ctx, r.exec, r.dialect, item.MediaID, domain.SubscriptionStatusActive, now); err != nil {
 		return domain.Subscription{}, false, err
 	}
-	return item, true, nil
+	// 与 List 保持同一返回形状：订阅成功通知的标题与推送封面直接用这里带出的影片快照，调用方不必再查一次。
+	// 订阅此时已提交，快照只影响文案与配图，取不到时只记录日志，不把已成功的创建报成失败。
+	items := []domain.Subscription{item}
+	if err := r.attachMedia(ctx, items); err != nil {
+		// 番号正是这次没读到的东西，此时手上只剩内部 media_id，对用户没有任何意义；
+		// 因此只说明「影片信息获取失败」并带上原因，不回退到内部标识。
+		logging.Error(logging.CategorySubscription, "订阅已保存，影片信息获取失败", "error", err.Error())
+		return item, true, nil
+	}
+	return items[0], true, nil
 }
 
 // hasActiveForMedia provides a clear domain error before the database uniqueness constraint
@@ -271,7 +281,15 @@ func (r *sqlSubscriptionRepository) cancel(ctx context.Context, id string) (doma
 	}
 	current.Status = domain.SubscriptionStatusCanceled
 	current.UpdatedAt = now
-	return current, true, nil
+	// 与 List/Create 保持同一返回形状：日志、通知与渠道卡片都用番号标识订阅，调用方不必再按 media_id 反查。
+	// 取消已提交，快照只影响展示，取不到时只记录日志，不把已成功的取消报成失败。
+	items := []domain.Subscription{current}
+	if err := r.attachMedia(ctx, items); err != nil {
+		// 同 Create：不回退到内部 media_id，只说明影片信息获取失败。
+		logging.Error(logging.CategorySubscription, "订阅已取消，影片信息获取失败", "error", err.Error())
+		return current, true, nil
+	}
+	return items[0], true, nil
 }
 
 // Update atomically replaces editable rules when the caller still holds the current version.
@@ -312,7 +330,14 @@ func (r *sqlSubscriptionRepository) Update(ctx context.Context, request ports.Up
 	current.Filter = cloneFilter(request.Filter)
 	current.UpdatedAt = now
 	current.Version++
-	return current, nil
+	// 与 Cancel 同理：编辑结果同样带出影片快照，调用方统一用番号标识这条订阅。
+	items := []domain.Subscription{current}
+	if err := r.attachMedia(ctx, items); err != nil {
+		// 同 Create：不回退到内部 media_id，只说明影片信息获取失败。
+		logging.Error(logging.CategorySubscription, "订阅已编辑，影片信息获取失败", "error", err.Error())
+		return current, nil
+	}
+	return items[0], nil
 }
 
 func (r *sqlSubscriptionRepository) List(ctx context.Context, query ports.SubscriptionListQuery) (domain.SubscriptionPage, error) {
@@ -410,6 +435,9 @@ func (r *sqlDownloadRepository) List(ctx context.Context, query ports.DownloadLi
 	}
 	if query.Status != "" {
 		add("status", query.Status, " = ")
+	}
+	if query.MediaID != "" {
+		add("media_id", query.MediaID, " = ")
 	}
 	if query.TransferStatus != "" {
 		if query.TransferStatus == "failed" {
@@ -625,6 +653,17 @@ func mediaProjectionJoins() string {
 			WHERE d2.media_id = m.id
 			ORDER BY d2.updated_at DESC, d2.id ASC LIMIT 1
 		)`
+}
+
+// mediaCoverColumn 返回媒体封面的列表达式：优先旧版横幅图，缺失时回退海报图，都没有则为空串。
+// 取值规则与 application.MediaCover 一致，推送配图不出现第二种口径；使用时必须同时连接 mediaCoverJoin。
+func mediaCoverColumn(mediaAlias string) string {
+	return fmt.Sprintf("COALESCE(NULLIF(lm.banner_url,''), %s.poster_url, '')", mediaAlias)
+}
+
+// mediaCoverJoin 是 mediaCoverColumn 依赖的元数据连接；legacy_media_metadata 以 media_id 为主键，连接为一次主键查找。
+func mediaCoverJoin(mediaAlias string) string {
+	return fmt.Sprintf("LEFT JOIN legacy_media_metadata lm ON lm.media_id = %s.id", mediaAlias)
 }
 
 func subscriptionColumns() string {

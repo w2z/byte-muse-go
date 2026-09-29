@@ -90,10 +90,12 @@ type SubscriptionRepository interface {
 
 // DownloadListQuery is the normalized download task pagination and status filter.
 type DownloadListQuery struct {
-	Limit                                          int
-	Offset                                         int
-	Status                                         domain.DownloadStatus
-	TransferStatus                                 string
+	Limit          int
+	Offset         int
+	Status         domain.DownloadStatus
+	TransferStatus string
+	// MediaID 按影片精确定位下载任务，供渠道卡片等需要「某部影片的当前任务」的场景使用。
+	MediaID                                        string
 	AddedFrom, AddedTo, CompletedFrom, CompletedTo *time.Time
 }
 

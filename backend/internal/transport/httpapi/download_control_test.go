@@ -129,7 +129,7 @@ func TestDownloadControlHTTP(t *testing.T) {
 		t.Fatalf("filter=%s", w.Body.String())
 	}
 	stale := time.Now().Add(-time.Hour)
-	if err = repo.SaveTransferStates(ctx, []ports.TransferState{{Hash: hash, Status: "downloading", ObservedAt: stale}}); err != nil {
+	if _, err = repo.SaveTransferStates(ctx, []ports.TransferState{{Hash: hash, Status: "downloading", ObservedAt: stale}}); err != nil {
 		t.Fatal(err)
 	}
 	var transfer string

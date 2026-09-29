@@ -43,13 +43,19 @@ type Dependencies struct {
 	Scheduler             *scheduler.Manager
 	Logs                  *logging.Logger
 	Readiness             ports.ReadinessProbe
-	StaticDir             string
+	// WeChatCallback 处理企业微信回调；未配置时为 nil，回调端点返回 503。
+	WeChatCallback ports.CallbackVerifier
+	// ChannelMessages 处理渠道入站消息；轮询与回调共用同一实现。
+	ChannelMessages ports.ChannelMessageHandler
+	StaticDir       string
 }
 
 // publicAuthPaths 是不要求既有会话即可访问的认证入口：登录本身，以及用过期会话换取新会话的续签。
 var publicAuthPaths = map[string]struct{}{
 	"/api/v1/auth/login":   {},
 	"/api/v1/auth/refresh": {},
+	// 企业微信回调由平台服务器直接请求，没有会话；安全性由回调签名与 AES 解密保证。
+	"/api/v1/message": {},
 }
 
 // New builds the API router and SPA static-file fallback.
@@ -92,6 +98,8 @@ func New(dependencies Dependencies) http.Handler {
 		router.Get("/system/settings", getSystemSettings(dependencies.Settings))
 		router.Put("/system/settings", updateSystemSettings(dependencies.Settings))
 		router.Post("/system/settings/openai/test", testOpenAI)
+		router.Get("/message", wechatVerify(dependencies))
+		router.Post("/message", wechatReceive(dependencies))
 	})
 
 	spa := spaHandler(dependencies.StaticDir)
@@ -510,7 +518,6 @@ func listSubscriptions(service *application.SubscriptionService) http.HandlerFun
 			return
 		}
 		writeJSON(response, http.StatusOK, result)
-		logging.Info(logging.CategorySubscription, "订阅查询完成", "count", len(result.Items))
 	}
 }
 
@@ -538,7 +545,6 @@ func createSubscription(service *application.SubscriptionService) http.HandlerFu
 			status = http.StatusCreated
 		}
 		writeJSON(response, status, item)
-		logging.Info(logging.CategorySubscription, "订阅已保存", "media_id", body.MediaID, "created", created)
 	}
 }
 
@@ -556,12 +562,10 @@ func updateSubscription(service *application.SubscriptionService) http.HandlerFu
 		}
 		item, err := service.Update(request.Context(), application.UpdateSubscriptionCommand{ID: chi.URLParam(request, "subscriptionId"), Mode: body.Mode, Filter: body.Filter, ExpectedVersion: body.Version})
 		if err != nil {
-			logging.Error(logging.CategorySubscription, "编辑订阅失败", "subscription_id", chi.URLParam(request, "subscriptionId"))
 			writeApplicationError(response, err)
 			return
 		}
 		writeJSON(response, http.StatusOK, item)
-		logging.Info(logging.CategorySubscription, "订阅已编辑", "subscription_id", chi.URLParam(request, "subscriptionId"))
 	}
 }
 
@@ -569,12 +573,10 @@ func cancelSubscription(service *application.SubscriptionService) http.HandlerFu
 	return func(response http.ResponseWriter, request *http.Request) {
 		item, err := service.Cancel(request.Context(), chi.URLParam(request, "subscriptionId"))
 		if err != nil {
-			logging.Error(logging.CategorySubscription, "取消订阅失败", "subscription_id", chi.URLParam(request, "subscriptionId"))
 			writeApplicationError(response, err)
 			return
 		}
 		writeJSON(response, http.StatusOK, item)
-		logging.Info(logging.CategorySubscription, "订阅已取消", "subscription_id", chi.URLParam(request, "subscriptionId"))
 	}
 }
 
@@ -623,7 +625,6 @@ func listDownloads(service *application.DownloadService) http.HandlerFunc {
 			return
 		}
 		writeJSON(response, http.StatusOK, result)
-		logging.Info(logging.CategoryDownload, "下载任务查询完成", "count", len(result.Items))
 	}
 }
 
@@ -792,6 +793,8 @@ func writeApplicationError(response http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, application.ErrTagFollowPending):
 		writeError(response, 500, "tag_follow_pending", "标签规则已保存，追新暂未完成，请重试或等待下次标签追新任务")
+	case errors.Is(err, application.ErrActorFollowPending):
+		writeError(response, 500, "actor_follow_pending", "演员规则已保存，追新暂未完成，请重试或等待下次同步热门演员任务")
 	case errors.Is(err, application.ErrInvalidTagRule):
 		writeError(response, 400, "invalid_tag_rule", "标签类型、订阅状态或限制日期无效，日期须为 YYYY-MM-DD")
 	case errors.Is(err, ports.ErrTagNotFound):

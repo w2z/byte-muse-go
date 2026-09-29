@@ -1,7 +1,7 @@
 import { Button, Input, InputNumber, Radio, Select, Switch, Tabs } from "@arco-design/web-react";
 import { IconCheck, IconClose, IconLaunch, IconSave, IconUndo } from "@arco-design/web-react/icon";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState, type ReactNode } from "react";
 import { apiRequest } from "../../shared/api/client";
 import type { SystemSettings } from "../../shared/api/types";
 import { ContentCard } from "../../shared/ui/ContentCard";
@@ -9,7 +9,12 @@ import { PageState } from "../../shared/ui/PageState";
 import { useFeedbackMessage } from "../../shared/ui/FeedbackMessage";
 
 type FieldKind = "text" | "textarea" | "bool" | "int" | "enum" | "json" | "sort";
-type SettingOption = { value: string; label: string };
+type SettingOption = {
+  value: string;
+  label: string;
+  /** 依赖的配置键；任一为空时该选项不可选（如 OpenAI 翻译需要完整的翻译模型配置）。 */
+  requires?: string[];
+};
 type SettingField = {
   key: string;
   label: string;
@@ -27,8 +32,27 @@ type SettingField = {
   options?: SettingOption[];
   /** 支持两种凭据的站点；模式和凭据独立保存，切换时不清空隐藏字段。 */
   siteAuth?: { modeKey: string; keyField: string; keyPlaceholder: string };
+  /** 字段上方的分节标题；同一分组里成组的字段（如消息通知开关）用它归类。 */
+  section?: string;
+  /** 与相邻同标记字段排成一行；用于同一分节内的多个布尔开关。 */
+  inline?: boolean;
 };
-type SettingGroup = { code: string; title: string; fields: SettingField[] };
+/** 一个分组内的页签；同一业务对象下有多套互不影响的配置时使用。 */
+type SettingTab = {
+  code: string;
+  title: string;
+  fields: SettingField[];
+  /** 该页签的 OpenAI 兼容连接测试；使用当前草稿，不保存设置也不依赖启用开关。 */
+  test?: { label: string; urlKey: string; modelKey: string; apiKeyKey: string };
+};
+type SettingGroup = {
+  code: string;
+  title: string;
+  fields: SettingField[];
+  tabs?: SettingTab[];
+  /** 分组底部的备注，用于说明该组配置的适用范围。 */
+  note?: string;
+};
 type SettingCategory = { code: string; title: string; groupCodes: string[] };
 type SettingsUpdate = { values: Record<string, string> };
 const TabPane = Tabs.TabPane;
@@ -124,6 +148,11 @@ const filterSwitches: { key: FilterSwitchKey; label: string }[] = [
   { key: "only_uhd", label: "仅UHD" },
   { key: "exclude_uhd", label: "排除UHD" },
 ];
+
+/** OpenAI 翻译引擎依赖的「翻译模型」配置键；三者任一为空即视为未配置，Prompt 不参与判定。 */
+const translationOpenAIKeys = ["TRANSLATION_OPENAI_URL", "TRANSLATION_OPENAI_MODEL", "TRANSLATION_OPENAI_API_KEY"];
+/** 翻译引擎默认值；OpenAI 翻译未配置齐全时回落此值，与后端 none（关闭）语义一致。 */
+const defaultTranslationEngine = "none";
 
 /** 分组、顺序与字段命名对齐对标站 对标站/config。 */
 const groups: SettingGroup[] = [
@@ -267,7 +296,14 @@ const groups: SettingGroup[] = [
         placeholder: "|分割，默认@all",
       },
       { key: "WECHAT_BANNER", label: "微信封面推送", kind: "bool" },
+      { key: "WECHAT_NOTIFY_SUBSCRIBE", label: "订阅成功", kind: "bool", section: "消息", inline: true },
+      { key: "WECHAT_NOTIFY_SUBSCRIBE_FAILED", label: "订阅失败", kind: "bool", inline: true },
+      { key: "WECHAT_NOTIFY_DOWNLOAD_START", label: "开始下载", kind: "bool", inline: true },
+      { key: "WECHAT_NOTIFY_DOWNLOAD_COMPLETE", label: "下载完成", kind: "bool", inline: true },
+      { key: "WECHAT_NOTIFY_DOWNLOAD_FAILED", label: "下载失败", kind: "bool", inline: true },
+      { key: "WECHAT_NOTIFY_AGENT_CHAT", label: "Agent对话", kind: "bool", inline: true },
     ],
+    note: "该设置只针对于微信、TG",
   },
   {
     code: "telegram",
@@ -285,8 +321,15 @@ const groups: SettingGroup[] = [
         label: "Telegram白名单，英文逗号分割",
         kind: "text",
       },
-      { key: "TELEGRAM_SPOILER", label: "推送防剧透", kind: "bool" },
+      { key: "TELEGRAM_SPOILER", label: "图片防剧透", kind: "bool" },
+      { key: "TELEGRAM_NOTIFY_SUBSCRIBE", label: "订阅成功", kind: "bool", section: "消息", inline: true },
+      { key: "TELEGRAM_NOTIFY_SUBSCRIBE_FAILED", label: "订阅失败", kind: "bool", inline: true },
+      { key: "TELEGRAM_NOTIFY_DOWNLOAD_START", label: "开始下载", kind: "bool", inline: true },
+      { key: "TELEGRAM_NOTIFY_DOWNLOAD_COMPLETE", label: "下载完成", kind: "bool", inline: true },
+      { key: "TELEGRAM_NOTIFY_DOWNLOAD_FAILED", label: "下载失败", kind: "bool", inline: true },
+      { key: "TELEGRAM_NOTIFY_AGENT_CHAT", label: "Agent对话", kind: "bool", inline: true },
     ],
+    note: "该设置只针对于微信、TG",
   },
   {
     code: "qbittorrent",
@@ -423,24 +466,27 @@ const groups: SettingGroup[] = [
         key: "RANK_SCHEDULE_TIME",
         label: "榜单订阅定时任务",
         placeholder: "cron表达式",
+        description: "5 段 cron（分 时 日 月 周），如 0 20 * * * 表示每天 20:00",
         kind: "text",
       },
       {
         key: "ACTOR_SCHEDULE_TIME",
         label: "演员订阅定时任务",
         placeholder: "cron表达式",
+        description: "5 段 cron（分 时 日 月 周），如 0 21 * * * 表示每天 21:00",
         kind: "text",
       },
       {
         key: "TAG_SCHEDULE_TIME",
         label: "标签订阅定时任务",
         placeholder: "cron表达式",
+        description: "5 段 cron（分 时 日 月 周），如 30 21 * * * 表示每天 21:30",
         kind: "text",
       },
       {
         key: "DOWNLOAD_SCHEDULE_TIME",
         label: "番号订阅定时任务",
-        description: "cron表达式，建议设置在榜单与演员订阅之后",
+        description: "5 段 cron（分 时 日 月 周），建议设置在榜单与演员订阅之后",
         kind: "text",
       },
       {
@@ -473,73 +519,118 @@ const groups: SettingGroup[] = [
       {
         key: "TRANSLATION_ENGINE",
         label: "翻译引擎",
+        description: "选择 OpenAI 需先在「AI 模型 → 翻译模型」配置接口、模型与密钥，未配置齐全时不可选；Google 无需申请密钥，留空即用免密钥接口",
         kind: "enum",
         options: [
-          { value: "none", label: "关闭" },
-          { value: "openai", label: "OpenAI" },
+          { value: defaultTranslationEngine, label: "关闭" },
+          { value: "openai", label: "OpenAI", requires: translationOpenAIKeys },
           { value: "google", label: "Google" },
           { value: "baidu", label: "百度" },
           { value: "deeplx", label: "DeepLX" },
         ],
       },
-      { key: "BAIDU_APP_ID", label: "百度翻译APPID", kind: "text" },
+      {
+        key: "BAIDU_APP_ID",
+        label: "百度翻译APPID",
+        kind: "text",
+        description: "百度翻译开放平台的 APPID",
+      },
       {
         key: "BAIDU_API_KEY",
         label: "百度大模型文本翻译API_KEY",
         kind: "text",
         secret: true,
+        description: "百度翻译开放平台的开发者密钥（密钥），用于 MD5 签名鉴权，需已开通文本翻译服务",
       },
       {
         key: "GOOGLE_API_KEY",
         label: "Google Cloud Translation API_KEY",
         kind: "text",
         secret: true,
+        description: "留空使用免密钥接口，无需申请即可翻译；填写后改走官方 Cloud Translation API，配额与计费按该 key 所属项目结算",
       },
       {
         key: "DEEPLX_URL",
         label: "DeepLX 地址",
         kind: "text",
         placeholder: "http://127.0.0.1:1188",
-      },
-      {
-        key: "TRANSLATION_PROMPT",
-        label: "自定义翻译 Prompt",
-        kind: "textarea",
-        wide: true,
-        placeholder: "留空使用内置翻译提示词；仅 OpenAI 翻译引擎使用",
+        description: "只填服务地址即可，会自动补 /translate；填完整 /translate 地址也可以",
       },
     ],
   },
   {
     code: "agent",
-    title: "Agent",
-    fields: [
-      { key: "AGENT_ENABLE", label: "启用对话 Agent", kind: "bool" },
+    title: "AI 模型",
+    fields: [],
+    // 对话与翻译是两套独立配置：可以分别指向不同模型，互不覆盖。
+    tabs: [
       {
-        key: "OPENAI_MODEL",
-        label: "模型名称",
-        kind: "text",
-        placeholder: "gpt-4o-mini",
+        code: "conversation",
+        title: "对话 Agent",
+        fields: [
+          { key: "AGENT_ENABLE", label: "启用对话 Agent", kind: "bool" },
+          {
+            key: "OPENAI_MODEL",
+            label: "模型名称",
+            kind: "text",
+            placeholder: "gpt-4o-mini",
+          },
+          {
+            key: "OPENAI_URL",
+            label: "接口地址（OpenAI 兼容）",
+            kind: "text",
+            placeholder: "https://api.openai.com/v1",
+          },
+          {
+            key: "OPENAI_API_KEY",
+            label: "API Key",
+            kind: "text",
+            secret: true,
+            placeholder: "sk-...",
+          },
+          {
+            key: "AGENT_SYSTEM_PROMPT",
+            label: "自定义 System Prompt（留空使用内置提示词）",
+            kind: "textarea",
+            wide: true,
+            placeholder: "你是一个媒体库助手……",
+          },
+        ],
+        test: { label: "测试 OpenAI", urlKey: "OPENAI_URL", modelKey: "OPENAI_MODEL", apiKeyKey: "OPENAI_API_KEY" },
       },
       {
-        key: "OPENAI_URL",
-        label: "接口地址（OpenAI 兼容）",
-        kind: "text",
-        placeholder: "https://api.openai.com/v1",
-      },
-      {
-        key: "OPENAI_API_KEY",
-        label: "API Key",
-        kind: "text",
-        secret: true,
-        placeholder: "sk-...",
-      },
-      {
-        key: "AGENT_SYSTEM_PROMPT",
-        label: "自定义 System Prompt（留空使用内置提示词）",
-        kind: "textarea",
-        wide: true,
-        placeholder: "你是一个媒体库助手……",
+        code: "translation",
+        title: "翻译模型",
+        fields: [
+          {
+            key: "TRANSLATION_OPENAI_MODEL",
+            label: "模型名称",
+            description: "修改后需重启后端服务生效",
+            kind: "text",
+            placeholder: "gpt-4o-mini",
+          },
+          {
+            key: "TRANSLATION_OPENAI_URL",
+            label: "接口地址（OpenAI 兼容）",
+            kind: "text",
+            placeholder: "https://api.openai.com/v1",
+          },
+          {
+            key: "TRANSLATION_OPENAI_API_KEY",
+            label: "API Key",
+            kind: "text",
+            secret: true,
+            placeholder: "sk-...",
+          },
+          {
+            key: "TRANSLATION_PROMPT",
+            label: "翻译 Prompt",
+            kind: "textarea",
+            wide: true,
+            placeholder: "留空使用内置翻译提示词",
+          },
+        ],
+        test: { label: "测试翻译模型", urlKey: "TRANSLATION_OPENAI_URL", modelKey: "TRANSLATION_OPENAI_MODEL", apiKeyKey: "TRANSLATION_OPENAI_API_KEY" },
       },
     ],
   },
@@ -638,6 +729,27 @@ const categories: SettingCategory[] = [
 
 function filterId(name: string) {
   return `setting-${name}`;
+}
+
+/** 分组的全部字段：包含页签内字段，保证草稿初始化、变更判断与保存始终覆盖整组。 */
+function groupFields(group: SettingGroup): SettingField[] {
+  return [...group.fields, ...(group.tabs ?? []).flatMap((tab) => tab.fields)];
+}
+
+/** 选项依赖的配置键是否都已填写；缺一即视为未配置。 */
+function hasRequiredValues(keys: string[] | undefined, draft: Draft): boolean {
+  return (keys ?? []).every((key) => String(draft[key] ?? "").trim() !== "");
+}
+
+/**
+ * OpenAI 翻译引擎要求「AI 模型 → 翻译模型」的接口、模型与密钥三者齐全，Prompt 可以为空。
+ * 未配置齐全时不允许停留在 openai，统一回落默认引擎，保证设置页展示与后端装配判定一致。
+ */
+function applyTranslationEngineGuard(draft: Draft): Draft {
+  if (draft.TRANSLATION_ENGINE !== "openai" || hasRequiredValues(translationOpenAIKeys, draft)) {
+    return draft;
+  }
+  return { ...draft, TRANSLATION_ENGINE: defaultTranslationEngine };
 }
 
 /** 站点名称统一附带外链图标，图标不重复参与无障碍名称。 */
@@ -741,11 +853,48 @@ function serializeFilterDraft(filter: FilterDraft, unknown: Record<string, unkno
  */
 const SITE_TEXTAREA_ROWS = 3;
 
+/** OpenAI 兼容连接测试使用的三个草稿键。 */
+type OpenAITestKeys = { urlKey: string; modelKey: string; apiKeyKey: string };
+
+/**
+ * 用当前草稿测试一组 OpenAI 兼容配置。
+ * 待测字段由调用方在触发时给出，只提交草稿，不保存设置，也不依赖启用开关。
+ */
+function useOpenAITest(
+  draft: Draft,
+  message: { success: (text: string) => void; error: (text: string) => void },
+) {
+  return useMutation({
+    mutationFn: async (keys: OpenAITestKeys) => {
+      const started = performance.now();
+      try {
+        return await apiRequest<{ message: string }>("/system/settings/openai/test", {
+          method: "POST",
+          body: JSON.stringify({
+            url: String(draft[keys.urlKey] ?? "").trim(),
+            model: String(draft[keys.modelKey] ?? "").trim(),
+            api_key: String(draft[keys.apiKeyKey] ?? "").trim(),
+          }),
+        });
+      } catch (error) {
+        // 后端不可达时没有返回耗时，使用浏览器实际等待时长保持提示格式一致。
+        if (error instanceof Error && /^OpenAI 连接失败 [(][0-9]+ms[)](?:：.+)?$/.test(error.message)) throw error;
+        const reason = error instanceof Error ? error.message : "请求失败，请稍后重试";
+        throw new Error(`OpenAI 连接失败 (${Math.round(performance.now() - started)}ms)：${reason}`);
+      }
+    },
+    retry: false,
+    onSuccess: (result) => message.success(result.message),
+    onError: (error: Error) => message.error(error.message),
+  });
+}
+
 export function SettingsPage() {
   const [activeCategoryCode, setActiveCategoryCode] = useState(
     categories[0].code,
   );
   const [activeGroupCode, setActiveGroupCode] = useState(categories[0].groupCodes[0]);
+  const [activeTabCodes, setActiveTabCodes] = useState<Record<string, string>>({});
   const [draft, setDraft] = useState<Draft>({});
   const [filter, setFilter] = useState<FilterDraft>(emptyFilterDraft);
   const [filterUnknown, setFilterUnknown] = useState<Record<string, unknown>>(
@@ -768,13 +917,18 @@ export function SettingsPage() {
     .map((groupCode) => groups.find((group) => group.code === groupCode))
     .filter((group): group is SettingGroup => Boolean(group));
   const activeGroup = groups.find((group) => group.code === activeGroupCode) ?? activeGroups[0];
+  // 页签只决定展示哪一组字段：草稿、变更判断与保存始终覆盖整个分组。
+  const activeTabs = activeGroup.tabs ?? [];
+  const activeTab = activeTabs.find((tab) => tab.code === activeTabCodes[activeGroup.code]) ?? activeTabs[0];
+  const activeFields = activeTab ? activeTab.fields : activeGroup.fields;
+  const activeTest = activeTab?.test;
 
   const syncDraft = (settings: SystemSettings) => {
     const values = settings.values ?? {};
     setSavedSnapshot({ values: { ...values } });
     const next: Draft = {};
     for (const group of groups) {
-      for (const field of group.fields) {
+      for (const field of groupFields(group)) {
         if (field.kind === "json" || field.kind === "sort") continue;
         const raw = Object.prototype.hasOwnProperty.call(values, field.key)
           ? values[field.key]
@@ -791,7 +945,7 @@ export function SettingsPage() {
     }
     const parsed = parseFilterDraft(values.DEFAULT_FILTER);
     if (!next.BYPASS_ENGINE) next.BYPASS_USE_PROXY = false;
-    setDraft(next);
+    setDraft(applyTranslationEngineGuard(next));
     setFilter(parsed.draft);
     setFilterUnknown(parsed.unknown);
     setSortOrder(parseSortOrder(values.DEFAULT_SORT));
@@ -817,33 +971,12 @@ export function SettingsPage() {
     },
   });
 
-  // 测试直接提交当前草稿，不触发保存，也不依赖 Agent 开关。
-  const openAITest = useMutation({
-    mutationFn: async () => {
-      const started = performance.now();
-      try {
-        return await apiRequest<{ message: string }>("/system/settings/openai/test", {
-          method: "POST",
-          body: JSON.stringify({
-            url: String(draft.OPENAI_URL ?? "").trim(),
-            model: String(draft.OPENAI_MODEL ?? "").trim(),
-            api_key: String(draft.OPENAI_API_KEY ?? "").trim(),
-          }),
-        });
-      } catch (error) {
-        // 后端不可达时没有返回耗时，使用浏览器实际等待时长保持提示格式一致。
-        if (error instanceof Error && /^OpenAI 连接失败 [(][0-9]+ms[)](?:：.+)?$/.test(error.message)) throw error;
-        const reason = error instanceof Error ? error.message : "请求失败，请稍后重试";
-        throw new Error(`OpenAI 连接失败 (${Math.round(performance.now() - started)}ms)：${reason}`);
-      }
-    },
-    retry: false,
-    onSuccess: (result) => message.success(result.message),
-    onError: (error: Error) => message.error(error.message),
-  });
+  // 测试直接提交当前草稿，不触发保存，也不依赖 Agent 开关；对话与翻译各自测试自己的配置。
+  const openAITest = useOpenAITest(draft, message);
 
+  // 编辑任意字段后都重新校验 OpenAI 翻译不变式，删除翻译模型配置时引擎立即回落。
   const setValue = (key: string, value: string | boolean) =>
-    setDraft((previous) => ({
+    setDraft((previous) => applyTranslationEngineGuard({
       ...previous,
       [key]: value,
       ...(key === "BYPASS_ENGINE" && value === "" ? { BYPASS_USE_PROXY: false } : {}),
@@ -866,10 +999,25 @@ export function SettingsPage() {
     });
   };
 
+  const baselineValue = (key: string) => {
+    if (groups.some((group) => groupFields(group).some((field) => field.siteAuth?.modeKey === key))) {
+      return savedSnapshot.values[key] === "cookie" ? "cookie" : "key";
+    }
+    const saved = savedSnapshot.values[key];
+    if (saved !== undefined) return saved;
+    const field = groups
+      .flatMap((group) => groupFields(group))
+      .find((item) => item.key === key);
+    if (field?.kind === "bool") return "false";
+    if (key === "LOG_RETENTION_DAYS") return "30";
+    if (field?.kind === "sort" || field?.kind === "json") return "";
+    return "";
+  };
+
   const buildPayload = () => {
     const payload: Record<string, string> = {};
     for (const group of [activeGroup]) {
-      for (const field of group.fields) {
+      for (const field of groupFields(group)) {
         if (field.kind === "json") {
           payload[field.key] = serializeFilterDraft(filter, filterUnknown);
           continue;
@@ -893,24 +1041,14 @@ export function SettingsPage() {
         }
       }
     }
+    // 跨分组不变式：OpenAI 翻译未配置齐全时引擎必须回落默认值；
+    // 在「AI 模型」分组删除翻译模型配置后保存，也要一并提交回落结果，避免设置值与实际装配不一致。
+    const engine = typeof draft.TRANSLATION_ENGINE === "string" ? draft.TRANSLATION_ENGINE : "";
+    if (engine !== baselineValue("TRANSLATION_ENGINE")) payload.TRANSLATION_ENGINE = engine;
     return payload;
   };
 
   const currentPayload = buildPayload();
-  const baselineValue = (key: string) => {
-    if (groups.some((group) => group.fields.some((field) => field.siteAuth?.modeKey === key))) {
-      return savedSnapshot.values[key] === "cookie" ? "cookie" : "key";
-    }
-    const saved = savedSnapshot.values[key];
-    if (saved !== undefined) return saved;
-    const field = groups
-      .flatMap((group) => group.fields)
-      .find((item) => item.key === key);
-    if (field?.kind === "bool") return "false";
-    if (key === "LOG_RETENTION_DAYS") return "30";
-    if (field?.kind === "sort" || field?.kind === "json") return "";
-    return "";
-  };
   const hasChanges = Object.keys(currentPayload).some(
     (key) => currentPayload[key] !== baselineValue(key),
   );
@@ -981,9 +1119,9 @@ export function SettingsPage() {
           <span className="settings-field-label">{field.label}</span>
           <div className="settings-filter">
             {filterSwitches.map((item) => (
-              <label className="settings-filter-row settings-toggle-row" key={item.key}>
-                <span>{item.label}</span>
+              <div className="settings-filter-row settings-toggle-row" key={item.key}>
                 <Switch
+                  id={filterId(item.key)}
                   size="small"
                   type="round"
                   checkedIcon={<IconCheck />}
@@ -997,7 +1135,8 @@ export function SettingsPage() {
                     }))
                   }
                 />
-              </label>
+                <label className="settings-field-label" htmlFor={filterId(item.key)}>{item.label}</label>
+              </div>
             ))}
             <div className="settings-filter-range">
               <label className="settings-field" htmlFor={filterId("min_size")}>
@@ -1079,10 +1218,10 @@ export function SettingsPage() {
 
     if (field.kind === "bool") {
       return (
-        <div className="settings-field" key={field.key}>
+        <div className={"settings-field" + (field.inline ? " settings-field-inline" : "")} key={field.key}>
           <div className="settings-toggle-row">
-            <span className="settings-field-label">{field.label}</span>
             <Switch
+              id={filterId(field.key)}
               size="small"
               type="round"
               checkedIcon={<IconCheck />}
@@ -1092,6 +1231,8 @@ export function SettingsPage() {
               disabled={field.key === "BYPASS_USE_PROXY" && !draft.BYPASS_ENGINE}
               onChange={(checked: boolean) => setValue(field.key, checked)}
             />
+            {/* 文字位于开关右侧，原生 label 关联保留点击切换和禁用行为。 */}
+            <label className="settings-field-label" htmlFor={filterId(field.key)}>{field.label}</label>
           </div>
           {field.description ? <span className="settings-field-description">{field.description}</span> : null}
         </div>
@@ -1107,7 +1248,15 @@ export function SettingsPage() {
               <span className="settings-field-placeholder">请选择</span>
             ) : null}
             <Radio.Group value={typeof draft[field.key] === "string" ? draft[field.key] : ""} onChange={(value: string | number) => setValue(field.key, String(value))}>
-              {(field.options ?? []).map((option) => <Radio key={option.value} value={option.value}>{option.label}</Radio>)}
+              {(field.options ?? []).map((option) => (
+                <Radio
+                  key={option.value}
+                  value={option.value}
+                  disabled={!hasRequiredValues(option.requires, draft)}
+                >
+                  {option.label}
+                </Radio>
+              ))}
             </Radio.Group>
           </div>
           {field.description ? <span className="settings-field-description">{field.description}</span> : null}
@@ -1232,6 +1381,43 @@ export function SettingsPage() {
     );
   };
 
+  // 连续 inline 字段与标题组成一个字段容器，复用普通字段的内部间距；选项可自动换行。
+  const renderFieldSequence = (fields: SettingField[]) => {
+    const nodes: ReactNode[] = [];
+    let inlineFields: SettingField[] = [];
+    const flushInlineFields = () => {
+      if (inlineFields.length === 0) return;
+      const rowFields = inlineFields;
+      inlineFields = [];
+      nodes.push(
+        <div className="settings-field settings-field-wide" key={rowFields[0].key}>
+          {rowFields[0].section ? <h3 className="settings-field-section settings-field-label">{rowFields[0].section}</h3> : null}
+          <div className="settings-inline-row">
+            {rowFields.map((rowField) => renderField(rowField, activeGroup))}
+          </div>
+        </div>,
+      );
+    };
+    fields.forEach((field, index) => {
+      if (field.section && field.section !== fields[index - 1]?.section) {
+        flushInlineFields();
+        if (!field.inline) nodes.push(
+          <h3 className="settings-field-section" key={`section-${field.section}`}>
+            {field.section}
+          </h3>,
+        );
+      }
+      if (field.inline) {
+        inlineFields.push(field);
+        return;
+      }
+      flushInlineFields();
+      nodes.push(<Fragment key={field.key}>{renderField(field, activeGroup)}</Fragment>);
+    });
+    flushInlineFields();
+    return nodes;
+  };
+
   return (
     <section className="settings-page">
       {messageHolder}
@@ -1272,23 +1458,41 @@ export function SettingsPage() {
             </Tabs>
           </div>
           <div className="settings-form-shell">
+            {activeTabs.length > 0 && activeTab ? (
+              <div className="settings-model-tabs">
+                <Tabs
+                  className="settings-model-tabs-bar"
+                  type="capsule"
+                  size="small"
+                  activeTab={activeTab.code}
+                  onChange={(code: string) => setActiveTabCodes((previous) => ({ ...previous, [activeGroup.code]: code }))}
+                  animation={false}
+                  aria-label={`${activeGroup.title}配置`}
+                >
+                  {activeTabs.map((tab) => (
+                    <TabPane key={tab.code} title={tab.title} />
+                  ))}
+                </Tabs>
+              </div>
+            ) : null}
             <section className="settings-group-section">
               <div className="settings-fields">
-                {activeGroup.fields.map((field) => renderField(field, activeGroup))}
-                {activeGroup.code === "agent" ? (
+                {renderFieldSequence(activeFields)}
+                {activeTest ? (
                   <div className="settings-field">
                     <div>
                       <Button
                         loading={openAITest.isPending}
                         disabled={openAITest.isPending}
-                        onClick={() => openAITest.mutate()}
+                        onClick={() => openAITest.mutate(activeTest)}
                       >
-                        测试 OpenAI
+                        {activeTest.label}
                       </Button>
                     </div>
                   </div>
                 ) : null}
               </div>
+              {activeGroup.note ? <p className="settings-group-note">{activeGroup.note}</p> : null}
             </section>
           </div>
         </ContentCard>

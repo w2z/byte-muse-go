@@ -44,14 +44,19 @@ DATABASE_DSN=file:/data/bytemuse.db?_pragma=foreign_keys(1)&_pragma=journal_mode
 
 - Netflav：`search` 按关键词查询，`detail` 的 query 为搜索结果中的 source_id；已通过真实搜索和详情核验。演员优先使用日文原名，避免多语言别名重复建档。
 - JavDB：`search`、`detail`、`rank`（period 为 daily/weekly/monthly，有码榜）；详情读取显式番号、发行日期、时长、演员和标签。
-- 2026-09-28 接入边界：按用户“不可用则不添加”的要求，JavLibrary、AVBase、JavBus、Jable、SupJav 因后台请求 source_blocked 暂不加入来源目录，不能提交采集任务；源码中只保留解析器及离线回归测试，不代表已接通。Avgle 主页超时、API HTTP 520，不添加；ThisAV 明确排除。
-- JavDB 保留此前已接入的搜索、榜单及本轮详情解析；当前后台访问仍可能 source_blocked，不宣称实时采集通过。Netflav 后台搜索和详情已实测通过。来源目录不是实时健康检测；已启用源站后续访问失败必须明确报错，不能当作空数据。
+- JavLibrary：`rank`，period 仅 `wanted`（最想要榜），从首页自动翻到末页。其他榜单、搜索、详情及演员榜尚未开放。
+- AVBase：`search`，保存源站明确提供的番号、标题、封面、演员、发行日期与标签；当前只处理指定页，不声明自动分页能力。
+- Jable、SupJav：`search`，保存站内 ID、页面地址、标题与可用封面；没有可靠番号时只保存来源快照，不猜测创建影片。详情、标签及演员补全尚未开放。
+- 未接入：JavBus 仍要求源站人工年龄验证；Avgle 此前主页超时/API HTTP 520；ThisAV 按用户要求排除。
+- 接入目录共 6 站，仅发布已核验能力，不代表外站实时可达。CF、代理及源站网络仍可能间歇失败，失败必须明确报错，不能当作成功空数据。
 
 提交后返回 HTTP 202 和 run_id，仅代表任务已持久化；用 GET /api/v1/collection/runs/{runId} 查询进度。榜单从第 1 页自动采到末页，不设固定 100 页上限；search 仍按指定页处理（1..100），detail 仅第 1 页，省略或 0 视为 1。每个页面、视频、翻译任务分别最多执行 90 秒。不会下载视频、判断订阅或触发下载。
 
-页面解析后把视频逐个登记到数据库队列。每个视频单独事务保存，失败不回滚其他视频。来源快照按 source/source_id 幂等更新；有可靠番号才新增影片，新演员进入演员列表。标签临时保存在 legacy_media_metadata.genres：仅对本次采集按番号命中的影片追加去重标签，保留已有文本和顺序，空标签不清空原数据；来源快照保留完整 tags 数组。其他已有影片元数据、订阅状态、媒体库状态和演员订阅日期不变；仅对本次采集涉及且缺少译文的影片登记翻译任务，不回填全部历史库。翻译调用在事务外执行，完成时只填写仍为空的译文，不覆盖人工译文；翻译禁用时不创建新翻译任务。页面读取不再触发同步翻译。
+页面解析后把视频逐个登记到数据库队列。每个视频单独事务保存，失败不回滚其他视频。来源快照按 source/source_id 幂等更新；有可靠番号才新增影片，新演员进入演员列表。标签临时保存在 legacy_media_metadata.genres：先查库内标签字典与来源别名，统一成权威简体中文名并按出现顺序去重后写入，仅对本次采集按番号命中的影片追加，保留已有文本和顺序，空标签不清空原数据；来源快照保留完整 tags 数组。其他已有影片元数据、订阅状态、媒体库状态和演员订阅日期不变；仅对本次采集涉及且缺少译文的影片登记翻译任务，不回填全部历史库。翻译调用在事务外执行，完成时只填写仍为空的译文，不覆盖人工译文；翻译禁用时不创建新翻译任务。页面读取不再触发同步翻译。
 
-标签无需全库匹配，也不会自动遍历影片补全。Netflav 当前搜索页不提供 tags，需对选定的少量 source_id 提交 detail 采集才有标签；不自动展开搜索结果的所有详情。JavDB 当前列表适配器不提供标签。不做跨语言标签别名合并。
+标签无需全库匹配，也不会自动遍历影片补全。Netflav 当前搜索页不提供 tags，需对选定的少量 source_id 提交 detail 采集才有标签；不自动展开搜索结果的所有详情。JavDB 当前列表适配器不提供标签。
+
+标签入库前先查库内标签字典与来源别名：命中权威名或别名直接复用，未命中才翻译成简体中文并登记，来源原文保存为别名，避免同一标签的多种写法重复入库。翻译未启用或译文无效时保留原名，不阻断入库。迁移 25 新增 tag_aliases（alias 为主键，canonical 指向 tag_catalog.name），升级后执行一次 bytemuse migrate tag-normalize 把库内历史标签统一为权威简体中文名并去重；命令可重复执行，名称全部命中字典时不产生写入，翻译引擎不可用时直接失败且不改写任何标签。
 
 标签页面提供订阅中/全部标签、名称搜索、七类标签及未分类筛选，使用 GET /api/v1/tags 的 subscription/category/search 与服务端分页。迁移 20 新增源站标签分类字典、标签订阅规则和影片处理台账，不修改历史影片；无关联影片的源站标签也可订阅。PUT /tags/{tagName}/subscription 创建或编辑 limit_date（含起始日），保存后匹配本地目录，后续 TAG_SCHEDULE_TIME 定时追新；DELETE 幂等取消标签规则，保留影片订阅和下载历史。追新精确匹配完整标签，未知发行日期不匹配，已入库/已有活动订阅/已提交或未知下载记录不重复建单，处理台账防止恢复用户手动取消的影片订阅。新增订阅复用 strict 规则，下载仍由现有流程处理。标题跳转 /search?tag=名称，GET /complex/search?tag=名称 按标签精确检索，tag 非空时优先于 q。
 
@@ -61,13 +66,13 @@ DATABASE_DSN=file:/data/bytemuse.db?_pragma=foreign_keys(1)&_pragma=journal_mode
 
 迁移 13 新增 collection_records 表，不回填历史库。来源与站内 ID 为联合主键，code 空串表示未知番号，payload_json 保存规范化资料，collected_at 记录 UTC 采集时间；字段均不可为空。SQLite/PostgreSQL 使用 TEXT 资料列，MySQL 同样使用 TEXT（单条最多 65535 字节），时间列按数据库分别为 TEXT/TIMESTAMPTZ/DATETIME(6)。回退程序无需删表；不要手工删除迁移记录。
 
-“同步榜单”的定时触发和任务页立即执行均将已接入的 JavDB 有码日、周、月榜全部分别入队，不需要填写 RANK_TYPE。RANK_TYPE 是旧自动订阅筛选配置，不参与采集；现存配置值保留。RANK_SCHEDULE_TIME 仍控制定时任务注册与执行时间。这里的全部仅指已实现的三个周期，不代表已接入源站其他分类、专题榜、JavLibrary 或厂牌榜；直接调用 POST /collection/runs 仍指定单个来源与周期。
+“同步榜单”的定时触发和任务页立即执行均将已接入的 JavDB 有码日、周、月榜全部分别入队，不需要填写 RANK_TYPE。RANK_TYPE 是旧自动订阅筛选配置，不参与采集；现存配置值保留。RANK_SCHEDULE_TIME 仍控制定时任务注册与执行时间。自动调度仍仅包含 JavDB 三个周期，不自动扩大采集范围；JavLibrary 最想要榜通过 POST /collection/runs 显式提交 {"source":"javlibrary","kind":"rank","period":"wanted","page":1}。其他站点搜索同样显式提交任务。
 
 当前榜单只在所有页面采完、视频全部保存成功且结果非空时短事务切换，旧影片、订阅和下载状态不删除；视频已保存成功不依赖整榜成功，翻译失败不阻止榜单发布。空结果、分页失败和坏视频保留旧榜，重复页面判为异常；旧批次不能覆盖较新批次。批次状态分别报告采集页数、入库成功/失败/待处理、翻译状态及榜单是否曾发布。每次记录来源、周期、新旧来源数与实际新增数。其他未接入调度保持原状。PROXY、BYPASS 和翻译配置在启动时读取，修改后需重启；不使用 JAVDB_HOST 替换来源。
 
-爬虫增强：识别 CF 验证响应（包括 HTTP 200 验证页）后最多增强一次，返回 HTML 再经错误分类及站点解析。FlareSolverr 使用 POST /v1，地址可填服务根地址或完整 /v1；ByPass（协议键 cloudflare_bypass_for_scraping）使用 GET /html?url=。下方“是否使用代理”（BYPASS_USE_PROXY）默认关闭，开启且 PROXY 非空时将代理传给远程浏览器；增强选择“不使用”时强制关闭且禁用开关，再次启用增强不自动打开代理。连接增强服务本身仍直连。FlareSolverr 普通代理使用 proxy.url，带凭据代理使用独占会话并在结束或失败时销毁；ByPass 使用 proxy 查询参数，应避免服务访问日志记录含凭据的 URL。代理地址必须能从增强服务所在主机访问，localhost 不会自动替换。Scrapling 的 HTTP 封装协议尚未确认，选用时返回 bypass_config_invalid。增强阶段上限 55 秒，FlareSolverr 求解上限 45 秒，独立会话清理最多额外 5 秒；抓取仍受队列 90 秒约束。相关配置在启动时读取，保存后需重启生效。
+爬虫增强：识别 CF 验证响应（包括 HTTP 200 验证页）后最多增强一次，返回 HTML 再经错误分类及站点解析。FlareSolverr 使用 POST /v1，地址可填服务根地址或完整 /v1；ByPass（协议键 cloudflare_bypass_for_scraping）使用 GET /html?url=。下方“爬虫增强是否使用代理”（BYPASS_USE_PROXY）默认关闭，开启且 PROXY 非空时将代理传给远程浏览器；增强选择“不使用”时强制关闭且禁用开关，再次启用增强不自动打开代理。连接增强服务本身仍直连。FlareSolverr 普通代理使用 proxy.url，带凭据代理使用独占会话并在结束或失败时销毁；ByPass 使用 proxy 查询参数，应避免服务访问日志记录含凭据的 URL。代理地址必须能从增强服务所在主机访问，localhost 不会自动替换。Scrapling 的 HTTP 封装协议尚未确认，选用时返回 bypass_config_invalid。增强阶段上限 55 秒，FlareSolverr 求解上限 45 秒，独立会话清理最多额外 5 秒；抓取仍受队列 90 秒约束。相关配置在启动时读取，保存后需重启生效。
 
-错误区分：source_cookie_required 表示明确登录要求；source_interactive_verification 表示源站要求人工年龄/驾驶验证；source_blocked 表示普通拒绝或验证未通过；bypass_unavailable 表示增强服务未知失败或返回无效页面；bypass_timeout 表示增强等待超时；bypass_captcha_required 表示增强明确要求人工验证码；bypass_proxy_failed 表示浏览器代理连接或认证失败；bypass_browser_failed 表示远程浏览器启动失败或崩溃；bypass_session_failed 表示远程会话失效；bypass_target_unavailable 表示浏览器访问目标站点的网络错误；bypass_config_invalid 表示增强地址或协议配置不可用。普通 403 和 429 不自动增强，导航栏登录链接不判为登录要求。增强返回 Cookie 不保存、不输出；未自动获取或使用用户登录 Cookie。JavDB、JavLibrary、AVBase、Jable、SupJav 已通过带代理增强实测解析，JavBus 返回源站年龄验证页，需要人工交互；未注册新来源。
+错误区分：source_cookie_required 表示明确登录要求；source_interactive_verification 表示源站要求人工年龄/驾驶验证；source_blocked 表示普通拒绝或验证未通过；bypass_unavailable 表示增强服务未知失败或返回无效页面；bypass_timeout 表示增强等待超时；bypass_captcha_required 表示增强明确要求人工验证码；bypass_proxy_failed 表示浏览器代理连接或认证失败；bypass_browser_failed 表示远程浏览器启动失败或崩溃；bypass_session_failed 表示远程会话失效；bypass_target_unavailable 表示浏览器访问目标站点的网络错误；bypass_config_invalid 表示增强地址或协议配置不可用。普通 403 和 429 不自动增强，导航栏登录链接不判为登录要求。增强返回 Cookie 不保存、不输出；未自动获取或使用用户登录 Cookie。JavDB、JavLibrary、AVBase、Jable、SupJav 已通过带代理增强实测解析，JavBus 返回源站年龄验证页，需要人工交互。已验证能力按上方目录正式注册，不开放未验收操作。
 
 常规回归：在 backend 运行 `go test ./...`。真实外站核验需显式设置 `BYTEMUSE_LIVE_COLLECTION=1` 后运行 `go test ./internal/platform/collector -run TestLiveCollection -v`；该测试不保存真实数据，受站点网络与访问策略影响，失败不能当作解析测试通过。
 
@@ -79,7 +84,7 @@ DATABASE_DSN=file:/data/bytemuse.db?_pragma=foreign_keys(1)&_pragma=journal_mode
 
 下载任务页可按下载中、暂停、下载失败、下载完成以及加入时间、下载完成时间筛选，均由服务端先过滤再分页。传输状态和时间来自 qBittorrent 只读轮询；下载失败也包含搜索或提交阶段失败的任务。历史和未同步任务的传输字段保持空值，不回填或推测。日期范围按本地自然日选择，接口使用 UTC RFC3339 的含起点、不含终点时间。
 
-订阅页的“搜索下载”会通过 `POST /api/v1/subscriptions/{subscriptionId}/download` 持久化任务，重复请求返回同一任务 ID；后台按 `DOWNLOAD_SCHEDULE_TIME` 批量入队，并定期处理。BT 来源为 Nyaa BT（sukebei.nyaa.si）；PT 来源包括使用存取令牌的 M-Team、支持访问令牌或 Cookie 的 PTFans（9KG）、NicePT，以及支持个人 API Key 或 Cookie 的 RousiPro（9KG）。PTTime 使用 Cookie 搜索 9KG 并取种，不使用有限 RSS，历史 PassKey/UID 仅保留不参与运行。三站密钥模式不会回退使用隐藏的 Cookie；PTFans/NicePT 令牌需要种子列表与详情权限，RousiPro 需要读取与搜索种子、下载种子权限。各站按番号、订阅筛选与排序规则选择资源。当前仅 qBittorrent 提交已实现：BT 提交磁力链接，PT 上传私有种子文件。任务的 `submitted` 表示下载器回查已接收，不代表文件下载完成或媒体入库；不确定结果保留为 `unknown`，不自动重复提交。相关设置在后续处理批次读取；当前不会回填或批量修改历史下载记录。Transmission、aria2、迅雷下载提交尚未接入。站点联调只验证搜索与种子字节，不代表真实 qB 端到端提交已经验收。
+订阅页的“搜索下载”会通过 `POST /api/v1/subscriptions/{subscriptionId}/download` 持久化任务，重复请求返回同一任务 ID；后台按 `DOWNLOAD_SCHEDULE_TIME` 批量入队，并定期处理。BT 来源为 Nyaa BT（sukebei.nyaa.si）；PT 来源包括使用存取令牌的 M-Team、支持访问令牌或 Cookie 的 PTFans（9KG）、NicePT，以及支持个人 API Key 或 Cookie 的 RousiPro（9KG）。PTTime 使用 Cookie 搜索 9KG 并取种，不使用有限 RSS，历史 PassKey/UID 仅保留不参与运行。三站密钥模式不会回退使用隐藏的 Cookie；PTFans/NicePT 令牌需要种子列表与详情权限，RousiPro 需要读取与搜索种子、下载种子权限。各站按番号、订阅筛选与排序规则选择资源。当前 qBittorrent 与迅雷提交已实现：qBittorrent 的 BT 提交磁力链接、PT 上传私有种子文件；迅雷通过迅雷网盘网关（`THUNDER_URL`/`THUNDER_FILE_ID`/`THUNDER_AUTHORIZATION`）提交磁力，只挑选大于 1GB 的文件，仅用于 BT 资源。任务的 `submitted` 表示下载器回查已接收，不代表文件下载完成或媒体入库；不确定结果保留为 `unknown`，不自动重复提交。相关设置在后续处理批次读取；当前不会回填或批量修改历史下载记录。Transmission、aria2 下载提交，以及迅雷任务在下载页的暂停/恢复/删除控制尚未接入；迅雷当前无可用实例，仅完成代码实现与受控网关测试。站点联调只验证搜索与种子字节，不代表真实 qB 端到端提交已经验收。
 
 ```powershell
 cd frontend

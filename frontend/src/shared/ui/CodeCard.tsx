@@ -1,4 +1,4 @@
-import { Button, Card, Descriptions, Divider, Image, Space, Tag } from "@arco-design/web-react";
+import { Button, Card, Descriptions, Divider, Image, Tag } from "@arco-design/web-react";
 import dayjs from "dayjs";
 import { IconCopy, IconImage, IconPlayArrow } from "@arco-design/web-react/icon";
 import { useQuery } from "@tanstack/react-query";
@@ -160,9 +160,16 @@ export function CodeCard({ media, meta, actions, onSelect, hideActions = false, 
         {showImages && stills.length > 0 ? <>
           <Divider />
           <Descriptions title="剧照" column={1} data={[]} />
-          <Space size={12} wrap>
-            {stills.map((src, index) => <Image key={src + "-" + index} className={imageClassName} src={src} alt={media.code + " 剧照 " + (index + 1)} width={160} style={{ maxWidth: "100%" }} preview={imageMode === "VISIBLE"} previewProps={{ visible: false, onVisibleChange: (visible) => { if (visible) openStills(index); } }} />)}
-          </Space>
+          {/* 剧照缩略图统一 16:9 裁切后向下换行；点某一张即从该张进入受控预览组。
+              模糊模式只保留缩略图展示，不提供放大入口，避免绕过图片设置看到原图。 */}
+          <div className="code-card-still-grid">
+            {stills.map((src, index) => {
+              const thumb = <img className={imageClassName} src={src} alt={media.code + " 剧照 " + (index + 1)} loading="lazy" />;
+              return imageMode === "VISIBLE"
+                ? <button key={src + "-" + index} type="button" className="code-card-still-cell" aria-label={"放大第 " + (index + 1) + " 张剧照"} onClick={() => openStills(index)}>{thumb}</button>
+                : <span key={src + "-" + index} className="code-card-still-cell">{thumb}</span>;
+            })}
+          </div>
         </> : null}
       </div> : null}
       {/* 剧照不经过弹窗：点按钮直接把 Arco Image 预览（ImagePreviewGroup）拉起来，从第一张开始看。

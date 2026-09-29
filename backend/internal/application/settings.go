@@ -17,6 +17,8 @@ import (
 
 	"bytemuse/backend/internal/domain"
 	"bytemuse/backend/internal/ports"
+
+	"github.com/robfig/cron/v3"
 )
 
 var ErrInvalidSetting = errors.New("invalid setting")
@@ -29,6 +31,7 @@ const (
 	settingJSON = "json" // JSON 对象
 	settingEnum = "enum" // 封闭取值
 	settingSort = "sort" // 逗号分隔的排序标签
+	settingCron = "cron" // 标准 5 段 cron（分 时 日 月 周）
 )
 
 // sortTags 是资源排序器接受的标签集合，与对标站排序器一致。
@@ -109,12 +112,26 @@ var writableSettings = map[string]settingSpec{
 	"WECHAT_ENCODING_AES_KEY": {secret: true, kind: settingText},
 	"WECHAT_TO_USER":          {kind: settingText},
 	"WECHAT_BANNER":           {kind: settingBool},
+	// 微信渠道通知开关：与 application.NotificationEvent 一一对应，只影响微信推送与微信对话。
+	"WECHAT_NOTIFY_SUBSCRIBE":         {kind: settingBool},
+	"WECHAT_NOTIFY_SUBSCRIBE_FAILED":  {kind: settingBool},
+	"WECHAT_NOTIFY_DOWNLOAD_START":    {kind: settingBool},
+	"WECHAT_NOTIFY_DOWNLOAD_COMPLETE": {kind: settingBool},
+	"WECHAT_NOTIFY_DOWNLOAD_FAILED":   {kind: settingBool},
+	"WECHAT_NOTIFY_AGENT_CHAT":        {kind: settingBool},
 
 	// Telegram
 	"TELEGRAM_BOT_TOKEN": {secret: true, kind: settingText},
 	"TELEGRAM_CHAT_ID":   {kind: settingText},
 	"TELEGRAM_WHITELIST": {kind: settingText},
 	"TELEGRAM_SPOILER":   {kind: settingBool},
+	// Telegram 渠道通知开关：与微信各自独立，互不影响。
+	"TELEGRAM_NOTIFY_SUBSCRIBE":         {kind: settingBool},
+	"TELEGRAM_NOTIFY_SUBSCRIBE_FAILED":  {kind: settingBool},
+	"TELEGRAM_NOTIFY_DOWNLOAD_START":    {kind: settingBool},
+	"TELEGRAM_NOTIFY_DOWNLOAD_COMPLETE": {kind: settingBool},
+	"TELEGRAM_NOTIFY_DOWNLOAD_FAILED":   {kind: settingBool},
+	"TELEGRAM_NOTIFY_AGENT_CHAT":        {kind: settingBool},
 
 	// Qbittorrent
 	"QBITTORRENT_URL":           {kind: settingText},
@@ -159,10 +176,10 @@ var writableSettings = map[string]settingSpec{
 	"RANK_PAGE":              {kind: settingInt},
 	"RANK_TYPE":              {kind: settingEnum, allowed: rankTypes},
 	"BRAND_TYPE":             {kind: settingText},
-	"RANK_SCHEDULE_TIME":     {kind: settingText},
-	"ACTOR_SCHEDULE_TIME":    {kind: settingText},
-	"TAG_SCHEDULE_TIME":      {kind: settingText},
-	"DOWNLOAD_SCHEDULE_TIME": {kind: settingText},
+	"RANK_SCHEDULE_TIME":     {kind: settingCron},
+	"ACTOR_SCHEDULE_TIME":    {kind: settingCron},
+	"TAG_SCHEDULE_TIME":      {kind: settingCron},
+	"DOWNLOAD_SCHEDULE_TIME": {kind: settingCron},
 	"MAX_ACTOR":              {kind: settingInt},
 	"TAG_MAX_SUB_PER_RUN":    {kind: settingInt},
 	"PT_SEARCH_INTERVAL":     {kind: settingInt},
@@ -174,6 +191,11 @@ var writableSettings = map[string]settingSpec{
 	"DEEPLX_URL":         {kind: settingText},
 	"TRANSLATION_ENGINE": {kind: settingEnum, allowed: translationEngines},
 	"TRANSLATION_PROMPT": {kind: settingText, maxBytes: 60 * 1024},
+
+	// 翻译模型（OpenAI 兼容），与对话 Agent 的 OPENAI_* 相互独立
+	"TRANSLATION_OPENAI_URL":     {kind: settingText},
+	"TRANSLATION_OPENAI_MODEL":   {kind: settingText},
+	"TRANSLATION_OPENAI_API_KEY": {secret: true, kind: settingText},
 
 	// Agent
 	"OPENAI_URL":          {kind: settingText},
@@ -198,9 +220,19 @@ var writableSettings = map[string]settingSpec{
 
 // SettingsService validates the bounded setting set and encrypts secret values before persistence.
 type SettingsService struct {
-	repository     ports.SettingsRepository
-	databaseDriver string
-	aead           cipher.AEAD
+	repository      ports.SettingsRepository
+	databaseDriver  string
+	aead            cipher.AEAD
+	scheduleApplier ScheduleApplier
+}
+
+// ScheduleApplier 把最新设置中的定时任务表达式同步到调度器。返回值表示本次同步是否成功，
+// 由 bootstrap 注入，使保存设置后无需重启后端即可生效。
+type ScheduleApplier func(values map[string]string) error
+
+// SetScheduleApplier 注入调度同步回调；必须在开始处理请求前调用，服务运行期间不再变更。
+func (s *SettingsService) SetScheduleApplier(applier ScheduleApplier) {
+	s.scheduleApplier = applier
 }
 
 // NewSettingsService builds a settings service. The session secret also protects persisted application secrets.
@@ -314,7 +346,19 @@ func (s *SettingsService) Update(ctx context.Context, values map[string]string) 
 			return domain.SystemSettings{}, fmt.Errorf("save settings: %w", err)
 		}
 	}
-	return s.Get(ctx)
+	saved, err := s.Get(ctx)
+	if err != nil {
+		return domain.SystemSettings{}, err
+	}
+	// 设置已落库，定时任务表达式需要立即生效：Apply 对未变化的表达式是幂等的，
+	// 因此每次保存都重新对齐一次。同步失败只记录，不把已成功的保存报成失败，
+	// 重启会按落库设置重新注册。
+	if s.scheduleApplier != nil {
+		if err := s.scheduleApplier(saved.Values); err != nil {
+			log.Printf("warning: apply schedule after settings save failed: %v", err)
+		}
+	}
+	return saved, nil
 }
 
 // validateSettingValue 按配置项取值域校验输入；空值表示清除该项。
@@ -356,6 +400,10 @@ func validateSettingValue(key string, spec settingSpec, value string) error {
 			if !containsValue(sortTags, tag) {
 				return invalid("排序标签无效: " + tag)
 			}
+		}
+	case settingCron:
+		if _, err := cron.ParseStandard(value); err != nil {
+			return invalid("需要是合法的 5 段 cron 表达式（分 时 日 月 周）")
 		}
 	}
 	return nil

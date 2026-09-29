@@ -47,7 +47,14 @@ func TestExtraSearchLists(t *testing.T) {
 		{"supjav", `<div class="post"><h3><a rel="bookmark" href="https://supjav.com/123.html">TEST-001 样例</a></h3></div><div class="pagination"><span class="next-page"><a href="/page/2?s=TEST">2</a></span></div>`, ""},
 		{"javbus", `<div id="waterfall"><a class="movie-box" href="https://www.javbus.com/TEST-001"><img title="样例"><div class="photo-info"><date>TEST-001</date><date>2026-09-28</date></div></a></div><a id="next" href="/search/TEST/2">下一页</a>`, "TEST-001"},
 	} {
-		b, e := collectUnreleasedFixture(context.Background(), &pageFetcher{body: tc.body}, ports.CollectionRequest{Source: tc.source, Kind: "search", Query: "TEST", Page: 1})
+		f := &pageFetcher{body: tc.body}
+		collect := NewRegistry(f).Collect
+		if tc.source == "javbus" {
+			collect = func(ctx context.Context, req ports.CollectionRequest) (ports.CollectionBatch, error) {
+				return collectUnreleasedFixture(ctx, f, req)
+			}
+		}
+		b, e := collect(context.Background(), ports.CollectionRequest{Source: tc.source, Kind: "search", Query: "TEST", Page: 1})
 		if e != nil || len(b.Items) != 1 || !b.HasMore || b.Items[0].Code != tc.code {
 			t.Fatalf("%s %+v %v", tc.source, b, e)
 		}

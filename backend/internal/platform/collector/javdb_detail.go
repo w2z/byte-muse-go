@@ -1,12 +1,14 @@
 package collector
 
 import (
-	"bytemuse/backend/internal/ports"
 	"context"
-	"github.com/PuerkitoBio/goquery"
 	"strconv"
 	"strings"
 	"time"
+
+	"bytemuse/backend/internal/domain"
+	"bytemuse/backend/internal/ports"
+	"github.com/PuerkitoBio/goquery"
 )
 
 // collectJavDBDetail 只读取详情元数据；番号来自明确字段，不解析磁力或触发外站操作。
@@ -65,5 +67,7 @@ func collectJavDBDetail(ctx context.Context, f Fetcher, req ports.CollectionRequ
 	if !valid || m.Code == "" || m.Title == "" {
 		return ports.CollectionBatch{}, ErrParse
 	}
+	// 详情页的「類別」是来源给出的权威分类证据，交给统一规则判定。
+	m.VideoType = domain.ClassifyVideoType(m.Code, m.Title, m.Tags)
 	return ports.CollectionBatch{Items: []ports.CollectedMedia{m}}, nil
 }

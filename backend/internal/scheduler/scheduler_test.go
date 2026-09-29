@@ -136,3 +136,81 @@ func TestNewRejectsDuplicateTaskNames(t *testing.T) {
 		t.Fatal("expected duplicate task names to be rejected")
 	}
 }
+
+// TestApplyReconcilesSpecs 验证保存设置后无需重启即可重排 cron：补排、改表达式、清空停用，
+// 未知任务与非法表达式整批拒绝且不改变当前排期。
+func TestApplyReconcilesSpecs(t *testing.T) {
+	manager, err := New([]Job{{Name: "任务", Run: func(context.Context) JobResult { return nil }}})
+	if err != nil {
+		t.Fatalf("create scheduler: %v", err)
+	}
+	spec := func() string {
+		items := manager.Tasks()
+		if len(items) != 1 {
+			t.Fatalf("unexpected tasks: %#v", items)
+		}
+		return items[0].Spec
+	}
+	if got := spec(); got != "" {
+		t.Fatalf("task without a spec must start unscheduled, got %q", got)
+	}
+	if err := manager.Apply(map[string]string{"任务": "0 20 * * *"}); err != nil {
+		t.Fatalf("schedule task: %v", err)
+	}
+	if got := spec(); got != "0 20 * * *" {
+		t.Fatalf("scheduled spec = %q", got)
+	}
+	if err := manager.Apply(map[string]string{"任务": "*/5 * * * *"}); err != nil {
+		t.Fatalf("reschedule task: %v", err)
+	}
+	if got := spec(); got != "*/5 * * * *" {
+		t.Fatalf("rescheduled spec = %q", got)
+	}
+	if err := manager.Apply(map[string]string{"任务": "0 1 * * *", "不存在": "0 1 * * *"}); err == nil {
+		t.Fatal("expected an unknown task name to be rejected")
+	}
+	if err := manager.Apply(map[string]string{"任务": "not a cron"}); err == nil {
+		t.Fatal("expected an invalid expression to be rejected")
+	}
+	if got := spec(); got != "*/5 * * * *" {
+		t.Fatalf("a rejected apply changed the schedule: %q", got)
+	}
+	if err := manager.Apply(map[string]string{}); err != nil {
+		t.Fatalf("unschedule task: %v", err)
+	}
+	if got := spec(); got != "" {
+		t.Fatalf("unscheduled spec = %q", got)
+	}
+	if err := manager.RunNow("任务"); err != nil {
+		t.Fatalf("an unscheduled task must stay manually runnable: %v", err)
+	}
+}
+
+// TestApplyWorksWhileRunning 覆盖真实故障场景：调度器已启动时保存设置必须能完成重排，不能阻塞。
+func TestApplyWorksWhileRunning(t *testing.T) {
+	manager, err := New([]Job{{Name: "任务", Spec: "0 20 * * *", Run: func(context.Context) JobResult { return nil }}})
+	if err != nil {
+		t.Fatalf("create scheduler: %v", err)
+	}
+	if err := manager.Start(); err != nil {
+		t.Fatalf("start scheduler: %v", err)
+	}
+	applied := make(chan error, 1)
+	go func() { applied <- manager.Apply(map[string]string{"任务": "*/1 * * * *"}) }()
+	select {
+	case err := <-applied:
+		if err != nil {
+			t.Fatalf("apply while running: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("apply blocked while the scheduler was running")
+	}
+	if got := manager.Tasks()[0].Spec; got != "*/1 * * * *" {
+		t.Fatalf("running reschedule spec = %q", got)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := manager.Stop(ctx); err != nil {
+		t.Fatalf("stop scheduler: %v", err)
+	}
+}

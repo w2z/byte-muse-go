@@ -34,6 +34,14 @@ func (r *Registry) Collect(ctx context.Context, req ports.CollectionRequest) (po
 		return collectJavDB(ctx, r.fetch, req)
 	case "netflav":
 		return collectNetflav(ctx, r.fetch, req)
+	case "javlibrary":
+		return collectJavLibrary(ctx, r.fetch, req)
+	case "avbase":
+		return collectAVBase(ctx, r.fetch, req)
+	case "jable":
+		return collectJableSearch(ctx, r.fetch, req)
+	case "supjav":
+		return collectSupJavSearch(ctx, r.fetch, req)
 	}
 	return ports.CollectionBatch{}, ErrUnsupported
 }

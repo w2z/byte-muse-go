@@ -67,6 +67,61 @@ type integrationPage struct{ body string }
 
 func (p *integrationPage) Get(context.Context, string) ([]byte, error) { return []byte(p.body), nil }
 
+// TestNewSourceQueuedPersistence 验证正式分派、逐视频事务、重复入队幂等及无番号快照。
+func TestNewSourceQueuedPersistence(t *testing.T) {
+	for _, tc := range []struct {
+		source, kind, period, body string
+		media                      int
+	}{
+		{"javlibrary", "rank", "wanted", `<div class="videothumblist"><div class="video"><a href="./javabc.html"><div class="id">TEST-001</div><div class="title">测试</div></a></div></div>`, 1},
+		{"avbase", "search", "", `<script id="__NEXT_DATA__">{"page":"/works","props":{"pageProps":{"page":1,"total":1,"works":[{"work_id":"TEST-001","title":"测试"}]}}}</script>`, 1},
+		{"jable", "search", "", `<div id="list_videos_videos_list_search_result"><div class="video-img-box"><div class="detail"><h6 class="title"><a href="https://jable.tv/videos/sample/">TEST-001 测试</a></h6></div></div></div>`, 0},
+		{"supjav", "search", "", `<div class="post"><h3><a rel="bookmark" href="https://supjav.com/123.html">TEST-001 测试</a></h3></div>`, 0},
+	} {
+		t.Run(tc.source, func(t *testing.T) {
+			ctx := context.Background()
+			db, err := database.Open(ctx, database.Config{Dialect: database.DialectSQLite, SQLitePath: filepath.Join(t.TempDir(), "source.db")})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			if err = db.Migrate(ctx); err != nil {
+				t.Fatal(err)
+			}
+			svc := application.NewQueuedCollectionService(collector.NewRegistry(&integrationPage{body: tc.body}), database.NewCollectionRepository(db.SQLDB(), database.DialectSQLite), nil)
+			for i := 0; i < 2; i++ {
+				run, err := svc.Enqueue(ctx, ports.CollectionRequest{Source: tc.source, Kind: tc.kind, Period: tc.period, Query: "TEST", Page: 1})
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, stage := range []string{"page", "video"} {
+					if ok, err := svc.ProcessOne(ctx, stage, time.Now()); err != nil || !ok {
+						t.Fatalf("%s: %v %v", stage, ok, err)
+					}
+				}
+				run, err = svc.RunStatus(ctx, run.ID)
+				if err != nil || run.Status != "completed" || run.Saved != 1 || run.Counts.Inserted != 1-i || run.Counts.Existing != i || run.RankPublished != (tc.kind == "rank") {
+					t.Fatalf("run=%+v err=%v", run, err)
+				}
+			}
+			for _, check := range []struct {
+				query string
+				want  int
+			}{
+				{`SELECT COUNT(*) FROM collection_records`, 1},
+				{`SELECT COUNT(*) FROM media`, tc.media},
+				{`SELECT COUNT(*) FROM subscriptions`, 0},
+				{`SELECT COUNT(*) FROM download_tasks`, 0},
+			} {
+				var n int
+				if err := db.SQLDB().QueryRow(check.query).Scan(&n); err != nil || n != check.want {
+					t.Fatalf("%s: got=%d want=%d err=%v", check.query, n, check.want, err)
+				}
+			}
+		})
+	}
+}
+
 // TestCollectionEndToEnd 仅替换外站响应，登录、路由、解析、迁移、事务及目录查询均为真实实现。
 func TestCollectionEndToEnd(t *testing.T) {
 	ctx := context.Background()
@@ -105,10 +160,10 @@ func TestCollectionEndToEnd(t *testing.T) {
 		if i == 0 {
 			w := call("GET", "/api/v1/collection/sources", "")
 			var sources []ports.CollectionSource
-			if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &sources) != nil || len(sources) != 2 {
+			if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &sources) != nil || len(sources) != 6 {
 				t.Fatalf("unexpected enabled sources: %d %s", w.Code, w.Body.String())
 			}
-			for _, source := range []string{"javlibrary", "avbase", "javbus", "jable", "supjav", "avgle", "thisav"} {
+			for _, source := range []string{"javlibrary", "javbus", "avgle", "thisav"} {
 				w = call("POST", "/api/v1/collection/runs", `{"source":"`+source+`","kind":"search","query":"TEST"}`)
 				if w.Code != 400 {
 					t.Fatalf("excluded source %s accepted: %d %s", source, w.Code, w.Body.String())

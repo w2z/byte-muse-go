@@ -24,6 +24,10 @@ func TestSubscriptionDownloadQueueDeduplicatesAndSurvivesReopen(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
+	_, e = s.SQLDB().ExecContext(ctx, "INSERT INTO legacy_media_metadata (media_id,code,banner_url,legacy_status,legacy_mode) VALUES (?,?,?,?,?)", "m1", "SSIS-001", "https://img.example/banner.jpg", "SUBSCRIBE", "strict")
+	if e != nil {
+		t.Fatal(e)
+	}
 	_, e = s.SQLDB().ExecContext(ctx, "INSERT INTO subscriptions (id,media_id,status,mode,filter_json,idempotency_key,idempotency_hash,created_at,updated_at,version) VALUES (?,?,?,?,?,?,?,?,?,?)", "sub1", "m1", "active", "strict", "{}", "test-key", "hash", now, now, 1)
 	if e != nil {
 		t.Fatal(e)
@@ -57,6 +61,9 @@ func TestSubscriptionDownloadQueueDeduplicatesAndSurvivesReopen(t *testing.T) {
 	if e != nil || claimed == nil || claimed.ID != first.ID {
 		t.Fatalf("claim=%#v err=%v", claimed, e)
 	}
+	if claimed.Title != "film" || claimed.Cover != "https://img.example/banner.jpg" {
+		t.Fatalf("claim 文案与封面 = %#v", claimed)
+	}
 	if e = q.SetCandidate(ctx, *claimed, "Nyaa BT", "bt", "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567", "0123456789abcdef0123456789abcdef01234567", "qbittorrent", true); e != nil {
 		t.Fatal(e)
 	}
@@ -67,6 +74,9 @@ func TestSubscriptionDownloadQueueDeduplicatesAndSurvivesReopen(t *testing.T) {
 	pending, e := q.ClaimPending(ctx, time.Now().Add(3*time.Minute))
 	if e != nil || pending == nil || pending.InfoHash != "0123456789abcdef0123456789abcdef01234567" {
 		t.Fatalf("pending=%#v err=%v", pending, e)
+	}
+	if pending.Code != "SSIS-001" || pending.Title != "film" || pending.Cover != "https://img.example/banner.jpg" {
+		t.Fatalf("pending 文案与封面 = %#v", pending)
 	}
 	if e = q.FinishSubmission(ctx, *pending, true, ""); e != nil {
 		t.Fatal(e)
@@ -142,7 +152,7 @@ func TestDownloadTransferSnapshotFiltersBeforePagination(t *testing.T) {
 	completed := time.Unix(1780000200, 0).UTC()
 	added := time.Unix(1780000100, 0).UTC()
 	repo := NewSubscriptionDownloadRepository(s.SQLDB(), DialectSQLite)
-	if err = repo.SaveTransferStates(ctx, []ports.TransferState{{Hash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Status: "paused"}, {Hash: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", Status: "completed", AddedAt: &added, CompletedAt: &completed}}); err != nil {
+	if _, err = repo.SaveTransferStates(ctx, []ports.TransferState{{Hash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Status: "paused"}, {Hash: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", Status: "completed", AddedAt: &added, CompletedAt: &completed}}); err != nil {
 		t.Fatal(err)
 	}
 	page, err := s.Downloads().List(ctx, ports.DownloadListQuery{Limit: 1, TransferStatus: "completed", CompletedFrom: &completed})

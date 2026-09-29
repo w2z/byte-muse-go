@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"bytemuse/backend/internal/domain"
 	"bytemuse/backend/internal/ports"
 	"github.com/PuerkitoBio/goquery"
 )
@@ -46,11 +47,6 @@ func collectJavDB(ctx context.Context, f Fetcher, req ports.CollectionRequest) (
 		return ports.CollectionBatch{}, ErrParse
 	}
 	batch := ports.CollectionBatch{}
-	// 当前榜单请求明确限定 t=censored；跨分类搜索不能据番号或标题猜测。
-	videoType := ""
-	if req.Kind == "rank" {
-		videoType = "censored"
-	}
 	valid := true
 	doc.Find(".movie-list .item").Each(func(_ int, s *goquery.Selection) {
 		a := s.Find("a.box").First()
@@ -69,6 +65,12 @@ func collectJavDB(ctx context.Context, f Fetcher, req ports.CollectionRequest) (
 				valid = false
 				return
 			}
+		}
+		// 榜单请求明确限定 t=censored，直接采用来源分类；搜索结果没有类别字段，
+		// 交回统一的 domain.ClassifyVideoType 判定，不在解析器里另写一套规则。
+		videoType := domain.VideoTypeCensored
+		if req.Kind != "rank" {
+			videoType = domain.ClassifyVideoType(code, strings.TrimSpace(title), nil)
 		}
 		batch.Items = append(batch.Items, ports.CollectedMedia{SourceID: id, URL: "https://javdb.com" + href, Code: code, Title: strings.TrimSpace(title), PosterURL: poster, ReleaseDate: date, VideoType: videoType})
 	})
@@ -147,6 +149,7 @@ func collectNetflav(ctx context.Context, f Fetcher, req ports.CollectionRequest)
 			return ports.CollectionBatch{}, ErrParse
 		}
 		m := ports.CollectedMedia{SourceID: v.ID, URL: "https://netflav.com/video?id=" + url.QueryEscape(v.ID), Code: v.Code, Title: v.Title, PosterURL: v.PosterHD, Tags: localizedValues(v.Tags)}
+		m.VideoType = domain.ClassifyVideoType(m.Code, m.Title, m.Tags)
 		if m.PosterURL == "" {
 			m.PosterURL = v.Poster
 		}
