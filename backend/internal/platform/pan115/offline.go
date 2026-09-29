@@ -30,6 +30,14 @@ type OfflinePage struct {
 	Tasks     []OfflineTask
 }
 
+// OfflineQuota 是 115 云下载（离线下载）的配额快照。
+// 115 以任务个数而非字节计量云下载配额，因此三个字段都是任务数。
+type OfflineQuota struct {
+	Total     int
+	Used      int
+	Remaining int
+}
+
 type offlineTaskWire struct {
 	Hash        string      `json:"info_hash"`
 	Status      int         `json:"status"`
@@ -137,4 +145,18 @@ func (c *Client) RemoveOffline(ctx context.Context, accessToken, hash string) er
 		"del_source_file": {"0"},
 	}, "离线任务删除")
 	return err
+}
+
+// OfflineQuota 读取云下载配额；115 未返回 data 段时按零配额处理，不视为错误。
+func (c *Client) OfflineQuota(ctx context.Context, accessToken string) (OfflineQuota, error) {
+	type quotaWire struct {
+		Total     int `json:"count"`
+		Used      int `json:"used"`
+		Remaining int `json:"surplus"`
+	}
+	data, err := apiGet[quotaWire](ctx, c, c.api+"/open/offline/get_quota_info", accessToken, nil, "云下载配额")
+	if err != nil {
+		return OfflineQuota{}, err
+	}
+	return OfflineQuota{Total: data.Total, Used: data.Used, Remaining: data.Remaining}, nil
 }

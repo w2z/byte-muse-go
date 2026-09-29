@@ -1,4 +1,4 @@
-import { Button, Modal } from "@arco-design/web-react";
+import { Button, Modal, Progress } from "@arco-design/web-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { apiRequest } from "../../shared/api/client";
@@ -13,6 +13,9 @@ type Pan115LoginSession = { session_id: string; qr_code: string; expires_at: str
 /** 单个容量数值；115 未返回格式化文本时回退字节数展示。 */
 type Pan115SpaceAmount = { size: number; formatted: string };
 
+/** 云下载配额；115 以任务个数计量，缺失时为 null 表示 115 未提供该数据。 */
+type Pan115Quota = { total: number; used: number; remaining: number };
+
 /** 账号快照；只含展示字段，令牌始终留在后端。 */
 type Pan115Account = {
   id: string;
@@ -20,6 +23,7 @@ type Pan115Account = {
   avatar: string;
   level: string;
   space: { total: Pan115SpaceAmount; used: Pan115SpaceAmount; remaining: Pan115SpaceAmount };
+  quota: Pan115Quota | null;
 };
 
 type Pan115LoginResult = { status: Pan115LoginStatus; account: Pan115Account | null };
@@ -43,6 +47,31 @@ const statusText: Record<Pan115LoginStatus, string> = {
 /** 容量展示；缺少格式化文本时回退字节数，避免出现空值。 */
 function formatSpace(amount: Pan115SpaceAmount): string {
   return amount.formatted || `${amount.size} B`;
+}
+
+/** 进度百分比；总量缺失或为零时按 0 处理，避免出现 NaN 与负值。 */
+function percentOf(used: number, total: number): number {
+  if (!Number.isFinite(used) || !Number.isFinite(total) || total <= 0) return 0;
+  return Math.min(100, Math.max(0, (used / total) * 100));
+}
+
+/** 空间容量与云下载配额共用同一行结构：标签 + 数值 + 整行进度条。 */
+function MeterRow({ label, value, percent }: { label: string; value: string; percent: number }) {
+  return (
+    <div className="settings-pan115-meter">
+      <div className="settings-pan115-meter-head">
+        <span className="settings-pan115-meter-label">{label}</span>
+        <span className="settings-pan115-meter-value">{value}</span>
+      </div>
+      <Progress
+        className="settings-pan115-meter-bar"
+        percent={percent}
+        showText={false}
+        strokeWidth={6}
+        aria-label={`${label} ${value}`}
+      />
+    </div>
+  );
 }
 
 /**
@@ -132,11 +161,23 @@ export function Pan115LoginPanel() {
             {bound.avatar ? <img className="settings-pan115-avatar" src={bound.avatar} alt="" /> : null}
             <div className="settings-pan115-account-text">
               <strong>{bound.name}</strong>
-              <span className="settings-field-description">
-                等级 {bound.level || "未知"} · 已用 {formatSpace(bound.space.used)} / {formatSpace(bound.space.total)}
-              </span>
+              <span className="settings-field-description">等级 {bound.level || "未知"}</span>
             </div>
           </div>
+          <MeterRow
+            label="空间容量"
+            value={`已用 ${formatSpace(bound.space.used)} / ${formatSpace(bound.space.total)}`}
+            percent={percentOf(bound.space.used.size, bound.space.total.size)}
+          />
+          {bound.quota ? (
+            <MeterRow
+              label="云下载配额"
+              value={`已用 ${bound.quota.used} / ${bound.quota.total}`}
+              percent={percentOf(bound.quota.used, bound.quota.total)}
+            />
+          ) : (
+            <span className="settings-field-description">云下载配额暂不可用</span>
+          )}
           <div className="settings-pan115-actions">
             <Button
               type="secondary"

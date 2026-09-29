@@ -428,10 +428,11 @@ describe("网盘设置", () => {
     avatar: "",
     level: "VIP",
     space: {
-      total: { size: 0, formatted: "5TB" },
-      used: { size: 0, formatted: "1TB" },
-      remaining: { size: 0, formatted: "4TB" },
+      total: { size: 5000, formatted: "5TB" },
+      used: { size: 1000, formatted: "1TB" },
+      remaining: { size: 4000, formatted: "4TB" },
     },
+    quota: { total: 1500, used: 30, remaining: 1470 },
   };
 
   it("网盘分类用二级页签展示 115 网盘与 CloudDrive2，CloudDrive2 不再属于下载器", async () => {
@@ -492,10 +493,32 @@ describe("网盘设置", () => {
     // 授权成功后结束轮询、刷新账号快照并展示绑定信息。
     expect(await screen.findByText("115 用户")).toBeInTheDocument();
     expect(screen.queryByAltText("115 登录二维码")).not.toBeInTheDocument();
-    expect(screen.getByText(/已用 1TB \/ 5TB/)).toBeInTheDocument();
+    // 等级、已用、云下载配额各占一行，两行数值下方各有一条进度条。
+    expect(screen.getByText("等级 VIP")).toBeInTheDocument();
+    expect(screen.getByText("已用 1TB / 5TB")).toBeInTheDocument();
+    expect(screen.getByText("已用 30 / 1500")).toBeInTheDocument();
+    expect(screen.getByLabelText("空间容量 已用 1TB / 5TB")).toBeInTheDocument();
+    expect(screen.getByLabelText("云下载配额 已用 30 / 1500")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "解除绑定" }));
     expect(await screen.findByRole("button", { name: "扫码登录" })).toBeInTheDocument();
+  });
+
+  it("115 未返回云下载配额时只提示配额不可用，账号与容量照常展示", async () => {
+    const user = userEvent.setup();
+    vi.mocked(apiRequest).mockImplementation(async (path) => {
+      if (path === "/system/settings") return { database_driver: "sqlite", values: {}, configured: {} };
+      if (path === "/pan115/account") return { linked: true, account: { ...boundAccount, quota: null } };
+      throw new Error(`未处理的请求 ${path}`);
+    });
+
+    renderSettings();
+    await user.click(await screen.findByRole("tab", { name: "网盘" }));
+
+    expect(await screen.findByText("115 用户")).toBeInTheDocument();
+    expect(screen.getByText("已用 1TB / 5TB")).toBeInTheDocument();
+    expect(screen.getByText("云下载配额暂不可用")).toBeInTheDocument();
+    expect(screen.queryByLabelText(/云下载配额/)).not.toBeInTheDocument();
   });
 
   it("二维码过期后提示失效并允许重新获取", async () => {

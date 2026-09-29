@@ -17,15 +17,18 @@ type pan115ClientStub struct {
 	loginState pan115.LoginState
 	tokens     pan115.Tokens
 	account    pan115.Account
+	quota      pan115.OfflineQuota
 	page       pan115.FilePage
 	offline    pan115.OfflinePage
 	addHash    string
 	addErr     error
+	quotaErr   error
 	refreshErr error
 
 	exchangeCalls int
 	refreshCalls  int
 	accountCalls  int
+	quotaCalls    int
 	listDirectory string
 	listOffset    int
 	listLimit     int
@@ -62,6 +65,14 @@ func (s *pan115ClientStub) RefreshToken(context.Context, string) (pan115.Tokens,
 func (s *pan115ClientStub) Account(context.Context, string) (pan115.Account, error) {
 	s.accountCalls++
 	return s.account, nil
+}
+
+func (s *pan115ClientStub) OfflineQuota(context.Context, string) (pan115.OfflineQuota, error) {
+	s.quotaCalls++
+	if s.quotaErr != nil {
+		return pan115.OfflineQuota{}, s.quotaErr
+	}
+	return s.quota, nil
 }
 
 func (s *pan115ClientStub) List(_ context.Context, _ string, directoryID string, offset, limit int) (pan115.FilePage, error) {
@@ -255,6 +266,37 @@ func TestPan115ExpiredAccessTokenRefreshesAndPersists(t *testing.T) {
 	}
 	if repo.account.UserID != "100" || repo.account.UserName != "张三" {
 		t.Fatalf("刷新不应丢失账号标识: %+v", repo.account)
+	}
+}
+
+// TestPan115AccountIncludesOfflineQuota 验证账号快照携带云下载配额，
+// 且配额接口失败时只把 Quota 置空，账号与容量仍照常返回，不连带隐藏解绑入口。
+func TestPan115AccountIncludesOfflineQuota(t *testing.T) {
+	secret := strings.Repeat("x", 32)
+	client := &pan115ClientStub{
+		account: pan115.Account{ID: "100", Name: "张三"},
+		quota:   pan115.OfflineQuota{Total: 1500, Used: 3, Remaining: 1497},
+	}
+	service := newPan115TestService(t, pan115BoundAccounts(t, secret), client, pan115TestSettings(""), secret)
+
+	account, err := service.Account(context.Background())
+	if err != nil {
+		t.Fatalf("读取账号失败: %v", err)
+	}
+	if account.Quota == nil || account.Quota.Total != 1500 || account.Quota.Used != 3 || account.Quota.Remaining != 1497 {
+		t.Fatalf("云下载配额 = %+v，期望 1500/3/1497", account.Quota)
+	}
+
+	client.quotaErr = &pan115.APIError{Code: 990002, Message: "参数错误"}
+	account, err = service.Account(context.Background())
+	if err != nil {
+		t.Fatalf("配额失败不应中断账号读取: %v", err)
+	}
+	if account.Quota != nil {
+		t.Fatalf("配额失败时 Quota = %+v，期望 nil", account.Quota)
+	}
+	if account.Name != "张三" || account.ID != "100" {
+		t.Fatalf("配额失败时账号快照 = %+v，期望保留用户 ID 与昵称", account)
 	}
 }
 

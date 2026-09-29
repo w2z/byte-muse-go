@@ -47,6 +47,7 @@ type pan115API interface {
 	ExchangeToken(context.Context, *pan115.Login) (pan115.Tokens, error)
 	RefreshToken(context.Context, string) (pan115.Tokens, error)
 	Account(context.Context, string) (pan115.Account, error)
+	OfflineQuota(context.Context, string) (pan115.OfflineQuota, error)
 	List(context.Context, string, string, int, int) (pan115.FilePage, error)
 	AddOffline(context.Context, string, string, string) (string, error)
 	OfflineTasks(context.Context, string, int) (pan115.OfflinePage, error)
@@ -184,21 +185,32 @@ func (s *Pan115Service) Unlink(ctx context.Context) error {
 	return s.accounts.Clear(ctx)
 }
 
-// Account 读取当前绑定账号的资料与容量；未绑定时返回 ErrPan115NotLinked。
+// Account 读取当前绑定账号的资料、容量与云下载配额；未绑定时返回 ErrPan115NotLinked。
+// 配额是账号面板的附加信息：115 未提供或临时不可用时仍返回账号快照，只把 Quota 置为 nil，
+// 避免配额接口的偶发故障连带隐藏账号、容量与解绑入口。
 func (s *Pan115Service) Account(ctx context.Context) (domain.Pan115Account, error) {
 	var account pan115.Account
+	var quota *domain.Pan115Quota
 	err := s.withToken(ctx, func(token string) error {
 		found, err := s.client.Account(ctx, token)
 		if err != nil {
 			return err
 		}
 		account = found
+		value, err := s.client.OfflineQuota(ctx, token)
+		if err != nil {
+			return nil
+		}
+		view := pan115QuotaView(value)
+		quota = &view
 		return nil
 	})
 	if err != nil {
 		return domain.Pan115Account{}, err
 	}
-	return pan115AccountView(account), nil
+	result := pan115AccountView(account)
+	result.Quota = quota
+	return result, nil
 }
 
 // Files 读取一个 115 目录的分页内容；directoryID 为空时读取根目录。
@@ -515,6 +527,10 @@ func pan115AccountView(account pan115.Account) domain.Pan115Account {
 
 func pan115AmountView(amount pan115.SpaceAmount) domain.Pan115SpaceAmount {
 	return domain.Pan115SpaceAmount{Size: amount.Size, Formatted: amount.Formatted}
+}
+
+func pan115QuotaView(quota pan115.OfflineQuota) domain.Pan115Quota {
+	return domain.Pan115Quota{Total: quota.Total, Used: quota.Used, Remaining: quota.Remaining}
 }
 
 func pan115FilePageView(directoryID string, page pan115.FilePage) domain.Pan115FilePage {

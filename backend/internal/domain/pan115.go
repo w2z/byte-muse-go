@@ -33,6 +33,8 @@ type Pan115Account struct {
 	Avatar string      `json:"avatar"`
 	Level  string      `json:"level"`
 	Space  Pan115Space `json:"space"`
+	// Quota 是云下载配额；115 未提供该数据时为 null，调用方据此只隐藏配额展示。
+	Quota *Pan115Quota `json:"quota"`
 }
 
 // Pan115Space 是容量快照；Formatted 直接使用 115 提供的展示文本。
@@ -46,6 +48,13 @@ type Pan115Space struct {
 type Pan115SpaceAmount struct {
 	Size      int64  `json:"size"`
 	Formatted string `json:"formatted"`
+}
+
+// Pan115Quota 是云下载配额快照；115 以任务个数计量，三个字段都是任务数而不是字节。
+type Pan115Quota struct {
+	Total     int `json:"total"`
+	Used      int `json:"used"`
+	Remaining int `json:"remaining"`
 }
 
 // Pan115Directory 是 115 目录路径上的一级。

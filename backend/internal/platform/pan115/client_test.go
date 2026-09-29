@@ -261,6 +261,42 @@ func TestOfflineTasksNormalizesProgress(t *testing.T) {
 	}
 }
 
+// TestOfflineQuotaParsesTotals 验证云下载配额按任务数解析 count/used/surplus，
+// 并命中 115 开放平台的配额接口，而不是网页版离线配额接口。
+func TestOfflineQuotaParsesTotals(t *testing.T) {
+	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/open/offline/get_quota_info" {
+			t.Errorf("配额请求路径 = %q，期望 /open/offline/get_quota_info", r.URL.Path)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer token-1" {
+			t.Errorf("Authorization = %q，期望 Bearer token-1", got)
+		}
+		writeJSON(t, w, `{"state":true,"message":"","code":0,"data":{"package":[{"surplus":1500,"used":0,"count":1500,"name":"VIP配额","expire_info":null}],"count":1500,"surplus":1500,"max_size":500,"used":0}}`)
+	})
+	quota, err := client.OfflineQuota(context.Background(), "token-1")
+	if err != nil {
+		t.Fatalf("读取云下载配额失败: %v", err)
+	}
+	if quota.Total != 1500 || quota.Used != 0 || quota.Remaining != 1500 {
+		t.Fatalf("云下载配额 = %+v，期望 total=1500 used=0 remaining=1500", quota)
+	}
+}
+
+// TestOfflineQuotaTreatsMissingDataAsZero 验证 115 未返回 data 段时按零配额处理，不报错，
+// 避免非会员账号让整个账号面板变成错误态。
+func TestOfflineQuotaTreatsMissingDataAsZero(t *testing.T) {
+	client := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(t, w, `{"state":true,"message":"","code":0,"data":null}`)
+	})
+	quota, err := client.OfflineQuota(context.Background(), "token-1")
+	if err != nil {
+		t.Fatalf("空 data 不应报错: %v", err)
+	}
+	if quota != (OfflineQuota{}) {
+		t.Fatalf("空 data 的配额 = %+v，期望零值", quota)
+	}
+}
+
 // TestUnauthorizedDetection 验证 HTTP 401 与业务错误码都能识别为令牌失效。
 func TestUnauthorizedDetection(t *testing.T) {
 	rejected := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {

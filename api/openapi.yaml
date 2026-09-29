@@ -859,7 +859,7 @@ paths:
     get:
       operationId: getPan115Account
       summary: 读取 115 绑定状态
-      description: 已绑定时用本地令牌读取账号资料与容量；未绑定时返回 linked=false，不视为错误。令牌失效时先刷新一次再读取，刷新令牌被吊销则清除绑定并返回 linked=false。
+      description: 已绑定时用本地令牌读取账号资料、容量与云下载配额；未绑定时返回 linked=false，不视为错误。令牌失效时先刷新一次再读取，刷新令牌被吊销则清除绑定并返回 linked=false。云下载配额为附加信息，115 未提供时 quota 为 null，不影响其余字段。
       parameters:
         - {in: cookie, name: bytemuse_session, required: true, schema: {type: string}, description: 登录签发的管理员会话 Cookie}
       responses:
@@ -868,7 +868,7 @@ paths:
           content:
             application/json:
               schema: {$ref: '#/components/schemas/Pan115AccountResponse'}
-              example: {linked: true, account: {id: '12345678', name: 115 用户, avatar: '', level: VIP, space: {total: {size: 5497558138880, formatted: 5.0TB}, used: {size: 1099511627776, formatted: 1.0TB}, remaining: {size: 4398046511104, formatted: 4.0TB}}}}
+              example: {linked: true, account: {id: '12345678', name: 115 用户, avatar: '', level: VIP, space: {total: {size: 5497558138880, formatted: 5.0TB}, used: {size: 1099511627776, formatted: 1.0TB}, remaining: {size: 4398046511104, formatted: 4.0TB}}, quota: {total: 1500, used: 0, remaining: 1500}}}
         '401':
           description: 未登录或会话失效
           content:
@@ -1895,7 +1895,7 @@ components:
         formatted: {type: string, description: '115 提供的展示文本，例如 5.0TB；缺失时为空串'}
     Pan115Account:
       type: object
-      required: [id, name, avatar, level, space]
+      required: [id, name, avatar, level, space, quota]
       description: 115 账号对外快照，只含展示字段，不含任何令牌
       properties:
         id: {type: string, description: 115 用户 ID}
@@ -1910,6 +1910,15 @@ components:
             total: {$ref: '#/components/schemas/Pan115SpaceAmount'}
             used: {$ref: '#/components/schemas/Pan115SpaceAmount'}
             remaining: {$ref: '#/components/schemas/Pan115SpaceAmount'}
+        quota: {oneOf: [{$ref: '#/components/schemas/Pan115Quota'}, {type: 'null'}], description: 云下载（离线下载）配额；115 未提供该数据时为 null，前端据此只把配额行替换为不可用提示}
+    Pan115Quota:
+      type: object
+      required: [total, used, remaining]
+      description: 云下载（离线下载）配额快照；115 以任务个数计量，三个字段都不是字节
+      properties:
+        total: {type: integer, description: 云下载配额总量，单位为任务个数}
+        used: {type: integer, description: 已占用的云下载配额，单位为任务个数}
+        remaining: {type: integer, description: 剩余的云下载配额，单位为任务个数}
     Pan115AccountResponse:
       type: object
       required: [linked]
