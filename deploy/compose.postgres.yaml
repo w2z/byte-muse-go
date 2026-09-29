@@ -1,7 +1,7 @@
 services:
   byte-muse:
     image: ghcr.io/w2z/byte-muse-go:latest
-    container_name: byte-muse
+    container_name: byte-muse-go
     restart: always
     networks:
       - bridge

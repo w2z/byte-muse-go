@@ -58,8 +58,8 @@ foreach ($composeFile in $composeFiles) {
     if ($text -match '(?<!\d)(?:10|192\.168|172\.(?:1[6-9]|2\d|3[01]))\.\d{1,3}\.\d{1,3}\.\d{1,3}(?!\d)') {
         throw "$($composeFile.Name) 不得写入内网 IP 地址"
     }
-    if ($text -notmatch '(?m)^\s+container_name:\s*byte-muse\s*$') {
-        throw "$($composeFile.Name) 必须固定容器名为 byte-muse"
+    if ($text -notmatch '(?m)^\s+container_name:\s*byte-muse-go\s*$') {
+        throw "$($composeFile.Name) 必须固定容器名为 byte-muse-go"
     }
     if ($text -notmatch '(?m)^\s+restart:\s*always\s*$') {
         throw "$($composeFile.Name) 必须使用 restart: always"
