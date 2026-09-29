@@ -37,7 +37,7 @@ docker run -d --name byte-muse-go \
   -p 3750:3750 \
   -e TZ=Asia/Shanghai \
   -e DATABASE_DRIVER=postgres \
-  -e DATABASE_DSN='postgres://bytemuse:请替换为数据库密码@请替换为数据库主机:5432/bytemuse?sslmode=disable' \
+  -e DATABASE_DSN='postgres://bytemuse:请替换为数据库密码@请替换为宿主机地址:5431/bytemuse?sslmode=disable' \
   -e ADMIN_USERNAME=admin \
   -e ADMIN_PASSWORD='请替换为管理员密码' \
   -e SESSION_SECRET='请替换SESSION_SECRET(32位)' \
@@ -57,7 +57,7 @@ docker run -d --name byte-muse-go \
   -p 3750:3750 \
   -e TZ=Asia/Shanghai \
   -e DATABASE_DRIVER=mysql \
-  -e DATABASE_DSN='bytemuse:请替换为数据库密码@tcp(请替换为数据库主机:3306)/bytemuse?charset=utf8mb4&parseTime=true&loc=Local' \
+  -e DATABASE_DSN='bytemuse:请替换为数据库密码@tcp(请替换为宿主机地址:3307)/bytemuse?charset=utf8mb4&parseTime=true&loc=Local' \
   -e ADMIN_USERNAME=admin \
   -e ADMIN_PASSWORD='请替换为管理员密码' \
   -e SESSION_SECRET='请替换SESSION_SECRET(32位)' \
@@ -72,7 +72,7 @@ docker run -d --name byte-muse-go \
 
 ## Docker Compose
 
-`deploy/` 下保留 `compose.sqlite.yaml`、`compose.postgres.yaml`、`compose.mysql.yaml` 三个模板，下面按数据库给出完整配置，与这三个文件内容一致。模板都直接写出配置值，不使用环境变量插值：服务名与容器名保持同一个名字——应用 `byte-muse-go`、抓取增强 `cloudflarebypass_byte_muse_go`、内置数据库 `postgres_byte_muse_go` / `mysql_byte_muse_go`；各服务接入同一 `bridge` 网络，`DATABASE_DSN` 与 `BYPASS_URL` 直接用该名字访问。代理地址与宿主机路径是占位符，`ADMIN_USERNAME`、`ADMIN_PASSWORD`、`SESSION_SECRET` 以及数据库密码也是占位值，部署前在文件中替换：`SESSION_SECRET` 少于 32 字节时服务会直接拒绝启动。真实拓扑与凭据只留在部署机上。
+`deploy/` 下保留 `compose.sqlite.yaml`、`compose.postgres.yaml`、`compose.mysql.yaml` 三个模板，下面按数据库给出完整配置，与这三个文件内容一致。模板直接写出配置值，不使用环境变量插值。`DATABASE_DSN` 使用容器可访问的宿主机地址及映射端口；`BYPASS_URL` 使用 `http://cloudflarebypass_byte_muse_go:8000`。部署前替换宿主机地址、代理地址、挂载路径及账号密码占位值；`SESSION_SECRET` 少于 32 字节时服务会拒绝启动。真实拓扑与凭据只留在部署机上。
 
 <details open>
 <summary><b>SQLite</b></summary>
@@ -146,8 +146,7 @@ services:
     environment:
       TZ: Asia/Shanghai
       DATABASE_DRIVER: postgres
-      # 改用外部数据库时才替换主机、端口与密码。
-      DATABASE_DSN: postgres://bytemuse:请替换为数据库密码@postgres_byte_muse_go:5431/bytemuse?sslmode=disable
+      DATABASE_DSN: postgres://bytemuse:请替换为数据库密码@请替换为宿主机地址:5431/bytemuse?sslmode=disable
       # 部署前必须替换下面三项：管理员账号密码，以及 32 字节以上随机会话密钥。
       # 占位值长度不足 32 字节，未替换时服务会直接拒绝启动。
       ADMIN_USERNAME: admin
@@ -158,7 +157,7 @@ services:
       # 宿主机目录需允许容器内 UID 65532 写入：chown -R 65532:65532 /path/to/byte-muse/data /path/to/byte-muse/strm
       - /path/to/byte-muse/data:/data
       - /path/to/byte-muse/strm:/strm
-  # 内置 PostgreSQL：与应用同一 bridge 网络，服务名 postgres_byte_muse_go 即 DSN 主机名。
+  # 内置 PostgreSQL
   postgres_byte_muse_go:
     image: postgres:17-alpine
     container_name: postgres_byte_muse_go
@@ -166,11 +165,10 @@ services:
     networks:
       - bridge
     ports:
-      - "5431:5431"
+      - "5431:5432"
     environment:
       POSTGRES_DB: bytemuse
       POSTGRES_USER: bytemuse
-      PGPORT: "5431"
       POSTGRES_PASSWORD: 请替换为数据库密码
       TZ: Asia/Shanghai
     healthcheck:
@@ -226,8 +224,7 @@ services:
     environment:
       TZ: Asia/Shanghai
       DATABASE_DRIVER: mysql
-      # 改用外部数据库时才替换主机、端口与密码。
-      DATABASE_DSN: bytemuse:请替换为数据库密码@tcp(mysql_byte_muse_go:3306)/bytemuse?charset=utf8mb4&parseTime=true&loc=Local
+      DATABASE_DSN: bytemuse:请替换为数据库密码@tcp(请替换为宿主机地址:3307)/bytemuse?charset=utf8mb4&parseTime=true&loc=Local
       # 部署前必须替换下面三项：管理员账号密码，以及 32 字节以上随机会话密钥。
       # 占位值长度不足 32 字节，未替换时服务会直接拒绝启动。
       ADMIN_USERNAME: admin
@@ -238,7 +235,7 @@ services:
       # 宿主机目录需允许容器内 UID 65532 写入：chown -R 65532:65532 /path/to/byte-muse/data /path/to/byte-muse/strm
       - /path/to/byte-muse/data:/data
       - /path/to/byte-muse/strm:/strm
-  # 内置 MySQL：与应用同一 bridge 网络，服务名 mysql_byte_muse_go 即 DSN 主机名。
+  # 内置 MySQL
   mysql_byte_muse_go:
     image: mysql:8.4
     container_name: mysql_byte_muse_go
@@ -246,7 +243,7 @@ services:
     networks:
       - bridge
     ports:
-      - "3306:3306"
+      - "3307:3306"
     environment:
       MYSQL_DATABASE: bytemuse
       MYSQL_USER: bytemuse

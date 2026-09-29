@@ -77,31 +77,41 @@ foreach ($composeFile in $composeFiles) {
     if ($text -notmatch '(?m)^\s+cloudflarebypass_byte_muse_go:\s*$' -or $text -notmatch 'ghcr\.io/sarperavci/cloudflarebypassforscraping') {
         throw "$($composeFile.Name) 必须包含 cloudflarebypass_byte_muse_go 抓取增强服务"
     }
-    # 数据库方言模板自带数据库容器：DSN 主机名就是该容器名，写错会连不上并反复重启。
+    # DSN 连接宿主机映射端口，数据库容器保持镜像默认监听端口。
     if ($composeFile.Name -match '\.postgres\.') {
-        if ($text -notmatch '(?m)^\s+postgres_byte_muse_go:\s*$' -or $text -notmatch '@postgres_byte_muse_go:5431/') {
-            throw "$($composeFile.Name) 必须包含内置 postgres 服务，且 DATABASE_DSN 指向 postgres_byte_muse_go:5431"
+        if ($text -notmatch '(?m)^\s+postgres_byte_muse_go:\s*$') {
+            throw "$($composeFile.Name) 必须包含内置 postgres 服务"
         }
         if ($text -notmatch '(?m)^\s+container_name:\s*postgres_byte_muse_go\s*$') {
             throw "$($composeFile.Name) 必须固定数据库容器名为 postgres_byte_muse_go"
         }
-        # 容器内监听端口必须与 DSN 一致，用 PGPORT 指定，避免用 command 覆盖镜像启动命令。
-        if ($text -notmatch '(?m)^\s+PGPORT:\s*"5431"\s*$') {
-            throw "$($composeFile.Name) 必须用 PGPORT 让内置 postgres 监听 5431"
+        if ($text -match '(?m)^\s+(?:PGPORT|command):') {
+            throw "$($composeFile.Name) 不得覆盖 postgres 默认监听端口"
         }
-        if ($text -notmatch '(?m)^\s+-\s+"5431:5431"\s*$') {
-            throw "$($composeFile.Name) 必须把内置 postgres 的 5431 端口发布到宿主机"
+        $publishedPort = [regex]::Match($text, '(?m)^\s+-\s+"(?<port>\d+):5432"\s*$')
+        if (-not $publishedPort.Success -or [int]$publishedPort.Groups['port'].Value -notin 1..65535) {
+            throw "$($composeFile.Name) 必须映射宿主机端口到 postgres 容器的 5432"
+        }
+        if ($text -notmatch ('@请替换为宿主机地址:' + $publishedPort.Groups['port'].Value + '/')) {
+            throw "$($composeFile.Name) 的 DATABASE_DSN 必须使用宿主机地址及 ports 左侧端口"
         }
     }
     if ($composeFile.Name -match '\.mysql\.') {
-        if ($text -notmatch '(?m)^\s+mysql_byte_muse_go:\s*$' -or $text -notmatch '@tcp\(mysql_byte_muse_go:3306\)') {
-            throw "$($composeFile.Name) 必须包含内置 mysql 服务，且 DATABASE_DSN 指向 tcp(mysql_byte_muse_go:3306)"
+        if ($text -notmatch '(?m)^\s+mysql_byte_muse_go:\s*$') {
+            throw "$($composeFile.Name) 必须包含内置 mysql 服务"
         }
         if ($text -notmatch '(?m)^\s+container_name:\s*mysql_byte_muse_go\s*$') {
             throw "$($composeFile.Name) 必须固定数据库容器名为 mysql_byte_muse_go"
         }
-        if ($text -notmatch '(?m)^\s+-\s+"3306:3306"\s*$') {
-            throw "$($composeFile.Name) 必须把内置 mysql 的 3306 端口发布到宿主机"
+        if ($text -match '(?m)^\s+(?:MYSQL_TCP_PORT|command):') {
+            throw "$($composeFile.Name) 不得覆盖 mysql 默认监听端口"
+        }
+        $publishedPort = [regex]::Match($text, '(?m)^\s+-\s+"(?<port>\d+):3306"\s*$')
+        if (-not $publishedPort.Success -or [int]$publishedPort.Groups['port'].Value -notin 1..65535) {
+            throw "$($composeFile.Name) 必须映射宿主机端口到 mysql 容器的 3306"
+        }
+        if ($text -notmatch ('@tcp\(请替换为宿主机地址:' + $publishedPort.Groups['port'].Value + '\)')) {
+            throw "$($composeFile.Name) 的 DATABASE_DSN 必须使用宿主机地址及 ports 左侧端口"
         }
     }
 }

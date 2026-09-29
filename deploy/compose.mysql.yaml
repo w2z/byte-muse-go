@@ -14,8 +14,7 @@ services:
     environment:
       TZ: Asia/Shanghai
       DATABASE_DRIVER: mysql
-      # 改用外部数据库时才替换主机、端口与密码。
-      DATABASE_DSN: bytemuse:请替换为数据库密码@tcp(mysql_byte_muse_go:3306)/bytemuse?charset=utf8mb4&parseTime=true&loc=Local
+      DATABASE_DSN: bytemuse:请替换为数据库密码@tcp(请替换为宿主机地址:3307)/bytemuse?charset=utf8mb4&parseTime=true&loc=Local
       # 部署前必须替换下面三项：管理员账号密码，以及 32 字节以上随机会话密钥。
       # 占位值长度不足 32 字节，未替换时服务会直接拒绝启动。
       ADMIN_USERNAME: admin
@@ -26,7 +25,7 @@ services:
       # 宿主机目录需允许容器内 UID 65532 写入：chown -R 65532:65532 /path/to/byte-muse/data /path/to/byte-muse/strm
       - /path/to/byte-muse/data:/data
       - /path/to/byte-muse/strm:/strm
-  # 内置 MySQL：与应用同一 bridge 网络，服务名 mysql_byte_muse_go 即 DSN 主机名。
+  # 内置 MySQL
   mysql_byte_muse_go:
     image: mysql:8.4
     container_name: mysql_byte_muse_go
@@ -34,7 +33,7 @@ services:
     networks:
       - bridge
     ports:
-      - "3306:3306"
+      - "3307:3306"
     environment:
       MYSQL_DATABASE: bytemuse
       MYSQL_USER: bytemuse

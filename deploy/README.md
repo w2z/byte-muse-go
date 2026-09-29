@@ -3,8 +3,8 @@
 三个 Compose 文件都以 `byte-muse-go` 服务启动 ByteMuse 应用容器，并附带 `cloudflarebypass_byte_muse_go` 抓取增强服务；`serve` 在同一进程中提供 Web/API 并运行后台调度器。
 
 - `compose.sqlite.yaml`：数据库文件保存在宿主机数据目录（模板占位 `/path/to/byte-muse/data`），适合 NAS 单机部署。
-- `compose.postgres.yaml`：内置 `postgres_byte_muse_go` 服务（`postgres:17-alpine`），应用通过 `DATABASE_DSN` 连接它；改用外部 PostgreSQL 时替换 DSN 的主机、端口与密码。
-- `compose.mysql.yaml`：内置 `mysql_byte_muse_go` 服务（`mysql:8.4`），应用通过 `DATABASE_DSN` 连接它；改用外部 MySQL 8.0+ 时替换 DSN 的主机、端口与密码。
+- `compose.postgres.yaml`：内置 `postgres_byte_muse_go` 服务（`postgres:17-alpine`），映射 `5431:5432`，`DATABASE_DSN` 使用 `请替换为宿主机地址:5431`。
+- `compose.mysql.yaml`：内置 `mysql_byte_muse_go` 服务（`mysql:8.4`），映射 `3307:3306`，`DATABASE_DSN` 使用 `请替换为宿主机地址:3307`。
 
 三个 Compose 文件都直接写出配置值，不使用环境变量插值。`ADMIN_USERNAME`、`ADMIN_PASSWORD`、`SESSION_SECRET` 以及 PostgreSQL/MySQL 的 `DATABASE_DSN` 都是文件里的占位值，部署前必须替换；`SESSION_SECRET` 少于 32 字节、DSN 占位主机无法解析时，服务会直接拒绝启动。真实凭据只留在部署机上，不提交回仓库。
 
