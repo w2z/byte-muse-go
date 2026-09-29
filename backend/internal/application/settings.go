@@ -19,13 +19,14 @@ var ErrInvalidSetting = errors.New("invalid setting")
 
 // 配置项取值域。一个 key 只有一个权威声明，前端控件类型与保存校验都从这里推导。
 const (
-	settingText = "text" // 任意文本
-	settingBool = "bool" // true / false
-	settingInt  = "int"  // 非负整数
-	settingJSON = "json" // JSON 对象
-	settingEnum = "enum" // 封闭取值
-	settingSort = "sort" // 逗号分隔的排序标签
-	settingCron = "cron" // 标准 5 段 cron（分 时 日 月 周）
+	settingText      = "text"       // 任意文本
+	settingBool      = "bool"       // true / false
+	settingInt       = "int"        // 非负整数
+	settingJSON      = "json"       // JSON 对象
+	settingJSONArray = "json_array" // JSON 数组，元素为对象
+	settingEnum      = "enum"       // 封闭取值
+	settingSort      = "sort"       // 逗号分隔的排序标签
+	settingCron      = "cron"       // 标准 5 段 cron（分 时 日 月 周）
 )
 
 // sortTags 是资源排序器接受的标签集合，与对标站排序器一致。
@@ -42,6 +43,7 @@ var imageModes = []string{"INVISIBLE", "VISIBLE", "BLUR"}
 var bypassEngines = []string{"cloudflare_bypass_for_scraping", "flaresolverr", "scrapling"}
 
 var ptDefaultDownloaderOptions = []string{"qbittorrent", "transmission"}
+
 // btDefaultDownloaderOptions 是 BT 默认下载器的可选值；115 只接受磁力与直链，不接受私有种子文件。
 var btDefaultDownloaderOptions = []string{"qbittorrent", "transmission", "aria2", "thunder", "pan115"}
 
@@ -160,8 +162,9 @@ var writableSettings = map[string]settingSpec{
 	"CLOUDNAS_PASSWORD": {secret: true, kind: settingText},
 	"CLOUDNAS_SAVEPATH": {kind: settingText},
 
-	// 115 网盘：账号与令牌由扫码登录管理并单独落库，这里只保存离线下载的目标目录。
-	"PAN115_SAVE_PATH": {kind: settingText},
+	// 115 网盘：账号与令牌由扫码登录管理并单独落库，这里只保存离线下载的目标目录与扫描目录。
+	"PAN115_SAVE_PATH":  {kind: settingText},
+	"PAN115_SCAN_PATHS": {kind: settingJSONArray},
 
 	// 过滤
 	"DEFAULT_FILTER": {kind: settingJSON},
@@ -354,6 +357,13 @@ func (s *SettingsService) Update(ctx context.Context, values map[string]string) 
 	return saved, nil
 }
 
+// pan115ScanPath 是 115 扫描目录设置 PAN115_SCAN_PATHS 的一个元素。
+// ID 是 115 目录标识，是扫描时的权威依据；Path 是选择目录时的完整路径，只用于展示。
+type pan115ScanPath struct {
+	ID   string `json:"id"`
+	Path string `json:"path"`
+}
+
 // validateSettingValue 按配置项取值域校验输入；空值表示清除该项。
 func validateSettingValue(key string, spec settingSpec, value string) error {
 	if value == "" {
@@ -379,6 +389,25 @@ func validateSettingValue(key string, spec settingSpec, value string) error {
 		var object map[string]any
 		if err := json.Unmarshal([]byte(value), &object); err != nil {
 			return invalid("需要是 JSON 对象")
+		}
+	case settingJSONArray:
+		if !strings.HasPrefix(value, "[") {
+			return invalid("需要是 JSON 数组")
+		}
+		var entries []pan115ScanPath
+		if err := json.Unmarshal([]byte(value), &entries); err != nil {
+			return invalid("需要是 JSON 数组，元素为目录 ID 与目录路径")
+		}
+		seen := make(map[string]bool, len(entries))
+		for _, entry := range entries {
+			id := strings.TrimSpace(entry.ID)
+			if id == "" || strings.TrimSpace(entry.Path) == "" {
+				return invalid("每一项都需要包含目录 ID 与目录路径")
+			}
+			if seen[id] {
+				return invalid("目录重复: " + id)
+			}
+			seen[id] = true
 		}
 	case settingEnum:
 		if !containsValue(spec.allowed, value) {

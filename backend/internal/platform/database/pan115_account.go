@@ -29,6 +29,18 @@ func pan115AccountMigration(dialect Dialect) Migration {
 	}}
 }
 
+// pan115ScanPathsSettingMigration 登记 115 网盘扫描目录设置，默认空值表示不扫描任何目录。
+// 只新增空配置键，不改表结构、不覆盖已有配置；重复执行安全。
+func pan115ScanPathsSettingMigration(dialect Dialect) Migration {
+	setting := fmt.Sprintf("INSERT INTO app_settings (setting_key, setting_value, is_secret, updated_at) VALUES (%s, %s, FALSE, %s)", sqlLiteral("PAN115_SCAN_PATHS"), sqlLiteral(""), currentTimestampExpression(dialect))
+	if dialect == DialectMySQL {
+		setting = strings.Replace(setting, "INSERT INTO", "INSERT IGNORE INTO", 1)
+	} else {
+		setting += " ON CONFLICT (setting_key) DO NOTHING"
+	}
+	return Migration{Version: 27, Name: "pan115_scan_paths_setting", Statements: []string{setting}}
+}
+
 // Pan115AccountRepository 读写 115 账号绑定；令牌密文由应用层负责加解密。
 type Pan115AccountRepository struct {
 	db      *sql.DB

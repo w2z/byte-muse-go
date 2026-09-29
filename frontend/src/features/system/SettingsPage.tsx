@@ -8,8 +8,9 @@ import { ContentCard } from "../../shared/ui/ContentCard";
 import { PageState } from "../../shared/ui/PageState";
 import { useFeedbackMessage } from "../../shared/ui/FeedbackMessage";
 import { Pan115LoginPanel } from "./Pan115LoginPanel";
+import { Pan115ScanPathsField, type Pan115ScanPath } from "./Pan115ScanPathsField";
 
-type FieldKind = "text" | "textarea" | "bool" | "int" | "enum" | "json" | "sort";
+type FieldKind = "text" | "textarea" | "bool" | "int" | "enum" | "json" | "sort" | "paths";
 type SettingOption = {
   value: string;
   label: string;
@@ -156,6 +157,9 @@ const filterSwitches: { key: FilterSwitchKey; label: string }[] = [
 const translationOpenAIKeys = ["TRANSLATION_OPENAI_URL", "TRANSLATION_OPENAI_MODEL", "TRANSLATION_OPENAI_API_KEY"];
 /** 翻译引擎默认值；OpenAI 翻译未配置齐全时回落此值，与后端 none（关闭）语义一致。 */
 const defaultTranslationEngine = "none";
+
+/** 扫描目录配置键；字段定义、解析与序列化共用同一处定义，避免键名漂移。 */
+const scanPathsKey = "PAN115_SCAN_PATHS";
 
 /** 分组、顺序与字段命名对齐对标站的 /config。 */
 const groups: SettingGroup[] = [
@@ -429,6 +433,12 @@ const groups: SettingGroup[] = [
         kind: "text",
         placeholder: "115 目录 ID，留空保存到根目录",
         description: "填写 115 网盘目录 ID；留空表示离线下载保存到根目录",
+      },
+      {
+        key: scanPathsKey,
+        label: "扫描目录",
+        kind: "paths",
+        description: "选择需要扫描的 115 网盘目录，可添加多个；留空表示不扫描任何目录。",
       },
     ],
   },
@@ -859,6 +869,25 @@ function serializeFilterDraft(filter: FilterDraft, unknown: Record<string, unkno
   return isEmpty ? "" : JSON.stringify({ ...unknown, ...filter });
 }
 
+/** 解析扫描目录配置；非法内容按空数组处理，坏数据不阻塞整个设置页渲染。 */
+function parseScanPaths(raw?: string): Pan115ScanPath[] {
+  if (!raw) return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(parsed)) return [];
+  return parsed.flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const { id, path } = item as { id?: unknown; path?: unknown };
+    if (typeof id !== "string" || typeof path !== "string") return [];
+    if (id.trim() === "" || path.trim() === "") return [];
+    return [{ id, path }];
+  });
+}
+
 /**
  * 系统设置页。
  *
@@ -925,6 +954,7 @@ export function SettingsPage() {
     {},
   );
   const [sortOrder, setSortOrder] = useState<string[]>([]);
+  const [scanPaths, setScanPaths] = useState<Pan115ScanPath[]>([]);
   const [savedSnapshot, setSavedSnapshot] = useState<SettingsUpdate>({
     values: {},
   });
@@ -953,7 +983,7 @@ export function SettingsPage() {
     const next: Draft = {};
     for (const group of groups) {
       for (const field of groupFields(group)) {
-        if (field.kind === "json" || field.kind === "sort") continue;
+        if (field.kind === "json" || field.kind === "sort" || field.kind === "paths") continue;
         const raw = Object.prototype.hasOwnProperty.call(values, field.key)
           ? values[field.key]
           : field.key === "LOG_RETENTION_DAYS"
@@ -973,6 +1003,7 @@ export function SettingsPage() {
     setFilter(parsed.draft);
     setFilterUnknown(parsed.unknown);
     setSortOrder(parseSortOrder(values.DEFAULT_SORT));
+    setScanPaths(parseScanPaths(values[scanPathsKey]));
   };
 
   useEffect(() => {
@@ -1034,7 +1065,7 @@ export function SettingsPage() {
       .find((item) => item.key === key);
     if (field?.kind === "bool") return "false";
     if (key === "LOG_RETENTION_DAYS") return "30";
-    if (field?.kind === "sort" || field?.kind === "json") return "";
+    if (field?.kind === "sort" || field?.kind === "json" || field?.kind === "paths") return "";
     return "";
   };
 
@@ -1048,6 +1079,10 @@ export function SettingsPage() {
         }
         if (field.kind === "sort") {
           payload[field.key] = sortOrder.join(",");
+          continue;
+        }
+        if (field.kind === "paths") {
+          payload[field.key] = scanPaths.length === 0 ? "" : JSON.stringify(scanPaths);
           continue;
         }
         const value = draft[field.key];
@@ -1134,6 +1169,15 @@ export function SettingsPage() {
           <span className="settings-field-description">
             <span>{field.description}</span>
           </span>
+        </div>
+      );
+    }
+    if (field.kind === "paths") {
+      return (
+        <div className="settings-field settings-field-wide" key={field.key}>
+          <span className="settings-field-label">{field.label}</span>
+          <Pan115ScanPathsField value={scanPaths} onChange={setScanPaths} />
+          {field.description ? <span className="settings-field-description">{field.description}</span> : null}
         </div>
       );
     }

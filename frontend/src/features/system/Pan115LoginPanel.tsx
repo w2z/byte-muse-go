@@ -1,4 +1,4 @@
-import { Button } from "@arco-design/web-react";
+import { Button, Modal } from "@arco-design/web-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { apiRequest } from "../../shared/api/client";
@@ -149,28 +149,6 @@ export function Pan115LoginPanel() {
             </Button>
           </div>
         </div>
-      ) : session ? (
-        <div className="settings-pan115-block">
-          <img className="settings-pan115-qrcode" src={session.qr_code} alt="115 登录二维码" />
-          <span className="settings-field-description">
-            {retrying ? "网络异常，正在重试…" : statusText[loginStatus ?? "waiting"]}
-            {failed ? "，请重新获取二维码" : ""}
-          </span>
-          <div className="settings-pan115-actions">
-            {failed ? (
-              <Button
-                type="primary"
-                loading={start.isPending}
-                disabled={start.isPending}
-                onClick={() => { setSession(null); start.mutate(); }}
-              >
-                重新获取二维码
-              </Button>
-            ) : (
-              <Button type="secondary" onClick={() => setSession(null)}>取消</Button>
-            )}
-          </div>
-        </div>
       ) : (
         <div className="settings-pan115-block">
           <div className="settings-pan115-actions">
@@ -181,7 +159,37 @@ export function Pan115LoginPanel() {
           <span className="settings-field-description">使用 115 手机客户端扫码授权，令牌加密保存在本地，可随时解除绑定。</span>
         </div>
       )}
-      {status.isError ? <span className="settings-field-description">查询扫码状态失败：{status.error.message}</span> : null}
+      {/* 二维码用弹窗展示：内联展开会把设置表单撑高，且关闭弹窗即作废当前扫码会话。 */}
+      <Modal
+        title="115 扫码登录"
+        visible={session !== null}
+        footer={null}
+        unmountOnExit
+        maskClosable={false}
+        onCancel={() => setSession(null)}
+      >
+        {session ? (
+          <div className="settings-pan115-block settings-pan115-login">
+            <img className="settings-pan115-qrcode" src={session.qr_code} alt="115 登录二维码" />
+            <span className="settings-field-description">
+              {retrying ? "网络异常，正在重试…" : statusText[loginStatus ?? "waiting"]}
+              {failed ? "，请重新获取二维码" : ""}
+            </span>
+            {status.isError ? (
+              <span className="settings-field-description">查询扫码状态失败：{status.error.message}</span>
+            ) : null}
+            <div className="settings-pan115-actions">
+              {failed ? (
+                <Button type="primary" loading={start.isPending} disabled={start.isPending} onClick={() => start.mutate()}>
+                  重新获取二维码
+                </Button>
+              ) : (
+                <Button type="secondary" onClick={() => setSession(null)}>取消</Button>
+              )}
+            </div>
+          </div>
+        ) : null}
+      </Modal>
     </div>
   );
 }

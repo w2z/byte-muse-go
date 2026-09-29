@@ -9,7 +9,7 @@ import (
 	"bytemuse/backend/internal/ports"
 )
 
-// TestPan115AccountMigrationCreatesTableAndSetting 验证空库初始化会建绑定表并登记空的离线保存目录。
+// TestPan115AccountMigrationCreatesTableAndSetting 验证空库初始化会建绑定表并登记空的离线保存目录与扫描目录。
 // 迁移只新增空表与空配置，不写入任何账号数据；令牌列保存应用层密文，表本身不解释内容。
 func TestPan115AccountMigrationCreatesTableAndSetting(t *testing.T) {
 	ctx := context.Background()
@@ -30,6 +30,12 @@ func TestPan115AccountMigrationCreatesTableAndSetting(t *testing.T) {
 	}
 	if value != "" {
 		t.Fatalf("离线保存目录默认值 = %q，应为空", value)
+	}
+	if err = store.SQLDB().QueryRowContext(ctx, "SELECT setting_value FROM app_settings WHERE setting_key = ?", "PAN115_SCAN_PATHS").Scan(&value); err != nil {
+		t.Fatal(err)
+	}
+	if value != "" {
+		t.Fatalf("扫描目录默认值 = %q，应为空", value)
 	}
 }
 
@@ -105,7 +111,7 @@ func TestPan115AccountMigrationUpgrade(t *testing.T) {
 		t.Fatalf("历史配置被改写: %q err=%v", value, err)
 	}
 	var version int64
-	if err = store.SQLDB().QueryRowContext(ctx, "SELECT max(version) FROM schema_migrations").Scan(&version); err != nil || version != 26 {
+	if err = store.SQLDB().QueryRowContext(ctx, "SELECT max(version) FROM schema_migrations").Scan(&version); err != nil || version != 27 {
 		t.Fatalf("最大迁移版本=%d err=%v", version, err)
 	}
 	if _, found, e := NewPan115AccountRepository(store.SQLDB(), DialectSQLite).Load(ctx); e != nil || found {

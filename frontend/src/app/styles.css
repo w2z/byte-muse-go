@@ -587,6 +587,22 @@ button.code-card-still-cell:hover img { opacity: .85; }
 .settings-pan115-account { display: flex; min-width: 0; align-items: center; gap: 12px; }
 .settings-pan115-avatar { width: 44px; height: 44px; flex: 0 0 auto; border-radius: 50%; object-fit: cover; }
 .settings-pan115-account-text { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
+.settings-pan115-login { align-items: center; }
+.settings-pan115-login .settings-field-description { align-items: center; text-align: center; }
+/* 115 扫描目录：每行只读输入框占满剩余宽度，选择/删除按钮保持原尺寸不被压缩。 */
+.settings-pan115-paths { display: flex; min-width: 0; flex-direction: column; gap: 8px; }
+.settings-pan115-path-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; margin: 0; padding: 0; list-style: none; }
+.settings-pan115-path-row { display: flex; min-width: 0; align-items: center; gap: 8px; }
+.settings-pan115-path-row > .arco-input { flex: 1 1 auto; min-width: 0; }
+.settings-pan115-path-row > .arco-btn { flex: 0 0 auto; }
+/* 目录选择弹窗：面包屑、子目录列表与分页/确认两行，纵向沿用字段间的 12px 间距。 */
+.settings-pan115-picker { display: flex; min-width: 0; flex-direction: column; gap: 12px; }
+.settings-pan115-breadcrumbs { display: flex; min-width: 0; flex-wrap: wrap; align-items: center; gap: 2px; }
+.settings-pan115-breadcrumb-separator { color: var(--muted); }
+.settings-pan115-picker-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: 2px; max-height: 260px; margin: 0; padding: 0; overflow-y: auto; list-style: none; }
+.settings-pan115-picker-item { justify-content: flex-start; }
+.settings-pan115-picker-state { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; line-height: 20px; }
+.settings-pan115-picker-footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
 /* 底部操作栏：sticky 贴在滚动容器底部（页面撑满可视高度时即视口底部）。
    横向用负外边距抵消内容区的 20px 左右内边距，拉通铺满整个内容区宽度 ——
    展开 40px 后正好等于内容区可视宽度（clientWidth 已扣掉纵向滚动条），不会撑出横向滚动。

@@ -254,6 +254,42 @@ func TestSettingsPTSiteCredentialsAndRetiredRousiKey(t *testing.T) {
 	}
 }
 
+// TestSettingsPan115ScanPaths 校验 115 扫描目录只接受 {id,path} 数组：拒绝对象、空元素与重复目录，
+// 并确认合法值原样回读。
+func TestSettingsPan115ScanPaths(t *testing.T) {
+	service, err := NewSettingsService(&settingsMemoryRepository{}, "sqlite", "a-development-secret-with-at-least-32-bytes")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	const saved = `[{"id":"341789","path":"/影片"},{"id":"341790","path":"/影片/4K"}]`
+	settings, err := service.Update(ctx, map[string]string{"PAN115_SCAN_PATHS": saved})
+	if err != nil {
+		t.Fatalf("save scan paths: %v", err)
+	}
+	if settings.Values["PAN115_SCAN_PATHS"] != saved {
+		t.Fatalf("scan paths did not round trip: %q", settings.Values["PAN115_SCAN_PATHS"])
+	}
+	for _, valid := range []string{"", "[]", `[{"id":"341789","path":"/影片"}]`} {
+		if _, err := service.Update(ctx, map[string]string{"PAN115_SCAN_PATHS": valid}); err != nil {
+			t.Fatalf("should accept %q: %v", valid, err)
+		}
+	}
+	for _, invalid := range []string{
+		"{}",
+		`{"id":"341789","path":"/影片"}`,
+		"null",
+		"[1,2]",
+		`[{"id":"","path":"/影片"}]`,
+		`[{"id":"341789","path":""}]`,
+		`[{"id":"341789","path":"/影片"},{"id":"341789","path":"/影片/2"}]`,
+	} {
+		if _, err := service.Update(ctx, map[string]string{"PAN115_SCAN_PATHS": invalid}); !errors.Is(err, ErrInvalidSetting) {
+			t.Fatalf("should reject %q, got %v", invalid, err)
+		}
+	}
+}
+
 // settingsMemoryRepository 只在测试中保留加密记录，用于核验保存和读取的真实业务边界。
 type settingsMemoryRepository struct{ items []ports.StoredSetting }
 

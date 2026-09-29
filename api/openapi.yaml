@@ -1730,7 +1730,10 @@ components:
             三站支持密钥分页搜索和种子下载；密钥与 Cookie 独立保存，切换模式不清除另一种凭据，密钥模式不回退 Cookie。
             PTTime 仅使用 PTT_COOKIE 搜索和下载，不使用受限 RSS。PTT_AUTH_TYPE、PTT_PASSKEY、PTT_UID 为兼容历史配置保留，运行时不读取，设置页不再提供。
             MAIN_SITE 取 ALL / 馒头 / BT / PTT / NicePT / PTFans / RousiPro；PTFANS_COOKIE 用于 PTFans 9KG 专区，ROUSIPRO_COOKIE 用于 RousiPro 9KG 目录，均为加密保存的管理员凭据，空值表示未配置；旧 ROUSI_COOKIE 不再显示或接受写入。IMAGE_MODE 取 INVISIBLE / VISIBLE / BLUR；PT_DEFAULT_DOWNLOADER 取 qbittorrent / transmission；BT_DEFAULT_DOWNLOADER 取 qbittorrent / transmission / aria2 / thunder / pan115（不含 CloudDrive2）；BYPASS_ENGINE 取 cloudflare_bypass_for_scraping / flaresolverr / scrapling，空值表示关闭；BYPASS_URL 为所选增强服务地址；LOG_RETENTION_DAYS 为日志保留天数，默认 30，0 或空值表示不自动删除；TRANSLATION_ENGINE 取 none / openai / google / baidu / deeplx；DEEPLX_URL 为 DeepLX 服务地址，可只填服务地址（例如 http://127.0.0.1:1188）或直接填 /translate 完整地址；TRANSLATION_PROMPT 仅在 OpenAI 翻译时作为翻译 system prompt，留空使用内置提示词；翻译的 OpenAI 兼容配置独立保存在 TRANSLATION_OPENAI_URL、TRANSLATION_OPENAI_MODEL、TRANSLATION_OPENAI_API_KEY，与对话 Agent 的配置互不影响，三者任一为空时 OpenAI 翻译引擎视为未配置，设置页禁用 OpenAI 选项并把已选引擎回落为 none；AGENT_ENABLE 为 true 时启用 Telegram 与企业微信的对话 Agent，默认 false；Agent 使用 OPENAI_URL、OPENAI_MODEL、OPENAI_API_KEY，三者任一为空时对话入口返回未启用提示，斜杠命令与番号订阅不受影响；AGENT_SYSTEM_PROMPT 仅用于渠道 Agent 对话，留空使用内置提示词。
-            PAN115_SAVE_PATH 为 115 网盘离线下载的保存目录 ID，空值表示保存到根目录；115 账号、令牌与离线任务由 /pan115 接口管理，令牌加密落库，不通过设置接口读写。
+            PAN115_SAVE_PATH 为 115 网盘离线下载的保存目录 ID，空值表示保存到根目录；
+            PAN115_SCAN_PATHS 为 115 网盘扫描目录的 JSON 数组字符串，元素形如 {"id":"目录 ID","path":"展示用绝对路径"}，
+            ID 与路径都不可为空、ID 不可重复，空字符串或 [] 表示不扫描任何目录；目录 ID 由 GET /pan115/files 逐级读取，前端以只读输入框加目录选择弹窗维护，避免手填无效 ID。
+            115 账号、令牌与离线任务由 /pan115 接口管理，令牌加密落库，不通过设置接口读写。
             GOOGLE_API_KEY 为 Google Cloud Translation API 密钥，留空时 Google 引擎改用免密钥接口（无需申请，按来源 IP 限流）；填写后走官方接口，配额与计费按 key 所属项目结算。
             BAIDU_APP_ID 与 BAIDU_API_KEY 为百度翻译开放平台的 APPID 与开发者密钥（密钥），请求按 MD5(appid+q+salt+密钥) 计算 sign 签名，需先在开放平台开通文本翻译服务，二者任一为空时百度引擎视为未配置。
             微信与 Telegram 各自独立的消息通知开关：前缀分别为 WECHAT_NOTIFY_ 与 TELEGRAM_NOTIFY_，

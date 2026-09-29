@@ -487,6 +487,8 @@ describe("网盘设置", () => {
     await user.click(await screen.findByRole("button", { name: "扫码登录" }));
 
     expect(await screen.findByAltText("115 登录二维码")).toHaveAttribute("src", "data:image/png;base64,AAA");
+    // 二维码改为弹窗展示，不再内联展开在标题下方。
+    expect(screen.getByText("115 扫码登录")).toBeInTheDocument();
     // 授权成功后结束轮询、刷新账号快照并展示绑定信息。
     expect(await screen.findByText("115 用户")).toBeInTheDocument();
     expect(screen.queryByAltText("115 登录二维码")).not.toBeInTheDocument();
@@ -516,5 +518,73 @@ describe("网盘设置", () => {
     expect(await screen.findByText("二维码已过期，请重新获取二维码")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "重新获取二维码" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "取消" })).not.toBeInTheDocument();
+  });
+
+  it("扫描目录可添加多个 115 目录，重复目录不可再添加，保存为 JSON 数组", async () => {
+    const user = userEvent.setup();
+    const values: Record<string, string> = {};
+    const directories: Record<string, { id: string; name: string }[]> = {
+      "0": [{ id: "10", name: "电影" }],
+      "10": [{ id: "11", name: "日韩" }],
+    };
+    vi.mocked(apiRequest).mockImplementation(async (path, options) => {
+      if (path === "/system/settings" && options?.method === "PUT") {
+        const body = JSON.parse(String(options.body)) as { values: Record<string, string> };
+        Object.assign(values, body.values);
+        return { database_driver: "sqlite", values: { ...body.values }, configured: {} };
+      }
+      if (path === "/system/settings") return { database_driver: "sqlite", values: {}, configured: {} };
+      if (path === "/pan115/account") return { linked: true, account: boundAccount };
+      if (path.startsWith("/pan115/files")) {
+        const directoryID = new URL(path, "http://localhost").searchParams.get("directory_id") ?? "0";
+        const crumbs = directoryID === "0"
+          ? [{ id: "0", name: "" }]
+          : [{ id: "0", name: "" }, { id: "10", name: "电影" }];
+        const entries = directories[directoryID] ?? [];
+        return {
+          directory_id: directoryID,
+          path: crumbs,
+          files: entries.map((item) => ({
+            id: item.id, parent_id: directoryID, name: item.name, is_directory: true, size: 0, pick_code: "",
+          })),
+          total: entries.length,
+          has_more: false,
+        };
+      }
+      throw new Error(`未处理的请求 ${path}`);
+    });
+
+    renderSettings();
+    await user.click(await screen.findByRole("tab", { name: "网盘" }));
+    expect(screen.getByText("尚未添加扫描目录")).toBeInTheDocument();
+
+    // 第一次：从根目录进入「电影」并选择当前目录。
+    await user.click(screen.getByRole("button", { name: "添加目录" }));
+    await user.click(await screen.findByRole("button", { name: "电影" }));
+    expect(await screen.findByText("当前目录：/电影")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "选择当前目录" }));
+    expect(await screen.findByLabelText("扫描目录 1")).toHaveValue("/电影");
+
+    // 重复目录在弹窗内直接标记为已添加，不能再次写入。
+    await user.click(screen.getByRole("button", { name: "添加目录" }));
+    await user.click(await screen.findByRole("button", { name: "电影" }));
+    expect(await screen.findByRole("button", { name: "该目录已添加" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "取消" }));
+
+    // 第二次：追加根目录，共两个地址。
+    await user.click(screen.getByRole("button", { name: "添加目录" }));
+    expect(await screen.findByText("当前目录：/")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "选择当前目录" }));
+    expect(await screen.findByLabelText("扫描目录 2")).toHaveValue("/");
+
+    await user.click(screen.getByRole("button", { name: "保存设置" }));
+    await waitFor(() => expect(values.PAN115_SCAN_PATHS).toBe(JSON.stringify([
+      { id: "10", path: "/电影" },
+      { id: "0", path: "/" },
+    ])));
+
+    // 删除第二个目录后只剩一个地址。
+    await user.click(screen.getAllByRole("button", { name: "删除" })[1]);
+    expect(screen.queryByLabelText("扫描目录 2")).not.toBeInTheDocument();
   });
 });
