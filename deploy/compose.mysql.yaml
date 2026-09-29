@@ -29,7 +29,7 @@ services:
   # 内置 MySQL：与应用同一 bridge 网络，服务名 mysql 即 DSN 主机名，不对宿主机发布端口。
   mysql:
     image: mysql:8.4
-    container_name: byte-muse-mysql
+    container_name: mysql_byte_muse_go
     restart: always
     networks:
       - bridge

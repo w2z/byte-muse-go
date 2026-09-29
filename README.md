@@ -95,7 +95,7 @@ services:
   # MySQL 部署时启用（deploy/compose.mysql.yaml 中已启用）：
   # mysql:
   #   image: mysql:8.4
-  #   container_name: byte-muse-mysql
+  #   container_name: mysql_byte_muse_go
   #   restart: always
   #   networks:
   #     - bridge

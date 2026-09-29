@@ -90,6 +90,9 @@ foreach ($composeFile in $composeFiles) {
         if ($text -notmatch '(?m)^\s+mysql:\s*$' -or $text -notmatch '@tcp\(mysql:3306\)') {
             throw "$($composeFile.Name) 必须包含内置 mysql 服务，且 DATABASE_DSN 指向 tcp(mysql:3306)"
         }
+        if ($text -notmatch '(?m)^\s+container_name:\s*mysql_byte_muse_go\s*$') {
+            throw "$($composeFile.Name) 必须固定数据库容器名为 mysql_byte_muse_go"
+        }
     }
 }
 
