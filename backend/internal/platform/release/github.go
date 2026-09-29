@@ -18,8 +18,10 @@ import (
 const (
 	// versionFilePath 是构建流程回写的版本记录路径，固定位于仓库根目录。
 	versionFilePath = "version.json"
-	// defaultEndpoint 是 GitHub 公开 API 基址。
-	defaultEndpoint = "https://api.github.com"
+	// defaultEndpoint 是 GitHub 原始文件服务基址：直接返回文件正文，不占用 API 额度。
+	defaultEndpoint = "https://raw.githubusercontent.com"
+	// defaultBranchRef 使用 HEAD 跟随仓库默认分支，避免把分支名写死在代码里。
+	defaultBranchRef = "HEAD"
 	// maxResponseBytes 限制响应体积，避免异常响应占用内存。
 	maxResponseBytes = 1 << 20
 	// requestTimeout 限制单次检查更新的耗时，避免拖住调用方请求。
@@ -29,7 +31,7 @@ const (
 // repoPattern 限定 owner/name 形式，防止把可配置文本拼进请求路径。
 var repoPattern = regexp.MustCompile(`^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$`)
 
-// GitHubSource 通过 GitHub Contents API 读取 version.json 的原始内容。
+// GitHubSource 通过 raw.githubusercontent.com 读取 version.json 的原始内容。
 // 只读、匿名：公开仓库按未认证额度访问，服务端缓存负责压低请求量，不携带任何凭据。
 type GitHubSource struct {
 	repo     string
@@ -52,13 +54,12 @@ func (s *GitHubSource) Latest(ctx context.Context) (ports.ReleaseInfo, error) {
 	}
 	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
 	defer cancel()
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, s.endpoint+"/repos/"+s.repo+"/contents/"+versionFilePath, nil)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, s.endpoint+"/"+s.repo+"/"+defaultBranchRef+"/"+versionFilePath, nil)
 	if err != nil {
 		return ports.ReleaseInfo{}, errors.New("检查更新的请求构建失败")
 	}
-	// Accept: raw 直接返回文件内容，避免再解析 Contents API 的 base64 包装。
-	request.Header.Set("Accept", "application/vnd.github.raw+json")
-	request.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	// 原始文件服务按分支路径返回正文，不需要 Contents API 的 base64 包装。
+	request.Header.Set("Accept", "text/plain")
 	request.Header.Set("User-Agent", "bytemuse")
 	// 不跟随重定向：版本记录只来自固定仓库路径，避免被重定向到其他主机。
 	bounded := *s.client
@@ -77,7 +78,7 @@ func (s *GitHubSource) Latest(ctx context.Context) (ports.ReleaseInfo, error) {
 	if response.StatusCode != http.StatusOK {
 		switch response.StatusCode {
 		case http.StatusNotFound:
-			return ports.ReleaseInfo{}, errors.New("发布仓库中未找到 version.json")
+			return ports.ReleaseInfo{}, errors.New("发布仓库中未找到 version.json（仓库不可见或文件不存在）")
 		case http.StatusForbidden, http.StatusTooManyRequests:
 			return ports.ReleaseInfo{}, fmt.Errorf("GitHub 访问受限（HTTP %d），请稍后重试", response.StatusCode)
 		default:

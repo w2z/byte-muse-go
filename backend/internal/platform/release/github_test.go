@@ -22,10 +22,10 @@ func newTestSource(t *testing.T, handler http.HandlerFunc) *GitHubSource {
 func TestGitHubSourceLatest(t *testing.T) {
 	const body = `{"version":"0.1.22","commit":"abc123","built_at":"2026-09-29T12:00:00Z","source":"https://github.com/w2z/byte-muse-go"}`
 	source := newTestSource(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/repos/w2z/byte-muse-go/contents/version.json" {
+		if r.URL.Path != "/w2z/byte-muse-go/HEAD/version.json" {
 			t.Errorf("请求路径=%s", r.URL.Path)
 		}
-		if r.Header.Get("Accept") != "application/vnd.github.raw+json" {
+		if r.Header.Get("Accept") != "text/plain" {
 			t.Errorf("Accept=%s", r.Header.Get("Accept"))
 		}
 		if r.Header.Get("User-Agent") == "" {
@@ -54,6 +54,7 @@ func TestGitHubSourceFailures(t *testing.T) {
 		{name: "限流", status: http.StatusForbidden, body: `{"message":"rate limit exceeded for 1.2.3.4"}`, wantPhrase: "GitHub 访问受限"},
 		{name: "限流429", status: http.StatusTooManyRequests, body: `{}`, wantPhrase: "GitHub 访问受限"},
 		{name: "服务端错误", status: http.StatusBadGateway, body: `upstream-secret-body`, wantPhrase: "GitHub 请求失败"},
+		{name: "重定向不跟随", status: http.StatusFound, body: ``, wantPhrase: "GitHub 请求失败"},
 		{name: "非JSON", status: http.StatusOK, body: `<html>secret</html>`, wantPhrase: "格式无效"},
 		{name: "缺少版本号", status: http.StatusOK, body: `{"commit":"abc"}`, wantPhrase: "缺少版本号"},
 	} {
