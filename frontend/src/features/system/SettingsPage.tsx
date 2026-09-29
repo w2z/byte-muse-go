@@ -154,7 +154,7 @@ const translationOpenAIKeys = ["TRANSLATION_OPENAI_URL", "TRANSLATION_OPENAI_MOD
 /** 翻译引擎默认值；OpenAI 翻译未配置齐全时回落此值，与后端 none（关闭）语义一致。 */
 const defaultTranslationEngine = "none";
 
-/** 分组、顺序与字段命名对齐对标站 对标站/config。 */
+/** 分组、顺序与字段命名对齐对标站的 /config。 */
 const groups: SettingGroup[] = [
   {
     code: "downloader-defaults",
@@ -838,7 +838,7 @@ function serializeFilterDraft(filter: FilterDraft, unknown: Record<string, unkno
 /**
  * 系统设置页。
  *
- * 字段命名与分组内容对齐对标站 对标站 的 /config；入口按站点、播放器、消息渠道和
+ * 字段命名与分组内容对齐对标站的 /config；入口按站点、播放器、消息渠道和
  * 下载器四类显示为一级标签，下方连续展示当前分类的全部分组。
  * 每个分类统一保存；敏感值以普通文本框回显并随当前分类一起提交；布尔、数字、枚举、JSON 与排序标签
  * 的取值由后端 writableSettings 权威校验。

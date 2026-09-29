@@ -13,7 +13,7 @@ import { PageState } from "../../shared/ui/PageState";
 /**
  * 演员列表。
  *
- * 布局对齐对标站 对标站 的演员页：标题一行 + 响应式卡片网格
+ * 布局对齐对标站的演员页：标题一行 + 响应式卡片网格
  * （grid-cols-1 / sm:2 / md:3 / lg:4，1280px 封顶 4 列），列表页不使用表格；
  * 卡片规格由公共组件 ActorCard 提供。
  *

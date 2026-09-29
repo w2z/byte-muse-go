@@ -1,5 +1,5 @@
 /* 榜单页专有样式：榜单筛选条的分段按钮组。
-   对标站 对标站 的榜单页用 flex items-center border rounded-md overflow-hidden 包住
+   对标站的榜单页用 flex items-center border rounded-md overflow-hidden 包住
    一组 ghost 按钮（日榜 / 周榜 / 月榜 与 1~5），选中项用浅灰底标识；这里用同一套规格，
    颜色全部走公共 token，深浅色主题由 body[arco-theme="dark"] 自动接管。 */
 .rank-filter {

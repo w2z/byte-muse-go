@@ -59,7 +59,7 @@ const RANK_SOURCES: RankSource[] = [
 /**
  * 榜单页。
  *
- * 布局依据对标站 对标站 的榜单页编译产物 assets/Rank-BMeKi9W2.js：
+ * 布局依据对标站的榜单页编译产物 assets/Rank-BMeKi9W2.js：
  * 页面标题一行，标题下方是一条筛选条（榜单来源 + 榜单周期），再往下是响应式番号卡片网格，
  * 列数 grid-cols-1 / sm:2 / md:3 / lg:5，即 MediaCardGrid 的 columns="wide"（1024px 提前到 5 列），
  * 名次由页面通过 renderMeta 注入，页面不自行实现卡片样式与分页条。
