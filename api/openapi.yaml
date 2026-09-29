@@ -221,14 +221,14 @@ paths:
         - $ref: '#/components/parameters/PageSize'
         - name: subscription
           in: query
-          description: 演员列表页签；active 为已订阅，hot 为热门演员，all/none 保留兼容
+          description: 演员列表页签；all 为系统全部演员（含 gfriends 目录），active 为已订阅，hot 仅为热门演员榜，none 为未订阅
           schema:
             type: string
             enum: [all, active, none, hot]
             default: active
         - name: keywords
           in: query
-          description: 按演员名称进行包含匹配；为空时不筛选
+          description: 按演员名称或 gfriends 别名进行包含匹配；为空时不筛选
           schema:
             type: string
             maxLength: 100
@@ -481,7 +481,7 @@ paths:
     get:
       operationId: listScheduledTasks
       summary: 查询定时任务
-      description: 返回调度器中已配置的后台定时任务、原始 Cron 表达式、最近执行时间和当前执行状态；该接口不是下载任务列表。
+      description: 返回调度器中已配置的后台定时任务、原始 Cron 表达式、最近执行时间和当前执行状态；该接口不是下载任务列表。同步热门演员按 ACTOR_SCHEDULE_TIME 执行热门演员月榜并继续订阅追新；同步演员目录固定每天 04:00 执行 gfriends 目录导入。演员目录任务失败不会清空已有演员或热门榜。
       parameters:
         - name: all
           in: query

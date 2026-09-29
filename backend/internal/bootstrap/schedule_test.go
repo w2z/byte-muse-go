@@ -25,8 +25,8 @@ func TestScheduleSpecsAlwaysIncludesLogCleanup(t *testing.T) {
 	if specs["订阅下载"] != "0 22 * * *" {
 		t.Fatalf("设置值应去除首尾空白: %q", specs["订阅下载"])
 	}
-	if len(specs) != 4 {
-		t.Fatalf("期望 3 个可配置任务加 1 个固定任务，得到 %d: %#v", len(specs), specs)
+	if len(specs) != 5 || specs["同步热门演员"] != "0 21 * * *" || specs["同步演员目录"] != actorCatalogSpec {
+		t.Fatalf("演员目录应独立注册，追新与热门榜共用任务，得到 %d: %#v", len(specs), specs)
 	}
 }
 
@@ -40,6 +40,7 @@ func TestScheduleReconcileKeepsLogCleanup(t *testing.T) {
 		}
 	}
 	jobs = append(jobs, scheduler.Job{Name: logCleanupTaskName, Spec: logCleanupSpec, Run: func(context.Context) scheduler.JobResult { return nil }})
+	jobs = append(jobs, scheduler.Job{Name: "同步演员目录", Run: func(context.Context) scheduler.JobResult { return nil }})
 	manager, err := scheduler.New(jobs)
 	if err != nil {
 		t.Fatal(err)

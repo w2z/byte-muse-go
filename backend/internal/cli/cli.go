@@ -21,16 +21,19 @@ type Commands struct {
 	TranslationCleanup func(context.Context) error
 	TranslationFill    func(context.Context, int) error
 	TagNormalize       func(context.Context) error
+	ActorSync          func(context.Context, string) error
 }
 
 // Run validates args, invokes one command, writes operator-facing output, and returns a process exit code.
 func Run(ctx context.Context, args []string, output io.Writer, commands Commands) int {
 	usage := func() int {
-		fmt.Fprintln(output, "用法: bytemuse serve | migrate status | migrate up | migrate legacy-catalog <旧版数据库路径> | migrate legacy-actors <旧版数据库路径> | migrate legacy-ranks <旧版数据库路径> | migrate video-types | migrate translation-cleanup | migrate translation-fill <数量> | migrate tag-normalize | doctor")
+		fmt.Fprintln(output, "用法: bytemuse serve | sync-actors gfriends|hot | migrate status | migrate up | migrate legacy-catalog <旧版数据库路径> | migrate legacy-actors <旧版数据库路径> | migrate legacy-ranks <旧版数据库路径> | migrate video-types | migrate translation-cleanup | migrate translation-fill <数量> | migrate tag-normalize | doctor")
 		return 2
 	}
 	var err error
 	switch {
+	case len(args) == 2 && args[0] == "sync-actors" && (args[1] == "gfriends" || args[1] == "hot") && commands.ActorSync != nil:
+		err = commands.ActorSync(ctx, args[1])
 	case len(args) == 1 && args[0] == "serve" && commands.Serve != nil:
 		err = commands.Serve(ctx)
 	case len(args) == 2 && args[0] == "migrate" && args[1] == "status" && commands.MigrationStatus != nil:

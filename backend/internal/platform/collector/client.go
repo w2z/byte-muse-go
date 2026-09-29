@@ -89,6 +89,8 @@ func allowedURL(u *url.URL) bool {
 		return false
 	}
 	switch u.Host {
+	case "raw.githubusercontent.com":
+		return u.Path == "/gfriends/gfriends/master/Filetree.json"
 	case "www.avbase.net", "javdb.com", "www.javbus.com", "netflav.com", "www.javlibrary.com", "jable.tv", "supjav.com":
 		return true
 	}

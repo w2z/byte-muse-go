@@ -470,3 +470,10 @@ ByteMuse 是自托管的 PT 订阅与媒体库编排工具。旧版能力包括�
 - 静态检查：`gofmt -l internal cmd` 无输出；`go build ./...`、`go vet ./...` 无输出；`go test -count=1 ./...` 全部 ok（新增 TestSendCardAppliesSpoilerSetting）；前端 `npm run check:standards` 11 项、`npm test` 82 项、`typecheck` 与 `build` 全部通过。
 - 浏览器验收（2026-09-29，Chrome 实机 http://localhost:5173/logs 与 /settings）：日志页首屏显示「订阅已保存，番号：SSIS-082，新建：是」「Telegram 图文消息已发送，消息类型：推送通知，防剧透：是」「消息通知已发送，渠道：tg，事件：subscribe，带封面：是」「消息通知已跳过，渠道：wx，事件：subscribe，原因：事件开关未启用」「订阅已取消，番号：SSIS-082」；设置页「消息渠道 → Telegram」分组显示「图片防剧透」且处于勾选状态。
 - 未验证与剩余风险：番号卡片的真机入站路径未走通——本机无法向机器人发送消息（getUpdates 只能由真实 Telegram 客户端触发），卡片打码由单元测试（断言 has_spoiler）与真机 API 复现（同一请求体）共同覆盖，需用户在 TG 里发一次番号确认；企业微信渠道未配置，微信侧只验证到「跳过原因已入日志」，未验证真实图文消息，`WECHAT_PHOTO` 为空时微信封面推送仍需先补齐企业微信凭据与默认配图；若用户客户端不支持 Telegram 的 spoiler 效果，服务端已无法进一步保证显示层打码。
+#### ACTOR-03：热门演员定时同步与 gfriends 演员目录（2026-09-30）
+
+- 目标：定时更新热门演员，并把 gfriends 官方演员库纳入演员列表；热门页与全部演员页使用不同数据边界。
+- 契约：GET /actors?subscription=all 返回系统全部演员（含 gfriends 导入），subscription=hot 只返回最近一次成功发布的演员榜；名称搜索同时匹配演员名和 gfriends 别名。固定任务「同步演员目录」每天 04:00 执行；「同步热门演员」按 ACTOR_SCHEDULE_TIME 先采集 JavDB 月榜，再继续原有订阅追新。目录导入不触发订阅或下载。
+- 数据变更：迁移 31 新增 actor_aliases(actor_name, alias) 及别名索引；演员资料逐条独立事务保存，已有订阅日期与非空头像不覆盖；热门发布在单事务内替换 rank_entries.rank_type='actors'，源站失败或部分资料失败保留旧榜。
+- 实网证据：gfriends Filetree.json 解析 28,881 个按目标文件名去重演员、9,080 个别名；开发库首次导入后重跑结果为获取 28,881、新增 0、保存 28,881、失败 0；JavDB 演员月榜获取 9 人并成功发布。开发库迁移后演员总数 29,162、别名 9,068，PRAGMA integrity_check=ok。
+- 验证证据：go test -count=1 ./...、go vet ./...、go build ./... 通过；演员前端 Tabs 单测通过。未完成真实浏览器多宽度验收及 Apifox 回读同步；头像仅保存来源 URL，不下载二进制。

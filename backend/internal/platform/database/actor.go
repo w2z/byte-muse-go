@@ -34,8 +34,8 @@ func (r *actorRepository) List(ctx context.Context, request ports.ActorListQuery
 		// 热门演员通过演员榜单快照关联，不额外限制订阅状态。
 	}
 	if keyword := strings.TrimSpace(request.Keywords); keyword != "" {
-		conditions = append(conditions, fmt.Sprintf("UPPER(name) LIKE %s", placeholder(r.dialect, len(args)+1)))
-		args = append(args, "%"+strings.ToUpper(keyword)+"%")
+		conditions = append(conditions, fmt.Sprintf("(UPPER(name) LIKE %s OR EXISTS (SELECT 1 FROM actor_aliases aa WHERE aa.actor_name=name AND UPPER(aa.alias) LIKE %s))", placeholder(r.dialect, len(args)+1), placeholder(r.dialect, len(args)+2)))
+		args = append(args, "%"+strings.ToUpper(keyword)+"%", "%"+strings.ToUpper(keyword)+"%")
 	}
 	where := ""
 	if len(conditions) > 0 {

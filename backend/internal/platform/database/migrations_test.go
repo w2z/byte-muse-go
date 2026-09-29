@@ -1,6 +1,10 @@
 package database
 
-import "testing"
+import (
+	"context"
+	"path/filepath"
+	"testing"
+)
 
 // TestMigrationPlanVersionsAreUniqueAndOrdered 约束每个方言的迁移版本号唯一且严格递增。
 // 迁移执行器按版本号判断是否已应用，重复版本号会被静默跳过并导致结构缺失，
@@ -26,5 +30,27 @@ func TestMigrationPlanVersionsAreUniqueAndOrdered(t *testing.T) {
 			}
 			previous = migration.Version
 		}
+	}
+}
+
+func TestActorAliasesMigration(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, Config{Dialect: DialectSQLite, SQLitePath: filepath.Join(t.TempDir(), "actor-aliases.db")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err = store.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	if err = store.SQLDB().QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='actor_aliases'").Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("actor_aliases table count = %d", n)
+	}
+	if err = store.Migrate(ctx); err != nil {
+		t.Fatal(err)
 	}
 }

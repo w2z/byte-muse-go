@@ -362,6 +362,13 @@ func (c *Commands) Serve(ctx context.Context) error {
 	collectionClient.ConfigureBypass(translationSettings.Values["BYPASS_ENGINE"], translationSettings.Values["BYPASS_URL"], translationSettings.Values["BYPASS_USE_PROXY"] == "true")
 	collectionRepository := database.NewCollectionRepository(store.SQLDB(), database.Dialect(c.config.DatabaseDriver))
 	collectionService := application.NewQueuedCollectionService(collector.NewRegistry(collectionClient), collectionRepository, nil)
+	actorCatalog := application.NewActorCatalogService(database.NewActorCatalogRepository(store.SQLDB(), database.Dialect(c.config.DatabaseDriver)),
+		func(loadCtx context.Context) ([]ports.ActorProfile, error) {
+			return collector.HotActors(loadCtx, collectionClient)
+		},
+		func(loadCtx context.Context) ([]ports.ActorProfile, error) {
+			return collector.GfriendsActors(loadCtx, collectionClient)
+		})
 	downloadRepository := database.NewSubscriptionDownloadRepository(store.SQLDB(), database.Dialect(c.config.DatabaseDriver))
 	downloadService := application.NewSubscriptionDownloadService(downloadRepository, nil, nil, settingsValues(settingsService))
 	downloadService.SetNotifier(notifier)
@@ -405,9 +412,10 @@ func (c *Commands) Serve(ctx context.Context) error {
 			}
 		}
 		if jobs[i].Name == "同步热门演员" {
-			jobs[i].Run = actorFollowJob(actorService, collectionService)
+			jobs[i].Run = actorHotAndFollowJob(actorCatalog, actorService, collectionService)
 		}
 	}
+	jobs = append(jobs, scheduler.Job{Name: "同步演员目录", Spec: actorCatalogSpec, Run: actorCatalogJob(actorCatalog, false)})
 	// 日志清理按服务所在时区每天零点执行，保留天数仍在执行时读取。
 	jobs = append(jobs, scheduler.Job{Name: logCleanupTaskName, Spec: logCleanupSpec, Run: func(jobCtx context.Context) scheduler.JobResult {
 		settings, err := settingsService.Get(jobCtx)
@@ -568,15 +576,15 @@ func (c *Commands) Serve(ctx context.Context) error {
 		Dashboard:             dashboardService,
 		Settings:              settingsService,
 		// 版本检查复用运行版本与发布仓库记录，顶栏标签与 Agent 运行环境提示取同一来源。
-		Version:               application.NewVersionService(c.config.Version, release.NewGitHubSource(c.config.ReleaseRepo, nil)),
-		Pan115:                pan115Service,
-		Scheduler:             manager,
-		Logs:                  logging.Default,
-		Readiness:             store.ReadinessProbe(),
-		WeChatCallback:        newWeChatCallback(settingsService),
-		ChannelMessages:       dispatcher,
-		Strm:                  strmService,
-		StaticDir:             c.config.WebStaticDir,
+		Version:         application.NewVersionService(c.config.Version, release.NewGitHubSource(c.config.ReleaseRepo, nil)),
+		Pan115:          pan115Service,
+		Scheduler:       manager,
+		Logs:            logging.Default,
+		Readiness:       store.ReadinessProbe(),
+		WeChatCallback:  newWeChatCallback(settingsService),
+		ChannelMessages: dispatcher,
+		Strm:            strmService,
+		StaticDir:       c.config.WebStaticDir,
 	})
 	server := &http.Server{Addr: c.config.HTTPAddress, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
 	return runtimeapp.New(server, manager, c.config.ShutdownTimeout).Run(ctx)
@@ -595,6 +603,7 @@ var scheduleDefinitions = []struct{ name, key string }{
 const (
 	logCleanupTaskName = "清理系统日志"
 	logCleanupSpec     = "0 0 * * *"
+	actorCatalogSpec   = "0 4 * * *"
 )
 
 // configuredJobs registers every configurable cron task. Domain executors are added as their
@@ -625,6 +634,7 @@ func scheduleSpecs(values map[string]string) map[string]string {
 		}
 	}
 	specs[logCleanupTaskName] = logCleanupSpec
+	specs["同步演员目录"] = actorCatalogSpec
 	return specs
 }
 

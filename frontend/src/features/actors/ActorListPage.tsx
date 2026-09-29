@@ -17,12 +17,13 @@ import { PageState } from "../../shared/ui/PageState";
  * （grid-cols-1 / sm:2 / md:3 / lg:4，1280px 封顶 4 列），列表页不使用表格；
  * 卡片规格由公共组件 ActorCard 提供。
  *
- * 数据来源 GET /actors；订阅中使用 active，热门使用 hot，关键词统一由服务端过滤。
+ * 数据来源 GET /actors；全部使用 all（含 gfriends 目录），订阅中使用 active，热门仅使用 hot 榜单。
+ * 名称与别名关键词统一由服务端过滤、分页。
  */
 export function ActorListPage() {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
-  const [tab, setTab] = useState<"active" | "hot">("active");
+  const [tab, setTab] = useState<"active" | "hot" | "all">("active");
   const [keywords, setKeywords] = useState("");
   const [searchInput, setSearchInput] = useState("");
   const query = useQuery({
@@ -39,7 +40,7 @@ export function ActorListPage() {
   }
 
   function changeTab(next: string) {
-    if (next !== "active" && next !== "hot") return;
+    if (next !== "active" && next !== "hot" && next !== "all") return;
     setTab(next);
     setPage(1);
     setKeywords("");
@@ -68,6 +69,7 @@ export function ActorListPage() {
       <Tabs style={{ marginBottom: 16 }} activeTab={tab} onChange={changeTab}>
           <Tabs.TabPane key="active" title="订阅中" />
           <Tabs.TabPane key="hot" title="热门" />
+          <Tabs.TabPane key="all" title="全部演员" />
       </Tabs>
       <form className="filter-toolbar actor-filter-toolbar" role="search" onSubmit={(event) => { event.preventDefault(); submitSearch(); }}>
         <Grid.Row gutter={[12, 12]} justify="start" align="center">
@@ -99,7 +101,7 @@ export function ActorListPage() {
         isLoading={query.isLoading}
         error={query.error}
         isEmpty={!query.isLoading && !query.error && items.length === 0}
-        emptyText={keywords ? "未找到匹配的演员" : tab === "active" ? "暂无已订阅演员" : "暂无热门演员"}
+        emptyText={keywords ? "未找到匹配的演员" : tab === "active" ? "暂无已订阅演员" : tab === "hot" ? "暂无热门演员" : "暂无演员"}
         onRetry={() => void query.refetch()}
         emptyExtra={<ListPagination page={page} total={total} pageSize={pageSize} onChange={setPage} onPageSizeChange={changePageSize} plain />}
       >
