@@ -4,8 +4,8 @@ import { useQuery } from "@tanstack/react-query";
 import { apiRequest } from "../../shared/api/client";
 import type { SystemVersion } from "../../shared/api/types";
 
-/** 前端缓存时长与后端一致：后端已按 10 分钟缓存上游结果，前端不重复请求。 */
-const VERSION_STALE_TIME = 10 * 60 * 1000;
+/** 前端缓存时长与后端一致：后端已按 1 小时缓存上游结果，前端不重复请求。 */
+const VERSION_STALE_TIME = 60 * 60 * 1000;
 
 /**
  * 顶栏版本标签：显示当前运行版本，发现新版本时换成提示色并可跳转发布仓库。

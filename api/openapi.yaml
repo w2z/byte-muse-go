@@ -752,7 +752,7 @@ paths:
     get:
       operationId: getSystemVersion
       summary: 读取当前版本与发布仓库版本
-      description: 返回当前运行版本与发布仓库 version.json 记录的版本，供顶栏版本标签显示与升级提示。当前版本来自 BYTEMUSE_VERSION，未注入时为 dev。服务端按 10 分钟缓存成功结果、1 分钟缓存失败结果，避免耗尽 GitHub 未认证额度。远端检查失败不影响本接口：仍返回 200，失败原因放在 check_error。版本按点分数字段比较，dev 或非数字版本不判定升级。
+      description: 返回当前运行版本与发布仓库 version.json 记录的版本，供顶栏版本标签显示与升级提示。当前版本来自 BYTEMUSE_VERSION，未注入时为 dev。服务端按 1 小时缓存成功结果、1 分钟缓存失败结果，避免耗尽 GitHub 未认证额度。远端检查失败不影响本接口：仍返回 200，失败原因放在 check_error。版本按点分数字段比较，dev 或非数字版本不判定升级。
       parameters:
         - {in: cookie, name: bytemuse_session, required: true, schema: {type: string}, description: 登录签发的管理员会话 Cookie，不在示例中填写真实值}
       responses:

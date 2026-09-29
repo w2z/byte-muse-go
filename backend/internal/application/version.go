@@ -15,8 +15,8 @@ import (
 var ErrVersionUnavailable = errors.New("版本检查未就绪")
 
 const (
-	// releaseCacheTTL 是成功结果的服务端缓存时长：刷新页面不会重复访问 GitHub。
-	releaseCacheTTL = 10 * time.Minute
+	// releaseCacheTTL 是成功结果的服务端缓存时长：同一小时内刷新页面不会重复访问 GitHub。
+	releaseCacheTTL = time.Hour
 	// releaseFailureTTL 是失败结果的缓存时长：上游故障时避免每次打开页面都重试。
 	releaseFailureTTL = time.Minute
 )
