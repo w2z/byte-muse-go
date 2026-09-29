@@ -17,9 +17,10 @@ services:
       ADMIN_PASSWORD: 请替换为管理员密码
       SESSION_SECRET: 请替换SESSION_SECRET
     volumes:
-      # 只挂载 /data：镜像的 /app 存放服务二进制与前端产物，挂载覆盖后容器无法启动。
-      # 宿主机目录需允许容器内 UID 65532 写入：chown -R 65532:65532 /path/to/byte-muse/data
+      # 只挂载 /data 与 /strm：镜像的 /app 存放服务二进制与前端产物，挂载覆盖后容器无法启动。
+      # 宿主机目录需允许容器内 UID 65532 写入：chown -R 65532:65532 /path/to/byte-muse/data /path/to/byte-muse/strm
       - /path/to/byte-muse/data:/data
+      - /path/to/byte-muse/strm:/strm
   # 抓取增强服务：设置页把 BYPASS_ENGINE 选为 cloudflare_bypass_for_scraping、BYPASS_URL 填 http://cloudflarebypass:8000
   cloudflarebypass:
     image: ghcr.io/sarperavci/cloudflarebypassforscraping:latest
