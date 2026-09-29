@@ -594,23 +594,28 @@ describe("网盘设置", () => {
     await user.click(await screen.findByRole("tab", { name: "网盘" }));
     expect(screen.getByText("尚未添加扫描目录")).toBeInTheDocument();
 
-    // 第一次：从根目录进入「电影」并选择当前目录。
+    // 第一次：根目录下选中「电影」后确认；未选中任何目录时确认按钮不可点。
     await user.click(screen.getByRole("button", { name: "添加目录" }));
+    const firstConfirm = await screen.findByRole("button", { name: "确认" });
+    expect(firstConfirm).toBeDisabled();
     await user.click(await screen.findByRole("button", { name: "电影" }));
-    expect(await screen.findByText("当前目录：/电影")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "选择当前目录" }));
+    expect(firstConfirm).toBeEnabled();
+    await user.click(firstConfirm);
+    await waitForDialogClosed();
     expect(await screen.findByLabelText("扫描目录 1")).toHaveValue("/电影");
 
-    // 重复目录在弹窗内直接标记为已添加，不能再次写入。
+    // 已添加的目录在弹窗内标记为已添加，不能再次选中。
     await user.click(screen.getByRole("button", { name: "添加目录" }));
-    await user.click(await screen.findByRole("button", { name: "电影" }));
-    expect(await screen.findByRole("button", { name: "该目录已添加" })).toBeDisabled();
+    expect(await screen.findByRole("button", { name: "电影" })).toBeDisabled();
+    expect(screen.getByText("已添加")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "取消" }));
+    await waitForDialogClosed();
 
-    // 第二次：追加根目录，共两个地址。
+    // 第二次：点击末级蓝色路径选中根目录，共两个地址。
     await user.click(screen.getByRole("button", { name: "添加目录" }));
-    expect(await screen.findByText("当前目录：/")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "选择当前目录" }));
+    await user.click(await screen.findByRole("button", { name: "根目录" }));
+    await user.click(screen.getByRole("button", { name: "确认" }));
+    await waitForDialogClosed();
     expect(await screen.findByLabelText("扫描目录 2")).toHaveValue("/");
 
     await user.click(screen.getByRole("button", { name: "保存设置" }));
@@ -681,15 +686,13 @@ describe("网盘设置", () => {
     await user.click(screen.getByRole("button", { name: "添加映射" }));
     await user.click(screen.getByRole("button", { name: "选择网盘目录" }));
     await user.click(await screen.findByRole("button", { name: "电影" }));
-    expect(await screen.findByText("当前目录：/电影")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "选择当前目录" }));
+    await user.click(screen.getByRole("button", { name: "确认" }));
     await waitForDialogClosed();
     expect(await screen.findByLabelText("网盘路径 1")).toHaveValue("/电影");
 
     await user.click(screen.getByRole("button", { name: "选择本地目录" }));
     await user.click(await screen.findByRole("button", { name: "movies" }));
-    expect(await screen.findByText("当前目录：/movies")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "选择当前目录" }));
+    await user.click(screen.getByRole("button", { name: "确认" }));
     await waitForDialogClosed();
     expect(await screen.findByLabelText("本地路径 1")).toHaveValue("/movies");
 
@@ -700,13 +703,14 @@ describe("网盘设置", () => {
     );
     await user.click(screen.getAllByRole("button", { name: "选择网盘目录" })[1]);
     await user.click(await screen.findByRole("button", { name: "115" }));
-    expect(await screen.findByText("当前目录：/115")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "选择当前目录" }));
+    await user.click(screen.getByRole("button", { name: "确认" }));
     await waitForDialogClosed();
     expect(await screen.findByLabelText("网盘路径 2")).toHaveValue("/115");
 
+    // 本地根目录只能通过末级蓝色路径选中：根目录下没有可选的子目录。
     await user.click(screen.getAllByRole("button", { name: "选择本地目录" })[1]);
-    await user.click(await screen.findByRole("button", { name: "选择当前目录" }));
+    await user.click(await screen.findByRole("button", { name: "strm" }));
+    await user.click(screen.getByRole("button", { name: "确认" }));
     await waitForDialogClosed();
     expect(await screen.findByLabelText("本地路径 2")).toHaveValue("/");
 
@@ -749,12 +753,14 @@ describe("网盘设置", () => {
     await user.click(screen.getByRole("button", { name: "添加映射" }));
     await user.click(screen.getByRole("button", { name: "选择本地目录" }));
 
-    // 根目录固定为 strm：面包屑只有一项且不可点击，没有回到 /strm 以上的入口。
+    // 根目录固定为 strm：面包屑只有一项，没有回到 /strm 以上的入口。
     const dialog = await screen.findByRole("dialog");
     const breadcrumbs = within(dialog).getByRole("navigation", { name: "目录路径" });
     expect(within(breadcrumbs).getAllByRole("button")).toHaveLength(1);
-    expect(within(breadcrumbs).getByRole("button", { name: "strm" })).toBeDisabled();
-    expect(await within(dialog).findByText("当前目录：/")).toBeInTheDocument();
+    expect(within(breadcrumbs).getByRole("button", { name: "strm" })).toBeInTheDocument();
+    expect(await within(dialog).findByRole("button", { name: "movies" })).toBeInTheDocument();
+    // 未选中任何目录时确认按钮不可点。
+    expect(within(dialog).getByRole("button", { name: "确认" })).toBeDisabled();
 
     // 新建目录后列表立即刷新出新目录。
     await user.type(within(dialog).getByLabelText("新目录名称"), "tv");
@@ -767,7 +773,9 @@ describe("网盘设置", () => {
     await user.click(within(dialog).getByRole("button", { name: "刷新" }));
     expect(await within(dialog).findByRole("button", { name: "external" })).toBeInTheDocument();
 
-    await user.click(within(dialog).getByRole("button", { name: "选择当前目录" }));
+    // 根目录通过末级蓝色路径选中，确认后回填 /。
+    await user.click(within(dialog).getByRole("button", { name: "strm" }));
+    await user.click(within(dialog).getByRole("button", { name: "确认" }));
     expect(await screen.findByLabelText("本地路径 1")).toHaveValue("/");
   });
 });

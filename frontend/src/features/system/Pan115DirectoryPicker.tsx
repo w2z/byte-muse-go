@@ -1,7 +1,8 @@
-import { Button, Spin } from "@arco-design/web-react";
+import { Button } from "@arco-design/web-react";
 import { useQuery } from "@tanstack/react-query";
-import { Fragment, useState } from "react";
+import { useState } from "react";
 import { apiRequest } from "../../shared/api/client";
+import { DirectoryPicker } from "../../shared/ui/DirectoryPicker";
 
 /** 115 目录条目；只有 is_directory 为 true 的条目可以进入下一级。 */
 export type Pan115FileEntry = {
@@ -33,8 +34,13 @@ export function pan115PathLabel(path: { name: string }[]): string {
   return names.length === 0 ? "/" : `/${names.join("/")}`;
 }
 
+/** 子目录的展示路径；父路径为根目录时直接拼在 "/" 之下。 */
+function pan115ChildPath(parent: string, name: string): string {
+  return parent === "/" ? `/${name}` : `${parent}/${name}`;
+}
+
 /**
- * 115 目录选择弹窗内容：面包屑导航、子目录列表、分页与「选择当前目录」。
+ * 115 目录选择器：把 115 的目录接口适配到公共目录选择组件。
  *
  * 只列出文件夹，文件条目不可进入；未绑定账号时后端返回 409，这里直接展示后端文案。
  * 选择结果只有目录 ID 与展示路径，是否允许重复由调用方通过 selectedIDs 决定：
@@ -59,76 +65,53 @@ export function Pan115DirectoryPicker({
     retry: false,
   });
 
-  const navigate = (id: string, page = 1) => setLocation({ id, page });
   const page = listing.data;
   const currentPath = page ? pan115PathLabel(page.path) : "/";
   const directories = page?.files.filter((file) => file.is_directory) ?? [];
-  const added = selectedIDs.includes(location.id);
-  const crumbs = page?.path ?? [];
 
   return (
-    <div className="settings-pan115-picker">
-      <nav className="settings-pan115-breadcrumbs" aria-label="115 目录路径">
-        {crumbs.map((item, index) => (
-          <Fragment key={item.id}>
-            {index > 0 ? <span className="settings-pan115-breadcrumb-separator">/</span> : null}
-            <Button type="text" size="mini" disabled={index === crumbs.length - 1} onClick={() => navigate(item.id)}>
-              {item.name || "根目录"}
+    <DirectoryPicker
+      crumbs={(page?.path ?? []).map((item) => ({ key: item.id, name: item.name.trim() === "" ? "根目录" : item.name }))}
+      onNavigate={(crumb) => setLocation({ id: crumb.key, page: 1 })}
+      onEnter={(entry) => setLocation({ id: entry.key, page: 1 })}
+      entries={directories.map((item) => ({
+        key: item.id,
+        name: item.name,
+        // 子目录只有名称没有路径，用当前目录路径拼出展示路径，选中与确认都用这一份。
+        path: pan115ChildPath(currentPath, item.name),
+        disabled: selectedIDs.includes(item.id),
+      }))}
+      status={listing.isLoading ? "loading" : listing.isError ? "error" : "ready"}
+      errorText={listing.error?.message}
+      loadingText="正在读取 115 目录…"
+      emptyText="当前目录下没有子文件夹"
+      currentOccupied={selectedIDs.includes(location.id)}
+      currentPath={currentPath}
+      onConfirm={(entry) => onSelect({ id: entry.key, path: entry.path ?? currentPath })}
+      onCancel={onCancel}
+      footer={
+        <div className="directory-picker-pagination">
+          <span className="settings-field-description">
+            第 {location.page} 页{page ? ` · 共 ${page.total} 项` : ""}
+          </span>
+          <div className="settings-pan115-actions">
+            <Button
+              type="secondary"
+              disabled={location.page === 1 || listing.isFetching}
+              onClick={() => setLocation({ id: location.id, page: location.page - 1 })}
+            >
+              上一页
             </Button>
-          </Fragment>
-        ))}
-      </nav>
-      {listing.isLoading ? (
-        <div className="settings-pan115-picker-state"><Spin size={16} /> 正在读取 115 目录…</div>
-      ) : listing.isError ? (
-        <div className="settings-pan115-picker-state">{listing.error.message}</div>
-      ) : directories.length === 0 ? (
-        <div className="settings-pan115-picker-state">当前目录下没有子文件夹</div>
-      ) : (
-        <ul className="settings-pan115-picker-list">
-          {directories.map((item) => (
-            <li key={item.id}>
-              <Button type="text" long className="settings-pan115-picker-item" onClick={() => navigate(item.id)}>
-                {item.name}
-              </Button>
-            </li>
-          ))}
-        </ul>
-      )}
-      <div className="settings-pan115-picker-footer">
-        <span className="settings-field-description">
-          第 {location.page} 页{page ? ` · 共 ${page.total} 项` : ""}
-        </span>
-        <div className="settings-pan115-actions">
-          <Button
-            type="secondary"
-            disabled={location.page === 1 || listing.isFetching}
-            onClick={() => navigate(location.id, location.page - 1)}
-          >
-            上一页
-          </Button>
-          <Button
-            type="secondary"
-            disabled={!page?.has_more || listing.isFetching}
-            onClick={() => navigate(location.id, location.page + 1)}
-          >
-            下一页
-          </Button>
+            <Button
+              type="secondary"
+              disabled={!page?.has_more || listing.isFetching}
+              onClick={() => setLocation({ id: location.id, page: location.page + 1 })}
+            >
+              下一页
+            </Button>
+          </div>
         </div>
-      </div>
-      <div className="settings-pan115-picker-footer">
-        <span className="settings-field-description">当前目录：{currentPath}</span>
-        <div className="settings-pan115-actions">
-          <Button type="secondary" onClick={onCancel}>取消</Button>
-          <Button
-            type="primary"
-            disabled={added || !page || listing.isError || listing.isFetching}
-            onClick={() => onSelect({ id: location.id, path: currentPath })}
-          >
-            {added ? "该目录已添加" : "选择当前目录"}
-          </Button>
-        </div>
-      </div>
-    </div>
+      }
+    />
   );
 }

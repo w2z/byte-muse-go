@@ -1,7 +1,8 @@
-import { Button, Input, Modal, Radio, Spin } from "@arco-design/web-react";
+import { Button, Input, Modal, Radio } from "@arco-design/web-react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { Fragment, useState } from "react";
+import { useState } from "react";
 import { apiRequest } from "../../shared/api/client";
+import { DirectoryPicker, type DirectoryPickerCrumb } from "../../shared/ui/DirectoryPicker";
 import { useFeedbackMessage } from "../../shared/ui/FeedbackMessage";
 import { Pan115DirectoryPicker } from "./Pan115DirectoryPicker";
 
@@ -47,23 +48,23 @@ function isStrmMappingComplete(item: StrmMapping): boolean {
 }
 
 /** 本地 strm 路径的面包屑；根目录固定为 strm，不能回到更上层。 */
-function strmCrumbs(path: string): { name: string; path: string }[] {
-  const crumbs = [{ name: "strm", path: strmRootPath }];
+function strmCrumbs(path: string): DirectoryPickerCrumb[] {
+  const crumbs = [{ name: "strm", key: strmRootPath }];
   let current = "";
   for (const segment of path.split("/").filter((item) => item !== "")) {
     current += `/${segment}`;
-    crumbs.push({ name: segment, path: current });
+    crumbs.push({ name: segment, key: current });
   }
   return crumbs;
 }
 
 /** 网盘路径的面包屑；网盘目录是绝对路径，逐级向上回退。 */
-function cloudCrumbs(path: string): { name: string; path: string }[] {
-  const crumbs = [{ name: "网盘根目录", path: "/" }];
+function cloudCrumbs(path: string): DirectoryPickerCrumb[] {
+  const crumbs = [{ name: "网盘根目录", key: "/" }];
   let current = "";
   for (const segment of path.split("/").filter((item) => item !== "")) {
     current += `/${segment}`;
-    crumbs.push({ name: segment, path: current });
+    crumbs.push({ name: segment, key: current });
   }
   return crumbs;
 }
@@ -268,7 +269,7 @@ export function StrmPathsField({
 }
 
 /**
- * 按路径浏览的目录选择器：面包屑、子目录列表、刷新与「选择当前目录」。
+ * 按路径浏览的目录选择器：把 {path, directories} 浏览接口适配到公共目录选择组件。
  *
  * 本地 strm 目录与 CloudDrive2 网盘目录共用这一份实现：两者的浏览接口都返回
  * {path, directories}，只有根目录语义与是否允许新建目录不同。
@@ -277,7 +278,7 @@ export function StrmPathsField({
 function StrmDirectoryPicker({
   endpoint,
   queryKeyPrefix,
-  crumbs,
+  crumbs: buildCrumbs,
   selectedIDs,
   creatable = false,
   onCancel,
@@ -285,7 +286,7 @@ function StrmDirectoryPicker({
 }: {
   endpoint: string;
   queryKeyPrefix: string;
-  crumbs: (path: string) => { name: string; path: string }[];
+  crumbs: (path: string) => DirectoryPickerCrumb[];
   selectedIDs: string[];
   creatable?: boolean;
   onCancel: () => void;
@@ -314,79 +315,52 @@ function StrmDirectoryPicker({
   });
 
   const directories = listing.data?.directories ?? [];
-  const added = selectedIDs.includes(path);
 
   return (
-    <div className="settings-pan115-picker">
+    <>
       {messageHolder}
-      <div className="settings-strm-picker-bar">
-        <nav className="settings-pan115-breadcrumbs" aria-label="目录路径">
-          {crumbs(path).map((item, index, all) => (
-            <Fragment key={item.path}>
-              {index > 0 ? <span className="settings-pan115-breadcrumb-separator">/</span> : null}
-              <Button type="text" size="mini" disabled={index === all.length - 1} onClick={() => setPath(item.path)}>
-                {item.name}
-              </Button>
-            </Fragment>
-          ))}
-        </nav>
-        <Button
-          type="secondary"
-          size="mini"
-          loading={listing.isFetching}
-          onClick={() => void listing.refetch()}
-        >
-          刷新
-        </Button>
-      </div>
-      {listing.isLoading ? (
-        <div className="settings-pan115-picker-state"><Spin size={16} /> 正在读取目录…</div>
-      ) : listing.isError ? (
-        <div className="settings-pan115-picker-state">{listing.error.message}</div>
-      ) : directories.length === 0 ? (
-        <div className="settings-pan115-picker-state">当前目录下没有子目录</div>
-      ) : (
-        <ul className="settings-pan115-picker-list">
-          {directories.map((item) => (
-            <li key={item.path}>
-              <Button type="text" long className="settings-pan115-picker-item" onClick={() => setPath(item.path)}>
-                {item.name}
-              </Button>
-            </li>
-          ))}
-        </ul>
-      )}
-      {creatable ? (
-        <div className="settings-strm-picker-create">
-          <Input
-            aria-label="新目录名称"
-            value={newName}
-            placeholder="新目录名称"
-            onChange={(value) => setNewName(value)}
-          />
-          <Button
-            type="secondary"
-            loading={create.isPending}
-            disabled={create.isPending || newName.trim() === ""}
-            onClick={() => create.mutate(newName.trim())}
-          >
-            新建目录
+      <DirectoryPicker
+        crumbs={buildCrumbs(path)}
+        onNavigate={(crumb) => setPath(crumb.key)}
+        onEnter={(entry) => setPath(entry.key)}
+        entries={directories.map((item) => ({
+          key: item.path,
+          name: item.name,
+          path: item.path,
+          disabled: selectedIDs.includes(item.path),
+        }))}
+        status={listing.isLoading ? "loading" : listing.isError ? "error" : "ready"}
+        errorText={listing.error?.message}
+        currentOccupied={selectedIDs.includes(path)}
+        currentPath={path}
+        onConfirm={(entry) => onSelect({ id: entry.key, path: entry.key })}
+        onCancel={onCancel}
+        toolbar={
+          <Button type="secondary" size="mini" loading={listing.isFetching} onClick={() => void listing.refetch()}>
+            刷新
           </Button>
-        </div>
-      ) : null}
-      <div className="settings-pan115-picker-footer">
-        <span className="settings-field-description">当前目录：{path}</span>
-        <div className="settings-pan115-actions">
-          <Button type="secondary" onClick={onCancel}>取消</Button>
-          <Button
-            type="primary"
-            disabled={added || listing.isLoading || listing.isError}
-            onClick={() => onSelect({ id: path, path })}
-          >
-            {added ? "该目录已添加" : "选择当前目录"}
-          </Button>
-        </div>
-      </div>
-    </div>
+        }
+        extra={
+          creatable ? (
+            <div className="settings-strm-picker-create">
+              <Input
+                aria-label="新目录名称"
+                value={newName}
+                placeholder="新目录名称"
+                onChange={(value) => setNewName(value)}
+              />
+              <Button
+                type="secondary"
+                loading={create.isPending}
+                disabled={create.isPending || newName.trim() === ""}
+                onClick={() => create.mutate(newName.trim())}
+              >
+                新建目录
+              </Button>
+            </div>
+          ) : null
+        }
+      />
+    </>
   );
 }

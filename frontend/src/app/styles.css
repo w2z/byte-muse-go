@@ -611,15 +611,39 @@ button.code-card-still-cell:hover img { opacity: .85; }
 .settings-pan115-path-row { display: flex; min-width: 0; align-items: center; gap: 8px; }
 .settings-pan115-path-row > .arco-input { flex: 1 1 auto; min-width: 0; }
 .settings-pan115-path-row > .arco-btn { flex: 0 0 auto; }
-/* 目录选择弹窗：面包屑、子目录列表与分页/确认两行，纵向沿用字段间的 12px 间距。 */
+/* 目录选择弹窗：统一 80vw 宽，内部布局由公共目录选择组件负责。 */
 .settings-directory-picker-modal { width: 80vw; max-width: 80vw; }
-.settings-pan115-picker { display: flex; min-width: 0; flex-direction: column; gap: 12px; }
-.settings-pan115-breadcrumbs { display: flex; min-width: 0; flex-wrap: wrap; align-items: center; gap: 2px; }
-.settings-pan115-breadcrumb-separator { color: var(--muted); }
-.settings-pan115-picker-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: 2px; max-height: 60vh; margin: 0; padding: 0; overflow-y: auto; list-style: none; }
-.settings-pan115-picker-item { justify-content: flex-start; text-align: left; }
-.settings-pan115-picker-state { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; line-height: 20px; }
-.settings-pan115-picker-footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+/* 通用目录选择组件：面包屑（末级蓝色）、列表头、目录区与底部操作。
+   目录图标统一使用 icons8 文件夹图片，不展示日期，也不用灰色卡片底。 */
+.directory-picker { display: flex; min-width: 0; flex-direction: column; gap: 12px; }
+.directory-picker-crumbs { display: flex; min-width: 0; flex-wrap: wrap; align-items: center; gap: 2px; }
+.directory-picker-crumb-separator { color: var(--muted); }
+.directory-picker-crumbs .arco-btn.directory-picker-crumb-current { color: var(--mint); font-weight: 500; }
+.directory-picker-head { display: flex; min-width: 0; flex-wrap: wrap; align-items: center; gap: 8px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+.directory-picker-head-title { color: var(--ink); font-size: var(--control-font-size); font-weight: 500; }
+.directory-picker-head-summary { color: var(--muted); font-size: 12px; line-height: 20px; }
+.directory-picker-head-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-left: auto; }
+.directory-picker-body { display: flex; min-height: 50vh; flex-direction: column; }
+.directory-picker-state { display: flex; margin: auto; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; line-height: 20px; }
+.directory-picker-entries { display: grid; gap: 0; max-height: 60vh; margin: 0; padding: 0; overflow-y: auto; list-style: none; }
+.directory-picker-entries-list { grid-template-columns: minmax(0, 1fr); }
+.directory-picker-entries-grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; }
+.directory-picker-entry { display: flex; width: 100%; min-width: 0; align-items: center; gap: 8px; padding: 6px 8px; color: var(--ink); font: inherit; text-align: left; background: none; border: 1px solid transparent; border-radius: var(--content-radius); cursor: pointer; }
+.directory-picker-entries-list .directory-picker-entry { border-radius: 0; border-bottom-color: var(--line); }
+.directory-picker-entry:hover { background: var(--hover); }
+.directory-picker-entries .directory-picker-entry-selected { background: var(--accent-soft); border-color: var(--mint); }
+.directory-picker-entries .directory-picker-entry-selected .directory-picker-name { color: var(--mint); font-weight: 500; }
+.directory-picker-entry:disabled { color: var(--muted); cursor: not-allowed; }
+.directory-picker-entry:disabled:hover { background: none; }
+.directory-picker-icon { flex: 0 0 auto; width: 28px; height: 28px; object-fit: contain; }
+.directory-picker-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.directory-picker-badge { flex: 0 0 auto; color: var(--muted); font-size: 12px; line-height: 20px; }
+.directory-picker-entries-grid .directory-picker-entry { flex-direction: column; justify-content: center; gap: 6px; padding: 12px 8px; text-align: center; }
+.directory-picker-entries-grid .directory-picker-icon { width: 48px; height: 48px; }
+.directory-picker-entries-grid .directory-picker-name { width: 100%; text-align: center; }
+.directory-picker-pagination { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.directory-picker-footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.directory-picker-selection { min-width: 0; overflow: hidden; color: var(--ink); font-size: 12px; line-height: 20px; text-overflow: ellipsis; white-space: nowrap; }
 /* strm 网盘映射：一条映射两行（网盘目录 / 本地 strm 目录），只读输入框占满剩余宽度，
    按钮保持原尺寸不被压缩；窄屏按 flex-wrap 换行，不做固定列数的栅格。 */
 .settings-strm-paths { display: flex; min-width: 0; flex-direction: column; gap: 8px; }
@@ -631,8 +655,6 @@ button.code-card-still-cell:hover img { opacity: .85; }
 .settings-strm-path-line > .arco-input { flex: 1 1 160px; min-width: 0; }
 .settings-strm-path-line > .arco-btn { flex: 0 0 auto; }
 .settings-strm-scan { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-/* 目录选择器顶部：面包屑与「刷新」同行，右侧刷新按钮不参与面包屑换行。 */
-.settings-strm-picker-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
 .settings-strm-picker-create { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .settings-strm-picker-create > .arco-input { flex: 1 1 160px; min-width: 0; }
 /* 底部操作栏：sticky 贴在滚动容器底部（页面撑满可视高度时即视口底部）。
