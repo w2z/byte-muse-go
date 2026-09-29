@@ -84,7 +84,35 @@ func (r *sqlMediaRepository) Get(ctx context.Context, id string) (domain.Media, 
 	if errors.Is(err, sql.ErrNoRows) {
 		return domain.Media{}, ports.ErrMediaNotFound
 	}
-	return media, err
+	if err != nil {
+		return domain.Media{}, err
+	}
+	// 扩展资料仅在详情读取，避免给每个分页卡片附加元数据查询。
+	details := &domain.MediaDetails{Actors: []string{}, Tags: []string{}}
+	var casts, genres, producer, publisher, series sql.NullString
+	err = r.exec.QueryRowContext(ctx, "SELECT casts, genres, producer, publisher, series FROM legacy_media_metadata WHERE media_id = "+placeholder(r.dialect, 1), id).Scan(&casts, &genres, &producer, &publisher, &series)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return domain.Media{}, err
+	}
+	if err == nil {
+		details.Actors = splitRecommendationValues(casts.String)
+		details.Tags = splitRecommendationValues(genres.String)
+		for field, value := range map[**string]sql.NullString{&details.Producer: producer, &details.Publisher: publisher, &details.Series: series} {
+			if value.Valid && strings.TrimSpace(value.String) != "" {
+				*field = stringPointer(strings.TrimSpace(value.String))
+			}
+		}
+	}
+	// 只采用明确分类；流出类别不能说明是否有码或有马赛克。
+	if media.VideoType != nil {
+		switch *media.VideoType {
+		case "censored", "uncensored", "uncensored_cracked":
+			censored, mosaic := *media.VideoType != "uncensored", *media.VideoType == "censored"
+			details.Censored, details.Mosaic = &censored, &mosaic
+		}
+	}
+	media.Details = details
+	return media, nil
 }
 
 // UpdateTranslatedTitle 只更新媒体译文和更新时间，避免覆盖并发写入的其他字段。
@@ -604,7 +632,7 @@ func subscriptionColumns() string {
 }
 
 func downloadColumns() string {
-	return "id, media_id, status, external_id, error_message, created_at, updated_at, source_site, source_kind, downloader, info_hash, transfer_status, added_at, completed_at"
+	return "id, media_id, status, external_id, error_message, created_at, updated_at, source_site, source_kind, downloader, info_hash, transfer_status, added_at, completed_at, (SELECT code FROM media WHERE media.id=download_tasks.media_id)"
 }
 
 type rowScanner interface{ Scan(dest ...any) error }
@@ -798,7 +826,7 @@ func scanDownloadRows(rows *sql.Rows) ([]domain.DownloadTask, error) {
 		var item domain.DownloadTask
 		var externalID, errorMessage, sourceSite, sourceKind, downloader, infoHash, transferStatus, addedAt, completedAt any
 		var createdAt, updatedAt any
-		if err := rows.Scan(&item.ID, &item.MediaID, &item.Status, &externalID, &errorMessage, &createdAt, &updatedAt, &sourceSite, &sourceKind, &downloader, &infoHash, &transferStatus, &addedAt, &completedAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.MediaID, &item.Status, &externalID, &errorMessage, &createdAt, &updatedAt, &sourceSite, &sourceKind, &downloader, &infoHash, &transferStatus, &addedAt, &completedAt, &item.Code); err != nil {
 			return nil, err
 		}
 		item.ExternalID, _ = valueToStringPtr(externalID)

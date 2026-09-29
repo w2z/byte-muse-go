@@ -6,6 +6,48 @@ import (
 	"testing"
 )
 
+// TestBypassProxyMigration 验证旧配置保持不变、新开关默认关闭且重复升级不覆盖选择。
+func TestBypassProxyMigration(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, Config{Dialect: DialectSQLite, DSN: filepath.Join(t.TempDir(), "proxy.db")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err = ensureMigrationTable(ctx, store.SQLDB(), DialectSQLite); err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range MigrationPlan(DialectSQLite) {
+		if m.Version < 21 {
+			if err = applyMigration(ctx, store.SQLDB(), DialectSQLite, m); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if _, err = store.SQLDB().ExecContext(ctx, "UPDATE app_settings SET setting_value='http://example.test:7890' WHERE setting_key='PROXY'"); err != nil {
+		t.Fatal(err)
+	}
+	if err = store.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for key, want := range map[string]string{"PROXY": "http://example.test:7890", "BYPASS_USE_PROXY": "false"} {
+		var got string
+		if err = store.SQLDB().QueryRowContext(ctx, "SELECT setting_value FROM app_settings WHERE setting_key=?", key).Scan(&got); err != nil || got != want {
+			t.Fatalf("%s=%q err=%v", key, got, err)
+		}
+	}
+	if _, err = store.SQLDB().ExecContext(ctx, "UPDATE app_settings SET setting_value='true' WHERE setting_key='BYPASS_USE_PROXY'"); err != nil {
+		t.Fatal(err)
+	}
+	if err = store.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var got string
+	if err = store.SQLDB().QueryRowContext(ctx, "SELECT setting_value FROM app_settings WHERE setting_key='BYPASS_USE_PROXY'").Scan(&got); err != nil || got != "true" {
+		t.Fatal("repeat migration changed switch", err)
+	}
+}
+
 func TestPTSiteSettingsMigrationPreservesLegacyCookie(t *testing.T) {
 	ctx := context.Background()
 	store, err := Open(ctx, Config{Dialect: DialectSQLite, DSN: filepath.Join(t.TempDir(), "settings.db")})

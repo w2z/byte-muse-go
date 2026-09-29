@@ -5,6 +5,9 @@ WORKDIR /src/frontend
 COPY frontend/package.json frontend/package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm npm ci
 COPY frontend/ ./
+# 前端构建前检查规范入口及链接，文档仅进入构建阶段。
+COPY AGENTS.md /src/AGENTS.md
+COPY docs/ /src/docs/
 RUN npm run build
 
 FROM golang:1.27-alpine AS backend-build

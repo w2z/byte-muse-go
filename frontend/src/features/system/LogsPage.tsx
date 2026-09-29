@@ -1,4 +1,4 @@
-import { Button, DatePicker, Divider, Input, Select } from "@arco-design/web-react";
+import { Button, DatePicker, Divider, Input, Select, Grid } from "@arco-design/web-react";
 import { IconDelete, IconSearch } from "@arco-design/web-react/icon";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
@@ -131,46 +131,59 @@ export function LogsPage() {
       <PageHeader title="日志" />
       <PageState isLoading={query.isPending && !query.data} error={query.error} isEmpty={false} onRetry={() => void query.refetch()}>
         <div className="logs-content-card">
-          {/* 每个「标签 + 控件」包一层 .logs-field：筛选栏与四个控件允许换行，
-              只有成对包住才能保证窄屏折行时标签不会和它的控件被拆到两行。 */}
+          {/* 复用公共筛选布局，日期范围优先保留输入宽度，空间不足时在标签下方展开。 */}
           <div className="logs-filters">
-            <div className="logs-field">
-              <span className="logs-filter-label">关键词</span>
-              <Input allowClear prefix={<IconSearch />} placeholder="搜索日志..." value={draftKeyword} onChange={setDraftKeyword} className="logs-keyword" />
-            </div>
-            <div className="logs-field">
-              <span className="logs-filter-label">分类</span>
-              <Select aria-label="日志分类" placeholder="全部分类" value={draftCategory || undefined} allowClear onChange={(value) => setDraftCategory((value as Category | undefined) ?? "")} className="logs-select">
-                {CATEGORIES.map((item) => <Select.Option key={item} value={item}>{item}</Select.Option>)}
-              </Select>
-            </div>
-            <div className="logs-field">
-              <span className="logs-filter-label">级别</span>
-              <Select aria-label="日志级别" placeholder="全部级别" value={draftLevel || undefined} allowClear onChange={(value) => setDraftLevel((value as Level | undefined) ?? "")} className="logs-select">
-                <Select.Option value="info">INFO</Select.Option>
-                <Select.Option value="warning">WARNING</Select.Option>
-                <Select.Option value="error">ERROR</Select.Option>
-                <Select.Option value="debug">DEBUG</Select.Option>
-              </Select>
-            </div>
-            <div className="logs-field">
-              <span className="logs-filter-label">时间段</span>
-              <DatePicker.RangePicker
-                aria-label="日志时间段"
-                showTime={{ format: "HH:mm:ss" }}
-                format="YYYY-MM-DD HH:mm:ss"
-                value={draftTimeRange?.map((value) => dayjs(value))}
-                shortcuts={getLogTimeShortcuts()}
-                disabledDate={(current) => isFutureLogDate(current)}
-                disabledTime={(current) => getDisabledLogTime()(current)}
-                onChange={(_dateStrings, values) => setDraftTimeRange(values?.length === 2 && values[0] && values[1] ? rangeToStrings(clampLogTimeRange([values[0], values[1]])) : undefined)}
-                allowClear
-                className="logs-time-range"
-              />
-            </div>
-            <Button type="primary" icon={<IconSearch />} onClick={applyFilters}>查询</Button>
-            <Button onClick={resetFilters}>重置</Button>
-            <Button className="logs-clear-button" status="danger" icon={<IconDelete />} onClick={confirmClearLogs}>清空日志</Button>
+            <Grid.Row gutter={[12, 12]} justify="start" align="center">
+              <Grid.Col xs={24} sm={12} md={8} xl={4}>
+                <div className="logs-field filter-field">
+                  <span className="logs-filter-label filter-label">关键词</span>
+                  <Input allowClear prefix={<IconSearch />} placeholder="搜索日志..." value={draftKeyword} onChange={setDraftKeyword} className="logs-keyword filter-control" />
+                </div>
+              </Grid.Col>
+              <Grid.Col xs={24} sm={12} md={8} xl={4}>
+                <div className="logs-field filter-field">
+                  <span className="logs-filter-label filter-label">分类</span>
+                  <Select aria-label="日志分类" placeholder="全部分类" value={draftCategory || undefined} allowClear onChange={(value) => setDraftCategory((value as Category | undefined) ?? "")} className="logs-select filter-control">
+                    {CATEGORIES.map((item) => <Select.Option key={item} value={item}>{item}</Select.Option>)}
+                  </Select>
+                </div>
+              </Grid.Col>
+              <Grid.Col xs={24} sm={12} md={8} xl={4}>
+                <div className="logs-field filter-field">
+                  <span className="logs-filter-label filter-label">级别</span>
+                  <Select aria-label="日志级别" placeholder="全部级别" value={draftLevel || undefined} allowClear onChange={(value) => setDraftLevel((value as Level | undefined) ?? "")} className="logs-select filter-control">
+                    <Select.Option value="info">INFO</Select.Option>
+                    <Select.Option value="warning">WARNING</Select.Option>
+                    <Select.Option value="error">ERROR</Select.Option>
+                    <Select.Option value="debug">DEBUG</Select.Option>
+                  </Select>
+                </div>
+              </Grid.Col>
+              <Grid.Col xs={24} sm={12} md={8} xl={4}>
+                <div className="logs-field filter-field filter-field--range">
+                  <span className="logs-filter-label filter-label">时间段</span>
+                  <DatePicker.RangePicker
+                    aria-label="日志时间段"
+                    showTime={{ format: "HH:mm:ss" }}
+                    format="YYYY-MM-DD HH:mm:ss"
+                    value={draftTimeRange?.map((value) => dayjs(value))}
+                    shortcuts={getLogTimeShortcuts()}
+                    disabledDate={(current) => isFutureLogDate(current)}
+                    disabledTime={(current) => getDisabledLogTime()(current)}
+                    onChange={(_dateStrings, values) => setDraftTimeRange(values?.length === 2 && values[0] && values[1] ? rangeToStrings(clampLogTimeRange([values[0], values[1]])) : undefined)}
+                    allowClear
+                    className="logs-time-range filter-control"
+                  />
+                </div>
+              </Grid.Col>
+              <Grid.Col xs={24} sm={12} md={8} xl={4}>
+                <div className="filter-actions">
+                  <Button type="primary" icon={<IconSearch />} onClick={applyFilters}>查询</Button>
+                  <Button onClick={resetFilters}>重置</Button>
+                <Button className="logs-clear-button" status="danger" icon={<IconDelete />} onClick={confirmClearLogs}>清空日志</Button>
+                </div>
+              </Grid.Col>
+            </Grid.Row>
           </div>
           <Divider className="logs-divider" />
           <div className="logs-terminal" role="log" aria-label="系统日志" aria-live="polite">

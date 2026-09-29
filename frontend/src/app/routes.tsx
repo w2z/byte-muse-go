@@ -31,12 +31,20 @@ export type RouteMeta = {
   label: string;
   group: "通用" | "系统";
   surface?: "white";
+  /** 页面自行管理列表滚动，外层内容区固定。 */
+  innerScroll?: boolean;
 };
 
 /** 未恢复会话时不渲染管理壳，避免刷新瞬间出现受保护页面后再跳转登录页。 */
 function ProtectedLayout() {
   const user = useSession((state) => state.user);
   return user ? <AppLayout /> : <Navigate to="/login" replace />;
+}
+
+/** 会话恢复后，已登录用户访问登录页时直接进入看板，避免重复显示登录表单。 */
+function GuestLoginPage() {
+  const user = useSession((state) => state.user);
+  return user ? <Navigate to="/dashboard" replace /> : <LoginPage />;
 }
 
 const meta = (
@@ -46,7 +54,7 @@ const meta = (
 ): RouteMeta => ({ label, group, surface });
 
 export const routes: RouteObject[] = [
-  { path: "/login", element: <LoginPage /> },
+  { path: "/login", element: <GuestLoginPage /> },
   {
     path: "/",
     element: <ProtectedLayout />,
@@ -61,7 +69,7 @@ export const routes: RouteObject[] = [
       { path: "settings", element: <SettingsPage />, handle: meta("设置", "系统") },
       { path: "config", element: <SettingsPage />, handle: meta("设置", "系统") },
       { path: "actor", element: <ActorListPage />, handle: meta("演员", "通用", "white") },
-      { path: "tag", element: <TagListPage />, handle: meta("标签", "通用", "white") },
+      { path: "tag", element: <TagListPage />, handle: { ...meta("标签", "通用", "white"), innerScroll: true } },
       { path: "release-today", element: <ReleaseTodayPage />, handle: meta("上新", "通用", "white") },
       { path: "recommend", element: <RecommendPage />, handle: meta("推荐", "通用", "white") },
       { path: "rank", element: <RankPage />, handle: meta("榜单", "通用", "white") },

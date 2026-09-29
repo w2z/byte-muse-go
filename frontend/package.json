@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "check:standards": "vitest run src/app/standards.test.ts",
+    "prebuild": "npm run check:standards",
     "build": "tsc -b --noEmit && vite build",
     "typecheck": "tsc -b --noEmit",
     "test": "vitest run",

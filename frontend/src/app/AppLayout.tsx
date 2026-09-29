@@ -68,7 +68,7 @@ export function AppLayout() {
     .map((match) => match.handle as RouteMeta | undefined)
     .find((handle) => handle?.label);
   const isWhiteSurface = currentMeta?.surface === "white";
-  const contentClassName = isWhiteSurface ? "app-content app-content--surface" : "app-content";
+  const contentClassName = (isWhiteSurface ? "app-content app-content--surface" : "app-content") + (currentMeta?.innerScroll ? " app-content--inner-scroll" : "");
   const isDark = themeMode === "dark";
   const themeToggleLabel = isDark ? "切换为亮色模式" : "切换为暗色模式";
   const collapseLabel = collapsed ? "展开菜单" : "折叠菜单";
@@ -122,7 +122,7 @@ export function AppLayout() {
                 </Breadcrumb>
               ) : null}
               <div className="page-container">
-                {isWhiteSurface ? <PageSurface><Outlet /></PageSurface> : <Outlet />}
+                {isWhiteSurface ? <PageSurface fillHeight={currentMeta?.innerScroll}><Outlet /></PageSurface> : <Outlet />}
               </div>
             </div>
           </Layout.Content>

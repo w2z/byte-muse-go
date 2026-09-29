@@ -1,44 +1,42 @@
-# ByteMuse Go 实施基线
+# ByteMuse 当前实施基线
+
+本文件保留仍有效的架构约束；Agent工作规则从根目录AGENTS.md进入。2026-09-29以当前代码修正早期骨架规划，具体版本以依赖清单为准，不将规划中的工具或接口宣称为已实现。
 
 ## 运行形态
 
-- 单个 `bytemuse` 容器同时提供 React 静态资源、REST API、SSE、MCP 和后台调度。
-- `bytemuse serve` 是唯一常驻命令；启动时先执行幂等数据库迁移，再启动 HTTP 与调度器。
-- `bytemuse migrate status|up` 仅用于排障或手工维护，不单独部署 worker。
-- 不实现旧数据库导入器，不读取或修改旧 `lady.db`。
-- 首次开发/演示环境可显式运行 seed，写入两条脱敏影片演示记录；生产默认不 seed。
+- 一个bytemuse应用容器提供React静态资源、REST API和后台调度，`bytemuse serve`为常驻入口，`migrate status|up`用于维护；不另建重复worker。
+- 启动按版本执行迁移后启动HTTP与调度；数据库迁移与业务执行共享配置，但业务规则不得复制。
+- 应用不注入演示数据。测试使用独立库或可清理夹具；旧库导入命令的存在不构成运行授权，原始lady.db只读，不自动迁移或回填。
+- 本地开发前后端分开运行，Vite通过代理访问真实Go API；生产由应用提供构建后的静态资源。
 
-## 技术栈
+## 已确认技术栈和目录
 
-- 前端：React 19、TypeScript、Vite、React Router、Arco Design、TanStack Query、Zustand、Vitest、Playwright。
-- 后端：Go 1.27、chi、OpenAPI 3.1、oapi-codegen、Bun ORM、Goose、robfig/cron、slog。
-- 数据库：SQLite、PostgreSQL 16+、MySQL 8.0+；统一仓储和业务规则，各方言显式迁移。
+| 范围 | 当前实现及来源 |
+| --- | --- |
+| 前端 | React 19、TypeScript、Vite、React Router、Arco Design、TanStack Query、Zustand、Vitest；见frontend/package.json |
+| 后端 | Go 1.27、chi、robfig/cron及slog；见backend/go.mod和internal/bootstrap |
+| 数据库 | database/sql，SQLite/PostgreSQL/MySQL方言与驱动；自有版本迁移执行器，见internal/platform/database |
+| 契约 | api/openapi.yaml，API修改需同步Apifox；不能假定存在自动生成HTTP实现 |
+| 业务边界 | application服务、ports接口、platform适配、transport/httpapi传输；从实际调用核查模块能力 |
 
-## 业务模块
+旧文档中的Bun、Goose、oapi-codegen、SSE/MCP统一交付、演示seed及“标签尚无API”等描述不作为当前事实。外部来源是否可用应查来源目录和真实运行证据，源码存在不等于已接入。
 
-`auth`、`catalog`、`discovery`、`subscription`、`torrent`、`download`、`library`、`notification`、`integration`、`scheduler`、`translation`、`agent`、`system`。
+## 数据与接口
 
-HTTP、调度任务、MCP 与 Agent 工具必须调用同一应用服务，不得复制业务规则。影片订阅状态、下载任务状态、媒体库存在状态独立存储和返回。
+- API主要前缀 `/api/v1`，健康检查 `/health/live`、`/health/ready`。前端只通过统一请求客户端访问接口。
+- 时间统一明确时区，API使用RFC3339；容量使用字节整数，受控枚举使用一致字符串。已有ID和历史数据以当前模型/契约为准，不因旧规划批量改写。
+- SQLite启用WAL、外键和busy timeout；PostgreSQL/MySQL使用连接池。新库与旧版本升级均经过唯一版本迁移来源。
+- 影片订阅、下载受理/完成、媒体库存在是不同状态。HTTP、调度和其他消费者复用应用服务，不各自实现状态转换。
+- 日志已持久化到数据库Store；轮询接口、保留期、清理与计数以当前logging/数据库/调度实现为准。
+- 敏感配置不写日志、文档或测试快照；浏览器和真实第三方操作必须处于当前授权范围。
 
-## 数据与接口约束
+## 实现与验收
 
-- 主键采用 ULID 字符串；时间统一 UTC，API 使用 RFC 3339。
-- 容量使用字节整数；枚举使用受控字符串。
-- SQLite 启用 WAL、外键和 busy timeout；PostgreSQL/MySQL 使用连接池。
-- REST 主路径 `/api/v1`，健康检查 `/health/live` 与 `/health/ready`。
-- OpenAPI 是前后端接口唯一权威来源。
-- 敏感配置不写日志、响应、演示数据或仓库。
+- 前端、后端、数据库的默认写入范围分别为frontend、backend服务层及backend/internal/platform/database；跨范围由主Agent分配，契约与共享文件指定唯一负责人。
+- 前端执行规范检查、相关测试、类型检查、构建及真实浏览器验收；后端执行适用test/vet/build。
+- 仓储至少验证SQLite；涉及PostgreSQL/MySQL时核对方言、迁移与目标版本，未实测环境明确报告。
+- 发布只交付运行产物；最终镜像启动、健康、静态资源、配置注入和迁移须真实验证。源码测试不替代镜像与第三方业务验收。
 
-## 目录所有权
+## 文档整理说明
 
-- 前端 agent：仅写 `frontend/`。
-- 后端 agent：写 `backend/`，但不写 `backend/internal/platform/database/migrations/` 和数据库仓储实现。
-- 数据库 agent：仅写 `backend/internal/platform/database/` 及其测试。
-- 主 agent：维护根配置、`api/`、`deploy/`、共享文档和最终集成。
-
-## 验收
-
-- `go test ./...`、前端单元测试、类型检查和构建通过。
-- 同一仓储契约至少在 SQLite 实测；PostgreSQL/MySQL 通过容器矩阵或明确标注环境未验证。
-- 单镜像能启动，API 与调度器共享数据库且不会重复启动相同任务。
-- 演示 seed 只生成两条影片，不生成用户、凭据、下载历史或外部配置。
+原docs/agents下的frontend-task.md、backend-task.md、database-task.md是已完成骨架阶段的一次性任务单，含不存在的引用与过期seed/边界要求。有效的真实API、统一服务/仓储、测试和职责边界已合并到根入口及专项规范，原任务单删除，不再作为新任务指令。

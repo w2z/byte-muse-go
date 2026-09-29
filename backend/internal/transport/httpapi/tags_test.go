@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"bytemuse/backend/internal/application"
+	"bytemuse/backend/internal/auth"
 	"bytemuse/backend/internal/platform/database"
 	"bytemuse/backend/internal/ports"
 	"context"
@@ -9,6 +10,7 @@ import (
 	"fmt"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -39,9 +41,14 @@ func TestTagsCatalog(t *testing.T) {
 		name                string
 		count               int
 	}{
-		{"", 200, 4, 4, "标签甲", 2}, {"page_size=1&page=2", 200, 4, 1, "100%", 1},
+		{"", 200, 309, 15, "标签甲", 2}, {"page_size=1&page=2", 200, 309, 1, "100%", 1},
 		{"search=甲", 200, 1, 1, "标签甲", 2}, {"search=%25", 200, 1, 1, "100%", 1},
-		{"search=不存在", 200, 0, 0, "", 0}, {"page=99", 200, 4, 0, "", 0}, {"page=0", 400, 0, 0, "", 0}, {"page_size=201", 400, 0, 0, "", 0},
+		{"search=不存在", 200, 0, 0, "", 0}, {"page=99", 200, 309, 0, "", 0}, {"page=0", 400, 0, 0, "", 0}, {"page_size=501", 400, 0, 0, "", 0},
+		{"subscription=all&page_size=100", 200, 309, 100, "标签甲", 2},
+		{"subscription=all&page_size=200", 200, 309, 200, "标签甲", 2},
+		{"subscription=all&page_size=300", 200, 309, 300, "标签甲", 2},
+		{"subscription=all&page_size=400", 200, 309, 309, "标签甲", 2},
+		{"subscription=all&page_size=500", 200, 309, 309, "标签甲", 2},
 	} {
 		t.Run(tc.query, func(t *testing.T) {
 			out := httptest.NewRecorder()
@@ -68,5 +75,82 @@ func TestTagsCatalog(t *testing.T) {
 	New(Dependencies{}).ServeHTTP(out, httptest.NewRequest("GET", "/api/v1/tags", nil))
 	if out.Code != 401 {
 		t.Fatalf("unauthenticated status=%d", out.Code)
+	}
+}
+
+// TestTagSubscriptionHTTP 覆盖真实鉴权、日期校验、重复保存、编辑、取消、分类和搜索。
+func TestTagSubscriptionHTTP(t *testing.T) {
+	ctx := context.Background()
+	s, e := database.Open(ctx, database.Config{Dialect: database.DialectSQLite, SQLitePath: filepath.Join(t.TempDir(), "api.db")})
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer s.Close()
+	if e = s.Migrate(ctx); e != nil {
+		t.Fatal(e)
+	}
+	a, e := auth.New(auth.Config{Username: "test-admin", Password: "test-password", Secret: strings.Repeat("x", 32)})
+	if e != nil {
+		t.Fatal(e)
+	}
+	h := New(Dependencies{Auth: a, Tags: application.NewTagService(database.NewTagRepository(s.SQLDB(), database.DialectSQLite)), CatalogQueries: application.NewCatalogQueryService(database.NewCatalogQueryRepository(s.SQLDB(), database.DialectSQLite))})
+	for _, method := range []string{"PUT", "DELETE"} {
+		out := httptest.NewRecorder()
+		h.ServeHTTP(out, httptest.NewRequest(method, "/api/v1/tags/制服/subscription", nil))
+		if out.Code != 401 {
+			t.Fatalf("unauth=%d", out.Code)
+		}
+	}
+	login := httptest.NewRecorder()
+	h.ServeHTTP(login, httptest.NewRequest("POST", "/api/v1/auth/login", strings.NewReader(`{"username":"test-admin","password":"test-password"}`)))
+	if login.Code != 200 {
+		t.Fatal(login.Body)
+	}
+	for _, tc := range []struct {
+		method, path, body string
+		status             int
+	}{
+		{"PUT", "/tags/制服/subscription", `{"limit_date":"2026-02-30"}`, 400},
+		{"PUT", "/tags/制服/subscription", `{"limit_date":""}`, 400},
+		{"PUT", "/tags/不存在/subscription", `{"limit_date":"2026-09-28"}`, 404},
+		{"PUT", "/tags/制服/subscription", `{"limit_date":"2026-09-28"}`, 200},
+		{"PUT", "/tags/制服/subscription", `{"limit_date":"2026-09-28"}`, 200},
+		{"PUT", "/tags/制服/subscription", `{"limit_date":"2026-09-27"}`, 200},
+		{"GET", "/tags?subscription=active&category=服装", "", 200},
+		{"GET", "/tags?subscription=invalid", "", 400},
+		{"GET", "/tags?category=invalid", "", 400},
+		{"GET", "/complex/search?tag=制服", "", 200},
+		{"DELETE", "/tags/制服/subscription", "", 200},
+		{"DELETE", "/tags/制服/subscription", "", 200},
+		{"GET", "/tags?subscription=active", "", 200},
+	} {
+		out := httptest.NewRecorder()
+		req := httptest.NewRequest(tc.method, "/api/v1"+tc.path, strings.NewReader(tc.body))
+		req.AddCookie(login.Result().Cookies()[0])
+		h.ServeHTTP(out, req)
+		if out.Code != tc.status {
+			t.Fatalf("%s %s: %d %s", tc.method, tc.path, out.Code, out.Body)
+		}
+		if tc.method == "PUT" && tc.status == 200 {
+			var v ports.Tag
+			json.Unmarshal(out.Body.Bytes(), &v)
+			if v.Category != "服装" || v.LimitDate == nil {
+				t.Fatal(out.Body)
+			}
+		}
+		if tc.path == "/tags?subscription=active&category=服装" {
+			var v application.Page[ports.Tag]
+			json.Unmarshal(out.Body.Bytes(), &v)
+			if v.Total != 1 || v.Items[0].LimitDate == nil || *v.Items[0].LimitDate != "2026-09-27" {
+				t.Fatal(out.Body)
+			}
+		}
+		if tc.path == "/tags?subscription=active" {
+			var v application.Page[ports.Tag]
+			json.Unmarshal(out.Body.Bytes(), &v)
+			if v.Total != 0 || len(v.Items) != 0 {
+				t.Fatal(out.Body)
+			}
+		}
 	}
 }

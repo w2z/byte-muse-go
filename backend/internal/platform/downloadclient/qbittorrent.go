@@ -73,7 +73,10 @@ func transferStatus(state string, progress float64, completed int64) string {
 	if completed > 0 && progress >= 1 {
 		return "completed"
 	}
-	if strings.HasPrefix(state, "stopped") || strings.HasPrefix(state, "paused") {
+	if strings.HasPrefix(state, "stopped") {
+		return "stopped"
+	}
+	if strings.HasPrefix(state, "paused") {
 		return "paused"
 	}
 	return "downloading"

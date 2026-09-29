@@ -65,9 +65,10 @@ var rankTypes = []string{"daily", "weekly", "monthly"}
 
 // settingSpec 描述一个可写配置项：是否敏感，以及取值范围。
 type settingSpec struct {
-	secret  bool
-	kind    string
-	allowed []string
+	secret   bool
+	kind     string
+	allowed  []string
+	maxBytes int // 0 使用普通配置的 8192 字节限制；提示词容量须兼容 MySQL TEXT。
 }
 
 // writableSettings 是可写配置项的唯一权威清单，key 与旧版 template.env、对标站 /config 完全一致。
@@ -172,14 +173,14 @@ var writableSettings = map[string]settingSpec{
 	"GOOGLE_API_KEY":     {secret: true, kind: settingText},
 	"DEEPLX_URL":         {kind: settingText},
 	"TRANSLATION_ENGINE": {kind: settingEnum, allowed: translationEngines},
-	"TRANSLATION_PROMPT": {kind: settingText},
+	"TRANSLATION_PROMPT": {kind: settingText, maxBytes: 60 * 1024},
 
 	// Agent
 	"OPENAI_URL":          {kind: settingText},
 	"OPENAI_MODEL":        {kind: settingText},
 	"OPENAI_API_KEY":      {secret: true, kind: settingText},
 	"AGENT_ENABLE":        {kind: settingBool},
-	"AGENT_SYSTEM_PROMPT": {kind: settingText},
+	"AGENT_SYSTEM_PROMPT": {kind: settingText, maxBytes: 60 * 1024},
 
 	// 其他
 	"IMAGE_MODE":           {kind: settingEnum, allowed: imageModes},
@@ -187,6 +188,7 @@ var writableSettings = map[string]settingSpec{
 	"EXTERNAL_DOMAIN":      {kind: settingText},
 	"BYPASS_URL":           {kind: settingText},
 	"BYPASS_ENGINE":        {kind: settingEnum, allowed: bypassEngines},
+	"BYPASS_USE_PROXY":     {kind: settingBool},
 	"JAVDB_HOST":           {kind: settingText},
 	"ENABLE_BT_ANTI_LEECH": {kind: settingBool},
 	"ENABLE_PHOTO_CACHE":   {kind: settingBool},
@@ -246,6 +248,10 @@ func (s *SettingsService) Get(ctx context.Context) (domain.SystemSettings, error
 		}
 		result.Values[item.Key] = item.Value
 	}
+	// 未启用增强或历史配置未提供开关时，一律对外呈现关闭状态。
+	if result.Values["BYPASS_ENGINE"] == "" || result.Values["BYPASS_USE_PROXY"] != "true" {
+		result.Values["BYPASS_USE_PROXY"] = "false"
+	}
 	return result, nil
 }
 
@@ -255,8 +261,15 @@ func (s *SettingsService) Update(ctx context.Context, values map[string]string) 
 	items := make([]ports.StoredSetting, 0, len(values))
 	for key, value := range values {
 		spec, ok := writableSettings[key]
-		if !ok || len(value) > 8192 {
+		if !ok {
 			return domain.SystemSettings{}, fmt.Errorf("%w: %s", ErrInvalidSetting, key)
+		}
+		maxBytes := spec.maxBytes
+		if maxBytes == 0 {
+			maxBytes = 8192
+		}
+		if len(value) > maxBytes {
+			return domain.SystemSettings{}, fmt.Errorf("%w: %s 最多允许 %d 字节（UTF-8），当前 %d 字节", ErrInvalidSetting, key, maxBytes, len(value))
 		}
 		value = strings.TrimSpace(value)
 		if err := validateSettingValue(key, spec, value); err != nil {
@@ -270,6 +283,31 @@ func (s *SettingsService) Update(ctx context.Context, values map[string]string) 
 			value = encrypted
 		}
 		items = append(items, ports.StoredSetting{Key: key, Value: value, IsSecret: spec.secret})
+	}
+	// 部分更新也遵循增强关闭则代理关闭；与本次设置使用同一批次持久化。
+	_, changesEngine := values["BYPASS_ENGINE"]
+	_, changesProxy := values["BYPASS_USE_PROXY"]
+	if changesEngine || changesProxy {
+		engine, supplied := values["BYPASS_ENGINE"]
+		if !supplied {
+			current, err := s.Get(ctx)
+			if err != nil {
+				return domain.SystemSettings{}, err
+			}
+			engine = current.Values["BYPASS_ENGINE"]
+		}
+		if strings.TrimSpace(engine) == "" || changesProxy && strings.TrimSpace(values["BYPASS_USE_PROXY"]) == "" {
+			found := false
+			for i := range items {
+				if items[i].Key == "BYPASS_USE_PROXY" {
+					items[i].Value = "false"
+					found = true
+				}
+			}
+			if !found {
+				items = append(items, ports.StoredSetting{Key: "BYPASS_USE_PROXY", Value: "false"})
+			}
+		}
 	}
 	if len(items) > 0 {
 		if err := s.repository.Upsert(ctx, items); err != nil {

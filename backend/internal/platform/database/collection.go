@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -56,13 +57,13 @@ func (r *CollectionRepository) SaveCollection(ctx context.Context, req ports.Col
 // saveCollectionTx 为同步兼容调用与队列逐项处理提供唯一资料写入规则。
 func (r *CollectionRepository) saveCollectionTx(ctx context.Context, tx *sql.Tx, req ports.CollectionRequest, b ports.CollectionBatch) (ports.CollectionCounts, error) {
 	empty := ports.CollectionCounts{}
-	if req.Source != "javdb" && req.Source != "netflav" {
+	if !ports.ValidCollectionSource(req.Source) {
 		return empty, fmt.Errorf("invalid collection source")
 	}
 	if len(b.Items) > 500 || len(b.Actors) > 500 {
 		return empty, fmt.Errorf("collection too large")
 	}
-	if req.Kind == "rank" && (req.Source != "javdb" || (req.Period != "daily" && req.Period != "weekly" && req.Period != "monthly")) {
+	if req.Kind == "rank" && !slices.Contains(ports.CollectionRankPeriods(req.Source), req.Period) {
 		return empty, fmt.Errorf("invalid rank")
 	}
 	var e error

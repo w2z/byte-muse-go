@@ -18,6 +18,7 @@ func TestLiveCollection(t *testing.T) {
 	for _, req := range []ports.CollectionRequest{
 		{Source: "javdb", Kind: "search", Query: "TEST", Page: 1},
 		{Source: "javdb", Kind: "rank", Period: "daily", Page: 1},
+		{Source: "javdb", Kind: "detail", Query: "96rq0V", Page: 1},
 		{Source: "netflav", Kind: "search", Query: "TEST", Page: 1},
 	} {
 		t.Run(req.Source+"_"+req.Kind, func(t *testing.T) {

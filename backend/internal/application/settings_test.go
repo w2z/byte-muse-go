@@ -2,6 +2,8 @@ package application
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 
 	"bytemuse/backend/internal/ports"
@@ -9,6 +11,87 @@ import (
 
 type settingsRepositoryStub struct {
 	items []ports.StoredSetting
+}
+
+// TestBypassProxySetting 验证开关持久化、部分更新禁用增强时关闭代理，以及非法布尔值拒绝。
+func TestBypassProxySetting(t *testing.T) {
+	repo := &settingsMemoryRepository{}
+	svc, err := NewSettingsService(repo, "sqlite", strings.Repeat("x", 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	for _, tc := range []struct {
+		values map[string]string
+		want   string
+	}{
+		{map[string]string{"BYPASS_ENGINE": "flaresolverr", "BYPASS_USE_PROXY": "true"}, "true"},
+		{map[string]string{"BYPASS_ENGINE": ""}, "false"},
+		{map[string]string{"BYPASS_USE_PROXY": "true"}, "false"},
+		{map[string]string{"BYPASS_ENGINE": "flaresolverr"}, "false"},
+		{map[string]string{"BYPASS_USE_PROXY": "true"}, "true"},
+		{map[string]string{"BYPASS_USE_PROXY": ""}, "false"},
+	} {
+		got, err := svc.Update(ctx, tc.values)
+		if err != nil || got.Values["BYPASS_USE_PROXY"] != tc.want {
+			t.Fatalf("proxy=%q err=%v", got.Values["BYPASS_USE_PROXY"], err)
+		}
+	}
+	if _, err := svc.Update(ctx, map[string]string{"BYPASS_USE_PROXY": "yes"}); !errors.Is(err, ErrInvalidSetting) {
+		t.Fatal(err)
+	}
+}
+
+// TestSettingsPromptCapacity 防止长中文提示词被普通配置长度限制拒绝，并核对完整回读和清空。
+func TestSettingsPromptCapacity(t *testing.T) {
+	for _, key := range []string{"AGENT_SYSTEM_PROMPT", "TRANSLATION_PROMPT"} {
+		t.Run(key, func(t *testing.T) {
+			repo := &settingsMemoryRepository{}
+			service, err := NewSettingsService(repo, "sqlite", strings.Repeat("x", 32))
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, prompt := range []string{strings.Repeat("中文提示词\n", 1000), strings.Repeat("中", 20480), strings.Repeat("😀", 15360), ""} {
+				want := strings.TrimSpace(prompt)
+				got, err := service.Update(context.Background(), map[string]string{key: prompt})
+				if err != nil {
+					t.Fatalf("save %d bytes: %v", len(prompt), err)
+				}
+				if got.Values[key] != want {
+					t.Fatal("save response truncated prompt")
+				}
+				got, err = service.Get(context.Background())
+				if err != nil || got.Values[key] != want {
+					t.Fatal("prompt did not round trip")
+				}
+			}
+		})
+	}
+}
+
+// TestSettingsLengthRejectionIsAtomic 验证字节边界、清晰错误及失败时不覆盖现有配置。
+func TestSettingsLengthRejectionIsAtomic(t *testing.T) {
+	for _, tc := range []struct{ key, value, limit string }{
+		{"AGENT_SYSTEM_PROMPT", strings.Repeat("中", 20480) + "a", "61440"},
+		{"TRANSLATION_PROMPT", strings.Repeat("😀", 15360) + "a", "61440"},
+		{"OPENAI_MODEL", strings.Repeat("a", 8193), "8192"},
+	} {
+		t.Run(tc.key, func(t *testing.T) {
+			repo := &settingsMemoryRepository{items: []ports.StoredSetting{{Key: tc.key, Value: "original"}, {Key: "AGENT_ENABLE", Value: "false"}}}
+			service, err := NewSettingsService(repo, "sqlite", strings.Repeat("x", 32))
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = service.Update(context.Background(), map[string]string{tc.key: tc.value, "AGENT_ENABLE": "true"})
+			if !errors.Is(err, ErrInvalidSetting) || !strings.Contains(err.Error(), tc.limit) || !strings.Contains(err.Error(), "UTF-8") {
+				t.Fatalf("expected explicit byte limit, got %v", err)
+			}
+			got, err := service.Get(context.Background())
+			if err != nil || got.Values[tc.key] != "original" || got.Values["AGENT_ENABLE"] != "false" {
+				t.Fatal("rejected batch changed settings")
+			}
+		})
+	}
 }
 
 func (r settingsRepositoryStub) List(context.Context) ([]ports.StoredSetting, error) {

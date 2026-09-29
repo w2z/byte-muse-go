@@ -22,6 +22,7 @@ type PendingSubmission struct{ ID, URI, InfoHash, Downloader, LeaseToken string 
 type TransferState struct {
 	Hash, Status         string
 	AddedAt, CompletedAt *time.Time
+	ObservedAt           time.Time // 拉取快照前的时间，用于拒绝控制操作之前的过期响应。
 }
 
 // SubscriptionDownloadRepository is the durable boundary for scheduled subscription downloads.

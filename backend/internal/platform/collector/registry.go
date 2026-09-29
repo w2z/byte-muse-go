@@ -4,6 +4,7 @@ import (
 	"context"
 	"slices"
 	"strings"
+	"time"
 
 	"bytemuse/backend/internal/ports"
 )
@@ -16,14 +17,11 @@ func NewRegistry(fetch Fetcher) *Registry { return &Registry{fetch: fetch} }
 
 // JavDBRankPeriods 返回已实现的有码榜周期，供请求校验和全榜调度共同使用。
 // 每次返回独立切片；源站其他分类及专题榜尚未接入，不在此声明。
-func JavDBRankPeriods() []string { return []string{"daily", "weekly", "monthly"} }
+func JavDBRankPeriods() []string { return ports.CollectionRankPeriods("javdb") }
 
 // Sources 返回各站点已接入的查询类型。
 func (r *Registry) Sources() []ports.CollectionSource {
-	return []ports.CollectionSource{
-		{ID: "javdb", Kinds: []string{"search", "rank"}},
-		{ID: "netflav", Kinds: []string{"search", "detail"}},
-	}
+	return ports.CollectionSources()
 }
 
 // Collect 校验单页范围，防止拼接任意地址；HTTP 200 仍须通过解析器结构检查。
@@ -59,7 +57,7 @@ func (r *Registry) Validate(req ports.CollectionRequest) error {
 		return ErrUnsupported
 	}
 	if req.Kind == "rank" {
-		if !slices.Contains(JavDBRankPeriods(), req.Period) {
+		if !slices.Contains(ports.CollectionRankPeriods(req.Source), req.Period) {
 			return ErrInvalidRequest
 		}
 	} else if strings.TrimSpace(req.Query) == "" {
@@ -74,6 +72,14 @@ func (r *Registry) Validate(req ports.CollectionRequest) error {
 				return ErrInvalidRequest
 			}
 		}
+	}
+	if req.Kind == "date" {
+		if _, e := time.Parse("2006-01-02", req.Query); e != nil {
+			return ErrInvalidRequest
+		}
+	}
+	if req.Kind == "actor" && (req.Query == "." || req.Query == ".." || strings.ContainsAny(req.Query, "/\\?#")) {
+		return ErrInvalidRequest
 	}
 	return nil
 }

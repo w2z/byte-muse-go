@@ -29,7 +29,7 @@ import (
 
 // Dependencies contains the services required by the HTTP transport.
 type Dependencies struct {
- Tags *application.TagService
+	Tags                  *application.TagService
 	Collection            *application.CollectionService
 	Auth                  *auth.Service
 	Catalog               *application.CatalogService
@@ -68,12 +68,14 @@ func New(dependencies Dependencies) http.Handler {
 		router.Get("/media", listMedia(dependencies.Catalog))
 		router.Get("/actors", listActors(dependencies.Actors))
 		router.Get("/tags", listTags(dependencies.Tags))
+		router.Put("/tags/{tagName}/subscription", saveTagSubscription(dependencies.Tags))
+		router.Delete("/tags/{tagName}/subscription", cancelTagSubscription(dependencies.Tags))
 		router.Put("/actors/{actorName}/subscription", saveActorSubscription(dependencies.Actors))
 		router.Delete("/actors/{actorName}/subscription", cancelActorSubscription(dependencies.Actors))
 		router.Get("/ranks", listRank(dependencies.CatalogQueries))
 		router.Get("/codes/release_today", listReleaseToday(dependencies.CatalogQueries))
 		router.Get("/codes/recommend", listRecommendations(dependencies.CatalogQueries))
-		router.Get("/complex/search", searchCatalog(dependencies.CatalogQueries))
+		router.Get("/complex/search", searchCatalog(dependencies.CatalogQueries, dependencies.Tags))
 		router.Get("/tasks", listScheduledTasks(dependencies.Scheduler))
 		router.Post("/tasks/{taskName}/run", runScheduledTask(dependencies.Scheduler))
 		router.Get("/logs", listLogs(dependencies.Logs))
@@ -85,8 +87,11 @@ func New(dependencies Dependencies) http.Handler {
 		router.Post("/subscriptions/{subscriptionId}/cancel", cancelSubscription(dependencies.Subscriptions))
 		router.Post("/subscriptions/{subscriptionId}/download", enqueueSubscriptionDownload(dependencies.SubscriptionDownloads))
 		router.Get("/downloads", listDownloads(dependencies.Downloads))
+		router.Post("/downloads/{taskId}/{action}", controlDownload(dependencies.Downloads))
+		router.Delete("/downloads/{taskId}", controlDownload(dependencies.Downloads))
 		router.Get("/system/settings", getSystemSettings(dependencies.Settings))
 		router.Put("/system/settings", updateSystemSettings(dependencies.Settings))
+		router.Post("/system/settings/openai/test", testOpenAI)
 	})
 
 	spa := spaHandler(dependencies.StaticDir)
@@ -428,7 +433,7 @@ func listRecommendations(service *application.CatalogQueryService) http.HandlerF
 	}
 }
 
-func searchCatalog(service *application.CatalogQueryService) http.HandlerFunc {
+func searchCatalog(service *application.CatalogQueryService, tags ...*application.TagService) http.HandlerFunc {
 	return func(response http.ResponseWriter, request *http.Request) {
 		if service == nil {
 			writeError(response, http.StatusServiceUnavailable, "service_unavailable", "搜索服务尚未就绪")
@@ -436,6 +441,19 @@ func searchCatalog(service *application.CatalogQueryService) http.HandlerFunc {
 		}
 		page, pageSize, ok := pagination(response, request)
 		if !ok {
+			return
+		}
+		if tag := strings.TrimSpace(request.URL.Query().Get("tag")); tag != "" {
+			if len(tags) == 0 || tags[0] == nil {
+				writeError(response, 503, "service_unavailable", "标签服务未就绪")
+				return
+			}
+			result, err := tags[0].SearchMedia(request.Context(), tag, page, pageSize)
+			if err != nil {
+				writeApplicationError(response, err)
+				return
+			}
+			writeJSON(response, 200, result)
 			return
 		}
 		result, err := service.Search(request.Context(), request.URL.Query().Get("q"), page, pageSize)
@@ -772,6 +790,12 @@ func settingErrorMessage(err error) string {
 
 func writeApplicationError(response http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, application.ErrTagFollowPending):
+		writeError(response, 500, "tag_follow_pending", "标签规则已保存，追新暂未完成，请重试或等待下次标签追新任务")
+	case errors.Is(err, application.ErrInvalidTagRule):
+		writeError(response, 400, "invalid_tag_rule", "标签类型、订阅状态或限制日期无效，日期须为 YYYY-MM-DD")
+	case errors.Is(err, ports.ErrTagNotFound):
+		writeError(response, 404, "not_found", "标签不存在")
 	case errors.Is(err, application.ErrInvalidVideoType):
 		writeError(response, http.StatusBadRequest, "invalid_video_type", "影片类型无效")
 	case errors.Is(err, application.ErrInvalidDownloadFilter):

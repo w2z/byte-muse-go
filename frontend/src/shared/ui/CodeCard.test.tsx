@@ -1,12 +1,16 @@
 // @vitest-environment jsdom
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import "@testing-library/jest-dom/vitest";
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { ComponentProps } from "react";
 import { afterEach, expect, it, vi } from "vitest";
 import { apiRequest } from "../api/client";
 import type { Media, SystemSettings } from "../api/types";
 import { CodeCard } from "./CodeCard";
+
+// jsdom 未实现媒体查询，提供 Arco 响应式描述列表所需的浏览器接口。
+Object.defineProperty(window, "matchMedia", { writable: true, value: (query: string) => ({ matches: false, media: query, addListener() {}, removeListener() {} }) });
 
 vi.mock("../api/client", () => ({ apiRequest: vi.fn() }));
 // 播放器会创建浏览器媒体实例；保留封面入参用于检查图片模式边界。
@@ -21,10 +25,10 @@ const media: Media = {
 };
 const settings = (mode: string): SystemSettings => ({ database_driver: "sqlite", values: { IMAGE_MODE: mode }, configured: {} });
 
-function renderCard(mode?: string) {
+function renderCard(mode?: string, props: Partial<ComponentProps<typeof CodeCard>> = {}) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
   if (mode !== undefined) client.setQueryData(["system-settings"], settings(mode));
-  const view = render(<QueryClientProvider client={client}><CodeCard media={media} /></QueryClientProvider>);
+  const view = render(<QueryClientProvider client={client}><CodeCard media={media} {...props} /></QueryClientProvider>);
   return { client, ...view };
 }
 
@@ -37,6 +41,27 @@ it("无图模式不渲染封面或剧照，手动打开预告也不传封面", a
   expect(screen.getByText("测试影片")).toBeInTheDocument();
   await user.click(screen.getByRole("button", { name: "预告" }));
   expect(screen.getByLabelText("预告播放器")).not.toHaveAttribute("poster");
+});
+
+it("支持隐藏整个操作区和状态，同时保留影片信息与复制番号", () => {
+  const { container } = renderCard("VISIBLE", { hideActions: true, hideStatus: true, actions: <button>订阅</button> });
+  expect(screen.getByText("测试影片")).toBeInTheDocument();
+  expect(screen.getByRole("img", { name: "TEST-001 封面" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "复制番号 TEST-001" })).toBeInTheDocument();
+  expect(screen.queryByText("未订阅")).toBeNull();
+  expect(container.querySelector(".code-card-actions")).toBeNull();
+  expect(screen.queryByRole("button", { name: "订阅" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "预告" })).toBeNull();
+});
+
+it("默认保留状态及操作，隐藏状态不会隐藏操作", () => {
+  const { client, rerender } = renderCard("VISIBLE", { actions: <button>订阅</button> });
+  expect(screen.getByText("未订阅")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "订阅" })).toBeInTheDocument();
+  rerender(<QueryClientProvider client={client}><CodeCard media={media} hideStatus actions={<button>订阅</button>} /></QueryClientProvider>);
+  expect(screen.queryByText("未订阅")).toBeNull();
+  expect(screen.getByRole("button", { name: "订阅" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "预告" })).toBeInTheDocument();
 });
 
 it("图片模式保存到共享缓存后，已有卡片立即隐藏封面", async () => {
@@ -70,4 +95,49 @@ it("模糊模式使用模糊封面，未知模式不加载图片", async () => {
   expect(screen.getByRole("img", { name: "TEST-001 封面" })).toHaveClass("code-card-image-blurred");
   await act(async () => { client.setQueryData(["system-settings"], settings("unknown")); });
   await waitFor(() => expect(screen.queryByRole("img", { name: "TEST-001 封面" })).toBeNull());
+});
+
+it("完整资料分组显示真实零值与否值，无图模式不加载详细图片", () => {
+  const { container } = renderCard("INVISIBLE", { variant: "detail", media: { ...media, details: {
+    actors: ["演员甲"], tags: ["标签甲"], producer: "制作商", publisher: "发行商", series: null,
+    release_code: null, plot: null, director: null, rating: 0, want_count: 0, translation_engine: null, mosaic: false, censored: false, resolution: null,
+  } } });
+  expect(screen.getByText("基本信息")).toBeInTheDocument();
+  expect(screen.getByText("制作与发行")).toBeInTheDocument();
+  expect(screen.getByText("评分与规格")).toBeInTheDocument();
+  expect(screen.getByText("演员甲")).toBeInTheDocument();
+  expect(screen.getByText("标签甲")).toBeInTheDocument();
+  expect(screen.getAllByText("0")).toHaveLength(2);
+  expect(screen.getAllByText("否")).toHaveLength(2);
+  expect(screen.getAllByText("已按图片设置隐藏")).toHaveLength(2);
+  expect(container.querySelector("img")).toBeNull();
+});
+
+it("详情顶部显示完整封面，移除卡片标题和复制按钮", () => {
+  const { container } = renderCard("VISIBLE", { variant: "detail" });
+  expect(screen.getByRole("img", { name: "TEST-001 封面" })).toHaveAttribute("src", media.banner_url);
+  expect(screen.getByRole("img", { name: "TEST-001 封面" })).toHaveAttribute("width", "100%");
+  expect(container.querySelector(".code-card")).toBeNull();
+  expect(screen.queryByRole("button", { name: "复制番号 TEST-001" })).toBeNull();
+  expect(screen.getByText("基本信息")).toBeInTheDocument();
+  expect(screen.getByRole("img", { name: "TEST-001 剧照 1" })).toHaveAttribute("src", media.still_photos![0]);
+});
+
+it("没有剧照的详情不显示剧照区域", () => {
+  renderCard("VISIBLE", { variant: "detail", media: { ...media, still_photos: [] } });
+  expect(screen.queryByText("剧照")).toBeNull();
+});
+
+it("详情从选中的剧照打开预览，底部缩略图可切换且无图设置立即关闭", async () => {
+  const user = userEvent.setup();
+  const { client } = renderCard("VISIBLE", { variant: "detail", media: { ...media, still_photos: ["https://example.test/one.jpg", "https://example.test/two.jpg"] } });
+  const second = screen.getByRole("img", { name: "TEST-001 剧照 2" });
+  fireEvent.load(second);
+  await user.click(second);
+  expect(await screen.findByRole("button", { name: "查看第 2 张剧照" })).toHaveAttribute("aria-pressed", "true");
+  await user.click(screen.getByRole("button", { name: "查看第 1 张剧照" }));
+  expect(screen.getByRole("button", { name: "查看第 1 张剧照" })).toHaveAttribute("aria-pressed", "true");
+  expect(screen.getByRole("button", { name: "查看第 2 张剧照" })).toHaveAttribute("aria-pressed", "false");
+  await act(async () => { client.setQueryData(["system-settings"], settings("INVISIBLE")); });
+  await waitFor(() => expect(document.querySelector("img")).toBeNull());
 });

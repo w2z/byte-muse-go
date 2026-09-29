@@ -1,13 +1,16 @@
-import { Button, DatePicker, Divider, Select, Table, Tag } from "@arco-design/web-react";
+import { Button, DatePicker, Divider, Drawer, Dropdown, Menu, Modal, Select, Space, Table, Tag, Grid } from "@arco-design/web-react";
+import { IconClose, IconDown } from "@arco-design/web-react/icon";
 import dayjs from "dayjs";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState, type FormEvent } from "react";
 import { apiRequest, type Page } from "../../shared/api/client";
-import type { DownloadTask } from "../../shared/api/types";
+import type { DownloadAction, DownloadTask, Media } from "../../shared/api/types";
+import { CodeCard } from "../../shared/ui/CodeCard";
 import { ContentCard } from "../../shared/ui/ContentCard";
 import { DEFAULT_PAGE_SIZE, ListPagination } from "../../shared/ui/ListPagination";
 import { PageHeader } from "../../shared/ui/PageHeader";
 import { PageState } from "../../shared/ui/PageState";
+import { useFeedbackMessage } from "../../shared/ui/FeedbackMessage";
 
 /** 下载任务状态到公共标签色板的映射：完成是正常态，失败告警，其余（排队/搜索/提交/下载中）都是进行中。 */
 function statusTone(status: DownloadTask["status"]): string {
@@ -17,10 +20,57 @@ function statusTone(status: DownloadTask["status"]): string {
 }
 
 const transferLabels: Record<string, string> = {
-  downloading: "下载中", paused: "暂停", failed: "下载失败", completed: "下载完成",
+  downloading: "下载中", paused: "暂停", stopped: "停止", failed: "下载失败", completed: "下载完成",
 };
 
+const actionLabels: Record<DownloadAction, string> = { pause: "暂停", stop: "停止", resume: "继续", retry: "重试", delete: "删除任务", delete_files: "删除任务+文件" };
+const statusLabels: Record<DownloadTask["status"], string> = { queued: "排队中", searching: "搜索中", submitted: "已提交", downloading: "下载中", completed: "已完成", failed: "失败", unknown: "待核实" };
+
+/** 操作只消费后端能力，删除模式明确确认；同一行请求期间禁用全部按钮。 */
+function DownloadActions({ task, onChanged }: { task: DownloadTask; onChanged: (deleted?: boolean) => void }) {
+  const [message, messageHolder] = useFeedbackMessage();
+  const [deleteAction, setDeleteAction] = useState<"delete" | "delete_files" | null>(null);
+  const actions = task.available_actions ?? [];
+  const mutation = useMutation({
+    mutationFn: (action: DownloadAction) => apiRequest<void>(action === "delete" || action === "delete_files"
+      ? "/downloads/" + encodeURIComponent(task.id) + "?delete_files=" + String(action === "delete_files")
+      : "/downloads/" + encodeURIComponent(task.id) + "/" + action,
+      { method: action === "delete" || action === "delete_files" ? "DELETE" : "POST" }),
+    onSuccess: (_, action) => { setDeleteAction(null); message.success("操作成功"); onChanged(action === "delete" || action === "delete_files"); },
+    onError: (error: Error) => { message.error(error.message); onChanged(); },
+  });
+  /** 删除文件不可恢复，确认弹窗明确展示番号和删除范围。 */
+  function confirmDelete(action: "delete" | "delete_files") {
+    setDeleteAction(action);
+  }
+  if (!actions.length) return <span>—</span>;
+  return <>{messageHolder}<Space size={4} wrap>
+    {actions.filter((action) => action !== "delete" && action !== "delete_files").map((action) => <Button key={action} type="text" disabled={mutation.isPending} loading={mutation.isPending && mutation.variables === action} onClick={() => mutation.mutate(action)}>{actionLabels[action]}</Button>)}
+    {actions.includes("delete") && (actions.includes("delete_files") ? <Dropdown trigger="click" disabled={mutation.isPending} droplist={<Menu onClickMenuItem={(key) => confirmDelete(key as "delete" | "delete_files")}><Menu.Item key="delete">删除任务</Menu.Item><Menu.Item key="delete_files">删除任务+文件</Menu.Item></Menu>}><Button type="text" status="danger" disabled={mutation.isPending}>删除<IconDown /></Button></Dropdown>
+      : <Button type="text" status="danger" disabled={mutation.isPending} onClick={() => confirmDelete("delete")}>删除</Button>)}
+  </Space><Modal title={(deleteAction ? actionLabels[deleteAction] : "删除任务") + "：" + (task.code ?? "此任务")} visible={deleteAction !== null}
+    onCancel={() => { if (!mutation.isPending) setDeleteAction(null); }} onOk={() => { if (deleteAction) return mutation.mutateAsync(deleteAction); }}
+    okText="确认删除" cancelText="取消" okButtonProps={{ status: "danger" }} confirmLoading={mutation.isPending} maskClosable={!mutation.isPending}>
+    {deleteAction === "delete_files" ? "将删除下载任务及下载器中的文件，文件删除后无法恢复。" : "仅删除下载任务，保留已经下载的文件。"}
+  </Modal></>;
+}
+
 type DownloadFilters = { status: string; added: string[]; completed: string[] };
+
+/** 按媒体 ID 加载封面及分组资料；抽屉关闭或切换影片时取消未完成请求。 */
+function DownloadMediaDrawer({ mediaId, onClose }: { mediaId: string | null; onClose: () => void }) {
+  const detail = useQuery({
+    queryKey: ["media-detail", mediaId],
+    queryFn: ({ signal }) => apiRequest<Media>("/media/" + encodeURIComponent(mediaId!), { signal }),
+    enabled: mediaId !== null,
+  });
+  return <Drawer {...{ role: "dialog", "aria-modal": true, "aria-label": "影片信息" }} title="影片信息" visible={mediaId !== null} onCancel={onClose} placement="right" width="min(860px, 100vw)" footer={null} unmountOnExit
+    closeIcon={<Button type="text" aria-label="关闭影片信息" icon={<IconClose />} />}>
+    <PageState isLoading={detail.isLoading} error={detail.error} onRetry={() => void detail.refetch()}>
+      {detail.data ? <CodeCard key={mediaId} media={detail.data} variant="detail" /> : null}
+    </PageState>
+  </Drawer>;
+}
 
 /**
  * 下载任务列表。
@@ -35,11 +85,14 @@ type DownloadFilters = { status: string; added: string[]; completed: string[] };
  * 数据来源 GET /downloads。
  */
 export function DownloadListPage() {
+  const queryClient = useQueryClient();
+  const [selectedMediaId, setSelectedMediaId] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
   const [draft, setDraft] = useState<DownloadFilters>({ status: "", added: [], completed: [] });
   const [applied, setApplied] = useState<DownloadFilters>({ status: "", added: [], completed: [] });
   const query = useQuery({
+    refetchInterval: 5000,
     queryKey: ["downloads", page, pageSize, applied.status, applied.added, applied.completed],
     queryFn: () => {
       const params = new URLSearchParams({ page: String(page), page_size: String(pageSize) });
@@ -51,6 +104,11 @@ export function DownloadListPage() {
   });
   const items = query.data?.items ?? [];
   const total = query.data?.total ?? 0;
+  /** 删除页末任务后退到有效页，并刷新全部已缓存的下载筛选。 */
+  function refreshAfterAction(deleted = false) {
+    if (deleted && items.length === 1 && page > 1) setPage(page - 1);
+    void queryClient.invalidateQueries({ queryKey: ["downloads"] });
+  }
 
   /** 切换每页条数：页长变了，页码必须回到第一页，否则会请求到越界页。 */
   function changePageSize(next: number) {
@@ -84,13 +142,25 @@ export function DownloadListPage() {
       <PageHeader title="下载任务" />
       <ContentCard className="table-shell data-table-shell">
         <form className="download-filters" role="search" onSubmit={search}>
-          <div className="download-filter-field"><span className="download-filter-label">下载状态</span><Select aria-label="下载状态筛选" value={draft.status} onChange={(value) => setDraft((current) => ({ ...current, status: value }))} options={[
-            { label: "全部状态", value: "" }, { label: "下载中", value: "downloading" }, { label: "暂停", value: "paused" },
-            { label: "下载失败", value: "failed" }, { label: "下载完成", value: "completed" },
-          ]} /></div>
-          <div className="download-filter-field"><span className="download-filter-label">加入时间</span><DatePicker.RangePicker aria-label="加入时间筛选" value={draft.added.length === 2 ? [dayjs(draft.added[0]), dayjs(draft.added[1])] : undefined} onChange={(value) => setDraft((current) => ({ ...current, added: value ?? [] }))} placeholder={["加入开始", "加入结束"]} /></div>
-          <div className="download-filter-field"><span className="download-filter-label">下载完成时间</span><DatePicker.RangePicker aria-label="下载完成时间筛选" value={draft.completed.length === 2 ? [dayjs(draft.completed[0]), dayjs(draft.completed[1])] : undefined} onChange={(value) => setDraft((current) => ({ ...current, completed: value ?? [] }))} placeholder={["完成开始", "完成结束"]} /></div>
-          <div className="download-filter-actions"><Button type="primary" htmlType="submit">搜索</Button><Button onClick={reset}>重置</Button></div>
+          <Grid.Row gutter={[12, 12]} justify="start" align="center">
+            <Grid.Col xs={24} sm={12} md={8} xl={4}>
+              <div className="download-filter-field filter-field"><span className="download-filter-label filter-label">下载状态</span><Select className="filter-control" aria-label="下载状态筛选" value={draft.status} onChange={(value) => setDraft((current) => ({ ...current, status: value }))} options={[
+                { label: "全部状态", value: "" }, { label: "下载中", value: "downloading" }, { label: "暂停", value: "paused" },
+                { label: "停止", value: "stopped" },
+                { label: "下载失败", value: "failed" }, { label: "下载完成", value: "completed" },
+              ]} /></div>
+            </Grid.Col>
+            <Grid.Col xs={24} sm={12} md={8} xl={4}>
+              <div className="download-filter-field filter-field filter-field--range"><span className="download-filter-label filter-label">加入时间</span><DatePicker.RangePicker className="filter-control" aria-label="加入时间筛选" value={draft.added.length === 2 ? [dayjs(draft.added[0]), dayjs(draft.added[1])] : undefined} onChange={(value) => setDraft((current) => ({ ...current, added: value ?? [] }))} placeholder={["加入开始", "加入结束"]} />
+              </div>
+            </Grid.Col>
+            <Grid.Col xs={24} sm={12} md={8} xl={4}>
+              <div className="download-filter-field filter-field filter-field--range"><span className="download-filter-label filter-label">下载完成时间</span><DatePicker.RangePicker className="filter-control" aria-label="下载完成时间筛选" value={draft.completed.length === 2 ? [dayjs(draft.completed[0]), dayjs(draft.completed[1])] : undefined} onChange={(value) => setDraft((current) => ({ ...current, completed: value ?? [] }))} placeholder={["完成开始", "完成结束"]} /></div>
+            </Grid.Col>
+            <Grid.Col xs={24} sm={12} md={8} xl={4}>
+              <div className="download-filter-actions filter-actions"><Button type="primary" htmlType="submit">搜索</Button><Button onClick={reset}>重置</Button></div>
+            </Grid.Col>
+          </Grid.Row>
         </form>
         <Divider />
         <PageState isLoading={query.isLoading} error={query.error} onRetry={() => void query.refetch()}>
@@ -99,14 +169,17 @@ export function DownloadListPage() {
             border={false}
             rowKey="id"
             data={items}
-            loading={query.isLoading || query.isFetching}
+            loading={query.isLoading}
             noDataElement={<div className="data-table-empty" role="status">暂无下载任务</div>}
             pagination={false}
+            scroll={{ x: 1400 }}
             columns={[
-              { title: "影片", dataIndex: "media_id", render: (value: string) => <span className="code-cell">{value}</span> },
+              { title: "影片", dataIndex: "code", width: 130, render: (value: string | null, task: DownloadTask) => value && task.media_id
+                ? <Button type="text" className="code-cell" onClick={() => setSelectedMediaId(task.media_id)}>{value}</Button>
+                : <span className="code-cell">{value || "—"}</span> },
               { title: "资源站", dataIndex: "source_site", render: (value: string | null) => value || "—" },
               { title: "下载器", dataIndex: "downloader", render: (value: string | null) => value || "—" },
-              { title: "状态", dataIndex: "status", render: (value: DownloadTask["status"]) => <Tag className={`state-tag ${statusTone(value)}`}>{value}</Tag> },
+              { title: "状态", dataIndex: "status", render: (value: DownloadTask["status"]) => <Tag className={`state-tag ${statusTone(value)}`}>{statusLabels[value] ?? value}</Tag> },
               { title: "传输状态", dataIndex: "transfer_status", render: (value: string | null) => value ? (transferLabels[value] ?? value) : "—" },
               { title: "加入时间", dataIndex: "added_at", render: (value: string | null) => value ? dayjs(value).format("YYYY-MM-DD HH:mm") : "—" },
               { title: "完成时间", dataIndex: "completed_at", render: (value: string | null) => value ? dayjs(value).format("YYYY-MM-DD HH:mm") : "—" },
@@ -116,11 +189,13 @@ export function DownloadListPage() {
                 render: (value: string | null | undefined) => (value ? <span className="code-cell">{value}</span> : null),
               },
               { title: "错误", dataIndex: "error_message" },
+              { title: "操作", key: "actions", width: 200, fixed: "right", render: (_: unknown, task: DownloadTask) => <DownloadActions task={task} onChanged={refreshAfterAction} /> },
             ]}
           />
           <ListPagination page={page} total={total} pageSize={pageSize} onChange={setPage} onPageSizeChange={changePageSize} />
         </PageState>
       </ContentCard>
+      <DownloadMediaDrawer mediaId={selectedMediaId} onClose={() => setSelectedMediaId(null)} />
     </section>
   );
 }

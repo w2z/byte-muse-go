@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
-import { Input, Tabs } from "@arco-design/web-react";
+import { Button, Divider, Input, Tabs, Grid } from "@arco-design/web-react";
 import { IconSearch } from "@arco-design/web-react/icon";
 import { apiRequest, type Page } from "../../shared/api/client";
 import type { Actor } from "../../shared/api/types";
@@ -46,30 +46,55 @@ export function ActorListPage() {
     setSearchInput("");
   }
 
+  /** 搜索回到第一页，相同条件仍刷新当前结果。 */
   function submitSearch() {
-    setKeywords(searchInput.trim());
+    const next = searchInput.trim();
+    setKeywords(next);
     setPage(1);
+    if (next === keywords && page === 1) void query.refetch();
+  }
+
+  /** 清空筛选并回到当前标签的第一页。 */
+  function resetFilters() {
+    setSearchInput("");
+    setKeywords("");
+    setPage(1);
+    if (!keywords && page === 1) void query.refetch();
   }
 
   return (
     <section>
       <PageHeader title="演员" />
-      <div className="actor-toolbar">
-        <Tabs activeTab={tab} onChange={changeTab} className="actor-tabs">
+      <Tabs style={{ marginBottom: 16 }} activeTab={tab} onChange={changeTab}>
           <Tabs.TabPane key="active" title="订阅中" />
           <Tabs.TabPane key="hot" title="热门" />
-        </Tabs>
-        <Input.Search
-          className="actor-search"
-          allowClear
-          value={searchInput}
-          placeholder="搜索演员名称"
-          prefix={<IconSearch />}
-          onChange={setSearchInput}
-          onSearch={submitSearch}
-          onClear={() => { setSearchInput(""); setKeywords(""); setPage(1); }}
-        />
-      </div>
+      </Tabs>
+      <form className="filter-toolbar actor-filter-toolbar" role="search" onSubmit={(event) => { event.preventDefault(); submitSearch(); }}>
+        <Grid.Row gutter={[12, 12]} justify="start" align="center">
+          <Grid.Col xs={24} sm={12} md={8} xl={4}>
+            <div className="actor-search-field filter-labeled">
+              <span className="filter-label">演员名称</span>
+              <Input
+                aria-label="演员名称"
+                className="actor-search"
+                allowClear
+                value={searchInput}
+                placeholder="搜索演员名称"
+                prefix={<IconSearch />}
+                onChange={setSearchInput}
+                onClear={resetFilters}
+              />
+            </div>
+          </Grid.Col>
+          <Grid.Col xs={24} sm={12} md={8} xl={4}>
+            <div className="filter-actions">
+              <Button type="primary" htmlType="submit" loading={query.isFetching}>搜索</Button>
+              <Button htmlType="button" onClick={resetFilters}>重置</Button>
+            </div>
+          </Grid.Col>
+        </Grid.Row>
+      </form>
+      <Divider style={{ margin: "0 0 16px" }} />
       <PageState
         isLoading={query.isLoading}
         error={query.error}

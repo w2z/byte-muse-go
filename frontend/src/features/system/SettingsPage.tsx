@@ -32,9 +32,21 @@ type SettingGroup = { code: string; title: string; fields: SettingField[] };
 type SettingCategory = { code: string; title: string; groupCodes: string[] };
 type SettingsUpdate = { values: Record<string, string> };
 const TabPane = Tabs.TabPane;
+// 每个 Unicode 码点最多 4 个 UTF-8 字节，确保输入不超过后端 60 KiB 容量。
+const PROMPT_MAX_CHARS = 15360;
+
+/** 仅提示词采用长文本容量，Cookie 等普通配置不共享此限制。 */
+function isPromptSetting(key: string): boolean {
+  return key === "TRANSLATION_PROMPT" || key === "AGENT_SYSTEM_PROMPT";
+}
+
+/** 按完整 Unicode 码点截断，避免把 emoji 的代理对切开。 */
+function limitPrompt(value: string): string {
+  return Array.from(value).slice(0, PROMPT_MAX_CHARS).join("");
+}
 
 const bypassProjects = [
-  { name: "CloudflareBypassForScraping", url: "https://github.com/sarperavci/CloudflareBypassForScraping" },
+  { name: "ByPass", url: "https://github.com/sarperavci/CloudflareBypassForScraping" },
   { name: "FlareSolverr", url: "https://github.com/FlareSolverr/FlareSolverr" },
   { name: "Scrapling", url: "https://github.com/D4Vinci/Scrapling" },
 ] as const;
@@ -560,7 +572,7 @@ const groups: SettingGroup[] = [
         kind: "enum",
         options: [
           { value: "", label: "不使用" },
-          { value: "cloudflare_bypass_for_scraping", label: "CloudflareBypassForScraping" },
+          { value: "cloudflare_bypass_for_scraping", label: "ByPass" },
           { value: "flaresolverr", label: "FlareSolverr" },
           { value: "scrapling", label: "Scrapling" },
         ],
@@ -570,6 +582,12 @@ const groups: SettingGroup[] = [
         label: "爬虫增强",
         description: "选择增强类型后填写服务地址；仅在采集遇到 Cloudflare 人机页面时调用",
         kind: "text",
+      },
+      {
+        key: "BYPASS_USE_PROXY",
+        label: "爬虫增强是否使用代理",
+        description: "开启后，爬虫增强使用上方配置的代理地址访问源站；未配置代理地址时不传代理。选择“不使用”会自动关闭此开关。",
+        kind: "bool",
       },
       { key: "JAVDB_HOST", label: "JAVDB API地址", kind: "text" },
       { key: "ENABLE_BT_ANTI_LEECH", label: "BT种子下完即撤种", kind: "bool" },
@@ -772,6 +790,7 @@ export function SettingsPage() {
       }
     }
     const parsed = parseFilterDraft(values.DEFAULT_FILTER);
+    if (!next.BYPASS_ENGINE) next.BYPASS_USE_PROXY = false;
     setDraft(next);
     setFilter(parsed.draft);
     setFilterUnknown(parsed.unknown);
@@ -798,8 +817,37 @@ export function SettingsPage() {
     },
   });
 
+  // 测试直接提交当前草稿，不触发保存，也不依赖 Agent 开关。
+  const openAITest = useMutation({
+    mutationFn: async () => {
+      const started = performance.now();
+      try {
+        return await apiRequest<{ message: string }>("/system/settings/openai/test", {
+          method: "POST",
+          body: JSON.stringify({
+            url: String(draft.OPENAI_URL ?? "").trim(),
+            model: String(draft.OPENAI_MODEL ?? "").trim(),
+            api_key: String(draft.OPENAI_API_KEY ?? "").trim(),
+          }),
+        });
+      } catch (error) {
+        // 后端不可达时没有返回耗时，使用浏览器实际等待时长保持提示格式一致。
+        if (error instanceof Error && /^OpenAI 连接失败 [(][0-9]+ms[)](?:：.+)?$/.test(error.message)) throw error;
+        const reason = error instanceof Error ? error.message : "请求失败，请稍后重试";
+        throw new Error(`OpenAI 连接失败 (${Math.round(performance.now() - started)}ms)：${reason}`);
+      }
+    },
+    retry: false,
+    onSuccess: (result) => message.success(result.message),
+    onError: (error: Error) => message.error(error.message),
+  });
+
   const setValue = (key: string, value: string | boolean) =>
-    setDraft((previous) => ({ ...previous, [key]: value }));
+    setDraft((previous) => ({
+      ...previous,
+      [key]: value,
+      ...(key === "BYPASS_ENGINE" && value === "" ? { BYPASS_USE_PROXY: false } : {}),
+    }));
 
   const selectCategory = (categoryCode: string) => {
     setActiveCategoryCode(categoryCode);
@@ -835,7 +883,9 @@ export function SettingsPage() {
           payload[field.key] = value === true ? "true" : "false";
           continue;
         }
-        payload[field.key] = typeof value === "string" ? value.trim() : "";
+        payload[field.key] = typeof value === "string"
+          ? (isPromptSetting(field.key) ? limitPrompt(value) : value).trim()
+          : "";
         if (field.siteAuth) {
           for (const key of [field.siteAuth.modeKey, field.siteAuth.keyField]) {
             if (key) payload[key] = String(draft[key] ?? "").trim();
@@ -1039,6 +1089,7 @@ export function SettingsPage() {
               uncheckedIcon={<IconClose />}
               aria-label={field.label}
               checked={draft[field.key] === true}
+              disabled={field.key === "BYPASS_USE_PROXY" && !draft.BYPASS_ENGINE}
               onChange={(checked: boolean) => setValue(field.key, checked)}
             />
           </div>
@@ -1067,9 +1118,30 @@ export function SettingsPage() {
     const value =
       typeof draft[field.key] === "string" ? (draft[field.key] as string) : "";
     const siteField = group.code === "site";
-    const promptField =
-      field.key === "TRANSLATION_PROMPT" || field.key === "AGENT_SYSTEM_PROMPT";
+    const promptField = isPromptSetting(field.key);
     const placeholder = fieldPlaceholder(field);
+    if (promptField) {
+      const count = Array.from(value).length;
+      return (
+        <div className="settings-field settings-field-wide" key={field.key}>
+          <label className="settings-field-label" htmlFor={filterId(field.key)}>{field.label}</label>
+          <div className="settings-prompt-input">
+            <Input.TextArea
+              id={filterId(field.key)}
+              aria-describedby={`${filterId(field.key)}-limit`}
+              className="settings-textarea settings-prompt-textarea"
+              value={value}
+              placeholder={placeholder}
+              rows={5}
+              onChange={(nextValue) => setValue(field.key, limitPrompt(nextValue))}
+            />
+            <span id={`${filterId(field.key)}-limit`} className={`settings-prompt-count${count >= PROMPT_MAX_CHARS ? " settings-prompt-count-limit" : ""}`} aria-live="polite">
+              {count}/{PROMPT_MAX_CHARS}
+            </span>
+          </div>
+        </div>
+      );
+    }
     if (field.key === "BYPASS_URL") {
       const engine = typeof draft.BYPASS_ENGINE === "string" ? draft.BYPASS_ENGINE : "";
       return (
@@ -1082,7 +1154,7 @@ export function SettingsPage() {
               placeholder="选择类型"
               options={[
                 { value: "", label: "不使用" },
-                { value: "cloudflare_bypass_for_scraping", label: "CloudflareBypassForScraping" },
+                { value: "cloudflare_bypass_for_scraping", label: "ByPass" },
                 { value: "flaresolverr", label: "FlareSolverr" },
                 { value: "scrapling", label: "Scrapling" },
               ]}
@@ -1121,21 +1193,12 @@ export function SettingsPage() {
           <Input.TextArea
             id={filterId(field.key)}
             aria-label={field.key === "PTT_COOKIE" ? "PTTime Cookie" : undefined}
-            className={
-              promptField
-                ? "settings-textarea " +
-                  (field.key === "TRANSLATION_PROMPT"
-                    ? "settings-translation-prompt"
-                    : "settings-agent-prompt")
-                : siteField
-                  ? "settings-site-textarea"
-                  : "settings-textarea"
-            }
+            className={siteField ? "settings-site-textarea" : "settings-textarea"}
             value={value}
             placeholder={placeholder}
-            rows={promptField ? 5 : siteField ? SITE_TEXTAREA_ROWS : undefined}
+            rows={siteField ? SITE_TEXTAREA_ROWS : undefined}
             autoSize={
-              promptField || siteField
+              siteField
                 ? undefined
                 : {
                     minRows: field.kind === "textarea" ? 5 : 3,
@@ -1212,6 +1275,19 @@ export function SettingsPage() {
             <section className="settings-group-section">
               <div className="settings-fields">
                 {activeGroup.fields.map((field) => renderField(field, activeGroup))}
+                {activeGroup.code === "agent" ? (
+                  <div className="settings-field">
+                    <div>
+                      <Button
+                        loading={openAITest.isPending}
+                        disabled={openAITest.isPending}
+                        onClick={() => openAITest.mutate()}
+                      >
+                        测试 OpenAI
+                      </Button>
+                    </div>
+                  </div>
+                ) : null}
               </div>
             </section>
           </div>

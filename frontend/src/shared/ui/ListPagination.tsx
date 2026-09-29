@@ -4,7 +4,7 @@ import { Pagination } from "@arco-design/web-react";
  * 每页条数可选项。
  *
  * 这里是唯一权威：分页条渲染的选项、列表页的默认值、请求参数里的 page_size 都取自这里。
- * 默认业务列表上限 200 与后端 backend/internal/ports 的 MaxPageSize 保持一致；日志页通过 pageSizeOptions 单独使用 100-500。
+ * 默认业务列表上限 200 与后端 backend/internal/ports 的 MaxPageSize 保持一致；日志页和全部标签通过 pageSizeOptions 单独使用 100-500。
  */
 export const PAGE_SIZE_OPTIONS = [15, 30, 50, 100, 200];
 

@@ -1,15 +1,58 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, expect, test, vi } from "vitest";
 import { DownloadListPage } from "./DownloadListPage";
 
+// jsdom 未实现媒体查询，提供 Arco 响应式描述列表所需的浏览器接口。
+Object.defineProperty(window, "matchMedia", { writable: true, value: (query: string) => ({ matches: false, media: query, addListener() {}, removeListener() {} }) });
+
 const requests: string[] = [];
 let responseItems: Record<string, unknown>[] = [];
+let detailError = false;
 vi.mock("../../shared/api/client", () => ({
-  apiRequest: (path: string) => { requests.push(path); return Promise.resolve({ items: responseItems, total: responseItems.length, page: 1, page_size: 15 }); },
+  apiRequest: (path: string) => {
+    requests.push(path);
+    if (path.startsWith("/media/")) return detailError ? Promise.reject(new Error("影片加载失败")) : Promise.resolve({ id: "m1", code: "TEST-001", title: "影片详情标题", release_date: "2026-09-28", subscription_status: "active", display_status: "subscribed", preview_url: "https://example.test/trailer.mp4" });
+    if (path === "/system/settings") return Promise.resolve({ values: { IMAGE_MODE: "INVISIBLE" } });
+    return Promise.resolve({ items: responseItems, total: responseItems.length, page: 1, page_size: 15 });
+  },
 }));
-afterEach(() => { cleanup(); requests.length = 0; responseItems = []; });
+afterEach(() => { cleanup(); requests.length = 0; responseItems = []; detailError = false; });
+
+test("点击番号加载封面和资料，详情无卡片与操作并可关闭重开", async () => {
+  responseItems = [{ id: "d1", media_id: "media/id", code: "TEST-001", status: "failed" }];
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(<QueryClientProvider client={client}><DownloadListPage /></QueryClientProvider>);
+  fireEvent.click(await screen.findByRole("button", { name: "TEST-001" }));
+  const dialog = await screen.findByRole("dialog", { name: "影片信息" });
+  expect((await within(dialog).findAllByText("影片详情标题")).length).toBeGreaterThan(0);
+  expect(requests).toContain("/media/media%2Fid");
+  expect(within(dialog).getByText("2026-09-28")).not.toBeNull();
+  expect(within(dialog).queryByRole("article")).toBeNull();
+  expect(within(dialog).queryByRole("button", { name: "复制番号 TEST-001" })).toBeNull();
+  expect(within(dialog).queryByText("已订阅")).toBeNull();
+  expect(within(dialog).queryByRole("button", { name: "预告" })).toBeNull();
+  fireEvent.click(within(dialog).getByRole("button", { name: "关闭影片信息" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  fireEvent.click(screen.getByRole("button", { name: "TEST-001" }));
+  expect(await screen.findByRole("dialog", { name: "影片信息" })).not.toBeNull();
+  fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape", keyCode: 27 });
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+});
+
+test("影片加载失败可在抽屉内重试", async () => {
+  detailError = true;
+  responseItems = [{ id: "d1", media_id: "m1", code: "TEST-001", status: "failed" }];
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(<QueryClientProvider client={client}><DownloadListPage /></QueryClientProvider>);
+  fireEvent.click(await screen.findByRole("button", { name: "TEST-001" }));
+  const dialog = await screen.findByRole("dialog", { name: "影片信息" });
+  expect(await within(dialog).findByText("影片加载失败")).not.toBeNull();
+  detailError = false;
+  fireEvent.click(within(dialog).getByRole("button", { name: "重试" }));
+  expect((await within(dialog).findAllByText("影片详情标题")).length).toBeGreaterThan(0);
+});
 
 test("空筛选条件下点击搜索仍重新查询全部下载任务", async () => {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -55,6 +98,26 @@ test("传输状态以中文显示", async () => {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(<QueryClientProvider client={client}><DownloadListPage /></QueryClientProvider>);
   expect(await screen.findByRole("cell", { name: "暂停" })).not.toBeNull();
+});
+
+test("影片显示番号而不是内部媒体ID，并展示失败操作", async () => {
+  responseItems = [{ id: "d1", media_id: "internal-media-id", code: "TEST-001", status: "failed", available_actions: ["retry", "delete"] }];
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(<QueryClientProvider client={client}><DownloadListPage /></QueryClientProvider>);
+  expect(await screen.findByRole("cell", { name: "TEST-001" })).not.toBeNull();
+  expect(screen.queryByText("internal-media-id")).toBeNull();
+  expect(screen.getByRole("button", { name: "重试" })).not.toBeNull();
+  expect(screen.getByRole("button", { name: "删除" })).not.toBeNull();
+});
+
+test("删除下拉区分保留文件与删除文件，并显示对应确认提示", async () => {
+  responseItems = [{ id: "d1", media_id: "m1", code: "TEST-001", status: "submitted", transfer_status: "downloading", available_actions: ["stop", "delete", "delete_files"] }];
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(<QueryClientProvider client={client}><DownloadListPage /></QueryClientProvider>);
+  fireEvent.click(await screen.findByRole("button", { name: "删除" }));
+  fireEvent.click(await screen.findByRole("menuitem", { name: "删除任务+文件" }));
+  expect(await screen.findByText("将删除下载任务及下载器中的文件，文件删除后无法恢复。")).not.toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "取消" }));
 });
 
 test("筛选与表格共用一张卡片并由分隔条隔开", async () => {

@@ -2,7 +2,7 @@
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SettingsPage } from "./SettingsPage";
@@ -31,6 +31,86 @@ function renderSettings() {
 }
 
 describe("设置页字段布局", () => {
+  it("代理开关保存后重新加载保持选择，关闭增强保存为 false", async () => {
+    const user = userEvent.setup();
+    let values: Record<string, string> = { BYPASS_ENGINE: "flaresolverr", BYPASS_USE_PROXY: "false" };
+    vi.mocked(apiRequest).mockImplementation(async (_path, options) => {
+      if (options?.method === "PUT") values = { ...values, ...JSON.parse(String(options.body)).values };
+      return { database_driver: "sqlite", values: { ...values }, configured: {} };
+    });
+    const view = renderSettings();
+    await user.click(await screen.findByRole("tab", { name: "其他" }));
+    await user.click(screen.getByRole("switch", { name: "爬虫增强是否使用代理" }));
+    await user.click(screen.getByRole("button", { name: "保存设置" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "重置" })).toBeDisabled());
+    view.unmount();
+    renderSettings();
+    await user.click(await screen.findByRole("tab", { name: "其他" }));
+    expect(screen.getByRole("switch", { name: "爬虫增强是否使用代理" })).toBeChecked();
+    await user.click(screen.getByLabelText("爬虫增强类型"));
+    await waitFor(() => expect(getComputedStyle(screen.getByRole("option", { name: "不使用" })).pointerEvents).not.toBe("none"));
+    await user.click(screen.getByRole("option", { name: "不使用" }));
+    await user.click(screen.getByRole("button", { name: "保存设置" }));
+    await waitFor(() => expect(values.BYPASS_USE_PROXY).toBe("false"));
+  });
+
+  it.each([
+    ["Agent", "自定义 System Prompt（留空使用内置提示词）"],
+    ["翻译", "自定义翻译 Prompt"],
+  ])("%s 提示词框内计数并截断超限字符，保存完整 emoji", async (tab, label) => {
+    const user = userEvent.setup();
+    renderSettings();
+    await user.click(await screen.findByRole("tab", { name: tab }));
+    const input = screen.getByLabelText(label);
+    expect(input).toHaveAccessibleDescription("0/15360");
+    fireEvent.change(input, { target: { value: "中😀a\n" } });
+    expect(input).toHaveAccessibleDescription("4/15360");
+    const tooLong = "中".repeat(15360) + "a";
+    fireEvent.change(input, { target: { value: tooLong } });
+    expect(input).toHaveValue("中".repeat(15360));
+    expect(input).toHaveAccessibleDescription("15360/15360");
+    expect(screen.getByText("15360/15360")).toHaveClass("settings-prompt-count-limit");
+    expect(screen.queryByText(/UTF-8|字节|不会自动截断/)).not.toBeInTheDocument();
+    const boundary = "😀".repeat(15360);
+    fireEvent.change(input, { target: { value: boundary + "😀" } });
+    expect(input).toHaveValue(boundary);
+    fireEvent.keyDown(input, { key: "s", ctrlKey: true });
+    await waitFor(() => expect(vi.mocked(apiRequest).mock.calls.filter(([, options]) => options?.method === "PUT")).toHaveLength(1));
+    const call = vi.mocked(apiRequest).mock.calls.find(([, options]) => options?.method === "PUT");
+    expect(Object.values(JSON.parse(String(call?.[1]?.body)).values)).toContain(boundary);
+  });
+
+  it("Agent 使用未保存草稿测试 OpenAI，阻止重复点击并通过 Message 显示结果", async () => {
+    const user = userEvent.setup();
+    let finish!: (value: unknown) => void;
+    vi.mocked(apiRequest).mockImplementation(async (_path, options) => options?.method === "POST"
+      ? new Promise((resolve) => { finish = resolve; })
+      : { database_driver: "sqlite", values: {}, configured: {} });
+    renderSettings();
+    await user.click(await screen.findByRole("tab", { name: "Agent" }));
+    await user.type(screen.getByLabelText("模型名称"), "draft-model");
+    await user.type(screen.getByLabelText("接口地址（OpenAI 兼容）"), "https://example.com/v1");
+    await user.type(screen.getByLabelText("API Key"), "test-key");
+    const button = screen.getByRole("button", { name: "测试 OpenAI" });
+    await user.dblClick(button);
+    expect(button).toBeDisabled();
+    const posts = vi.mocked(apiRequest).mock.calls.filter(([, options]) => options?.method === "POST");
+    expect(posts).toHaveLength(1);
+    expect(posts[0][0]).toBe("/system/settings/openai/test");
+    expect(JSON.parse(String(posts[0][1]?.body))).toEqual({ url: "https://example.com/v1", model: "draft-model", api_key: "test-key" });
+    expect(vi.mocked(apiRequest).mock.calls.some(([, options]) => options?.method === "PUT")).toBe(false);
+    finish({ message: "OpenAI 连接成功 (892ms)" });
+    expect(await screen.findByRole("status")).toHaveTextContent("OpenAI 连接成功 (892ms)");
+    await waitFor(() => expect(button).toBeEnabled());
+    vi.mocked(apiRequest).mockRejectedValueOnce(new Error("OpenAI 连接失败 (892ms)：鉴权失败（HTTP 401），请检查 API Key 和模型权限"));
+    await user.click(button);
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("OpenAI 连接失败 (892ms)：鉴权失败（HTTP 401），请检查 API Key 和模型权限"));
+    expect(button).toBeEnabled();
+    vi.mocked(apiRequest).mockRejectedValueOnce(new Error("网络连接失败"));
+    await user.click(button);
+    await waitFor(() => expect(screen.getByRole("status").textContent).toMatch(/^OpenAI 连接失败 [(][0-9]+ms[)]：网络连接失败$/));
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(apiRequest).mockResolvedValue({
@@ -149,24 +229,42 @@ describe("设置页字段布局", () => {
     expect(screen.getByText("不使用")).toBeInTheDocument();
     const bypassURL = screen.getByLabelText("爬虫增强");
     expect(bypassURL).toBeDisabled();
+    const proxySwitch = screen.getByRole("switch", { name: "爬虫增强是否使用代理" });
+    expect(proxySwitch).toBeDisabled();
+    expect(proxySwitch).not.toBeChecked();
     await user.click(bypassControl);
     await waitFor(() => expect(getComputedStyle(screen.getByRole("option", { name: "FlareSolverr" })).pointerEvents).not.toBe("none"));
     await user.click(screen.getByRole("option", { name: "FlareSolverr" }));
     expect(bypassURL).toBeEnabled();
+    expect(proxySwitch).toBeEnabled();
+    await user.click(proxySwitch);
+    expect(proxySwitch).toBeChecked();
     await user.type(bypassURL, "http://localhost:8191/v1");
     await user.click(bypassControl);
     await waitFor(() => expect(getComputedStyle(screen.getByRole("option", { name: "不使用" })).pointerEvents).not.toBe("none"));
     await user.click(screen.getByRole("option", { name: "不使用" }));
     expect(bypassURL).toBeDisabled();
+    expect(proxySwitch).toBeDisabled();
+    expect(proxySwitch).not.toBeChecked();
     expect(bypassURL).toHaveValue("http://localhost:8191/v1");
     const bypassNote = screen.getByText(/选择增强类型后填写服务地址/);
     expect(bypassControl.compareDocumentPosition(bypassNote) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     for (const [name, url] of [
-      ["CloudflareBypassForScraping", "https://github.com/sarperavci/CloudflareBypassForScraping"],
+      ["ByPass", "https://github.com/sarperavci/CloudflareBypassForScraping"],
       ["FlareSolverr", "https://github.com/FlareSolverr/FlareSolverr"],
       ["Scrapling", "https://github.com/D4Vinci/Scrapling"],
     ]) {
       expect(screen.getByRole("link", { name })).toHaveAttribute("href", url);
     }
+    await user.click(bypassControl);
+    await waitFor(() => expect(getComputedStyle(screen.getByRole("option", { name: "ByPass" })).pointerEvents).not.toBe("none"));
+    await user.click(screen.getByRole("option", { name: "ByPass" }));
+    expect(proxySwitch).toBeEnabled();
+    expect(proxySwitch).not.toBeChecked();
+    await user.click(proxySwitch);
+    await user.click(screen.getByRole("button", { name: "保存设置" }));
+    await waitFor(() => expect(vi.mocked(apiRequest).mock.calls.some(([, options]) => options?.method === "PUT")).toBe(true));
+    const save = vi.mocked(apiRequest).mock.calls.find(([, options]) => options?.method === "PUT");
+    expect(JSON.parse(String(save?.[1]?.body)).values).toMatchObject({ BYPASS_ENGINE: "cloudflare_bypass_for_scraping", BYPASS_USE_PROXY: "true" });
   });
 });

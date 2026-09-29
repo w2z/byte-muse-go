@@ -28,7 +28,7 @@ func TestQbittorrentListTransferStates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(items) != 3 || items[0].Status != "paused" || items[1].Status != "completed" || items[1].CompletedAt == nil || items[2].Status != "failed" {
+	if len(items) != 3 || items[0].Status != "stopped" || items[1].Status != "completed" || items[1].CompletedAt == nil || items[2].Status != "failed" {
 		t.Fatalf("states=%+v", items)
 	}
 }

@@ -1,3 +1,4 @@
+import { Grid } from "@arco-design/web-react";
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { apiRequest, type Page } from "../../shared/api/client";
@@ -121,31 +122,39 @@ export function RankPage() {
     <section>
       <PageHeader title="榜单" />
       <div className="page-toolbar">
-        <div className="toolbar-group rank-filter-bar">
-          <div className="rank-filter" role="group" aria-label="榜单来源">
-            {RANK_SOURCES.map((item) => (
-              <button
-                key={item.value}
-                type="button"
-                aria-pressed={item.value === source}
-                onClick={() => changeSource(item.value)}
-              >
-                {item.label}
-              </button>
-            ))}
-          </div>
-          <div className="rank-filter" role="group" aria-label="榜单周期">
-            {currentSource.periods.map((item) => (
-              <button
-                key={item.value}
-                type="button"
-                aria-pressed={item.value === period}
-                onClick={() => changePeriod(item.value)}
-              >
-                {item.label}
-              </button>
-            ))}
-          </div>
+        <div className="rank-filter-bar">
+          <Grid.Row gutter={[12, 12]} justify="start" align="center">
+            <Grid.Col xs={24} sm={12} md={8} xl={4}>
+              <div className="filter-field"><span className="filter-label">榜单来源</span><div className="rank-filter" role="group" aria-label="榜单来源">
+                {RANK_SOURCES.map((item) => (
+                  <button
+                    key={item.value}
+                    type="button"
+                    aria-pressed={item.value === source}
+                    onClick={() => changeSource(item.value)}
+                  >
+                    {item.label}
+                  </button>
+                ))}
+              </div>
+              </div>
+            </Grid.Col>
+            <Grid.Col xs={24} sm={12} md={8} xl={4}>
+              <div className="filter-field"><span className="filter-label">榜单周期</span><div className="rank-filter" role="group" aria-label="榜单周期">
+                {currentSource.periods.map((item) => (
+                  <button
+                    key={item.value}
+                    type="button"
+                    aria-pressed={item.value === period}
+                    onClick={() => changePeriod(item.value)}
+                  >
+                    {item.label}
+                  </button>
+                ))}
+              </div>
+              </div>
+            </Grid.Col>
+          </Grid.Row>
         </div>
       </div>
       <MediaCardGrid

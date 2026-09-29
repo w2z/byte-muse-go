@@ -30,7 +30,7 @@ func (r *SubscriptionDownloadRepository) SaveTransferStates(ctx context.Context,
 		return err
 	}
 	defer tx.Rollback()
-	query := fmt.Sprintf("UPDATE download_tasks SET transfer_status=%s,added_at=COALESCE(added_at,%s),completed_at=COALESCE(completed_at,%s) WHERE downloader='qbittorrent' AND LOWER(info_hash)=%s AND status IN ('submitted','downloading','completed')", placeholder(r.dialect, 1), placeholder(r.dialect, 2), placeholder(r.dialect, 3), placeholder(r.dialect, 4))
+	query := fmt.Sprintf("UPDATE download_tasks SET transfer_status=%s,added_at=COALESCE(added_at,%s),completed_at=COALESCE(completed_at,%s) WHERE downloader='qbittorrent' AND LOWER(info_hash)=%s AND status IN ('submitted','downloading','completed') AND lease_token IS NULL AND updated_at<=%s", placeholder(r.dialect, 1), placeholder(r.dialect, 2), placeholder(r.dialect, 3), placeholder(r.dialect, 4), placeholder(r.dialect, 5))
 	for _, state := range states {
 		if state.Hash == "" {
 			continue
@@ -42,7 +42,11 @@ func (r *SubscriptionDownloadRepository) SaveTransferStates(ctx context.Context,
 		if state.CompletedAt != nil {
 			completed = encodeTime(*state.CompletedAt, r.dialect)
 		}
-		if _, err = tx.ExecContext(ctx, query, state.Status, added, completed, state.Hash); err != nil {
+		observedAt := state.ObservedAt
+		if observedAt.IsZero() {
+			observedAt = time.Now().UTC()
+		}
+		if _, err = tx.ExecContext(ctx, query, state.Status, added, completed, state.Hash, encodeTime(observedAt, r.dialect)); err != nil {
 			return err
 		}
 	}

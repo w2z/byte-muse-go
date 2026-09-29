@@ -119,6 +119,28 @@ func (s *CollectionService) ProcessOne(ctx context.Context, kind string, now tim
 		}
 		code := "processing_failed"
 		switch {
+		case errors.Is(e, collector.ErrCookieRequired):
+			code = "source_cookie_required"
+		case errors.Is(e, collector.ErrInteractiveVerification):
+			code = "source_interactive_verification"
+		case errors.Is(e, collector.ErrBypassTimeout):
+			code = "bypass_timeout"
+		case errors.Is(e, collector.ErrBypassCaptcha):
+			code = "bypass_captcha_required"
+		case errors.Is(e, collector.ErrBypassProxy):
+			code = "bypass_proxy_failed"
+		case errors.Is(e, collector.ErrBypassBrowser):
+			code = "bypass_browser_failed"
+		case errors.Is(e, collector.ErrBypassSession):
+			code = "bypass_session_failed"
+		case errors.Is(e, collector.ErrBypassTarget):
+			code = "bypass_target_unavailable"
+		case errors.Is(e, collector.ErrBypassUnavailable):
+			code = "bypass_unavailable"
+		case errors.Is(e, collector.ErrBypassConfig):
+			code = "bypass_config_invalid"
+		case errors.Is(e, collector.ErrUnavailable):
+			code = "source_unavailable"
 		case errors.Is(e, collector.ErrBlocked):
 			code = "source_blocked"
 		case errors.Is(e, collector.ErrParse):

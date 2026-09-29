@@ -91,6 +91,7 @@ func ValidVideoType(value string) bool {
 
 // Media is the API-facing catalog representation.
 type Media struct {
+	Details            *MediaDetails      `json:"details,omitempty"` // 仅详情接口返回扩展资料。
 	ID                 string             `json:"id"`
 	Code               string             `json:"code"`
 	Title              string             `json:"title"`
@@ -109,6 +110,24 @@ type Media struct {
 	DownloadStatus     *DownloadStatus    `json:"download_status"`
 	CreatedAt          time.Time          `json:"created_at"`
 	UpdatedAt          time.Time          `json:"updated_at"`
+}
+
+// MediaDetails 展示已保存的影片资料；空指针表示未采集或无法可靠确认，不从当前设置推断历史信息。
+type MediaDetails struct {
+	Actors            []string `json:"actors"`
+	Tags              []string `json:"tags"`
+	Producer          *string  `json:"producer"`
+	Publisher         *string  `json:"publisher"`
+	Series            *string  `json:"series"`
+	ReleaseCode       *string  `json:"release_code"`
+	Plot              *string  `json:"plot"`
+	Director          *string  `json:"director"`
+	Rating            *float64 `json:"rating"`
+	WantCount         *int     `json:"want_count"`
+	TranslationEngine *string  `json:"translation_engine"`
+	Mosaic            *bool    `json:"mosaic"`
+	Censored          *bool    `json:"censored"`
+	Resolution        *string  `json:"resolution"`
 }
 
 // MediaPage is a repository result before request pagination metadata is attached.
@@ -138,20 +157,22 @@ type SubscriptionPage struct {
 
 // DownloadTask is one independently tracked resource download attempt.
 type DownloadTask struct {
-	ID             string         `json:"id"`
-	MediaID        string         `json:"media_id"`
-	SourceSite     *string        `json:"source_site"`
-	SourceKind     *string        `json:"source_kind"`
-	Downloader     *string        `json:"downloader"`
-	InfoHash       *string        `json:"info_hash"`
-	TransferStatus *string        `json:"transfer_status"`
-	AddedAt        *time.Time     `json:"added_at"`
-	CompletedAt    *time.Time     `json:"completed_at"`
-	Status         DownloadStatus `json:"status"`
-	ExternalID     *string        `json:"external_id"`
-	ErrorMessage   *string        `json:"error_message"`
-	CreatedAt      time.Time      `json:"created_at"`
-	UpdatedAt      time.Time      `json:"updated_at"`
+	Code             *string        `json:"code"`              // 番号来自关联影片；关联缺失时为空。
+	AvailableActions []string       `json:"available_actions"` // 当前状态和下载器共同允许的操作。
+	ID               string         `json:"id"`
+	MediaID          string         `json:"media_id"`
+	SourceSite       *string        `json:"source_site"`
+	SourceKind       *string        `json:"source_kind"`
+	Downloader       *string        `json:"downloader"`
+	InfoHash         *string        `json:"info_hash"`
+	TransferStatus   *string        `json:"transfer_status"`
+	AddedAt          *time.Time     `json:"added_at"`
+	CompletedAt      *time.Time     `json:"completed_at"`
+	Status           DownloadStatus `json:"status"`
+	ExternalID       *string        `json:"external_id"`
+	ErrorMessage     *string        `json:"error_message"`
+	CreatedAt        time.Time      `json:"created_at"`
+	UpdatedAt        time.Time      `json:"updated_at"`
 }
 
 // DownloadPage is a repository result before request pagination metadata is attached.

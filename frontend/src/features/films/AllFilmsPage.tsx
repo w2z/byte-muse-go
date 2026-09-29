@@ -1,4 +1,4 @@
-import { Button, Input, Select } from "@arco-design/web-react";
+import { Button, Input, Select, Tag, Grid } from "@arco-design/web-react";
 import { IconSearch } from "@arco-design/web-react/icon";
 import { useQuery } from "@tanstack/react-query";
 import { useState, type FormEvent } from "react";
@@ -47,24 +47,61 @@ export function AllFilmsPage() {
       return apiRequest<Page<Media>>(`/media?${params.toString()}`);
     },
   });
-  const commit = () => { setPage(1); setSearch(draft.trim()); };
+  /** 相同条件（包括空条件）也重新查询；条件变化时由查询键触发第一页请求。 */
+  const commit = () => {
+    const nextSearch = draft.trim();
+    if (page === 1 && search === nextSearch) {
+      void query.refetch();
+      return;
+    }
+    setPage(1);
+    setSearch(nextSearch);
+  };
   const submit = (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); commit(); };
   const changeFilter = (setter: (value: never) => void, value: string) => { setPage(1); setter(value as never); };
   const changePageSize = (next: number) => { setPageSize(next); setPage(1); };
+  /** 清空搜索草稿及已生效的筛选，保留用户选择的每页条数。 */
+  const reset = () => {
+    setDraft("");
+    setSearch("");
+    setSubscription("");
+    setDownload("");
+    setLibrary("");
+    setVideoType("");
+    setPage(1);
+  };
   return (
     <section>
       <PageHeader title="所有影片" />
-      <form className="page-toolbar" role="search" onSubmit={submit}>
-        <div className="toolbar-group search-field">
-          <Input value={draft} onChange={setDraft} onPressEnter={commit} allowClear aria-label="搜索影片" placeholder="名称或番号" suffix={<IconSearch />} />
-          <Button type="primary" htmlType="submit">搜索</Button>
-        </div>
-        <Select aria-label="订阅状态筛选" value={subscription} onChange={(value) => changeFilter(setSubscription, value)} options={subscriptionOptions} />
-        <Select aria-label="影片类型筛选" value={videoType} onChange={(value) => changeFilter(setVideoType, value)} options={videoTypeOptions} />
-        <Select aria-label="下载状态筛选" value={download} onChange={(value) => changeFilter(setDownload, value)} options={downloadOptions} />
-        <Select aria-label="媒体库状态筛选" value={library} onChange={(value) => changeFilter(setLibrary, value)} options={libraryOptions} />
+      <form className="filter-toolbar all-films-toolbar" role="search" onSubmit={submit}>
+        <Grid.Row gutter={[12, 12]} justify="start" align="center">
+          <Grid.Col xs={24} sm={12} md={8} xl={4}>
+            <div className="filter-labeled"><span className="filter-label">关键词</span><Input value={draft} onChange={setDraft} allowClear aria-label="搜索影片" placeholder="名称或番号" suffix={<IconSearch />} /></div>
+          </Grid.Col>
+          <Grid.Col xs={24} sm={12} md={8} xl={4}>
+            <div className="filter-labeled"><span className="filter-label">订阅状态</span><Select aria-label="订阅状态筛选" value={subscription} onChange={(value) => changeFilter(setSubscription, value)} options={subscriptionOptions} />
+            </div>
+          </Grid.Col>
+          <Grid.Col xs={24} sm={12} md={8} xl={4}>
+            <div className="filter-labeled"><span className="filter-label">影片类型</span><Select aria-label="影片类型筛选" value={videoType} onChange={(value) => changeFilter(setVideoType, value)} options={videoTypeOptions} /></div>
+          </Grid.Col>
+          <Grid.Col xs={24} sm={12} md={8} xl={4}>
+            <div className="filter-labeled"><span className="filter-label">下载状态</span><Select aria-label="下载状态筛选" value={download} onChange={(value) => changeFilter(setDownload, value)} options={downloadOptions} /></div>
+          </Grid.Col>
+          <Grid.Col xs={24} sm={12} md={8} xl={4}>
+            <div className="filter-labeled"><span className="filter-label">媒体库状态</span><Select aria-label="媒体库状态筛选" value={library} onChange={(value) => changeFilter(setLibrary, value)} options={libraryOptions} /></div>
+          </Grid.Col>
+          <Grid.Col xs={24} sm={12} md={8} xl={4}>
+            <div className="filter-actions all-films-actions">
+              <Button type="primary" htmlType="submit">搜索</Button>
+              <Button htmlType="button" onClick={reset}>重置</Button>
+            </div>
+          </Grid.Col>
+        </Grid.Row>
       </form>
-      <MediaCardGrid items={query.data?.items ?? []} query={query} emptyText="暂无影片" total={query.data?.total ?? 0} page={page} pageSize={pageSize} onPageChange={setPage} onPageSizeChange={changePageSize} />
+      <MediaCardGrid items={query.data?.items ?? []} query={query} emptyText="暂无影片" total={query.data?.total ?? 0} page={page} pageSize={pageSize} onPageChange={setPage} onPageSizeChange={changePageSize}
+        renderMeta={(media) => <div><Tag color={media.video_type ? "arcoblue" : undefined}>{videoTypeOptions.find((option) => option.value === (media.video_type ?? "unknown"))?.label}</Tag></div>}
+      />
     </section>
   );
 }

@@ -59,6 +59,7 @@ func (r *CollectionRepository) q(query string) string {
 
 // CreateRun 仅登记请求和第一页任务，不发起网络调用；返回值代表受理而非采集完成。
 func (r *CollectionRepository) CreateRun(ctx context.Context, req ports.CollectionRequest) (ports.CollectionRun, error) {
+	period := ports.CollectionRankKey(req)
 	id := collectionID()
 	raw, e := json.Marshal(req)
 	if e != nil {
@@ -77,22 +78,22 @@ func (r *CollectionRepository) CreateRun(ctx context.Context, req ports.Collecti
 		} else {
 			query += ` ON CONFLICT (period) DO NOTHING`
 		}
-		if _, e = tx.ExecContext(ctx, r.q(query), req.Period); e != nil {
+		if _, e = tx.ExecContext(ctx, r.q(query), period); e != nil {
 			return ports.CollectionRun{}, e
 		}
 		// 同周期创建串行分配严格递增时间，毫秒内同时提交也不会用随机 ID 误判新旧。
-		if _, e = tx.ExecContext(ctx, r.q(`UPDATE collection_rank_heads SET period=period WHERE period=?`), req.Period); e != nil {
+		if _, e = tx.ExecContext(ctx, r.q(`UPDATE collection_rank_heads SET period=period WHERE period=?`), period); e != nil {
 			return ports.CollectionRun{}, e
 		}
 		var latest sql.NullInt64
-		if e = tx.QueryRowContext(ctx, r.q(`SELECT MAX(created_ms) FROM collection_runs WHERE kind='rank' AND period=?`), req.Period).Scan(&latest); e != nil {
+		if e = tx.QueryRowContext(ctx, r.q(`SELECT MAX(created_ms) FROM collection_runs WHERE kind='rank' AND period=?`), period).Scan(&latest); e != nil {
 			return ports.CollectionRun{}, e
 		}
 		if latest.Valid && now <= latest.Int64 {
 			now = latest.Int64 + 1
 		}
 	}
-	_, e = tx.ExecContext(ctx, r.q(`INSERT INTO collection_runs(id,request_json,source,kind,period,crawl_state,created_ms) VALUES(?,?,?,?,?,'queued',?)`), id, string(raw), req.Source, req.Kind, req.Period, now)
+	_, e = tx.ExecContext(ctx, r.q(`INSERT INTO collection_runs(id,request_json,source,kind,period,crawl_state,created_ms) VALUES(?,?,?,?,?,'queued',?)`), id, string(raw), req.Source, req.Kind, period, now)
 	if e != nil {
 		return ports.CollectionRun{}, e
 	}

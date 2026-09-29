@@ -165,10 +165,12 @@ func (c *Commands) Serve(ctx context.Context) error {
 		return fmt.Errorf("read translation settings: %w", err)
 	}
 	jobs := configuredJobs(translationSettings.Values)
+	tagService := application.NewTagService(database.NewTagRepository(store.SQLDB(), database.Dialect(c.config.DatabaseDriver)))
 	collectionClient, err := collector.NewClientWithProxy(translationSettings.Values["PROXY"])
 	if err != nil {
 		return fmt.Errorf("采集代理配置无效")
 	}
+	collectionClient.ConfigureBypass(translationSettings.Values["BYPASS_ENGINE"], translationSettings.Values["BYPASS_URL"], translationSettings.Values["BYPASS_USE_PROXY"] == "true")
 	collectionService := application.NewQueuedCollectionService(collector.NewRegistry(collectionClient), database.NewCollectionRepository(store.SQLDB(), database.Dialect(c.config.DatabaseDriver)), nil)
 	downloadRepository := database.NewSubscriptionDownloadRepository(store.SQLDB(), database.Dialect(c.config.DatabaseDriver))
 	downloadService := application.NewSubscriptionDownloadService(downloadRepository, nil, nil, func(ctx context.Context) (map[string]string, error) {
@@ -189,6 +191,12 @@ func (c *Commands) Serve(ctx context.Context) error {
 		}
 	})
 	for i := range jobs {
+		if jobs[i].Name == "标签追新" {
+			jobs[i].Run = func(jobCtx context.Context) scheduler.JobResult {
+				n, e := tagService.Follow(jobCtx, "")
+				return scheduler.JobResult{"created": n, "success": e == nil}
+			}
+		}
 		if jobs[i].Name == "同步榜单" {
 			jobs[i].Run = collectionRankJob(collectionService)
 		}
@@ -251,6 +259,7 @@ func (c *Commands) Serve(ctx context.Context) error {
 	defer func() { cancelWorkers(); <-workersDone }()
 	downloadWorkerDone := make(chan struct{})
 	syncTransfers := func(syncCtx context.Context) {
+		observedAt := time.Now().UTC()
 		current, err := settingsService.Get(syncCtx)
 		if err != nil {
 			logging.Error(logging.CategoryDownload, "读取下载器设置失败", "error", err.Error())
@@ -268,7 +277,7 @@ func (c *Commands) Serve(ctx context.Context) error {
 		}
 		updates := make([]ports.TransferState, 0, len(states))
 		for _, state := range states {
-			updates = append(updates, ports.TransferState{Hash: state.Hash, Status: state.Status, AddedAt: state.AddedAt, CompletedAt: state.CompletedAt})
+			updates = append(updates, ports.TransferState{Hash: state.Hash, Status: state.Status, AddedAt: state.AddedAt, CompletedAt: state.CompletedAt, ObservedAt: observedAt})
 		}
 		if err := downloadRepository.SaveTransferStates(syncCtx, updates); err != nil {
 			logging.Error(logging.CategoryDownload, "下载状态保存失败", "error", err.Error())
@@ -295,16 +304,25 @@ func (c *Commands) Serve(ctx context.Context) error {
 		}
 	}()
 	defer func() { cancelWorkers(); <-downloadWorkerDone }()
+	downloadQueries := application.NewDownloadService(store.Downloads())
+	downloadQueries.SetControls(downloadRepository, func(ctx context.Context) (map[string]ports.DownloadController, error) {
+		current, err := settingsService.Get(ctx)
+		if err != nil {
+			return nil, err
+		}
+		values := current.Values
+		return map[string]ports.DownloadController{"qbittorrent": downloadclient.NewQbittorrent(values["QBITTORRENT_URL"], values["QBITTORRENT_USERNAME"], values["QBITTORRENT_PASSWORD"], values["QBITTORRENT_DOWNLOAD_PATH"], values["QBITTORRENT_CATEGORY"], nil)}, nil
+	})
 	handler := httpapi.New(httpapi.Dependencies{
 		Collection:            collectionService,
 		Auth:                  authService,
 		Catalog:               application.NewCatalogService(mediaRepository),
 		CatalogQueries:        application.NewCatalogQueryService(database.NewCatalogQueryRepository(store.SQLDB(), database.Dialect(c.config.DatabaseDriver))),
 		Actors:                application.NewActorService(database.NewActorRepository(store.SQLDB(), database.Dialect(c.config.DatabaseDriver))),
-		Tags: application.NewTagService(database.NewTagRepository(store.SQLDB(), database.Dialect(c.config.DatabaseDriver))),
+		Tags:                  tagService,
 		Subscriptions:         application.NewSubscriptionService(store.Subscriptions()),
 		SubscriptionDownloads: downloadService,
-		Downloads:             application.NewDownloadService(store.Downloads()),
+		Downloads:             downloadQueries,
 		Dashboard:             application.NewDashboardService(store.Media(), store.Subscriptions(), store.Downloads()),
 		Settings:              settingsService,
 		Scheduler:             manager,

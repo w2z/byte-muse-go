@@ -92,28 +92,8 @@ func (s *TranslationService) openAI(ctx context.Context, text, target string) (s
 	if systemPrompt == "" {
 		systemPrompt = "Translate to " + target + ". Return only translated text."
 	}
-	payload := map[string]any{"model": s.config.OpenAIModel, "temperature": 0, "messages": []map[string]string{{"role": "system", "content": systemPrompt}, {"role": "user", "content": text}}}
-	raw, _ := json.Marshal(payload)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(s.config.OpenAIURL, "/")+"/chat/completions", bytes.NewReader(raw))
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+s.config.OpenAIAPIKey)
-	var out struct {
-		Choices []struct {
-			Message struct {
-				Content string `json:"content"`
-			} `json:"message"`
-		} `json:"choices"`
-	}
-	if err := s.doJSON(req, &out); err != nil {
-		return "", err
-	}
-	if len(out.Choices) == 0 {
-		return "", errors.New("translation response is empty")
-	}
-	return strings.TrimSpace(out.Choices[0].Message.Content), nil
+	payload := map[string]any{"temperature": 0, "messages": []map[string]string{{"role": "system", "content": systemPrompt}, {"role": "user", "content": text}}}
+	return openAICompletion(ctx, s.client, OpenAIConfig{URL: s.config.OpenAIURL, Model: s.config.OpenAIModel, APIKey: s.config.OpenAIAPIKey}, payload)
 }
 func (s *TranslationService) google(ctx context.Context, text, target string) (string, error) {
 	payload := map[string]any{"q": text, "target": target}

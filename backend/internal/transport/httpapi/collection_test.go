@@ -102,6 +102,23 @@ func TestCollectionEndToEnd(t *testing.T) {
 		return w
 	}
 	for i := 0; i < 2; i++ {
+		if i == 0 {
+			w := call("GET", "/api/v1/collection/sources", "")
+			var sources []ports.CollectionSource
+			if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &sources) != nil || len(sources) != 2 {
+				t.Fatalf("unexpected enabled sources: %d %s", w.Code, w.Body.String())
+			}
+			for _, source := range []string{"javlibrary", "avbase", "javbus", "jable", "supjav", "avgle", "thisav"} {
+				w = call("POST", "/api/v1/collection/runs", `{"source":"`+source+`","kind":"search","query":"TEST"}`)
+				if w.Code != 400 {
+					t.Fatalf("excluded source %s accepted: %d %s", source, w.Code, w.Body.String())
+				}
+			}
+			var runs int
+			if err := store.SQLDB().QueryRow(`SELECT COUNT(*) FROM collection_runs`).Scan(&runs); err != nil || runs != 0 {
+				t.Fatalf("excluded sources created runs: %d %v", runs, err)
+			}
+		}
 		w := call("POST", "/api/v1/collection/runs", `{"source":"netflav","kind":"search","query":"TEST-001"}`)
 		if w.Code != http.StatusAccepted {
 			t.Fatalf("%d %s", w.Code, w.Body.String())
@@ -159,10 +176,13 @@ func TestCollectionEndToEnd(t *testing.T) {
 	}
 }
 
-type blockedCollection struct{}
+type blockedCollection struct{ err error }
 
 func (blockedCollection) Sources() []ports.CollectionSource { return nil }
-func (blockedCollection) Collect(context.Context, ports.CollectionRequest) (ports.CollectionBatch, error) {
+func (b blockedCollection) Collect(context.Context, ports.CollectionRequest) (ports.CollectionBatch, error) {
+	if b.err != nil {
+		return ports.CollectionBatch{}, b.err
+	}
 	return ports.CollectionBatch{}, collector.ErrBlocked
 }
 
@@ -189,27 +209,47 @@ func TestCollectionRejectsUnknownFieldsAndMultipleBodies(t *testing.T) {
 }
 
 func TestCollectionBlockedQueueIsNotEmptySuccess(t *testing.T) {
-	ctx := context.Background()
-	s, e := database.Open(ctx, database.Config{Dialect: database.DialectSQLite, SQLitePath: filepath.Join(t.TempDir(), "blocked.db")})
-	if e != nil {
-		t.Fatal(e)
-	}
-	defer s.Close()
-	if e = s.Migrate(ctx); e != nil {
-		t.Fatal(e)
-	}
-	service := application.NewQueuedCollectionService(blockedCollection{}, database.NewCollectionRepository(s.SQLDB(), database.DialectSQLite), nil)
-	run, e := service.Enqueue(ctx, ports.CollectionRequest{Source: "javdb", Kind: "rank", Period: "daily"})
-	if e != nil {
-		t.Fatal(e)
-	}
-	for i := 0; i < 3; i++ {
-		if _, e = service.ProcessOne(ctx, "page", time.Now().Add(time.Minute)); e != nil {
-			t.Fatal(e)
-		}
-	}
-	result, e := service.RunStatus(ctx, run.ID)
-	if e != nil || result.Status != "failed" || result.Error != "source_blocked" {
-		t.Fatalf("%+v %v", result, e)
+	for _, expected := range []struct {
+		err  error
+		code string
+	}{
+		{collector.ErrBlocked, "source_blocked"},
+		{collector.ErrCookieRequired, "source_cookie_required"},
+		{collector.ErrInteractiveVerification, "source_interactive_verification"},
+		{collector.ErrBypassUnavailable, "bypass_unavailable"},
+		{collector.ErrBypassTimeout, "bypass_timeout"},
+		{collector.ErrBypassCaptcha, "bypass_captcha_required"},
+		{collector.ErrBypassProxy, "bypass_proxy_failed"},
+		{collector.ErrBypassBrowser, "bypass_browser_failed"},
+		{collector.ErrBypassSession, "bypass_session_failed"},
+		{collector.ErrBypassTarget, "bypass_target_unavailable"},
+		{collector.ErrBypassConfig, "bypass_config_invalid"},
+		{collector.ErrUnavailable, "source_unavailable"},
+	} {
+		t.Run(expected.code, func(t *testing.T) {
+			ctx := context.Background()
+			s, e := database.Open(ctx, database.Config{Dialect: database.DialectSQLite, SQLitePath: filepath.Join(t.TempDir(), "blocked.db")})
+			if e != nil {
+				t.Fatal(e)
+			}
+			defer s.Close()
+			if e = s.Migrate(ctx); e != nil {
+				t.Fatal(e)
+			}
+			service := application.NewQueuedCollectionService(blockedCollection{err: expected.err}, database.NewCollectionRepository(s.SQLDB(), database.DialectSQLite), nil)
+			run, e := service.Enqueue(ctx, ports.CollectionRequest{Source: "javdb", Kind: "rank", Period: "daily"})
+			if e != nil {
+				t.Fatal(e)
+			}
+			for i := 0; i < 3; i++ {
+				if _, e = service.ProcessOne(ctx, "page", time.Now().Add(time.Minute)); e != nil {
+					t.Fatal(e)
+				}
+			}
+			result, e := service.RunStatus(ctx, run.ID)
+			if e != nil || result.Status != "failed" || result.Error != expected.code {
+				t.Fatalf("%+v %v", result, e)
+			}
+		})
 	}
 }

@@ -1,7 +1,8 @@
 /** 与 api/openapi.yaml 0.1.0 对齐的第一阶段响应类型。 */
 
 /** 已存影片标签及去重关联数，不包含追新订阅状态。 */
-export type CatalogTag = { name: string; media_count: number };
+/** 标签名称保留来源原文；limit_date=null 表示未订阅。 */
+export type CatalogTag = { name: string; media_count: number; category: string; limit_date: string | null };
 
 export type SubscriptionStatus = "none" | "active" | "canceled";
 export type LibraryStatus = "unknown" | "absent" | "present";
@@ -35,6 +36,8 @@ export type LoginResponse = {
 };
 
 export type Media = {
+  /** 详情接口返回的扩展资料；列表不加载。 */
+  details?: MediaDetails;
   video_type: VideoType | null;
   id: string;
   code: string;
@@ -55,6 +58,24 @@ export type Media = {
   updated_at: string;
 };
 
+/** 已保存的影片资料；null 表示未采集或无法确认，数值零和 false 均为有效资料。 */
+export type MediaDetails = {
+  actors: string[];
+  tags: string[];
+  producer: string | null;
+  publisher: string | null;
+  series: string | null;
+  release_code: string | null;
+  plot: string | null;
+  director: string | null;
+  rating: number | null;
+  want_count: number | null;
+  translation_engine: string | null;
+  mosaic: boolean | null;
+  censored: boolean | null;
+  resolution: string | null;
+};
+
 export type Subscription = {
   id: string;
   media_id: string;
@@ -70,11 +91,13 @@ export type Subscription = {
 export type DownloadTask = {
   id: string;
   media_id: string;
+  code?: string | null;
+  available_actions?: DownloadAction[];
   source_site?: string | null;
   source_kind?: "pt" | "bt" | null;
   downloader?: string | null;
   info_hash?: string | null;
-  transfer_status?: "downloading" | "paused" | "failed" | "completed" | null;
+  transfer_status?: "downloading" | "paused" | "stopped" | "failed" | "completed" | null;
   added_at?: string | null;
   completed_at?: string | null;
   status: DownloadStatus;
@@ -83,6 +106,9 @@ export type DownloadTask = {
   created_at: string;
   updated_at: string;
 };
+
+/** 后端按任务状态及下载器实际能力返回的允许操作。 */
+export type DownloadAction = "pause" | "stop" | "resume" | "retry" | "delete" | "delete_files";
 
 export type ScheduledTask = {
   name: string;

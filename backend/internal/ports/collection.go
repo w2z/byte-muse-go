@@ -1,6 +1,47 @@
 package ports
 
-import "context"
+import (
+	"context"
+)
+
+// ValidCollectionSource 是采集和存储共用的来源白名单，不表示网络实时可达。
+func ValidCollectionSource(source string) bool {
+	for _, s := range CollectionSources() {
+		if s.ID == source {
+			return true
+		}
+	}
+	return false
+}
+
+// CollectionSources 只发布已启用来源；新增站点须通过后台实网核验后才加入。
+// 保留既有 JavDB 能力；解析器存在不等于已启用，每次返回独立值。
+func CollectionSources() []CollectionSource {
+	return []CollectionSource{
+		{ID: "javdb", Kinds: []string{"search", "detail", "rank"}},
+		{ID: "netflav", Kinds: []string{"search", "detail"}},
+	}
+}
+
+// CollectionRankPeriods 定义已接入影片榜单，来源之间不共享周期语义。
+func CollectionRankPeriods(source string) []string {
+	switch source {
+	case "javdb":
+		return []string{"daily", "weekly", "monthly"}
+	case "javlibrary":
+		return []string{"wanted", "bestrated", "newrelease", "newentries"}
+	default:
+		return nil
+	}
+}
+
+// CollectionRankKey 保留旧 JavDB 键名；其他站点使用命名空间防止覆盖旧榜。
+func CollectionRankKey(req CollectionRequest) string {
+	if req.Kind != "rank" || req.Source == "javdb" {
+		return req.Period
+	}
+	return req.Source + ":" + req.Period
+}
 
 // CollectionRequest 指定单一数据源的一页查询；采集与订阅、下载相互独立。
 type CollectionRequest struct {

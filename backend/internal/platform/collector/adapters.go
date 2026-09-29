@@ -18,6 +18,9 @@ var datePattern = regexp.MustCompile(`\d{4}-\d{2}-\d{2}`)
 
 // collectJavDB 仅解析已确认的搜索和榜单卡片，不把登录页视为空结果。
 func collectJavDB(ctx context.Context, f Fetcher, req ports.CollectionRequest) (ports.CollectionBatch, error) {
+	if req.Kind == "detail" {
+		return collectJavDBDetail(ctx, f, req)
+	}
 	q := url.Values{"page": {strconv.Itoa(req.Page)}}
 	path := "/search"
 	if req.Kind == "rank" {
@@ -37,7 +40,7 @@ func collectJavDB(ctx context.Context, f Fetcher, req ports.CollectionRequest) (
 		return ports.CollectionBatch{}, ErrParse
 	}
 	if doc.Find("form[action='/users/sign_in']").Length() > 0 || strings.Contains(doc.Find("title").Text(), "登入") {
-		return ports.CollectionBatch{}, ErrBlocked
+		return ports.CollectionBatch{}, ErrCookieRequired
 	}
 	if doc.Find(".movie-list").Length() != 1 {
 		return ports.CollectionBatch{}, ErrParse

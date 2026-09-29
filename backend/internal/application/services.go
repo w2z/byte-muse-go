@@ -192,7 +192,11 @@ func (s *SubscriptionService) List(ctx context.Context, page, pageSize int, stat
 }
 
 // DownloadService owns download task queries.
-type DownloadService struct{ repository ports.DownloadRepository }
+type DownloadService struct {
+	repository ports.DownloadRepository
+	controls   ports.DownloadControlRepository
+	clients    func(context.Context) (map[string]ports.DownloadController, error)
+}
 
 // NewDownloadService builds a download task application service.
 func NewDownloadService(repository ports.DownloadRepository) *DownloadService {
@@ -209,7 +213,7 @@ func (s *DownloadService) ListFiltered(ctx context.Context, page, pageSize int, 
 	if err := validatePagination(page, pageSize); err != nil {
 		return Page[domain.DownloadTask]{}, err
 	}
-	if query.TransferStatus != "" && query.TransferStatus != "downloading" && query.TransferStatus != "paused" && query.TransferStatus != "failed" && query.TransferStatus != "completed" {
+	if query.TransferStatus != "" && query.TransferStatus != "downloading" && query.TransferStatus != "paused" && query.TransferStatus != "stopped" && query.TransferStatus != "failed" && query.TransferStatus != "completed" {
 		return Page[domain.DownloadTask]{}, ErrInvalidDownloadFilter
 	}
 	if query.AddedFrom != nil && query.AddedTo != nil && !query.AddedFrom.Before(*query.AddedTo) || query.CompletedFrom != nil && query.CompletedTo != nil && !query.CompletedFrom.Before(*query.CompletedTo) {
@@ -220,6 +224,7 @@ func (s *DownloadService) ListFiltered(ctx context.Context, page, pageSize int, 
 	if err != nil {
 		return Page[domain.DownloadTask]{}, fmt.Errorf("list downloads: %w", err)
 	}
+	s.decorateActions(ctx, result.Items)
 	logging.Info(logging.CategoryDownload, "下载任务列表查询完成", "count", len(result.Items))
 	return Page[domain.DownloadTask]{Page: page, PageSize: pageSize, Total: result.Total, Items: nonNil(result.Items)}, nil
 }

@@ -27,7 +27,19 @@ func MigrationPlan(dialect Dialect) []Migration {
 	default:
 		return nil
 	}
-	return append(plan, settingsMigration(dialect), activeSubscriptionMigration(dialect), defaultSettingsMigration(dialect), systemLogsMigration(dialect), logRetentionSettingMigration(dialect), cleanupCanceledSubscriptionsMigration(dialect), catalogQueryIndexesMigration(dialect), downloaderAndBypassSettingsMigration(dialect), collectionMigration(dialect), collectionQueueMigration(dialect), mediaTypeMigration(dialect), subscriptionDownloadMigration(dialect), downloadTransferMigration(dialect), ptSiteSettingsMigration(dialect), siteAuthSettingsMigration(dialect))
+	return append(plan, settingsMigration(dialect), activeSubscriptionMigration(dialect), defaultSettingsMigration(dialect), systemLogsMigration(dialect), logRetentionSettingMigration(dialect), cleanupCanceledSubscriptionsMigration(dialect), catalogQueryIndexesMigration(dialect), downloaderAndBypassSettingsMigration(dialect), collectionMigration(dialect), collectionQueueMigration(dialect), mediaTypeMigration(dialect), subscriptionDownloadMigration(dialect), downloadTransferMigration(dialect), ptSiteSettingsMigration(dialect), siteAuthSettingsMigration(dialect), tagSubscriptionMigration(dialect), bypassProxySettingMigration(dialect))
+}
+
+// bypassProxySettingMigration 新增非敏感字符串布尔配置，默认 false；空值视为关闭。
+// 复用既有非空 setting_value，不改表结构或历史配置，回退代码时保留此键即可。
+func bypassProxySettingMigration(dialect Dialect) Migration {
+	statement := "INSERT INTO app_settings (setting_key, setting_value, is_secret, updated_at) VALUES ('BYPASS_USE_PROXY', 'false', FALSE, " + currentTimestampExpression(dialect) + ")"
+	if dialect == DialectMySQL {
+		statement = strings.Replace(statement, "INSERT INTO", "INSERT IGNORE INTO", 1)
+	} else {
+		statement += " ON CONFLICT (setting_key) DO NOTHING"
+	}
+	return Migration{Version: 21, Name: "bypass_proxy_setting", Statements: []string{statement}}
 }
 
 // siteAuthSettingsMigration 为两种凭据分别建立配置记录，新增模式默认密钥。

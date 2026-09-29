@@ -280,14 +280,6 @@ h1 { margin: 0; color: var(--ink); font-size: 16px; font-weight: 500; letter-spa
 .actor-card-name { color: var(--ink); font-size: 18px; font-weight: 700; line-height: 1.3; overflow-wrap: anywhere; }
 .actor-card-meta { color: var(--muted); font-size: 12px; }
 .actor-card-actions { display: flex; flex-wrap: wrap; gap: 8px; }
-.actor-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
-.actor-tabs { flex: 0 0 auto; min-width: 300px; }
-.actor-tabs .arco-tabs-nav { margin-bottom: 0; padding: 4px; background: var(--panel-deep); border-radius: 10px; }
-.actor-tabs .arco-tabs-nav::before, .actor-tabs .arco-tabs-nav-ink { display: none; }
-.actor-tabs .arco-tabs-tab { min-width: 120px; margin: 0; padding: 8px 20px; color: var(--ink-2); border-radius: 6px; justify-content: center; transition: color .18s ease, background .18s ease, box-shadow .18s ease; }
-.actor-tabs .arco-tabs-tab-active { color: var(--ink); background: var(--panel); box-shadow: 0 1px 3px rgba(0, 0, 0, .08); }
-.actor-search { width: min(280px, 42vw); }
-@media (max-width: 640px) { .actor-toolbar { align-items: stretch; flex-direction: column; } .actor-tabs { min-width: 0; } .actor-search { width: 100%; } }
 .actor-subscription-date { display: grid; gap: 8px; }
 .actor-subscription-date-input { width: 100%; height: 32px; padding: 4px 12px; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 2px; outline: none; }
 .actor-subscription-date-input:hover { border-color: var(--faint); }
@@ -302,14 +294,58 @@ h1 { margin: 0; color: var(--ink); font-size: 16px; font-weight: 500; letter-spa
 .info-card { height: 100%; background: var(--panel); border-color: var(--line); border-radius: var(--content-radius); box-shadow: none; }
 .info-card > .arco-card-body { height: 100%; padding: var(--content-padding); }
 .info-card-body { display: flex; flex-direction: column; gap: 12px; min-height: 100%; }
+.info-card-content { display: flex; flex-direction: column; gap: 12px; min-width: 0; flex: 1; }
+.info-card-body--end-actions { flex-direction: row; align-items: center; }
+.info-card-actions { flex-shrink: 0; }
+.info-card-action-buttons { display: flex; flex-direction: column; gap: 8px; align-items: stretch; }
+.info-card-title-link, .info-card-title-link:visited, .info-card-title-link:hover, .info-card-title-link:active { color: inherit; text-decoration: none; }
 .info-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
 .info-card-title { color: var(--ink); font-size: 17px; font-weight: 700; line-height: 1.35; overflow-wrap: anywhere; }
 .info-card-meta { color: var(--muted); font-size: 12px; }
 
-/* ===== 筛选/工具条（对齐对标站 flex flex-col md:flex-row gap-2 justify-between） ===== */
-.page-toolbar { display: flex; flex-direction: column; gap: 8px; justify-content: space-between; margin-bottom: 16px; }
+/* 内部滚动页面逐层限制高度，工具栏和分页留在列表滚动区域之外。 */
+.app-content--inner-scroll .app-content-scroll { display: flex; flex-direction: column; overflow: hidden; }
+.app-content--inner-scroll .app-breadcrumb { flex-shrink: 0; }
+.app-content--inner-scroll .page-container { flex: 1; min-height: 0; overflow: hidden; }
+.app-content--inner-scroll .page-surface-card--fill { height: 100%; min-height: 0; }
+.tag-page { display: flex; flex-direction: column; height: 100%; min-height: 0; container: tag-page / inline-size; }
+.tag-page > :not(.tag-list-scroll) { flex-shrink: 0; }
+.tag-list-scroll { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
+/* 所选列数为上限；窄屏按卡片最小宽度换行，极窄屏单列填满容器。 */
+.tag-card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, max(240px, calc((100% - (var(--tag-columns, 5) - 1) * 12px) / var(--tag-columns, 5)))), 1fr)); gap: 12px; align-items: stretch; }
+.tag-card-grid .info-card-body { flex-wrap: wrap; align-items: stretch; }
+.tag-card-grid .info-card-content { flex-basis: 100px; overflow-wrap: anywhere; }
+.tag-card-grid .info-card-head { flex-wrap: wrap; }
+/* 操作区位于卡片右侧，类型在订阅按钮上方水平居中。 */
+.tag-card-grid .info-card-actions { display: flex; flex-direction: column; align-items: center; justify-content: space-between; gap: 12px; margin-left: auto; }
+.tag-card-category { padding: 0; border: 0; background: transparent; font-family: inherit; line-height: inherit; text-align: center; cursor: pointer; }
+.tag-card-category:hover { text-decoration: underline; }
+.tag-card-category:focus-visible { outline: 2px solid var(--mint); outline-offset: 3px; }
+
+/* 筛选统一规则：操作紧随最后一个条件，整体居左，空间不足时整组换行。 */
+.page-toolbar { display: flex; flex-direction: column; flex-wrap: wrap; min-width: 0; gap: 12px; justify-content: flex-start; margin-bottom: 16px; }
 @media (min-width: 768px) { .page-toolbar { flex-direction: row; align-items: center; } }
-.toolbar-group { display: flex; align-items: center; gap: 8px; }
+.toolbar-group { display: flex; min-width: 0; align-items: center; gap: 8px; }
+/* 列宽、间距和响应式断点由 Arco Grid 管理，表单仅保留底部留白。 */
+.filter-toolbar { min-width: 0; margin-bottom: 16px; }
+.filter-field, .filter-labeled { display: flex; flex-wrap: wrap; width: 100%; min-width: 0; align-items: center; gap: 8px; }
+.filter-label { flex: none; color: var(--ink-2); font-size: var(--control-font-size); line-height: 22px; white-space: nowrap; }
+.filter-labeled > :last-child, .filter-control { flex: 1 1 140px; width: 100%; min-width: 0; max-width: 100%; }
+/* 日期范围与分段筛选保留可读宽度，格子不足时标题在控件上方。 */
+.filter-field--range, .rank-filter-bar .filter-field { flex-wrap: wrap; }
+.filter-field--range > .filter-control { flex-basis: 300px; }
+.filter-actions { display: flex; min-width: 0; align-items: center; justify-content: flex-start; gap: 8px; flex-wrap: wrap; }
+.rank-filter-bar { width: 100%; }
+.rank-filter-bar .rank-filter { flex: 1 1 240px; max-width: 100%; }
+.rank-filter-bar .rank-filter button { flex: 1 1 auto; }
+/* 列数显示设置沿用窄屏隐藏规则，宽屏在自己的网格内伸缩。 */
+.tag-column-cell { display: none; }
+.tag-column-control { display: flex; flex-wrap: wrap; width: 100%; min-width: 0; align-items: center; gap: 8px; }
+.tag-column-control > span { flex: none; white-space: nowrap; }
+.tag-column-slider { flex: 1 1 140px; width: 100%; min-width: 0; }
+@container tag-page (min-width: 600px) {
+  .tag-column-cell { display: block; }
+}
 
 /* 垂直堆叠容器：需要多块内容时用它统一 16px 间距 */
 .stack { display: flex; flex-direction: column; gap: 16px; }
@@ -328,17 +364,6 @@ h1 { margin: 0; color: var(--ink); font-size: 16px; font-weight: 500; letter-spa
 .table-shell > .arco-card-body { overflow-x: auto; }
 /* ===== 数据表格（任务/下载任务等表格型页面共用） ===== */
 .data-table-shell > .arco-card-body { padding: 20px; }
-.download-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
-.download-filter-field { display: flex; min-width: 0; align-items: center; gap: 8px; }
-.download-filter-label { flex: none; color: var(--ink-2); font-size: var(--control-font-size); line-height: 22px; white-space: nowrap; }
-.download-filter-field > .arco-select { width: 160px; }
-.download-filter-field > .arco-picker { width: 340px; }
-.download-filter-actions { display: flex; align-items: center; gap: 8px; }
-@media (max-width: 600px) {
-  .download-filter-field { width: 100%; flex-wrap: wrap; }
-  .download-filter-field > .arco-select,
-  .download-filter-field > .arco-picker { width: min(340px, 100%); }
-}
 .data-table-shell .data-table { overflow: visible; }
 .data-table-shell .data-table .arco-table-container { border-radius: 2px 2px 0 0; }
 .data-table-shell .data-table .arco-table-header { background: var(--panel-deep); }
@@ -347,9 +372,21 @@ h1 { margin: 0; color: var(--ink); font-size: 16px; font-weight: 500; letter-spa
 .data-table-shell .data-table .arco-table-tr:hover .arco-table-td { background: var(--hover) !important; }
 .data-table-empty { min-height: 280px; display: grid; place-items: center; color: var(--muted); }
 /* 分页条靠左对齐；总数、页码、每页条数都由 Arco Pagination 自己渲染。 */
-.list-pagination { display: flex; align-items: center; justify-content: flex-start; padding-top: 16px; }
+.list-pagination { display: flex; min-width: 0; align-items: center; justify-content: flex-start; padding-top: 16px; container: list-pagination / inline-size; }
 /* 分页放在卡片网格下方时不需要再套一层边框 */
 .list-pagination.plain { padding-top: 16px; }
+/* 宽屏沿用 Arco 单行分页；窄容器固定两行，页码在上、总数和页长在下。 */
+.list-pagination > .arco-pagination { max-width: 100%; flex-wrap: wrap; gap: 8px 0; }
+.list-pagination .arco-pagination-total-text,
+.list-pagination .arco-pagination-option { flex: none; white-space: nowrap; }
+.list-pagination .arco-pagination-list { max-width: 100%; flex-wrap: wrap; }
+@container list-pagination (max-width: 640px) {
+  .list-pagination > .arco-pagination { display: grid; width: 100%; grid-template-columns: minmax(0, 1fr) auto; gap: 12px 8px; }
+  .list-pagination .arco-pagination-list { display: flex; grid-column: 1 / -1; grid-row: 1; width: 100%; min-width: 0; flex-wrap: nowrap; justify-content: center; gap: 4px; }
+  .list-pagination .arco-pagination-item { flex: 0 1 32px; min-width: 0; margin: 0; }
+  .list-pagination .arco-pagination-total-text { grid-column: 1; grid-row: 2; margin: 0; justify-self: start; }
+  .list-pagination .arco-pagination-option { grid-column: 2; grid-row: 2; margin: 0; justify-self: end; }
+}
 .toolbar { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 14px; }
 .toolbar-note { color: var(--muted); font-size: 12px; }
 
@@ -503,8 +540,10 @@ h1 { margin: 0; color: var(--ink); font-size: 16px; font-weight: 500; letter-spa
 .settings-main-site-options { --settings-radio-gap: 8px; }
 .settings-field-placeholder { color: var(--muted); font-size: var(--control-font-size); line-height: 22px; }
 .settings-textarea { width: 100%; }
-.settings-translation-prompt { min-height: 120px; resize: vertical; overflow-x: hidden; }
-.settings-agent-prompt { min-height: 120px; resize: vertical; overflow-x: hidden; }
+.settings-prompt-input { position: relative; width: 100%; }
+.settings-prompt-textarea { min-height: 120px; padding-bottom: 28px; resize: vertical; overflow-x: hidden; }
+.settings-prompt-count { position: absolute; right: 16px; bottom: 8px; color: var(--color-text-3); font-size: 12px; line-height: 18px; pointer-events: none; }
+.settings-prompt-count-limit { color: rgb(var(--danger-6)); }
 .settings-filter-range { display: grid; grid-column: 1 / -1; grid-template-columns: minmax(0, 1fr); row-gap: var(--field-gap-y); margin-top: 4px; }
 .settings-sort-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; margin: 0; padding: 0; list-style: none; }
 .settings-sort-row { display: flex; min-height: 44px; align-items: center; justify-content: space-between; gap: 16px; padding: 6px 10px 6px 14px; color: var(--ink-2); background: var(--panel-deep); border: 1px solid var(--line-soft); border-radius: var(--content-radius); font-size: var(--control-font-size); }
