@@ -32,11 +32,12 @@ function renderCard(mode?: string, props: Partial<ComponentProps<typeof CodeCard
   return { client, ...view };
 }
 
-it("无图模式不渲染封面或剧照，手动打开预告也不传封面", async () => {
+it("无图模式用占位图替代封面且不加载真实图片，剧照入口隐藏，手动打开预告也不传封面", async () => {
   const user = userEvent.setup();
   const { container } = renderCard("INVISIBLE");
   expect(container.querySelector("img")).toBeNull();
-  expect(container.querySelector(".code-card-cover")).toBeNull();
+  expect(screen.getByRole("img", { name: "TEST-001 封面占位图" })).toBeInTheDocument();
+  expect(container.querySelector(".code-card-cover")).not.toBeNull();
   expect(screen.queryByRole("button", { name: "剧照" })).toBeNull();
   expect(screen.getByText("测试影片")).toBeInTheDocument();
   await user.click(screen.getByRole("button", { name: "预告" }));
@@ -64,30 +65,34 @@ it("默认保留状态及操作，隐藏状态不会隐藏操作", () => {
   expect(screen.getByRole("button", { name: "预告" })).toBeInTheDocument();
 });
 
-it("图片模式保存到共享缓存后，已有卡片立即隐藏封面", async () => {
+it("图片模式保存到共享缓存后，已有卡片立即切换为占位图", async () => {
   const { client } = renderCard("VISIBLE");
   expect(screen.getByRole("img", { name: "TEST-001 封面" })).toHaveAttribute("src", media.banner_url);
   await act(async () => { client.setQueryData(["system-settings"], settings("INVISIBLE")); });
   await waitFor(() => expect(screen.queryByRole("img", { name: "TEST-001 封面" })).toBeNull());
+  expect(screen.getByRole("img", { name: "TEST-001 封面占位图" })).toBeInTheDocument();
   await act(async () => { client.setQueryData(["system-settings"], settings("VISIBLE")); });
   expect(await screen.findByRole("img", { name: "TEST-001 封面" })).toBeInTheDocument();
 });
 
-it("首次加载设置之前不加载图片，加载无图设置后保持隐藏", async () => {
+it("首次加载设置之前不加载图片，加载无图设置后仍不加载真实图片", async () => {
   let resolve!: (value: SystemSettings) => void;
   vi.mocked(apiRequest).mockReturnValue(new Promise<SystemSettings>((done) => { resolve = done; }));
   const { container, client } = renderCard();
   expect(container.querySelector("img")).toBeNull();
+  expect(screen.getByRole("img", { name: "TEST-001 封面占位图" })).toBeInTheDocument();
   await act(async () => { resolve(settings("INVISIBLE")); });
   await waitFor(() => expect(client.getQueryData(["system-settings"])).toEqual(settings("INVISIBLE")));
   expect(container.querySelector("img")).toBeNull();
+  expect(screen.getByRole("img", { name: "TEST-001 封面占位图" })).toBeInTheDocument();
 });
 
-it("设置读取失败时不露出图片", async () => {
+it("设置读取失败时不露出真实图片，改用占位图", async () => {
   vi.mocked(apiRequest).mockRejectedValue(new Error("设置读取失败"));
   const { container, client } = renderCard();
   await waitFor(() => expect(client.getQueryState(["system-settings"])?.status).toBe("error"));
   expect(container.querySelector("img")).toBeNull();
+  expect(screen.getByRole("img", { name: "TEST-001 封面占位图" })).toBeInTheDocument();
 });
 
 it("模糊模式使用模糊封面，未知模式不加载图片", async () => {
@@ -95,6 +100,7 @@ it("模糊模式使用模糊封面，未知模式不加载图片", async () => {
   expect(screen.getByRole("img", { name: "TEST-001 封面" })).toHaveClass("code-card-image-blurred");
   await act(async () => { client.setQueryData(["system-settings"], settings("unknown")); });
   await waitFor(() => expect(screen.queryByRole("img", { name: "TEST-001 封面" })).toBeNull());
+  expect(screen.getByRole("img", { name: "TEST-001 封面占位图" })).toBeInTheDocument();
 });
 
 it("完整资料分组显示真实零值与否值，无图模式不加载详细图片", () => {
@@ -109,7 +115,7 @@ it("完整资料分组显示真实零值与否值，无图模式不加载详细�
   expect(screen.getByText("标签甲")).toBeInTheDocument();
   expect(screen.getAllByText("0")).toHaveLength(2);
   expect(screen.getAllByText("否")).toHaveLength(2);
-  expect(screen.getAllByText("已按图片设置隐藏")).toHaveLength(2);
+  expect(screen.getAllByRole("img", { name: "影片资料占位图" })).toHaveLength(2);
   expect(container.querySelector("img")).toBeNull();
 });
 
@@ -140,4 +146,17 @@ it("详情从选中的剧照打开预览，底部缩略图可切换且无图设�
   expect(screen.getByRole("button", { name: "查看第 2 张剧照" })).toHaveAttribute("aria-pressed", "false");
   await act(async () => { client.setQueryData(["system-settings"], settings("INVISIBLE")); });
   await waitFor(() => expect(document.querySelector("img")).toBeNull());
+});
+
+it("缺少封面地址时同样显示占位图", () => {
+  const { container } = renderCard("VISIBLE", { media: { ...media, banner_url: null, poster_url: null } });
+  expect(container.querySelector("img")).toBeNull();
+  expect(screen.getByRole("img", { name: "TEST-001 封面占位图" })).toBeInTheDocument();
+});
+
+it("详情模式无图时顶部封面与资料图片都显示占位图", () => {
+  const { container } = renderCard("INVISIBLE", { variant: "detail" });
+  expect(container.querySelector("img")).toBeNull();
+  expect(screen.getByRole("img", { name: "TEST-001 封面占位图" })).toBeInTheDocument();
+  expect(screen.getAllByRole("img", { name: "影片资料占位图" })).toHaveLength(2);
 });

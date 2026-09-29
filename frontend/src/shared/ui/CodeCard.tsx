@@ -19,6 +19,18 @@ const displayStatus = {
   unknown: { text: "未知", className: "warn" },
 } as const;
 
+/**
+ * 图片不可显示时的统一占位：无图模式与缺少图片地址共用同一表现，
+ * 只渲染图标占位，不请求真实图片，保证卡片与详情版式稳定。
+ */
+function ImagePlaceholder({ className, label }: { className: string; label: string }) {
+  return (
+    <div className={"code-card-image-placeholder " + className} role="img" aria-label={label}>
+      <IconImage />
+    </div>
+  );
+}
+
 type CodeCardProps = {
   /** 服务端返回的媒体条目，卡片只展示不做业务状态推导。 */
   media: Media;
@@ -76,7 +88,9 @@ export function CodeCard({ media, meta, actions, onSelect, hideActions = false, 
   const missing = "暂无";
   /** 保留零值和 false 的真实含义，不用真假判断替代缺失判断。 */
   const yesNo = (value: boolean | null | undefined) => value == null ? missing : value ? "是" : "否";
-  const detailImage = (url?: string | null) => !url ? missing : !showImages ? "已按图片设置隐藏" : <Image className={imageClassName} src={url} alt="影片资料图片" width={160} style={{ maxWidth: "100%" }} preview={imageMode === "VISIBLE"} />;
+  const detailImage = (url?: string | null) => showImages && url
+    ? <Image className={imageClassName} src={url} alt="影片资料图片" width={160} style={{ maxWidth: "100%" }} preview={imageMode === "VISIBLE"} />
+    : <ImagePlaceholder className="code-card-detail-image-placeholder" label="影片资料占位图" />;
   const detailColumns = { xs: 1, sm: 2, md: 2, lg: 2, xl: 2, xxl: 2, xxxl: 2 };
 
   /** 卡片从第一张打开，详情缩略图从选中项打开，共用切换和底部缩略图条。 */
@@ -97,12 +111,16 @@ export function CodeCard({ media, meta, actions, onSelect, hideActions = false, 
   return (
     <>
       {messageHolder}
-      {showDetails ? (showImages && coverURL ? <Image className={imageClassName} src={coverURL} alt={media.code + " 封面"} width="100%" style={{ display: "block" }} preview={imageMode === "VISIBLE"} /> : <div role="status">{!showImages ? "封面已按图片设置隐藏" : "暂无封面"}</div>) : <Card
+      {showDetails ? (showImages && coverURL
+        ? <Image className={imageClassName} src={coverURL} alt={media.code + " 封面"} width="100%" style={{ display: "block" }} preview={imageMode === "VISIBLE"} />
+        : <ImagePlaceholder className="code-card-detail-cover-placeholder" label={media.code + " 封面占位图"} />) : <Card
         className="code-card"
         role="article"
         size="small"
         bordered
-        cover={showImages ? <div className="code-card-cover">{coverURL ? <img className={imageClassName} src={coverURL} alt={media.code + " 封面"} loading="lazy" /> : null}</div> : undefined}
+        cover={<div className="code-card-cover">{showImages && coverURL
+          ? <img className={imageClassName} src={coverURL} alt={media.code + " 封面"} loading="lazy" />
+          : <ImagePlaceholder className="code-card-cover-placeholder" label={media.code + " 封面占位图"} />}</div>}
       >
         <div className="code-card-body">
           <div className="code-card-code-row">
