@@ -125,7 +125,11 @@ Docker 发布使用多阶段构建或等效的“构建环境与运行环境分�
 
 - 主仓库推送后由 GitHub Actions 自动触发镜像构建，构建最新提交对应版本；镜像标签必须可追溯到具体提交，不以 latest 作为唯一可追溯版本。
 - 构建成功后把版本号和提交标识写入 `version.json` 并提交回仓库；版本号唯一、单调递增、可重复构建，版本规则为 `0.1.<提交计数>`，提交计数不含 `version.json` 回写提交，如需调整必须先与用户确认。
-- 版本回写提交只修改 `version.json`，workflow 用 `paths-ignore` 排除该文件，避免回写再次触发构建形成循环。
+- 构建触发使用 workflow 的 `paths` 白名单，只列出会改变镜像内容的构建输入：`backend/**`、`frontend/**`、`deploy/Dockerfile`、`.dockerignore`；新增构建输入必须同步更新白名单。
+- 文档与记录类改动不触发构建：`README.md`、`version.json`、`AGENTS.md`、`docs/**`、`api/` 接口契约、`deploy/` 下的 Compose 与校验脚本、`dev/` 本地脚本、`.github/**`、`.gitignore`；这些改动也不得手工触发构建补齐版本。
+- 文档类提交不产生构建，发布版本号之间可能不连续，属于预期行为；不得为补齐编号手工改写 `version.json`。
+- 版本回写提交只修改 `version.json`，该文件不在白名单内，回写不会再次触发构建形成循环。
+- 前端构建阶段读取根 `AGENTS.md` 与 `docs/` 执行规范检查，这两处改动不触发构建；规范链接有效性由本地 `npm run check:standards` 和下一次代码构建保证。
 - 回写提交必须以远端最新提交为基线并允许重试：并发构建会先后回写同一文件，直接以检出点提交会被非快进拒绝。
 - 同一分支同时只保留一个构建任务：新提交触发时取消仍在运行的旧构建，最终产出对应最新提交的镜像；实现方式为 workflow 的 `concurrency` 分组并开启 `cancel-in-progress`。
 - 取消旧构建不得删除已发布的镜像标签和 `version.json` 的历史版本。

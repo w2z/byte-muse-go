@@ -1,12 +1,17 @@
 name: build-image
 
 # 主仓库推送后自动构建镜像并把版本写回 version.json。
-# 触发条件排除 version.json：版本回写提交只改该文件，不会再次触发构建，避免自触发循环。
+# 触发条件只列出会改变镜像内容的构建输入：文档、规范、README.md、version.json、接口契约
+# 以及部署脚本、本地开发脚本的改动都不触发构建，避免纯文档提交占用构建资源。
+# version.json 不在白名单内：版本回写提交只改该文件，不会再次触发构建，避免自触发循环。
 on:
   push:
     branches: [main]
-    paths-ignore:
-      - version.json
+    paths:
+      - 'backend/**'
+      - 'frontend/**'
+      - 'deploy/Dockerfile'
+      - '.dockerignore'
   workflow_dispatch:
 
 # 同一分支只保留一个构建任务：新提交触发时取消仍在运行的旧构建，最终产出对应最新提交的镜像。

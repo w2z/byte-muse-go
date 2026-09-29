@@ -34,6 +34,8 @@ docker buildx build --platform linux/amd64,linux/arm64 \
 
 前端产物与架构无关，只有 Go 二进制按 `TARGETARCH` 交叉编译。标签使用明确版本或不可变提交标识，`latest` 只能作为附加标签；镜像由 CI 或本地构建后推送到容器仓库，不写回源码仓库。
 
+自动构建：GitHub Actions 只在 `backend/`、`frontend/`、`deploy/Dockerfile`、`.dockerignore` 变更时构建镜像并把版本回写到 `version.json`；只改 `README.md`、`version.json`、`AGENTS.md`、`docs/`、`api/` 契约、Compose 与本地脚本时不会触发构建，`latest` 保持上一次代码构建的版本。
+
 部署配置静态验证：
 
 ```powershell
