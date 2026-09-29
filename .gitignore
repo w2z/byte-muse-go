@@ -2,7 +2,6 @@ node_modules/
 .workbuddy/
 .env
 .env.*
-!.env.example
 frontend/node_modules/
 frontend/dist/
 frontend/coverage/

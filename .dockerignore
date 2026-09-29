@@ -5,7 +5,6 @@
 .apifox
 .env
 .env.*
-!.env.example
 .idea
 .vscode
 **/.DS_Store
