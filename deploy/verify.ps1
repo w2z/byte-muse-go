@@ -61,6 +61,9 @@ foreach ($composeFile in $composeFiles) {
     if ($text -notmatch '(?m)^\s+container_name:\s*byte-muse-go\s*$') {
         throw "$($composeFile.Name) 必须固定容器名为 byte-muse-go"
     }
+    if ($text -notmatch '(?m)^\s+container_name:\s*cloudflarebypass_byte_muse_go\s*$') {
+        throw "$($composeFile.Name) 必须固定增强服务容器名为 cloudflarebypass_byte_muse_go"
+    }
     if ($text -notmatch '(?m)^\s+restart:\s*always\s*$') {
         throw "$($composeFile.Name) 必须使用 restart: always"
     }
@@ -78,6 +81,9 @@ foreach ($composeFile in $composeFiles) {
     if ($composeFile.Name -match '\.postgres\.') {
         if ($text -notmatch '(?m)^\s+postgres:\s*$' -or $text -notmatch '@postgres:5432/') {
             throw "$($composeFile.Name) 必须包含内置 postgres 服务，且 DATABASE_DSN 指向 postgres:5432"
+        }
+        if ($text -notmatch '(?m)^\s+container_name:\s*postgres_byte_muse_go\s*$') {
+            throw "$($composeFile.Name) 必须固定数据库容器名为 postgres_byte_muse_go"
         }
     }
     if ($composeFile.Name -match '\.mysql\.') {

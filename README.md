@@ -66,7 +66,7 @@ services:
       # 占位值长度不足 32 字节，未替换时服务会直接拒绝启动。
       ADMIN_USERNAME: admin
       ADMIN_PASSWORD: 请替换为管理员密码
-      SESSION_SECRET: 请替换SESSION_SECRET
+      SESSION_SECRET: 请替换SESSION_SECRET(32位)
     volumes:
       # 只挂载 /data 与 /strm：镜像的 /app 存放服务二进制与前端产物，挂载覆盖后容器无法启动。
       # 宿主机目录需允许容器内 UID 65532 写入：chown -R 65532:65532 /path/to/byte-muse/data /path/to/byte-muse/strm
@@ -75,7 +75,7 @@ services:
   # PostgreSQL 部署时启用（deploy/compose.postgres.yaml 中已启用）：
   # postgres:
   #   image: postgres:17-alpine
-  #   container_name: byte-muse-postgres
+  #   container_name: postgres_byte_muse_go
   #   restart: always
   #   networks:
   #     - bridge
@@ -116,7 +116,7 @@ services:
   # 抓取增强服务：设置页把 BYPASS_ENGINE 选为 cloudflare_bypass_for_scraping、BYPASS_URL 填 http://cloudflarebypass:8000
   cloudflarebypass:
     image: ghcr.io/sarperavci/cloudflarebypassforscraping:latest
-    container_name: CloudFlareBypass
+    container_name: cloudflarebypass_byte_muse_go
     restart: always
     networks:
       - bridge
