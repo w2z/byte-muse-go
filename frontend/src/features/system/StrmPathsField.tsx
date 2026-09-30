@@ -66,6 +66,19 @@ function isStrmMappingComplete(item: StrmMapping): boolean {
   return item.id.trim() !== "" && item.path.trim() !== "" && item.local_path.startsWith("/") && item.formats.length > 0;
 }
 
+/** 未选齐网盘目录、本地目录或媒体格式的映射条数；保存时会跳过这些映射。 */
+function countIncompleteMappings(value: StrmMapping[]): number {
+  return value.filter((item) => !isStrmMappingComplete(item)).length;
+}
+
+/** 本地 strm 目录被多条映射重复占用的条数；重复写入同一目录会产生互相覆盖的 strm 文件。 */
+function countDuplicateLocalPaths(value: StrmMapping[]): number {
+  return value.filter((item, index) =>
+    item.local_path.trim() !== "" &&
+    value.findIndex((candidate) => candidate.local_path.trim() === item.local_path.trim()) !== index,
+  ).length;
+}
+
 /** 本地 strm 路径的面包屑；根目录名为生效的 strm 目录，不能回到更上层。 */
 function strmCrumbs(path: string, rootLabel: string): DirectoryPickerCrumb[] {
   const crumbs = [{ name: rootLabel, key: strmRootPath }];
@@ -125,10 +138,8 @@ export function StrmPathsField({
   const selectedLocalPaths = value
     .filter((_, position) => position !== picking?.index)
     .map((item) => item.local_path);
-  const incomplete = value.filter((item) => !isStrmMappingComplete(item)).length;
-  const duplicateLocalPaths = value.filter((item, index) =>
-    item.local_path.trim() !== "" && value.findIndex((candidate) => candidate.local_path.trim() === item.local_path.trim()) !== index,
-  ).length;
+  const incomplete = countIncompleteMappings(value);
+  const duplicateLocalPaths = countDuplicateLocalPaths(value);
   const selectedFormats = value[0]?.formats ?? [...DEFAULT_STRM_FORMATS];
 
   const updateFormats = (formats: unknown) => {
@@ -146,11 +157,6 @@ export function StrmPathsField({
     update(picking.index, { local_path: picked.path });
     closePicker();
   };
-
-  const scan = useMutation({
-    mutationFn: () => apiRequest<StrmScanResult>("/strm/scan", { method: "POST" }),
-  });
-  const failedMappings = scan.data?.mappings.filter((item) => item.message !== "") ?? [];
 
   return (
     <div className="settings-strm-paths">
@@ -261,32 +267,6 @@ export function StrmPathsField({
       {duplicateLocalPaths > 0 ? (
         <span className="settings-field-description">本地 strm 目录不能被多条映射重复使用，请修改后再保存。</span>
       ) : null}
-      <div className="settings-strm-scan">
-        <Button
-          type="secondary"
-          loading={scan.isPending}
-          disabled={scan.isPending || incomplete > 0 || duplicateLocalPaths > 0}
-          onClick={() => scan.mutate()}
-        >
-          生成 strm
-        </Button>
-        <span className="settings-field-description">
-          生成使用已保存的映射；修改后请先保存设置再生成。
-        </span>
-      </div>
-      {scan.isError ? (
-        <span className="settings-field-description">生成失败：{scan.error.message}</span>
-      ) : scan.data ? (
-        <span className="settings-field-description">
-          共 {scan.data.files} 个媒体文件，新增 {scan.data.created} 个 strm，失败 {scan.data.failed} 个。
-          {failedMappings.map((item) => ` ${item.path}：${item.message}`).join("")}
-          {scan.data.emby.refreshed
-            ? " 已刷新 Emby 媒体库。"
-            : scan.data.emby.message
-              ? ` Emby：${scan.data.emby.message}`
-              : ""}
-        </span>
-      ) : null}
       <Modal
         title="选择网盘目录"
         className="settings-directory-picker-modal"
@@ -339,6 +319,53 @@ export function StrmPathsField({
           />
         ) : null}
       </Modal>
+    </div>
+  );
+}
+
+/**
+ * strm 生成操作。
+ *
+ * 与映射字段分开渲染，放在「STRM 生成」分组字段之后（即「生成后刷新 Emby 媒体库」下方），
+ * 让「配置映射 → 配置播放地址与刷新开关 → 生成」的顺序与页面自上而下的阅读顺序一致。
+ * 生成始终使用已保存的映射，草稿改动需先保存设置；映射未选齐或本地目录重复时禁用，避免生成无效结果。
+ */
+export function StrmGenerateAction({ value }: { value: StrmMapping[] }) {
+  const incomplete = countIncompleteMappings(value);
+  const duplicateLocalPaths = countDuplicateLocalPaths(value);
+  const scan = useMutation({
+    mutationFn: () => apiRequest<StrmScanResult>("/strm/scan", { method: "POST" }),
+  });
+  const failedMappings = scan.data?.mappings.filter((item) => item.message !== "") ?? [];
+
+  return (
+    <div className="settings-strm-generate">
+      <div className="settings-strm-scan">
+        <Button
+          type="secondary"
+          loading={scan.isPending}
+          disabled={scan.isPending || incomplete > 0 || duplicateLocalPaths > 0}
+          onClick={() => scan.mutate()}
+        >
+          生成 strm
+        </Button>
+        <span className="settings-field-description">
+          生成使用已保存的映射；修改后请先保存设置再生成。
+        </span>
+      </div>
+      {scan.isError ? (
+        <span className="settings-field-description">生成失败：{scan.error.message}</span>
+      ) : scan.data ? (
+        <span className="settings-field-description">
+          共 {scan.data.files} 个媒体文件，新增 {scan.data.created} 个 strm，失败 {scan.data.failed} 个。
+          {failedMappings.map((item) => ` ${item.path}：${item.message}`).join("")}
+          {scan.data.emby.refreshed
+            ? " 已刷新 Emby 媒体库。"
+            : scan.data.emby.message
+              ? ` Emby：${scan.data.emby.message}`
+              : ""}
+        </span>
+      ) : null}
     </div>
   );
 }

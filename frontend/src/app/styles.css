@@ -677,6 +677,8 @@ button.code-card-still-cell:hover img { opacity: .85; }
 .settings-strm-format-line { margin-top: calc(var(--field-gap-y) - 8px); }
 .settings-strm-format-line > .arco-select { width: 100%; min-width: 0; }
 .settings-strm-scan { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+/* strm 生成操作：放在分组字段之后，按钮与结果说明各自一行，间距与字段内部一致。 */
+.settings-strm-generate { display: flex; min-width: 0; flex-direction: column; gap: 8px; }
 .settings-strm-picker-create { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .settings-strm-picker-create > .arco-input { flex: 1 1 160px; min-width: 0; }
 /* 底部操作栏：sticky 贴在滚动容器底部（页面撑满可视高度时即视口底部）。

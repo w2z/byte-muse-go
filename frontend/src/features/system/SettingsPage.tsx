@@ -9,7 +9,7 @@ import { PageState } from "../../shared/ui/PageState";
 import { useFeedbackMessage } from "../../shared/ui/FeedbackMessage";
 import { Pan115LoginPanel } from "./Pan115LoginPanel";
 import { Pan115ScanPathsField, type Pan115ScanPath } from "./Pan115ScanPathsField";
-import { DEFAULT_STRM_FORMATS, normalizeStrmFormats, StrmPathsField, type StrmMapping } from "./StrmPathsField";
+import { DEFAULT_STRM_FORMATS, normalizeStrmFormats, StrmGenerateAction, StrmPathsField, type StrmMapping } from "./StrmPathsField";
 
 type FieldKind = "text" | "textarea" | "bool" | "int" | "enum" | "json" | "sort" | "paths" | "strm-paths";
 type SettingOption = {
@@ -55,6 +55,8 @@ type SettingGroup = {
   tabs?: SettingTab[];
   /** 该分组顶部展示 115 扫码绑定面板；面板自身不参与设置草稿与保存。 */
   pan115Login?: boolean;
+  /** 该分组字段之后展示 strm 生成操作；它不是设置项，只读取当前映射草稿判断可用性。 */
+  strmGenerate?: boolean;
   /** 分组底部的备注，用于说明该组配置的适用范围。 */
   note?: string;
 };
@@ -465,6 +467,7 @@ const groups: SettingGroup[] = [
   {
     code: "strm",
     title: "STRM 生成",
+    strmGenerate: true,
     fields: [
       {
         key: strmPathsKey,
@@ -1630,6 +1633,11 @@ export function SettingsPage() {
               <div className="settings-fields">
                 {activeGroup.pan115Login ? <Pan115LoginPanel /> : null}
                 {renderFieldSequence(activeFields)}
+                {activeGroup.strmGenerate ? (
+                  <div className="settings-field settings-field-wide">
+                    <StrmGenerateAction value={strmPaths} />
+                  </div>
+                ) : null}
                 {activeTest ? (
                   <div className="settings-field">
                     <div>

@@ -752,6 +752,10 @@ describe("网盘设置", () => {
     expect(remoteGroup).toContainElement(screen.getByRole("combobox", { name: "网盘类型 1" }));
     expect(remoteGroup).toContainElement(screen.getByRole("button", { name: "选择网盘目录" }));
     expect(screen.getByLabelText("STRM文件播放地址")).toBeInTheDocument();
+    // 生成按钮排在「生成后刷新 Emby 媒体库」之后，与页面自上而下的操作顺序一致。
+    const embySwitch = screen.getByLabelText("生成后刷新 Emby 媒体库");
+    const generateButton = screen.getByRole("button", { name: "生成 strm" });
+    expect(embySwitch.compareDocumentPosition(generateButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "选择网盘目录" }));
     await user.click(await screen.findByRole("button", { name: "电影" }));
     await user.click(screen.getByRole("button", { name: "确认" }));
