@@ -22,7 +22,7 @@ func (n *originNotifier) ChannelEventEnabled(context.Context, string, applicatio
 	return true
 }
 
-// emptySearcher 返回空候选，稳定命中「暂未找到符合条件的资源」这条搜索失败分支。
+// emptySearcher 返回空候选，稳定命中「暂未找到符合条件的资源」这条搜索分支。
 type emptySearcher struct{}
 
 func (emptySearcher) Search(context.Context, string) ([]torrentsearch.Resource, error) {
@@ -57,17 +57,37 @@ func newOriginFixture(t *testing.T) (Store, *application.SubscriptionDownloadSer
 	return store, service, repository, notifier
 }
 
-// taskOrigin 读取唯一任务的发起方与状态，直接校验落库结果。
-func taskOrigin(t *testing.T, store Store, ctx context.Context) (ports.DownloadOrigin, string, string) {
+// downloadTaskCount 统计订阅关联的下载任务；搜索没找到资源必须为 0，下载页不能被失败记录污染。
+func downloadTaskCount(t *testing.T, store Store, ctx context.Context) int {
 	t.Helper()
-	var origin, status, message string
-	if err := store.SQLDB().QueryRowContext(ctx, "SELECT origin,status,COALESCE(error_message,'') FROM download_tasks WHERE subscription_id='sub1'").Scan(&origin, &status, &message); err != nil {
+	var count int
+	if err := store.SQLDB().QueryRowContext(ctx, "SELECT COUNT(*) FROM download_tasks WHERE subscription_id='sub1'").Scan(&count); err != nil {
 		t.Fatal(err)
 	}
-	return ports.DownloadOrigin(origin), status, message
+	return count
 }
 
-// TestScheduledSearchFailureStaysSilent 验证定时任务没找到资源时只落库、不推送，避免批量扫描刷屏。
+// scanCount 统计订阅残留的待执行搜索；一次搜索结束后必须清空。
+func scanCount(t *testing.T, store Store, ctx context.Context) int {
+	t.Helper()
+	var count int
+	if err := store.SQLDB().QueryRowContext(ctx, "SELECT COUNT(*) FROM subscription_scans WHERE subscription_id='sub1'").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	return count
+}
+
+// scanOrigin 读取待执行搜索的发起方，校验用户请求不会被定时任务降级。
+func scanOrigin(t *testing.T, store Store, ctx context.Context) ports.DownloadOrigin {
+	t.Helper()
+	var origin string
+	if err := store.SQLDB().QueryRowContext(ctx, "SELECT origin FROM subscription_scans WHERE subscription_id='sub1'").Scan(&origin); err != nil {
+		t.Fatal(err)
+	}
+	return ports.DownloadOrigin(origin)
+}
+
+// TestScheduledSearchFailureStaysSilent 验证定时任务没找到资源时不推送、不建立下载任务，避免批量扫描刷屏。
 func TestScheduledSearchFailureStaysSilent(t *testing.T) {
 	store, service, _, notifier := newOriginFixture(t)
 	ctx := context.Background()
@@ -80,13 +100,15 @@ func TestScheduledSearchFailureStaysSilent(t *testing.T) {
 	if len(notifier.events) != 0 {
 		t.Fatalf("定时任务搜索失败不应推送通知，实际 %v", notifier.events)
 	}
-	origin, status, message := taskOrigin(t, store, ctx)
-	if origin != ports.DownloadOriginSchedule || status != "failed" || message != "暂未找到符合条件的资源" {
-		t.Fatalf("定时任务失败落库 = origin %q status %q message %q", origin, status, message)
+	if n := downloadTaskCount(t, store, ctx); n != 0 {
+		t.Fatalf("搜索没找到资源不应建立下载任务，实际 %d 条", n)
+	}
+	if n := scanCount(t, store, ctx); n != 0 {
+		t.Fatalf("搜索结束后不应残留队列项，实际 %d 条", n)
 	}
 }
 
-// TestUserSearchFailureNotifies 验证聊天渠道发起的下载没找到资源时仍然推送失败通知。
+// TestUserSearchFailureNotifies 验证聊天渠道发起的搜索没找到资源时仍推送失败通知，且不建立下载任务。
 func TestUserSearchFailureNotifies(t *testing.T) {
 	store, service, _, notifier := newOriginFixture(t)
 	ctx := context.Background()
@@ -99,13 +121,16 @@ func TestUserSearchFailureNotifies(t *testing.T) {
 	if len(notifier.events) != 1 || notifier.events[0] != string(application.NotificationDownloadFailed) {
 		t.Fatalf("用户发起搜索失败应推送一次失败通知，实际 %v", notifier.events)
 	}
-	if origin, _, _ := taskOrigin(t, store, ctx); origin != ports.DownloadOriginUser {
-		t.Fatalf("用户发起失败落库 origin = %q", origin)
+	if n := downloadTaskCount(t, store, ctx); n != 0 {
+		t.Fatalf("搜索没找到资源不应建立下载任务，实际 %d 条", n)
+	}
+	if n := scanCount(t, store, ctx); n != 0 {
+		t.Fatalf("搜索结束后不应残留队列项，实际 %d 条", n)
 	}
 }
 
 // TestUserRequestUpgradesQueuedScheduledTask 覆盖关键场景：定时任务已排队时用户再发番号，
-// 来源必须升级为 user，否则用户显式请求会被定时任务建立的任务吸收而永远收不到失败通知。
+// 来源必须升级为 user，否则用户显式请求会被定时任务登记的搜索吸收而永远收不到失败通知。
 func TestUserRequestUpgradesQueuedScheduledTask(t *testing.T) {
 	store, service, _, notifier := newOriginFixture(t)
 	ctx := context.Background()
@@ -115,54 +140,60 @@ func TestUserRequestUpgradesQueuedScheduledTask(t *testing.T) {
 	if _, err := service.Enqueue(ctx, "sub1", ports.DownloadOriginUser); err != nil {
 		t.Fatal(err)
 	}
-	if origin, _, _ := taskOrigin(t, store, ctx); origin != ports.DownloadOriginUser {
-		t.Fatalf("用户请求命中已排队任务后 origin = %q，期望 user", origin)
+	if origin := scanOrigin(t, store, ctx); origin != ports.DownloadOriginUser {
+		t.Fatalf("用户请求命中已排队搜索后 origin = %q，期望 user", origin)
 	}
 	// 定时任务随后再次登记同一订阅，不得把来源降级回 schedule。
 	if _, err := service.Enqueue(ctx, "sub1", ports.DownloadOriginSchedule); err != nil {
 		t.Fatal(err)
 	}
-	if origin, _, _ := taskOrigin(t, store, ctx); origin != ports.DownloadOriginUser {
+	if origin := scanOrigin(t, store, ctx); origin != ports.DownloadOriginUser {
 		t.Fatalf("定时任务重复登记后 origin = %q，期望保持 user", origin)
 	}
 	if err := service.Process(ctx, 10); err != nil {
 		t.Fatal(err)
 	}
 	if len(notifier.events) != 1 || notifier.events[0] != string(application.NotificationDownloadFailed) {
-		t.Fatalf("升级为 user 的任务搜索失败应推送通知，实际 %v", notifier.events)
+		t.Fatalf("升级为 user 的搜索失败应推送通知，实际 %v", notifier.events)
+	}
+	if n := downloadTaskCount(t, store, ctx); n != 0 {
+		t.Fatalf("搜索没找到资源不应建立下载任务，实际 %d 条", n)
 	}
 }
 
-// TestBatchRunActiveStaysSilent 验证批量扫描（定时任务与聊天里的批量下载命令）统一按 schedule 落库：
+// TestBatchRunActiveStaysSilent 验证批量扫描（定时任务与聊天里的批量命令）统一按 schedule 处理：
 // 一条订阅的失败就推送一次通知，批量执行必须保持静默，否则会变成通知风暴。
 func TestBatchRunActiveStaysSilent(t *testing.T) {
 	store, service, _, notifier := newOriginFixture(t)
 	ctx := context.Background()
-	if _, err := service.RunActive(ctx); err != nil {
+	if _, err := service.RunActiveScans(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if len(notifier.events) != 0 {
 		t.Fatalf("批量扫描搜索失败不应推送通知，实际 %v", notifier.events)
 	}
-	if origin, status, _ := taskOrigin(t, store, ctx); origin != ports.DownloadOriginSchedule || status != "failed" {
-		t.Fatalf("批量扫描失败落库 = origin %q status %q", origin, status)
+	if n := downloadTaskCount(t, store, ctx); n != 0 {
+		t.Fatalf("批量扫描没找到资源不应建立下载任务，实际 %d 条", n)
+	}
+	if n := scanCount(t, store, ctx); n != 0 {
+		t.Fatalf("批量扫描结束后不应残留队列项，实际 %d 条", n)
 	}
 }
 
-// TestBatchRunActivePreservesUserOrigin 验证批量扫描命中用户已登记的下载时不得把来源降级回 schedule。
+// TestBatchRunActivePreservesUserOrigin 验证批量扫描命中用户已登记的搜索时不得把来源降级回 schedule。
 func TestBatchRunActivePreservesUserOrigin(t *testing.T) {
 	store, service, _, notifier := newOriginFixture(t)
 	ctx := context.Background()
 	if _, err := service.Enqueue(ctx, "sub1", ports.DownloadOriginUser); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.RunActive(ctx); err != nil {
+	if _, err := service.RunActiveScans(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if origin, _, _ := taskOrigin(t, store, ctx); origin != ports.DownloadOriginUser {
-		t.Fatalf("批量扫描后 origin = %q，期望保持 user", origin)
-	}
 	if len(notifier.events) != 1 || notifier.events[0] != string(application.NotificationDownloadFailed) {
-		t.Fatalf("用户发起的任务失败仍应推送一次通知，实际 %v", notifier.events)
+		t.Fatalf("用户发起的搜索失败仍应推送一次通知，实际 %v", notifier.events)
+	}
+	if n := downloadTaskCount(t, store, ctx); n != 0 {
+		t.Fatalf("搜索没找到资源不应建立下载任务，实际 %d 条", n)
 	}
 }

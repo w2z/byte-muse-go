@@ -273,6 +273,10 @@ func (r *sqlSubscriptionRepository) cancel(ctx context.Context, id string) (doma
 	if affected, err := result.RowsAffected(); err == nil && affected == 0 {
 		return domain.Subscription{}, false, ports.ErrSubscriptionNotFound
 	}
+	// 取消订阅必须同时清掉它登记的待执行搜索，否则搜索队列会留下无主行，重新订阅时被误用。
+	if _, err := r.exec.ExecContext(ctx, fmt.Sprintf(`DELETE FROM subscription_scans WHERE subscription_id = %s`, placeholder(r.dialect, 1)), id); err != nil {
+		return domain.Subscription{}, false, err
+	}
 	if _, err := r.exec.ExecContext(ctx, fmt.Sprintf(`DELETE FROM download_tasks WHERE media_id = %s AND status IN (%s, %s)`, placeholder(r.dialect, 1), placeholder(r.dialect, 2), placeholder(r.dialect, 3)), current.MediaID, domain.DownloadStatusQueued, domain.DownloadStatusSearching); err != nil {
 		return domain.Subscription{}, false, err
 	}

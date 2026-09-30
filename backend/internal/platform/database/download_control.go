@@ -1,11 +1,14 @@
 package database
 
 import (
-	"bytemuse/backend/internal/domain"
-	"bytemuse/backend/internal/ports"
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"time"
+
+	"bytemuse/backend/internal/domain"
+	"bytemuse/backend/internal/ports"
 )
 
 // LockControl 用已有租约排他保留任务；只允许终止搜索或已提交后的可操作状态。
@@ -54,18 +57,18 @@ func (r *SubscriptionDownloadRepository) ReleaseControl(ctx context.Context, id,
 	return err
 }
 
-// FinishControl 在下载器结果已核实后提交本地变更；搜索重试要求活动订阅且不存在另一有效任务。
+// FinishControl 在下载器结果已核实后提交本地变更。
+// retry_search 不再复活失败任务，而是把「没找到资源」的任务换成一次新的资源搜索。
 func (r *SubscriptionDownloadRepository) FinishControl(ctx context.Context, id, token, action string, state *ports.TransferState) error {
+	if action == "retry_search" {
+		return r.retrySearch(ctx, id, token)
+	}
 	var query string
 	var args []any
 	switch action {
 	case "delete", "delete_files":
 		query = fmt.Sprintf("DELETE FROM download_tasks WHERE id=%s AND lease_token=%s", placeholder(r.dialect, 1), placeholder(r.dialect, 2))
 		args = []any{id, token}
-	case "retry_search":
-		// 子查询再包一层以兼容 MySQL 对同表更新子查询的限制。
-		query = fmt.Sprintf("UPDATE download_tasks SET status='queued',error_message=NULL,transfer_status=NULL,lease_until=NULL,lease_token=NULL,updated_at=%s WHERE id=%s AND lease_token=%s AND status='failed' AND EXISTS (SELECT 1 FROM subscriptions s WHERE s.id=download_tasks.subscription_id AND s.status='active') AND NOT EXISTS (SELECT 1 FROM (SELECT id,subscription_id,status FROM download_tasks) other WHERE other.subscription_id=download_tasks.subscription_id AND other.id<>download_tasks.id AND other.status IN ('queued','searching','unknown','submitted','downloading','completed'))", placeholder(r.dialect, 1), placeholder(r.dialect, 2), placeholder(r.dialect, 3))
-		args = []any{encodeTime(time.Now().UTC(), r.dialect), id, token}
 	default:
 		if state == nil {
 			return ports.ErrDownloadAction
@@ -85,4 +88,43 @@ func (r *SubscriptionDownloadRepository) FinishControl(ctx context.Context, id, 
 		return ports.ErrDownloadConflict
 	}
 	return nil
+}
+
+// retrySearch 把「没找到资源」的失败任务换成一次新的资源搜索：删除任务行，登记搜索队列。
+// 手动重试由用户显式发起，搜索失败必须推送，因此队列项来源固定为 user；
+// 同一订阅已存在的待执行搜索会被替换，保证最多一条待执行搜索（与唯一索引一致）。
+func (r *SubscriptionDownloadRepository) retrySearch(ctx context.Context, id, token string) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var subscriptionID string
+	q := fmt.Sprintf("SELECT subscription_id FROM download_tasks WHERE id=%s AND lease_token=%s AND status='failed' AND (info_hash IS NULL OR info_hash=%s) AND EXISTS (SELECT 1 FROM subscriptions s WHERE s.id=download_tasks.subscription_id AND s.status='active')", placeholder(r.dialect, 1), placeholder(r.dialect, 2), placeholder(r.dialect, 3))
+	if err = tx.QueryRowContext(ctx, q, id, token, "").Scan(&subscriptionID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ports.ErrDownloadConflict
+		}
+		return err
+	}
+	result, err := tx.ExecContext(ctx, fmt.Sprintf("DELETE FROM download_tasks WHERE id=%s AND lease_token=%s", placeholder(r.dialect, 1), placeholder(r.dialect, 2)), id, token)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected != 1 {
+		return ports.ErrDownloadConflict
+	}
+	if _, err = tx.ExecContext(ctx, fmt.Sprintf("DELETE FROM subscription_scans WHERE subscription_id=%s", placeholder(r.dialect, 1)), subscriptionID); err != nil {
+		return err
+	}
+	now := time.Now().UTC()
+	insert := fmt.Sprintf("INSERT INTO subscription_scans (id,subscription_id,origin,status,created_at,updated_at) VALUES (%s)", placeholders(r.dialect, 6, 1))
+	if _, err = tx.ExecContext(ctx, insert, newSortableID(), subscriptionID, string(ports.DownloadOriginUser), "queued", encodeTime(now, r.dialect), encodeTime(now, r.dialect)); err != nil {
+		return err
+	}
+	return tx.Commit()
 }

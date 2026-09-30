@@ -179,16 +179,23 @@ func TestDownloadControlHTTP(t *testing.T) {
 	if commands != before {
 		t.Fatal("search retry called client")
 	}
-	var status string
-	store.SQLDB().QueryRow("SELECT status FROM download_tasks WHERE id='d1'").Scan(&status)
-	if status != "queued" {
-		t.Fatalf("retry state=%s", status)
+	var tasks int
+	store.SQLDB().QueryRow("SELECT COUNT(*) FROM download_tasks WHERE id='d1'").Scan(&tasks)
+	if tasks != 0 {
+		t.Fatalf("搜索重试应删除失败任务，剩余任务行=%d", tasks)
 	}
-	assertStatus("POST", "/downloads/d1/retry", 409)
-	exec("UPDATE download_tasks SET status='failed' WHERE id='d1'")
+	var scanOrigin, scanStatus string
+	if err := store.SQLDB().QueryRow("SELECT origin,status FROM subscription_scans WHERE subscription_id='s1'").Scan(&scanOrigin, &scanStatus); err != nil {
+		t.Fatalf("搜索重试应登记一次资源搜索: %v", err)
+	}
+	if scanOrigin != "user" || scanStatus != "queued" {
+		t.Fatalf("搜索队列项 = %s/%s", scanOrigin, scanStatus)
+	}
+	assertStatus("POST", "/downloads/d1/retry", 404)
+	exec("INSERT INTO download_tasks(id,media_id,subscription_id,status,created_at,updated_at,error_message) VALUES(?,?,?,?,?,?,?)", "d2", "m1", "s1", "failed", now, now, "search failed")
 	exec("UPDATE subscriptions SET status='canceled' WHERE id='s1'")
-	assertStatus("POST", "/downloads/d1/retry", 409)
-	assertStatus("DELETE", "/downloads/d1", 204)
+	assertStatus("POST", "/downloads/d2/retry", 409)
+	assertStatus("DELETE", "/downloads/d2", 204)
 	var count int
 	store.SQLDB().QueryRow("SELECT COUNT(*) FROM media").Scan(&count)
 	if count != 1 {

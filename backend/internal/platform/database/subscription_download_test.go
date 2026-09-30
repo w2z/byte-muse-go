@@ -33,19 +33,19 @@ func TestSubscriptionDownloadQueueDeduplicatesAndSurvivesReopen(t *testing.T) {
 		t.Fatal(e)
 	}
 	q := NewSubscriptionDownloadRepository(s.SQLDB(), DialectSQLite)
-	first, e := q.Enqueue(ctx, "sub1", ports.DownloadOriginUser)
+	first, e := q.EnqueueScan(ctx, "sub1", ports.DownloadOriginUser)
 	if e != nil {
 		t.Fatal(e)
 	}
-	again, e := q.Enqueue(ctx, "sub1", ports.DownloadOriginUser)
+	again, e := q.EnqueueScan(ctx, "sub1", ports.DownloadOriginUser)
 	if e != nil {
 		t.Fatal(e)
 	}
-	if first.ID != again.ID {
-		t.Fatalf("duplicate tasks: %s %s", first.ID, again.ID)
+	if first == "" || first != again {
+		t.Fatalf("duplicate scans: %s %s", first, again)
 	}
-	if count, e := q.EnqueueActive(ctx); e != nil || count != 0 {
-		t.Fatalf("existing queued task counted as new: count=%d err=%v", count, e)
+	if count, e := q.EnqueueActiveScans(ctx); e != nil || count != 0 {
+		t.Fatalf("existing queued scan counted as new: count=%d err=%v", count, e)
 	}
 	_ = s.Close()
 	s, e = Open(ctx, Config{Dialect: DialectSQLite, SQLitePath: path})
@@ -57,8 +57,8 @@ func TestSubscriptionDownloadQueueDeduplicatesAndSurvivesReopen(t *testing.T) {
 		t.Fatal(e)
 	}
 	q = NewSubscriptionDownloadRepository(s.SQLDB(), DialectSQLite)
-	claimed, e := q.Claim(ctx, time.Now())
-	if e != nil || claimed == nil || claimed.ID != first.ID {
+	claimed, e := q.ClaimScan(ctx, time.Now())
+	if e != nil || claimed == nil || claimed.ID != first {
 		t.Fatalf("claim=%#v err=%v", claimed, e)
 	}
 	if claimed.Title != "film" || claimed.Cover != "https://img.example/banner.jpg" {
@@ -67,24 +67,32 @@ func TestSubscriptionDownloadQueueDeduplicatesAndSurvivesReopen(t *testing.T) {
 	if claimed.Origin != ports.DownloadOriginUser {
 		t.Fatalf("claim 发起方 = %q，期望 user", claimed.Origin)
 	}
-	if e = q.SetCandidate(ctx, *claimed, "Nyaa BT", "bt", "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567", "0123456789abcdef0123456789abcdef01234567", "qbittorrent", true); e != nil {
+	pending, e := q.StartTask(ctx, *claimed, ports.ScanCandidate{Site: "Nyaa BT", Kind: "bt", URI: "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567", InfoHash: "0123456789abcdef0123456789abcdef01234567", Downloader: "qbittorrent", FilterPassed: true})
+	if e != nil {
 		t.Fatal(e)
+	}
+	if e = q.FinishScan(ctx, *claimed); e != nil {
+		t.Fatal(e)
+	}
+	var scans int
+	if e = s.SQLDB().QueryRowContext(ctx, "SELECT COUNT(*) FROM subscription_scans").Scan(&scans); e != nil || scans != 0 {
+		t.Fatalf("结束搜索后队列残留=%d err=%v", scans, e)
 	}
 	var status string
-	if e = s.SQLDB().QueryRowContext(ctx, "SELECT status FROM download_tasks WHERE id=?", first.ID).Scan(&status); e != nil || status != "unknown" {
+	if e = s.SQLDB().QueryRowContext(ctx, "SELECT status FROM download_tasks WHERE id=?", pending.ID).Scan(&status); e != nil || status != "unknown" {
 		t.Fatalf("status=%s err=%v", status, e)
 	}
-	pending, e := q.ClaimPending(ctx, time.Now().Add(3*time.Minute))
-	if e != nil || pending == nil || pending.InfoHash != "0123456789abcdef0123456789abcdef01234567" {
-		t.Fatalf("pending=%#v err=%v", pending, e)
+	claimedPending, e := q.ClaimPending(ctx, time.Now().Add(3*time.Minute))
+	if e != nil || claimedPending == nil || claimedPending.InfoHash != "0123456789abcdef0123456789abcdef01234567" {
+		t.Fatalf("pending=%#v err=%v", claimedPending, e)
 	}
-	if pending.Code != "SSIS-001" || pending.Title != "film" || pending.Cover != "https://img.example/banner.jpg" {
-		t.Fatalf("pending 文案与封面 = %#v", pending)
+	if claimedPending.Code != "SSIS-001" || claimedPending.Title != "film" || claimedPending.Cover != "https://img.example/banner.jpg" {
+		t.Fatalf("pending 文案与封面 = %#v", claimedPending)
 	}
-	if e = q.FinishSubmission(ctx, *pending, true, ""); e != nil {
+	if e = q.FinishSubmission(ctx, *claimedPending, true, ""); e != nil {
 		t.Fatal(e)
 	}
-	if e = s.SQLDB().QueryRowContext(ctx, "SELECT status FROM download_tasks WHERE id=?", first.ID).Scan(&status); e != nil || status != "submitted" {
+	if e = s.SQLDB().QueryRowContext(ctx, "SELECT status FROM download_tasks WHERE id=?", pending.ID).Scan(&status); e != nil || status != "submitted" {
 		t.Fatalf("status=%s err=%v", status, e)
 	}
 }
@@ -118,8 +126,8 @@ func TestSubscriptionDownloadConcurrentEnqueue(t *testing.T) {
 		go func(index int) {
 			defer wg.Done()
 			<-start
-			task, e := repo.Enqueue(ctx, "sub1", ports.DownloadOriginUser)
-			ids[index], errors[index] = task.ID, e
+			id, e := repo.EnqueueScan(ctx, "sub1", ports.DownloadOriginUser)
+			ids[index], errors[index] = id, e
 		}(i)
 	}
 	close(start)

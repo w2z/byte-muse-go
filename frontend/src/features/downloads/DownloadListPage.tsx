@@ -12,7 +12,7 @@ import { PageHeader } from "../../shared/ui/PageHeader";
 import { PageState } from "../../shared/ui/PageState";
 import { useFeedbackMessage } from "../../shared/ui/FeedbackMessage";
 
-/** 下载任务状态到公共标签色板的映射：完成是正常态，失败告警，其余（排队/搜索/提交/下载中）都是进行中。 */
+/** 下载任务状态到公共标签色板的映射：完成是正常态，失败告警，其余（提交/下载中）都是进行中。 */
 function statusTone(status: DownloadTask["status"]): string {
   if (status === "completed") return "active";
   if (status === "failed") return "warn";

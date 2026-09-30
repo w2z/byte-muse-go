@@ -159,20 +159,20 @@ func (r *Router) subscriptionList(ctx context.Context) (string, error) {
 	return strings.Join(lines, "\n"), nil
 }
 
-// downloadSubscriptions 触发一次订阅下载，只报告受理结果。
+// downloadSubscriptions 触发一次订阅资源搜索，只报告受理结果。
 func (r *Router) downloadSubscriptions(ctx context.Context) (string, error) {
 	if r.deps.SubscriptionDownloads == nil {
 		return "订阅下载服务不可用", nil
 	}
 	// 这是批量扫描全部订阅，来源按 schedule 处理：没找到资源不推送，避免一次命令刷出上百条失败通知。
-	count, err := r.deps.SubscriptionDownloads.RunActive(ctx)
+	count, err := r.deps.SubscriptionDownloads.RunActiveScans(ctx)
 	if err != nil {
 		return "订阅下载执行失败：" + err.Error(), nil
 	}
 	if count == 0 {
-		return "没有需要下载的订阅", nil
+		return "没有需要搜索的订阅", nil
 	}
-	return fmt.Sprintf("已提交 %d 条订阅下载，请在下载页查看进度", count), nil
+	return fmt.Sprintf("已登记 %d 条订阅搜索，有资源才会建立下载任务", count), nil
 }
 
 // subscriptionLabel 生成订阅的一行展示，优先使用译文标题。

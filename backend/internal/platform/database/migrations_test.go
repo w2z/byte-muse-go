@@ -3,7 +3,9 @@ package database
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 )
 
 // TestMigrationPlanVersionsAreUniqueAndOrdered 约束每个方言的迁移版本号唯一且严格递增。
@@ -172,5 +174,98 @@ func TestStrmRootSettingMigration(t *testing.T) {
 	}
 	if value := readRoot(upgraded); value != "/media/strm" {
 		t.Fatalf("升级不得覆盖已有配置，得到 %q", value)
+	}
+}
+
+// TestSubscriptionScanMigration 验证迁移 34 把资源搜索从下载任务里独立出来：
+// 建表 subscription_scans，并清理两类历史噪音——从未提交下载器的搜索队列项与没有 info_hash 的失败任务。
+// 真正提交过下载器（有 info_hash）的任务必须保留，空库初始化与重复执行都安全。
+func TestSubscriptionScanMigration(t *testing.T) {
+	ctx := context.Background()
+
+	fresh, err := Open(ctx, Config{Dialect: DialectSQLite, SQLitePath: filepath.Join(t.TempDir(), "scan-fresh.db")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fresh.Close()
+	if err = fresh.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var table int
+	if err = fresh.SQLDB().QueryRowContext(ctx, "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='subscription_scans'").Scan(&table); err != nil {
+		t.Fatal(err)
+	}
+	if table != 1 {
+		t.Fatal("空库迁移后缺少 subscription_scans 表")
+	}
+
+	store, err := Open(ctx, Config{Dialect: DialectSQLite, SQLitePath: filepath.Join(t.TempDir(), "scan-upgrade.db")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err = ensureMigrationTable(ctx, store.SQLDB(), DialectSQLite); err != nil {
+		t.Fatal(err)
+	}
+	// 先升级到迁移 34 之前，模拟旧版本实例。
+	for _, migration := range MigrationPlan(DialectSQLite) {
+		if migration.Version < 34 {
+			if err = applyMigration(ctx, store.SQLDB(), DialectSQLite, migration); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	stamp := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err = store.SQLDB().ExecContext(ctx, "INSERT INTO media (id,code,title,subscription_status,library_status,created_at,updated_at) VALUES (?,?,?,?,?,?,?)", "m1", "TEST-1", "film", "active", "absent", stamp, stamp); err != nil {
+		t.Fatal(err)
+	}
+	insert := func(id, status, hash string) {
+		t.Helper()
+		var value any
+		if hash != "" {
+			value = hash
+		}
+		if _, err := store.SQLDB().ExecContext(ctx, "INSERT INTO download_tasks (id,media_id,status,info_hash,created_at,updated_at) VALUES (?,?,?,?,?,?)", id, "m1", status, value, stamp, stamp); err != nil {
+			t.Fatal(err)
+		}
+	}
+	insert("noise-queued", "queued", "")
+	insert("noise-searching", "searching", "")
+	insert("noise-failed", "failed", "")
+	insert("keep-failed", "failed", strings.Repeat("a", 40))
+	insert("keep-submitted", "submitted", strings.Repeat("b", 40))
+	countTasks := func() int {
+		var count int
+		if err := store.SQLDB().QueryRowContext(ctx, "SELECT COUNT(*) FROM download_tasks").Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		return count
+	}
+	if count := countTasks(); count != 5 {
+		t.Fatalf("升级前任务行数 = %d，期望 5", count)
+	}
+	if err = store.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err = store.Migrate(ctx); err != nil {
+		t.Fatalf("迁移重复执行应安全: %v", err)
+	}
+	if count := countTasks(); count != 2 {
+		t.Fatalf("升级后任务行数 = %d，期望 2（只保留有 info_hash 的任务）", count)
+	}
+	for _, id := range []string{"keep-failed", "keep-submitted"} {
+		var found int
+		if err = store.SQLDB().QueryRowContext(ctx, "SELECT COUNT(*) FROM download_tasks WHERE id = ?", id).Scan(&found); err != nil {
+			t.Fatal(err)
+		}
+		if found != 1 {
+			t.Fatalf("有 info_hash 的任务 %s 被误删", id)
+		}
+	}
+	if _, err = store.SQLDB().ExecContext(ctx, "INSERT INTO subscription_scans (id,subscription_id,origin,status,created_at,updated_at) VALUES (?,?,?,?,?,?)", "scan-1", "sub1", "user", "queued", stamp, stamp); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.SQLDB().ExecContext(ctx, "INSERT INTO subscription_scans (id,subscription_id,origin,status,created_at,updated_at) VALUES (?,?,?,?,?,?)", "scan-2", "sub1", "schedule", "queued", stamp, stamp); err == nil {
+		t.Fatal("同一订阅重复登记搜索应被唯一索引拒绝")
 	}
 }

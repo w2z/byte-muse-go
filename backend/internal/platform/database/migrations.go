@@ -27,7 +27,7 @@ func MigrationPlan(dialect Dialect) []Migration {
 	default:
 		return nil
 	}
-	return append(plan, settingsMigration(dialect), activeSubscriptionMigration(dialect), defaultSettingsMigration(dialect), systemLogsMigration(dialect), logRetentionSettingMigration(dialect), cleanupCanceledSubscriptionsMigration(dialect), catalogQueryIndexesMigration(dialect), downloaderAndBypassSettingsMigration(dialect), collectionMigration(dialect), collectionQueueMigration(dialect), mediaTypeMigration(dialect), subscriptionDownloadMigration(dialect), downloadTransferMigration(dialect), ptSiteSettingsMigration(dialect), siteAuthSettingsMigration(dialect), tagSubscriptionMigration(dialect), bypassProxySettingMigration(dialect), actorSubscriptionMigration(dialect), translationModelSettingsMigration(dialect), notificationSettingsMigration(dialect), tagAliasMigration(dialect), pan115AccountMigration(dialect), pan115ScanPathsSettingMigration(dialect), strmSettingsMigration(dialect), downloadOriginMigration(dialect), dropUnusedJavdbHostSettingMigration(dialect), actorAliasesMigration(dialect), dropUnusedPhotoCacheSettingMigration(dialect), strmRootSettingMigration(dialect))
+	return append(plan, settingsMigration(dialect), activeSubscriptionMigration(dialect), defaultSettingsMigration(dialect), systemLogsMigration(dialect), logRetentionSettingMigration(dialect), cleanupCanceledSubscriptionsMigration(dialect), catalogQueryIndexesMigration(dialect), downloaderAndBypassSettingsMigration(dialect), collectionMigration(dialect), collectionQueueMigration(dialect), mediaTypeMigration(dialect), subscriptionDownloadMigration(dialect), downloadTransferMigration(dialect), ptSiteSettingsMigration(dialect), siteAuthSettingsMigration(dialect), tagSubscriptionMigration(dialect), bypassProxySettingMigration(dialect), actorSubscriptionMigration(dialect), translationModelSettingsMigration(dialect), notificationSettingsMigration(dialect), tagAliasMigration(dialect), pan115AccountMigration(dialect), pan115ScanPathsSettingMigration(dialect), strmSettingsMigration(dialect), downloadOriginMigration(dialect), dropUnusedJavdbHostSettingMigration(dialect), actorAliasesMigration(dialect), dropUnusedPhotoCacheSettingMigration(dialect), strmRootSettingMigration(dialect), subscriptionScanMigration(dialect))
 }
 
 // dropUnusedPhotoCacheSettingMigration 清理已废弃的 ENABLE_PHOTO_CACHE 配置行。
@@ -63,6 +63,37 @@ func downloadOriginMigration(dialect Dialect) Migration {
 	return Migration{Version: 29, Name: "download_task_origin", Statements: statements}
 }
 
+// subscriptionScanMigration 把资源搜索从下载任务里独立出来：subscription_scans 只保存待执行的订阅搜索，
+// download_tasks 只保存已经选中资源、真正提交给下载器的任务；搜索没找到资源不再产生失败任务。
+// 同一订阅同时只允许一次待执行搜索（唯一索引），重复登记只升级发起方，不重复入队。
+// 迁移同时清理两类历史噪音：旧搜索队列项（queued/searching，从未提交下载器）与
+// 没有 info_hash 的失败任务（只是没搜到资源）；两条 DELETE 都只命中无下载信息的行，重复执行安全。
+func subscriptionScanMigration(dialect Dialect) Migration {
+	idType, timeType, originComment := "TEXT", "TEXT", ""
+	if dialect == DialectPostgres {
+		timeType = "TIMESTAMPTZ"
+	}
+	if dialect == DialectMySQL {
+		idType, timeType = "VARCHAR(26)", "DATETIME(6)"
+		originComment = " COMMENT '搜索发起方：schedule 定时任务、user 用户显式发起'"
+	}
+	return Migration{Version: 34, Name: "subscription_scans", Statements: []string{
+		fmt.Sprintf(`CREATE TABLE subscription_scans (
+	id %s PRIMARY KEY,
+	subscription_id %s NOT NULL,
+	origin VARCHAR(16) NOT NULL DEFAULT 'schedule'%s CHECK (origin IN ('schedule','user')),
+	status VARCHAR(16) NOT NULL CHECK (status IN ('queued','searching')),
+	lease_until BIGINT DEFAULT NULL,
+	lease_token VARCHAR(64) DEFAULT NULL,
+	created_at %s NOT NULL,
+	updated_at %s NOT NULL
+)`, idType, idType, originComment, timeType, timeType),
+		"CREATE UNIQUE INDEX idx_subscription_scans_subscription ON subscription_scans(subscription_id)",
+		"CREATE INDEX idx_subscription_scans_status_created ON subscription_scans(status, created_at)",
+		"DELETE FROM download_tasks WHERE status IN ('queued','searching')",
+		"DELETE FROM download_tasks WHERE status = 'failed' AND (info_hash IS NULL OR info_hash = '')",
+	}}
+}
 // notificationSettingsMigration 为微信与 Telegram 各新增 6 个业务通知开关，两个渠道互不影响。
 // 5 个推送类通知是新增行为，默认关闭，避免升级后未经确认就向渠道推送；
 // 「Agent 对话」只是给已有渠道对话增加按渠道关闭的能力，默认开启以保持升级前后行为一致。

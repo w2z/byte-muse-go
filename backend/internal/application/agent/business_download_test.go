@@ -11,32 +11,32 @@ import (
 	"bytemuse/backend/internal/ports"
 )
 
-// recordingDownloadRepository 只记录 Enqueue 调用；其余方法在渠道订阅测试中不会被触发。
+// recordingDownloadRepository 只记录 EnqueueScan 调用；其余方法在渠道订阅测试中不会被触发。
 type recordingDownloadRepository struct {
 	subscriptionIDs []string
 	origins         []ports.DownloadOrigin
 }
 
-func (r *recordingDownloadRepository) Enqueue(_ context.Context, subscriptionID string, origin ports.DownloadOrigin) (domain.DownloadTask, error) {
+func (r *recordingDownloadRepository) EnqueueScan(_ context.Context, subscriptionID string, origin ports.DownloadOrigin) (string, error) {
 	r.subscriptionIDs = append(r.subscriptionIDs, subscriptionID)
 	r.origins = append(r.origins, origin)
-	return domain.DownloadTask{ID: "task-1", MediaID: "m1", Status: domain.DownloadStatusQueued, CreatedAt: time.Now().UTC()}, nil
+	return "scan-1", nil
 }
 
-func (r *recordingDownloadRepository) EnqueueActive(context.Context) (int, error) {
+func (r *recordingDownloadRepository) EnqueueActiveScans(context.Context) (int, error) {
 	return 0, nil
 }
 
-func (r *recordingDownloadRepository) Claim(context.Context, time.Time) (*ports.SubscriptionDownloadAttempt, error) {
+func (r *recordingDownloadRepository) ClaimScan(context.Context, time.Time) (*ports.SubscriptionScanAttempt, error) {
 	return nil, nil
 }
 
-func (r *recordingDownloadRepository) SetCandidate(context.Context, ports.SubscriptionDownloadAttempt, string, string, string, string, string, bool) error {
+func (r *recordingDownloadRepository) FinishScan(context.Context, ports.SubscriptionScanAttempt) error {
 	return nil
 }
 
-func (r *recordingDownloadRepository) FinishSearch(context.Context, ports.SubscriptionDownloadAttempt, string) error {
-	return nil
+func (r *recordingDownloadRepository) StartTask(context.Context, ports.SubscriptionScanAttempt, ports.ScanCandidate) (ports.PendingSubmission, error) {
+	return ports.PendingSubmission{}, nil
 }
 
 func (r *recordingDownloadRepository) ClaimPending(context.Context, time.Time) (*ports.PendingSubmission, error) {

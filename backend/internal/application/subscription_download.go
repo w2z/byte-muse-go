@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"bytemuse/backend/internal/logging"
 	"bytemuse/backend/internal/platform/torrentsearch"
 	"bytemuse/backend/internal/ports"
 )
@@ -126,11 +127,19 @@ func (s *SubscriptionDownloadService) notifyDownloadFailed(ctx context.Context, 
 	})
 }
 
-// failSearch 结束一次失败的搜索；落库原因与通知文案使用同一个字符串，两处不会漂移。
-// 失败记录一律落库，但只有用户显式发起的尝试才推送通知：定时任务批量扫描没找到资源属于正常状态，
-// 每次扫描都推送只会变成刷屏。下载器报告的真实失败走 notifyTransferTransitions，不受这里影响。
-func (s *SubscriptionDownloadService) failSearch(ctx context.Context, a *ports.SubscriptionDownloadAttempt, reason string) {
-	_ = s.tasks.FinishSearch(ctx, *a, reason)
+// finishScan 删除一次已领取的搜索队列项：搜索结束且不产生下载任务，也不推送通知。
+func (s *SubscriptionDownloadService) finishScan(ctx context.Context, a ports.SubscriptionScanAttempt) {
+	if e := s.tasks.FinishScan(ctx, a); e != nil {
+		logging.Error(logging.CategoryDownload, "结束订阅搜索失败", "scan_id", a.ID, "subscription_id", a.SubscriptionID, "error", e.Error())
+	}
+}
+
+// failSearch 结束一次没有选中资源的搜索；原因只写日志，不落库、不污染下载列表。
+// 只有用户显式发起的搜索才推送通知：定时任务批量扫描没找到资源属于正常状态，每次扫描都推送只会变成刷屏。
+// 下载器报告的真实失败走 notifyTransferTransitions，不受这里影响。
+func (s *SubscriptionDownloadService) failSearch(ctx context.Context, a *ports.SubscriptionScanAttempt, reason string) {
+	s.finishScan(ctx, *a)
+	logging.Info(logging.CategoryDownload, "订阅资源搜索未产生下载任务", "scan_id", a.ID, "subscription_id", a.SubscriptionID, "code", a.Code, "origin", string(a.Origin), "reason", reason)
 	if a.Origin != ports.DownloadOriginUser {
 		return
 	}
@@ -164,18 +173,18 @@ func NewSubscriptionDownloadService(tasks ports.SubscriptionDownloadRepository, 
 	return &SubscriptionDownloadService{tasks: tasks, searcher: searcher, downloaders: downloaders, settings: settings}
 }
 
-// Enqueue 登记一条有效订阅的下载尝试，重复请求返回已存在的任务。
-// origin 是这次尝试的发起方，决定搜索失败后是否推送通知。
+// Enqueue 为一条有效订阅登记一次资源搜索，返回本次请求对应的持久化标识。
+// 该订阅已有进行中的下载任务时直接返回该任务标识；已有待执行搜索时只升级发起方，不重复入队。
+// origin 是这次搜索的发起方，决定搜索失败后是否推送通知。
 func (s *SubscriptionDownloadService) Enqueue(ctx context.Context, id string, origin ports.DownloadOrigin) (string, error) {
-	task, e := s.tasks.Enqueue(ctx, id, origin)
-	return task.ID, e
+	return s.tasks.EnqueueScan(ctx, id, origin)
 }
 
-// RunActive 登记全部有效订阅并处理一批任务。
+// RunActiveScans 登记全部有效订阅并处理一批搜索。
 // 批量扫描的来源固定为 schedule：没找到资源属于正常状态，不能为每条订阅推送失败通知。
 // 只有用户针对具体番号显式发起的 Enqueue 才按 user 来源推送。
-func (s *SubscriptionDownloadService) RunActive(ctx context.Context) (int, error) {
-	n, e := s.tasks.EnqueueActive(ctx)
+func (s *SubscriptionDownloadService) RunActiveScans(ctx context.Context) (int, error) {
+	n, e := s.tasks.EnqueueActiveScans(ctx)
 	if e != nil {
 		return n, e
 	}
@@ -216,7 +225,7 @@ func (s *SubscriptionDownloadService) Process(ctx context.Context, limit int) er
 		}
 	}
 	for range limit {
-		a, e := s.tasks.Claim(ctx, time.Now())
+		a, e := s.tasks.ClaimScan(ctx, time.Now())
 		if e != nil {
 			return e
 		}
@@ -270,9 +279,17 @@ func (s *SubscriptionDownloadService) Process(ctx context.Context, limit int) er
 			}
 			selected.InfoHash = hash
 		}
-		if e = s.tasks.SetCandidate(ctx, *a, selected.Site, selected.Kind, selected.URI, selected.InfoHash, downloader, passed); e != nil {
+		p, e := s.tasks.StartTask(ctx, *a, ports.ScanCandidate{Site: selected.Site, Kind: selected.Kind, URI: selected.URI, InfoHash: selected.InfoHash, Downloader: downloader, FilterPassed: passed})
+		if errors.Is(e, ports.ErrSubscriptionTaskActive) || errors.Is(e, ports.ErrSubscriptionNotFound) {
+			// 已有有效任务或订阅已失效：本次搜索结束，不再建立重复任务。
+			s.finishScan(ctx, *a)
+			continue
+		}
+		if e != nil {
 			return e
 		}
+		// 资源已建立下载任务，搜索队列项完成使命，立即删除，避免租约过期后被重复领取。
+		s.finishScan(ctx, *a)
 		client := downloaders[downloader]
 		found, e := client.HasHash(ctx, selected.InfoHash)
 		if e == nil && !found {
@@ -289,11 +306,10 @@ func (s *SubscriptionDownloadService) Process(ctx context.Context, limit int) er
 			return fmt.Errorf("提交或回查下载器: %w", e)
 		}
 		if found {
-			p := ports.PendingSubmission{ID: a.ID, LeaseToken: a.LeaseToken}
 			if e = s.tasks.FinishSubmission(ctx, p, true, ""); e != nil {
 				return e
 			}
-			s.notifyDownloadStart(ctx, a.Code, a.Title, selected.Site, a.Cover)
+			s.notifyDownloadStart(ctx, p.Code, p.Title, p.Site, p.Cover)
 		}
 	}
 	return nil

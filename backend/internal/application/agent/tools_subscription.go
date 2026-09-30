@@ -260,18 +260,18 @@ func queryTagSubscribes(ctx context.Context, deps Deps) (any, error) {
 	return map[string]any{"total": page.Total, "returned": len(items), "items": items}, nil
 }
 
-// downloadSubscribe 触发一次订阅下载受理，只报告受理条数，不承诺下载完成。
+// downloadSubscribe 触发一次订阅资源搜索受理，只报告受理条数，不承诺找到资源或完成下载。
 func downloadSubscribe(ctx context.Context, deps Deps) (any, error) {
 	if deps.SubscriptionDownloads == nil {
 		return "订阅下载服务不可用", nil
 	}
 	// 这是批量扫描全部订阅，来源按 schedule 处理：没找到资源不推送，避免一次调用刷出上百条失败通知。
-	count, err := deps.SubscriptionDownloads.RunActive(ctx)
+	count, err := deps.SubscriptionDownloads.RunActiveScans(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("订阅下载执行失败: %w", err)
 	}
 	if count == 0 {
-		return "没有需要下载的订阅", nil
+		return "没有需要搜索的订阅", nil
 	}
-	return fmt.Sprintf("已提交 %d 条订阅下载，请在下载页查看进度", count), nil
+	return fmt.Sprintf("已登记 %d 条订阅搜索，有资源才会建立下载任务", count), nil
 }

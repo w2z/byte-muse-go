@@ -107,8 +107,8 @@ func TestSubscriptionDownloadFlowSubmitsOnceAndExposesSource(t *testing.T) {
 	if e = service.Process(ctx, 10); e != nil {
 		t.Fatal(e)
 	}
-	if client.submitted != 1 {
-		t.Fatalf("duplicate submission=%d", client.submitted)
+	if client.submitted != 1 || search.called != 1 {
+		t.Fatalf("duplicate submission=%d search=%d", client.submitted, search.called)
 	}
 }
 
@@ -180,5 +180,9 @@ func TestDefaultFilterAppliesWhenSubscriptionFilterEmpty(t *testing.T) {
 	}
 	if client.submitted != 0 {
 		t.Fatalf("default only_free filter ignored")
+	}
+	var tasks int
+	if e = s.SQLDB().QueryRowContext(ctx, "SELECT COUNT(*) FROM download_tasks").Scan(&tasks); e != nil || tasks != 0 {
+		t.Fatalf("被默认过滤挡掉的资源不应建立下载任务，实际 %d 条 err=%v", tasks, e)
 	}
 }

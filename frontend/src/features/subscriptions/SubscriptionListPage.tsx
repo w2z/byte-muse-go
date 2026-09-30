@@ -17,7 +17,7 @@ export function SubscriptionListPage() {
   const queryClient = useQueryClient();
   const enqueue = useMutation({
     mutationFn: (id: string) => apiRequest<{ task_id: string }>("/subscriptions/" + encodeURIComponent(id) + "/download", { method: "POST" }),
-    onSuccess: async () => { message.success?.("已加入下载任务"); await queryClient.invalidateQueries(); },
+    onSuccess: async () => { message.success?.("已登记资源搜索，有资源才会建立下载任务"); await queryClient.invalidateQueries(); },
     onError: (error: Error) => message.error?.(error.message),
   });
   const [page, setPage] = useState(1);

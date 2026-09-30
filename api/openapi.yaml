@@ -359,13 +359,13 @@ paths:
   /subscriptions/{subscriptionId}/download:
     post:
       operationId: enqueueSubscriptionDownload
-      summary: 为活动订阅登记资源搜索与下载任务
-      description: 将活动订阅登记为持久化任务，由后台搜索 PT（已接入馒头）和 Nyaa BT（sukebei.nyaa.si）资源。重复请求返回已有任务；202 不代表下载器已受理。需要登录。
+      summary: 为活动订阅登记一次资源搜索
+      description: 为活动订阅登记一次资源搜索，由后台搜索 PT（已接入馒头）和 Nyaa BT（sukebei.nyaa.si）资源；只有选中资源才会建立下载任务。搜索没找到资源属于正常结果，不建立下载任务，等下一次排期重新搜索。重复请求返回同一标识；202 只表示已受理搜索，不代表已找到资源或下载器已受理。需要登录。
       parameters:
         - $ref: '#/components/parameters/SubscriptionId'
       responses:
         '202':
-          description: 已持久化任务；task_id 是下载任务标识，不表示下载器已受理
+          description: 已受理搜索；task_id 是本次请求的持久化标识（已有下载任务时即该任务 ID，否则为搜索队列 ID），不表示已找到资源或下载器已受理
           content:
             application/json:
               schema:
@@ -374,7 +374,7 @@ paths:
                 properties:
                   task_id:
                     type: string
-                    description: 下载任务 ID，可在 GET /downloads 查询状态
+                    description: 本次请求的持久化标识；已有下载任务时为该任务 ID（可在 GET /downloads 查询），否则为搜索队列 ID，搜索有结果后会建立新的下载任务
               example:
                 task_id: ABCDEFGHIJKLMNOPQRSTUVWXYZ
         '404':
@@ -2075,6 +2075,7 @@ components:
       enum: [none, active, canceled]
     DownloadStatus:
       type: string
+      description: 下载任务状态；搜索没找到资源不会建立任务，因此新任务只从 unknown 开始，queued/searching 仅用于兼容历史数据
       enum: [queued, searching, submitted, downloading, completed, failed, unknown]
     MediaDisplayStatus:
       type: string
