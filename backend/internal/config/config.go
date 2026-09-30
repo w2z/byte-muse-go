@@ -11,8 +11,6 @@ import (
 
 const (
 	defaultWebStaticDir = "/app/web"
-	// defaultStrmRoot 是容器内 strm 根目录的默认挂载点，与 README、Compose 的 /strm 一致。
-	defaultStrmRoot = "/strm"
 	// defaultCoverRoot 是容器内影片封面缓存目录，位于用户自行挂载的 /data 之下。
 	defaultCoverRoot = "/data/cover"
 )
@@ -21,9 +19,6 @@ const (
 type Config struct {
 	HTTPAddress  string
 	WebStaticDir string
-	// StrmRoot 是设置项 STRM_ROOT 为空时使用的本地 strm 文件根目录；
-	// 设置页只能浏览生效根目录以下的内容。
-	StrmRoot string
 	// CoverRoot 是影片封面缓存目录；封面缓存固定开启，目录不可写时图片回退源站地址。
 	CoverRoot       string
 	ShutdownTimeout time.Duration
@@ -52,10 +47,6 @@ func Load() (Config, error) {
 	if staticDir == "" {
 		staticDir = defaultWebStaticDir
 	}
-	strmRoot := strings.TrimSpace(os.Getenv("STRM_ROOT"))
-	if strmRoot == "" {
-		strmRoot = defaultStrmRoot
-	}
 	coverRoot := strings.TrimSpace(os.Getenv("COVER_ROOT"))
 	if coverRoot == "" {
 		coverRoot = defaultCoverRoot
@@ -78,7 +69,6 @@ func Load() (Config, error) {
 	return Config{
 		HTTPAddress:     httpAddress,
 		WebStaticDir:    staticDir,
-		StrmRoot:        strmRoot,
 		CoverRoot:       coverRoot,
 		ShutdownTimeout: shutdownTimeout,
 		Version:         envOrDefault("BYTEMUSE_VERSION", "dev"),

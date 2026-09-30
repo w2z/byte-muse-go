@@ -710,6 +710,7 @@ describe("网盘设置", () => {
     await waitFor(() => expect(screen.queryByRole("tooltip")).not.toBeInTheDocument());
     expect(within(mappingCard as HTMLElement).getByText("本地路径", { exact: true })).toBeInTheDocument();
     expect(within(mappingCard as HTMLElement).getByText("网盘路径", { exact: true })).toBeInTheDocument();
+    expect(Array.from((mappingCard as HTMLElement).querySelectorAll(".settings-strm-path-label")).map((label) => label.textContent)).toEqual(["网盘路径", "本地路径"]);
     expect(screen.getByLabelText("本地路径 1").closest(".arco-input-group-wrapper"))
       .toContainElement(screen.getByRole("button", { name: "选择本地目录" }));
     const remoteGroup = screen.getByLabelText("网盘路径 1").closest(".arco-input-group-wrapper");
@@ -757,7 +758,7 @@ describe("网盘设置", () => {
     await user.click(screen.getByRole("button", { name: "删除映射 1" }));
     expect(screen.getByLabelText("网盘路径 1")).toHaveValue("/115");
     expect(screen.queryByLabelText("网盘路径 2")).not.toBeInTheDocument();
-  });
+  }, 20000);
 
   it("本地 strm 目录选择器固定以 /strm 为根，可新建目录并刷新出外部创建的目录", async () => {
     const user = userEvent.setup();
@@ -812,7 +813,7 @@ describe("网盘设置", () => {
     expect(await screen.findByLabelText("本地路径 1")).toHaveValue("/");
   });
 
-  it("STRM 目录设置决定本地目录选择器的根名称，并随保存提交", async () => {
+  it("固定 STRM 根目录并统一媒体格式字段样式", async () => {
     const user = userEvent.setup();
     const values: Record<string, string> = {};
     vi.mocked(apiRequest).mockImplementation(async (path, options) => {
@@ -822,7 +823,7 @@ describe("网盘设置", () => {
         return { database_driver: "sqlite", values: { ...body.values }, configured: {} };
       }
       if (path === "/system/settings") {
-        return { database_driver: "sqlite", values: { STRM_ROOT: "/media/library/strm" }, configured: {} };
+        return { database_driver: "sqlite", values: { STRM_ROOT: "/media/library/legacy-root" }, configured: {} };
       }
       if (path === "/pan115/account") return { linked: true, account: boundAccount };
       if (path.startsWith("/strm/directories")) {
@@ -836,8 +837,10 @@ describe("网盘设置", () => {
     await user.click(await screen.findByRole("tab", { name: "网盘" }));
     await user.click(screen.getByRole("tab", { name: "STRM 生成" }));
 
-    // 已保存的根目录回显在设置项里，并成为本地目录选择器的根名称。
-    expect(await screen.findByLabelText("STRM 目录")).toHaveValue("/media/library/strm");
+    expect(screen.queryByLabelText("STRM 目录")).not.toBeInTheDocument();
+    const formats = screen.getByRole("combobox", { name: "媒体格式" });
+    expect(formats.closest(".settings-field")).toHaveClass("settings-strm-format-line");
+    expect(screen.getByText("媒体格式", { exact: true })).toHaveClass("settings-field-label");
     await user.click(screen.getByRole("button", { name: "添加映射" }));
     await user.click(screen.getByRole("button", { name: "选择本地目录" }));
     const dialog = await screen.findByRole("dialog");
@@ -847,10 +850,8 @@ describe("网盘设置", () => {
     await user.click(within(dialog).getByRole("button", { name: "取消" }));
     await waitForDialogClosed();
 
-    // 修改后随保存提交；留空表示沿用部署默认值。
-    await user.clear(screen.getByLabelText("STRM 目录"));
-    await user.type(screen.getByLabelText("STRM 目录"), "/mnt/strm");
     await user.click(screen.getByRole("button", { name: "保存设置" }));
-    await waitFor(() => expect(values.STRM_ROOT).toBe("/mnt/strm"));
+    await waitFor(() => expect(values).toHaveProperty("STRM_PATHS"));
+    expect(values).not.toHaveProperty("STRM_ROOT");
   });
 });

@@ -363,8 +363,8 @@ func (c *Commands) Serve(ctx context.Context) error {
 	defer pan115Service.Close()
 	// strm 服务：把 115 与 CloudDrive2 的网盘目录镜像成本地 strm 文件，并解析播放地址。
 	// CloudDrive2 连接参数来自设置，因此传入按设置懒构造的适配器，改配置后无需重启进程。
-	// 本地 strm 根目录同样以设置项 STRM_ROOT 为准，进程配置只在设置为空时兜底。
-	strmService, err := application.NewStrmService(c.config.StrmRoot, pan115Service,
+	// 本地目录浏览与生成统一使用系统固定的 /strm 根目录。
+	strmService, err := application.NewStrmService(pan115Service,
 		application.NewCloudDriveSettings(settingsValues(settingsService)), settingsValues(settingsService))
 	if err != nil {
 		return fmt.Errorf("create strm service: %w", err)

@@ -30,7 +30,7 @@ func (s *strmPan115PlayStub) PlayURL(_ context.Context, fileID, _ string) (strin
 // 且 115 的标识按路径段还原、CloudDrive2 的多级目录路径不被拆断。
 func TestStrmPlayRouteIsPublicAndRedirects(t *testing.T) {
 	stub := &strmPan115PlayStub{}
-	service, err := application.NewStrmService(t.TempDir(), stub, nil, func(context.Context) (map[string]string, error) {
+	service, err := application.NewStrmService(stub, nil, func(context.Context) (map[string]string, error) {
 		return map[string]string{}, nil
 	})
 	if err != nil {
@@ -68,7 +68,7 @@ func TestStrmRoutesRequireSession(t *testing.T) {
 
 // TestStrmDirectoryHandlerRejectsEscape 验证本地目录浏览无法越出 strm 根目录。
 func TestStrmDirectoryHandlerRejectsEscape(t *testing.T) {
-	service, err := application.NewStrmService(t.TempDir(), nil, nil, func(context.Context) (map[string]string, error) {
+	service, err := application.NewStrmService(nil, nil, func(context.Context) (map[string]string, error) {
 		return map[string]string{}, nil
 	})
 	if err != nil {
@@ -103,7 +103,7 @@ func (s *strmPan115InvalidStub) PlayURL(context.Context, string, string) (string
 // TestStrmPlayRejectsInvalidFileID 验证 115 判定为非法的文件标识返回 400，
 // 而不是把它当作未知故障返回 500。
 func TestStrmPlayRejectsInvalidFileID(t *testing.T) {
-	service, err := application.NewStrmService(t.TempDir(), &strmPan115InvalidStub{}, nil, func(context.Context) (map[string]string, error) {
+	service, err := application.NewStrmService(&strmPan115InvalidStub{}, nil, func(context.Context) (map[string]string, error) {
 		return map[string]string{}, nil
 	})
 	if err != nil {

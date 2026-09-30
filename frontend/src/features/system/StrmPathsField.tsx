@@ -13,7 +13,7 @@ export type StrmKind = "115" | "cd2";
 /** 一条「网盘目录 → 本地 strm 目录」映射，字段与后端 domain.StrmMapping 一一对应。 */
 export type StrmMapping = { kind: StrmKind; id: string; path: string; local_path: string; formats: string[] };
 
-/** STRM 映射默认生成格式；用户可在 Select 中移除、恢复或手动添加格式。 */
+/** STRM 映射默认媒体格式；用户可在 Select 中移除、恢复或手动添加格式。 */
 export const DEFAULT_STRM_FORMATS = [
   "mp4", "avi", "rmvb", "wmv", "mov", "mkv", "webm", "iso",
   "mpg", "m4v", "ts", "flv", "strm", "vob", "m2ts",
@@ -91,19 +91,17 @@ function cloudCrumbs(path: string): DirectoryPickerCrumb[] {
 /**
  * strm 网盘映射字段。
  *
- * 每条映射分别展示本地 strm 目录与远程网盘目录；目录选择按钮作为输入框后置按钮，删除按钮位于映射卡片外侧。
- * 网盘目录来自 115 或 CloudDrive2 的实时目录列表；本地目录浏览以设置项 STRM_ROOT 生效的
+ * 每条映射依次展示远程网盘目录与本地 strm 目录；目录选择按钮作为输入框后置按钮，删除按钮位于映射卡片外侧。
+ * 网盘目录来自 115 或 CloudDrive2 的实时目录列表；本地目录浏览以系统固定的 /strm
  * 根目录为界，只能向下展开，外部新建的目录点击「刷新」即可看到。
  * 草稿由设置页统一持有并随「保存设置」提交。
  */
 export function StrmPathsField({
   value,
   onChange,
-  rootLabel = "strm",
 }: {
   value: StrmMapping[];
   onChange: (next: StrmMapping[]) => void;
-  rootLabel?: string;
 }) {
   // index 指向正在编辑的行，target 决定打开网盘目录还是本地目录选择器。
   const [picking, setPicking] = useState<{ index: number; target: "netdisk" | "local" } | null>(null);
@@ -164,23 +162,6 @@ export function StrmPathsField({
             <li className="settings-strm-path-row" key={`${item.kind}-${item.id}-${index}`}>
               <div className="settings-strm-path-card">
                 <div className="settings-strm-path-line">
-                  <span className="settings-strm-path-label">本地路径</span>
-                  <div className="settings-strm-field">
-                    <Input
-                      value={item.local_path}
-                      placeholder="尚未选择本地 strm 目录"
-                      aria-label={`本地路径 ${index + 1}`}
-                      onChange={(localPath) => update(index, { local_path: localPath })}
-                      afterStyle={{ padding: 0, border: 0 }}
-                      addAfter={(
-                        <Tooltip content="选择本地目录">
-                          <Button type="primary" icon={<IconFolder />} aria-label="选择本地目录" onClick={() => openPicker(index, "local")} />
-                        </Tooltip>
-                      )}
-                    />
-                  </div>
-                </div>
-                <div className="settings-strm-path-line">
                   <span className="settings-strm-path-label">网盘路径</span>
                   <div className="settings-strm-field settings-strm-remote-field">
                     <Input
@@ -210,6 +191,23 @@ export function StrmPathsField({
                     />
                   </div>
                 </div>
+                <div className="settings-strm-path-line">
+                  <span className="settings-strm-path-label">本地路径</span>
+                  <div className="settings-strm-field">
+                    <Input
+                      value={item.local_path}
+                      placeholder="尚未选择本地 strm 目录"
+                      aria-label={`本地路径 ${index + 1}`}
+                      onChange={(localPath) => update(index, { local_path: localPath })}
+                      afterStyle={{ padding: 0, border: 0 }}
+                      addAfter={(
+                        <Tooltip content="选择本地目录">
+                          <Button type="primary" icon={<IconFolder />} aria-label="选择本地目录" onClick={() => openPicker(index, "local")} />
+                        </Tooltip>
+                      )}
+                    />
+                  </div>
+                </div>
               </div>
               <Tooltip content="删除映射">
                 <Button
@@ -235,8 +233,8 @@ export function StrmPathsField({
           添加映射
         </Button>
       </div>
-      <div className="settings-strm-format-line">
-        <span className="settings-strm-path-label">生成格式</span>
+      <div className="settings-field settings-strm-format-line">
+        <span className="settings-field-label">媒体格式</span>
         <Select
           mode="multiple"
           allowCreate={{
@@ -251,13 +249,13 @@ export function StrmPathsField({
             label: format,
           }))}
           placeholder="选择或输入格式"
-          aria-label="生成格式"
+          aria-label="媒体格式"
           onChange={updateFormats}
         />
       </div>
       {incomplete > 0 ? (
         <span className="settings-field-description">
-          有 {incomplete} 条映射尚未选齐网盘目录、本地目录或生成格式，保存时会跳过这些映射。
+          有 {incomplete} 条映射尚未选齐网盘目录、本地目录或媒体格式，保存时会跳过这些映射。
         </span>
       ) : null}
       {duplicateLocalPaths > 0 ? (
@@ -333,7 +331,7 @@ export function StrmPathsField({
             key={pickerRun}
             endpoint="/strm/directories"
             queryKeyPrefix="strm-directories"
-            crumbs={(path) => strmCrumbs(path, rootLabel)}
+            crumbs={(path) => strmCrumbs(path, "strm")}
             selectedIDs={selectedLocalPaths}
             creatable
             onCancel={closePicker}

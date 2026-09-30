@@ -78,10 +78,11 @@ func strmTestMappings(t *testing.T, mappings []domain.StrmMapping) string {
 
 func newStrmTestService(t *testing.T, root string, pan115 strmPan115API, cloud strmCloudDriveAPI, values map[string]string) *StrmService {
 	t.Helper()
-	service, err := NewStrmService(root, pan115, cloud, strmTestSettings(values))
+	service, err := NewStrmService(pan115, cloud, strmTestSettings(values))
 	if err != nil {
 		t.Fatal(err)
 	}
+	service.root = filepath.Clean(root)
 	return service
 }
 
@@ -169,48 +170,42 @@ func TestResolveStrmPath(t *testing.T) {
 	}
 }
 
-// TestStrmRootSettingDrivesBrowseAndScan 验证设置项 STRM_ROOT 是本地 strm 根目录的权威来源：
-// 覆盖进程默认值、留空回退默认值、相对路径被拒绝，目录创建与 strm 生成都落在生效根目录内。
-func TestStrmRootSettingDrivesBrowseAndScan(t *testing.T) {
+// TestStrmRootIgnoresLegacySetting 验证旧根目录设置不能改变浏览、创建和生成的共同边界。
+func TestStrmRootIgnoresLegacySetting(t *testing.T) {
 	ctx := context.Background()
-	defaultRoot := t.TempDir()
-	configured := t.TempDir()
+	root := t.TempDir()
+	legacy := t.TempDir()
 	pan115 := &strmPan115Stub{pages: map[string]domain.Pan115FilePage{
 		"100": {Files: []domain.Pan115File{{ID: "f1", Name: "A.mkv"}}},
 	}}
-	service := newStrmTestService(t, defaultRoot, pan115, nil, map[string]string{
-		strmRootSettingKey:     configured,
+	service := newStrmTestService(t, root, pan115, nil, map[string]string{
+		"STRM_ROOT":            legacy,
 		strmPathsSettingKey:    strmTestMappings(t, []domain.StrmMapping{{Kind: "115", ID: "100", Path: "/影片", LocalPath: "/movies"}}),
 		strmPlayBaseSettingKey: "http://bm.local",
 	})
-	root, err := service.Root(ctx)
-	if err != nil || root != filepath.Clean(configured) {
-		t.Fatalf("生效根目录 = %q（err=%v），期望 %q", root, err, filepath.Clean(configured))
+	if actual, err := service.Root(ctx); err != nil || actual != filepath.Clean(root) {
+		t.Fatalf("根目录被历史设置改变: %q err=%v", actual, err)
 	}
 	if _, err := service.CreateDirectory(ctx, "/", "movies"); err != nil {
-		t.Fatalf("在生效根目录下创建目录失败: %v", err)
+		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(configured, "movies")); err != nil {
-		t.Fatalf("目录未创建在生效根目录下: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(defaultRoot, "movies")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatal("设置生效时不应写入进程默认根目录")
+	page, err := service.Directories(ctx, "/")
+	if err != nil || len(page.Directories) != 1 || page.Directories[0].Name != "movies" {
+		t.Fatalf("目录浏览异常: %+v err=%v", page, err)
 	}
 	result, err := service.Scan(ctx, "")
 	if err != nil || result.Created != 1 {
-		t.Fatalf("生成结果 %+v（err=%v）", result, err)
+		t.Fatalf("生成异常: %+v err=%v", result, err)
 	}
-	if _, err := os.Stat(filepath.Join(configured, "movies", "A.mkv.strm")); err != nil {
-		t.Fatalf("strm 未写入生效根目录: %v", err)
+	if _, err := os.Stat(filepath.Join(root, "movies", "A.mkv.strm")); err != nil {
+		t.Fatal(err)
 	}
-
-	fallback := newStrmTestService(t, defaultRoot, nil, nil, map[string]string{strmRootSettingKey: "  "})
-	if root, err := fallback.Root(ctx); err != nil || root != filepath.Clean(defaultRoot) {
-		t.Fatalf("留空时应回退默认根目录，得到 %q（err=%v）", root, err)
+	if _, err := os.Stat(filepath.Join(legacy, "movies")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("不得写入旧根目录")
 	}
-	invalid := newStrmTestService(t, defaultRoot, nil, nil, map[string]string{strmRootSettingKey: "strm"})
-	if _, err := invalid.Root(ctx); !errors.Is(err, ErrInvalidSetting) {
-		t.Fatalf("相对路径应被拒绝，得到 %v", err)
+	service.settings = func(context.Context) (map[string]string, error) { return nil, errors.New("settings unavailable") }
+	if actual, err := service.Root(ctx); err != nil || actual != filepath.Clean(root) {
+		t.Fatalf("浏览根目录不应依赖设置读取: %q err=%v", actual, err)
 	}
 }
 
@@ -314,7 +309,7 @@ func TestScanUsesMappingFormats(t *testing.T) {
 		"100": {Files: []domain.Pan115File{{ID: "f1", Name: "movie.MKV"}, {ID: "f2", Name: "movie.mp4"}}},
 	}}
 	values := map[string]string{
-		"STRM_PATHS": strmTestMappings(t, []domain.StrmMapping{{Kind: domain.StrmKindPan115, ID: "100", Path: "/影片", LocalPath: "/movies", Formats: []string{"mkv"}}}),
+		"STRM_PATHS":     strmTestMappings(t, []domain.StrmMapping{{Kind: domain.StrmKindPan115, ID: "100", Path: "/影片", LocalPath: "/movies", Formats: []string{"mkv"}}}),
 		"STRM_PLAY_BASE": "http://bm.local",
 	}
 	service := newStrmTestService(t, root, pan115, nil, values)

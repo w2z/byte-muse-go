@@ -66,27 +66,19 @@ type strmSourceFile struct {
 }
 
 // StrmService 把网盘目录镜像成本地 strm 文件，并为播放请求解析真实地址。
-// 目录浏览始终以 strm 根目录为界：调用方无法访问根目录以外的路径。
-// 根目录取设置项 STRM_ROOT，留空时回退到进程配置的默认值。
+// 目录浏览始终以固定 /strm 根目录为界，调用方无法访问根目录以外的路径。
 type StrmService struct {
-	// defaultRoot 是设置项 STRM_ROOT 为空时使用的本地 strm 根目录，来自进程配置。
-	defaultRoot string
-	pan115      strmPan115API
-	cloud       strmCloudDriveAPI
-	settings    func(context.Context) (map[string]string, error)
-	http        *http.Client
+	// root 是生产环境固定的 /strm；测试可在同包内替换为临时目录隔离文件。
+	root     string
+	pan115   strmPan115API
+	cloud    strmCloudDriveAPI
+	settings func(context.Context) (map[string]string, error)
+	http     *http.Client
 }
 
-// NewStrmService 组装 strm 服务；root 是设置项 STRM_ROOT 为空时的本地 strm 根目录，
+// NewStrmService 组装固定使用 /strm 根目录的 strm 服务。
 // cloud 未配置时只支持 115，pan115 为 nil 时只支持 CloudDrive2。
-func NewStrmService(root string, pan115 strmPan115API, cloud strmCloudDriveAPI, settings func(context.Context) (map[string]string, error)) (*StrmService, error) {
-	trimmed := strings.TrimSpace(root)
-	if trimmed == "" {
-		trimmed = strmRootDefault
-	}
-	if !filepath.IsAbs(trimmed) {
-		return nil, fmt.Errorf("strm 根目录必须是绝对路径: %s", trimmed)
-	}
+func NewStrmService(pan115 strmPan115API, cloud strmCloudDriveAPI, settings func(context.Context) (map[string]string, error)) (*StrmService, error) {
 	if settings == nil {
 		return nil, fmt.Errorf("strm settings loader is required")
 	}
@@ -95,34 +87,17 @@ func NewStrmService(root string, pan115 strmPan115API, cloud strmCloudDriveAPI, 
 		pan115 = nil
 	}
 	return &StrmService{
-		defaultRoot: filepath.Clean(trimmed),
-		pan115:      pan115,
-		cloud:       cloud,
-		settings:    settings,
-		http:        &http.Client{Timeout: strmRequestTimeout},
+		root:     strmRootDefault,
+		pan115:   pan115,
+		cloud:    cloud,
+		settings: settings,
+		http:     &http.Client{Timeout: strmRequestTimeout},
 	}, nil
 }
 
-// Root 解析当前生效的本地 strm 根目录：设置项 STRM_ROOT 优先，留空回退进程默认值。
-// 每次调用都重新读取设置，因此改设置后无需重启；取值必须是绝对路径，否则拒绝本次请求。
-func (s *StrmService) Root(ctx context.Context) (string, error) {
-	values, err := s.settings(ctx)
-	if err != nil {
-		return "", fmt.Errorf("读取 strm 配置失败: %w", err)
-	}
-	return s.resolveRoot(values)
-}
-
-// resolveRoot 从已经读到的设置快照解析根目录，避免同一次请求重复读取设置。
-func (s *StrmService) resolveRoot(values map[string]string) (string, error) {
-	configured := strings.TrimSpace(values[strmRootSettingKey])
-	if configured == "" {
-		return s.defaultRoot, nil
-	}
-	if !filepath.IsAbs(configured) {
-		return "", fmt.Errorf("%w: %s 需要是绝对路径", ErrInvalidSetting, strmRootSettingKey)
-	}
-	return filepath.Clean(configured), nil
+// Root 返回固定的本地 strm 根目录，不读取数据库设置。
+func (s *StrmService) Root(_ context.Context) (string, error) {
+	return s.root, nil
 }
 
 // Directories 列出 strm 根目录下某个目录的直接子目录。
@@ -232,10 +207,7 @@ func (s *StrmService) Scan(ctx context.Context, playBase string) (domain.StrmSca
 	if len(mappings) == 0 {
 		return domain.StrmScanResult{}, fmt.Errorf("%w: 尚未配置网盘映射", ErrStrmNotConfigured)
 	}
-	root, err := s.resolveRoot(values)
-	if err != nil {
-		return domain.StrmScanResult{}, err
-	}
+	root := s.root
 	base := strings.TrimRight(strings.TrimSpace(values[strmPlayBaseSettingKey]), "/")
 	if base == "" {
 		base = strings.TrimRight(strings.TrimSpace(playBase), "/")

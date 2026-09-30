@@ -161,8 +161,7 @@ const defaultTranslationEngine = "none";
 
 /** 扫描目录配置键；字段定义、解析与序列化共用同一处定义，避免键名漂移。 */
 const scanPathsKey = "PAN115_SCAN_PATHS";
-/** strm 配置键：本地 strm 根目录、网盘映射、strm 内容使用的对外基址、生成后是否刷新 Emby 媒体库。 */
-const strmRootKey = "STRM_ROOT";
+/** strm 配置键：网盘映射、strm 内容使用的对外基址、生成后是否刷新 Emby 媒体库；本地根目录固定为 /strm。 */
 const strmPathsKey = "STRM_PATHS";
 const strmPlayBaseKey = "STRM_PLAY_BASE";
 const strmEmbyRefreshKey = "STRM_EMBY_REFRESH";
@@ -467,13 +466,6 @@ const groups: SettingGroup[] = [
     code: "strm",
     title: "STRM 生成",
     fields: [
-      {
-        key: strmRootKey,
-        label: "STRM 目录",
-        kind: "text",
-        placeholder: "/strm",
-        description: "本地 strm 文件的保存根目录，必须是绝对路径；留空时使用部署默认值（容器内为 /strm）。目录浏览、新建目录与 strm 生成都限定在该目录以内，修改后已生成的 strm 文件不会自动迁移。",
-      },
       {
         key: strmPathsKey,
         label: "网盘strm映射",
@@ -948,17 +940,8 @@ function parseStrmPaths(raw?: string): StrmMapping[] {
 }
 
 /**
- * 本地 strm 根目录在目录选择器里的显示名：取已保存配置的最后一段路径，
- * 留空时回退容器默认的 strm。只用于展示，浏览范围始终由后端按同一设置判定。
- */
-function strmRootLabel(configured?: string): string {
-  const segments = String(configured ?? "").split(/[\\/]/).filter((item) => item !== "");
-  return segments.pop() ?? "strm";
-}
-
-/**
  * 序列化 strm 网盘映射：只提交已选齐网盘目录与本地目录的映射。
- * 本地路径必须是 strm 根目录下的绝对形式路径，与后端 STRM_PATHS 校验保持一致。
+ * 本地路径必须是固定 /strm 根目录下的绝对形式路径，与后端 STRM_PATHS 校验保持一致。
  */
 function serializeStrmPaths(mappings: StrmMapping[]): string {
   const complete = mappings.filter(
@@ -1273,7 +1256,6 @@ export function SettingsPage() {
           <StrmPathsField
             value={strmPaths}
             onChange={setStrmPaths}
-            rootLabel={strmRootLabel(savedSnapshot.values[strmRootKey])}
           />
           {field.description ? <span className="settings-field-description">{field.description}</span> : null}
         </div>

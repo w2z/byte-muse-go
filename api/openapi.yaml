@@ -674,7 +674,7 @@ paths:
     put:
       operationId: updateSystemSettings
       summary: 保存系统设置
-      description: 原子保存当前分组；密钥与 Cookie 分别加密保存，切换类型不清除隐藏凭据。AGENT_SYSTEM_PROMPT 和 TRANSLATION_PROMPT 各允许最多 61440 个 UTF-8 字节，其他值最多 8192 字节；按去除首尾空白前的输入计算，超限返回 400 invalid_setting，message 包含字段名、字节上限和当前字节数，整批不写入且不截断。STRM_ROOT 必须是绝对路径（留空表示沿用部署默认值），否则返回 400 invalid_setting。
+      description: 原子保存当前分组；密钥与 Cookie 分别加密保存，切换类型不清除隐藏凭据。AGENT_SYSTEM_PROMPT 和 TRANSLATION_PROMPT 各允许最多 61440 个 UTF-8 字节，其他值最多 8192 字节；按去除首尾空白前的输入计算，超限返回 400 invalid_setting，message 包含字段名、字节上限和当前字节数，整批不写入且不截断。本地 strm 根目录固定为 /strm，不接受 STRM_ROOT 配置。
       parameters:
         - {in: cookie, name: bytemuse_session, required: true, schema: {type: string}, description: 登录签发的管理员会话 Cookie，不在示例中填写真实值}
       requestBody:
@@ -1081,10 +1081,10 @@ paths:
     get:
       operationId: listStrmDirectories
       summary: 浏览本地 strm 目录
-      description: 列出 strm 根目录下某个目录的直接子目录，供设置页选择 strm 生成目录。根目录取设置项 STRM_ROOT，留空时回退部署默认值（容器内 /strm）；浏览范围固定在该根目录以内，根目录以上的路径会被拒绝。每次请求实时读盘，外部新建的目录重新请求即可看到。
+      description: 列出 strm 根目录下某个目录的直接子目录，供设置页选择 strm 生成目录。根目录固定为 /strm；浏览范围固定在该根目录以内，根目录以上的路径会被拒绝。每次请求实时读盘，外部新建的目录重新请求即可看到。
       parameters:
         - {in: cookie, name: bytemuse_session, required: true, schema: {type: string}, description: 登录签发的管理员会话 Cookie}
-        - {in: query, name: path, schema: {type: string}, description: '相对 strm 根目录（STRM_ROOT 生效值）的路径，以 / 开头；省略或空串表示根目录'}
+        - {in: query, name: path, schema: {type: string}, description: '相对固定 /strm 根目录的路径，以 / 开头；省略或空串表示根目录'}
       responses:
         '200':
           description: 当前目录的直接子目录；不返回文件
@@ -1093,7 +1093,7 @@ paths:
               schema: {$ref: '#/components/schemas/StrmDirectoryPage'}
               example: {path: /, directories: [{name: movies, path: /movies}]}
         '400':
-          description: 路径非法、超出 strm 根目录（STRM_ROOT 生效值）或目录不存在
+          description: 路径非法、超出固定 /strm 根目录或目录不存在
           content:
             application/json:
               schema: {$ref: '#/components/schemas/Error'}
@@ -1110,7 +1110,7 @@ paths:
     post:
       operationId: createStrmDirectory
       summary: 新建本地 strm 目录
-      description: 在 strm 根目录内的指定父目录下新建一级目录；根目录取设置项 STRM_ROOT，留空时回退部署默认值（容器内 /strm）。父目录必须已存在，目录名不能包含路径分隔符，同名目录已存在时返回 400。只创建一级，避免一次请求产生隐式目录树。
+      description: 在 strm 根目录内的指定父目录下新建一级目录；根目录固定为 /strm。父目录必须已存在，目录名不能包含路径分隔符，同名目录已存在时返回 400。只创建一级，避免一次请求产生隐式目录树。
       parameters:
         - {in: cookie, name: bytemuse_session, required: true, schema: {type: string}, description: 登录签发的管理员会话 Cookie}
       requestBody:
@@ -1122,7 +1122,7 @@ paths:
               required: [path, name]
               additionalProperties: false
               properties:
-                path: {type: string, description: '父目录相对 strm 根目录（STRM_ROOT 生效值）的路径，以 / 开头；省略或空串表示根目录'}
+                path: {type: string, description: '父目录相对固定 /strm 根目录的路径，以 / 开头；省略或空串表示根目录'}
                 name: {type: string, description: 新目录名称；不能为空，不能是 . 或 ..，不能包含路径分隔符}
             example: {path: /, name: movies}
       responses:
@@ -1133,7 +1133,7 @@ paths:
               schema: {$ref: '#/components/schemas/StrmDirectory'}
               example: {name: movies, path: /movies}
         '400':
-          description: 目录名非法、目录已存在、上级目录不存在或路径超出 strm 根目录（STRM_ROOT 生效值）
+          description: 目录名非法、目录已存在、上级目录不存在或路径超出固定 /strm 根目录
           content:
             application/json:
               schema: {$ref: '#/components/schemas/Error'}
@@ -1187,7 +1187,7 @@ paths:
     post:
       operationId: scanStrm
       summary: 生成 strm 文件
-      description: 按设置项 STRM_PATHS 把网盘目录镜像成本地 strm 文件，写入设置项 STRM_ROOT 生效的根目录（留空回退部署默认 /strm），每条映射仅处理其 formats 中的文件扩展名，文件内容为 {基址}/files/play/{网盘类型}/{文件标识}。重复执行幂等，内容一致时不改写磁盘。基址取 STRM_PLAY_BASE，为空时使用本次请求的来源地址；STRM_EMBY_REFRESH 为 true 且已配置 Emby 地址与密钥时额外刷新媒体库。单条映射失败不影响其他映射，失败原因通过 message 返回。
+      description: 按设置项 STRM_PATHS 把网盘目录镜像成本地 strm 文件，写入固定 /strm 根目录，每条映射仅处理其 formats 中的文件扩展名，文件内容为 {基址}/files/play/{网盘类型}/{文件标识}。重复执行幂等，内容一致时不改写磁盘。基址取 STRM_PLAY_BASE，为空时使用本次请求的来源地址；STRM_EMBY_REFRESH 为 true 且已配置 Emby 地址与密钥时额外刷新媒体库。单条映射失败不影响其他映射，失败原因通过 message 返回。
       parameters:
         - {in: cookie, name: bytemuse_session, required: true, schema: {type: string}, description: 登录签发的管理员会话 Cookie}
       responses:
@@ -2200,21 +2200,21 @@ components:
         kind: {type: string, enum: ['115', 'cd2'], description: '网盘类型；115 为 115 网盘，cd2 为 CloudDrive2，取值同时用作播放地址的路径段'}
         id: {type: string, description: '网盘目录标识，扫描与播放的权威依据；115 为目录 ID，CloudDrive2 为目录绝对路径'}
         path: {type: string, description: 网盘目录展示路径；只用于界面展示，不参与扫描与播放}
-        local_path: {type: string, description: '本地 strm 目录，以 / 开头，相对设置项 STRM_ROOT 生效的根目录；不能超出该根目录'}
-        formats: {type: array, minItems: 1, items: {type: string, pattern: '^[a-z0-9][a-z0-9._-]*$'}, description: '该映射允许生成 strm 的文件格式；保存时转为小写并去除前导点。未提供时使用默认格式 mp4、avi、rmvb、wmv、mov、mkv、webm、iso、mpg、m4v、ts、flv、strm、vob、m2ts'}
+        local_path: {type: string, description: '本地 strm 目录，以 / 开头，相对固定 /strm 根目录；不能超出该根目录'}
+        formats: {type: array, minItems: 1, items: {type: string, pattern: '^[a-z0-9][a-z0-9._-]*$'}, description: '该映射允许生成 STRM 的媒体格式；保存时转为小写并去除前导点。未提供时使用默认格式 mp4、avi、rmvb、wmv、mov、mkv、webm、iso、mpg、m4v、ts、flv、strm、vob、m2ts'}
     StrmDirectory:
       type: object
       required: [name, path]
       description: 一个可选择的目录
       properties:
         name: {type: string, description: 目录名称}
-        path: {type: string, description: '目录路径；本地 strm 目录相对 STRM_ROOT 生效的根目录，CloudDrive2 目录为网盘绝对路径'}
+        path: {type: string, description: '目录路径；本地 strm 目录相对固定 /strm 根目录，CloudDrive2 目录为网盘绝对路径'}
     StrmDirectoryPage:
       type: object
       required: [path, directories]
       description: 一次目录浏览结果；只包含子目录，不包含文件
       properties:
-        path: {type: string, description: '当前目录路径；本地 strm 目录相对 STRM_ROOT 生效的根目录，CloudDrive2 目录为网盘绝对路径'}
+        path: {type: string, description: '当前目录路径；本地 strm 目录相对固定 /strm 根目录，CloudDrive2 目录为网盘绝对路径'}
         directories: {type: array, items: {$ref: '#/components/schemas/StrmDirectory'}, description: '当前目录的直接子目录；无子目录为空数组'}
     StrmScanMapping:
       type: object

@@ -3,7 +3,6 @@ package application
 import (
 	"context"
 	"errors"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -291,31 +290,28 @@ func TestSettingsPan115ScanPaths(t *testing.T) {
 	}
 }
 
-// TestStrmRootSettingValidation 验证本地 strm 根目录只接受绝对路径：
-// 相对路径会随进程工作目录漂移，使目录浏览与生成落到非预期位置；
-// 空值表示清除该项并回退部署默认值，必须允许。
-func TestStrmRootSettingValidation(t *testing.T) {
-	service, err := NewSettingsService(&settingsMemoryRepository{}, "sqlite", strings.Repeat("x", 32))
+// TestStrmRootSettingRemoved 验证旧设置不再回显或接受修改，同时保留历史记录。
+func TestStrmRootSettingRemoved(t *testing.T) {
+	repo := &settingsMemoryRepository{items: []ports.StoredSetting{{Key: "STRM_ROOT", Value: "/legacy/strm"}}}
+	service, err := NewSettingsService(repo, "sqlite", strings.Repeat("x", 32))
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	// 用临时目录拼出当前平台的绝对路径：Windows 的 \strm 不是绝对路径，只有盘符路径才是。
-	absolute := filepath.Join(t.TempDir(), "strm")
-	saved, err := service.Update(ctx, map[string]string{"STRM_ROOT": absolute})
+	saved, err := service.Get(ctx)
 	if err != nil {
-		t.Fatalf("保存绝对路径失败: %v", err)
+		t.Fatal(err)
 	}
-	if saved.Values["STRM_ROOT"] != absolute {
-		t.Fatalf("strm 根目录未按原值回读: %q", saved.Values["STRM_ROOT"])
+	if _, present := saved.Values["STRM_ROOT"]; present {
+		t.Fatal("旧根目录设置不应回显")
 	}
-	if _, err := service.Update(ctx, map[string]string{"STRM_ROOT": ""}); err != nil {
-		t.Fatalf("空值应清除该设置并回退部署默认值: %v", err)
-	}
-	for _, invalid := range []string{"strm", "strm/root", "./strm", "../strm"} {
-		if _, err := service.Update(ctx, map[string]string{"STRM_ROOT": invalid}); !errors.Is(err, ErrInvalidSetting) {
-			t.Fatalf("应拒绝相对路径 %q，得到 %v", invalid, err)
+	for _, value := range []string{"", "/strm", "/other"} {
+		if _, err := service.Update(ctx, map[string]string{"STRM_ROOT": value}); !errors.Is(err, ErrInvalidSetting) {
+			t.Fatalf("应拒绝旧设置更新: %v", err)
 		}
+	}
+	if len(repo.items) != 1 || repo.items[0].Value != "/legacy/strm" {
+		t.Fatal("不得修改历史根目录记录")
 	}
 }
 
