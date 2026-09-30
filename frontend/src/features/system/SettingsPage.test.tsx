@@ -689,6 +689,18 @@ describe("网盘设置", () => {
     expect(within(mappingCard as HTMLElement).getByRole("button", { name: "选择本地目录" })).toBeInTheDocument();
     expect(within(mappingCard as HTMLElement).getByRole("button", { name: "选择网盘目录" })).toBeInTheDocument();
     expect(mappingCard).not.toContainElement(screen.getByRole("button", { name: "删除映射 1" }));
+    const localPickerButton = screen.getByRole("button", { name: "选择本地目录" });
+    expect(localPickerButton).toHaveClass("arco-btn-primary");
+    expect(localPickerButton.textContent).toBe("");
+    const netdiskPickerButton = screen.getByRole("button", { name: "选择网盘目录" });
+    expect(netdiskPickerButton).toHaveClass("arco-btn-primary");
+    expect(netdiskPickerButton.textContent).toBe("");
+    expect(screen.getByLabelText("本地路径 1").closest(".arco-input-group-wrapper"))
+      .toContainElement(screen.getByRole("button", { name: "选择本地目录" }));
+    const remoteGroup = screen.getByLabelText("网盘路径 1").closest(".arco-input-group-wrapper");
+    expect(remoteGroup).toContainElement(screen.getByRole("combobox", { name: "网盘类型 1" }));
+    expect(remoteGroup).toContainElement(screen.getByRole("button", { name: "选择网盘目录" }));
+    expect(screen.getByLabelText("STRM文件播放地址")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "选择网盘目录" }));
     await user.click(await screen.findByRole("button", { name: "电影" }));
     await user.click(screen.getByRole("button", { name: "确认" }));
