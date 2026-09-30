@@ -66,13 +66,13 @@ func TestPan115EventsGenerateRetryAndResume(t *testing.T) {
 	if repo.items[0].Value != before {
 		t.Fatal("failed scan advanced cursor")
 	}
-	files.pages["10"] = domain.Pan115FilePage{Files: []domain.Pan115File{{ID: "42", Name: "ABC-123.mkv"}, {ID: "43", Name: "readme.txt"}}}
+	files.pages["10"] = domain.Pan115FilePage{Files: []domain.Pan115File{{ID: "42", PickCode: "pc-42", Name: "ABC-123.mkv"}, {ID: "43", PickCode: "pc-43", Name: "readme.txt"}}}
 	if err := worker.Poll(ctx); err != nil {
 		t.Fatal(err)
 	}
 	target := filepath.Join(root, "movies", "ABC-123.mkv.strm")
 	content, err := os.ReadFile(target)
-	if err != nil || string(content) != "https://media.example.com/files/play/115/42\n" {
+	if err != nil || string(content) != "https://media.example.com/files/play/115/pc-42\n" {
 		t.Fatalf("content=%q err=%v", content, err)
 	}
 	if _, err := os.Stat(filepath.Join(root, "movies", "readme.txt.strm")); !os.IsNotExist(err) {
@@ -136,7 +136,7 @@ func TestPan115EventsBaselineAndEmbyRetry(t *testing.T) {
 		t.Fatal("baseline replayed historical events")
 	}
 	baseline := repo.items[0].Value
-	files.pages["10"] = domain.Pan115FilePage{Files: []domain.Pan115File{{ID: "42", Name: "film.mkv"}}}
+	files.pages["10"] = domain.Pan115FilePage{Files: []domain.Pan115File{{ID: "42", PickCode: "pc-42", Name: "film.mkv"}}}
 	source.pages[0] = pan115.LifePage{Total: 1, Events: []pan115.LifeEvent{{ID: 2, Type: 2, UpdatedAt: 21}}}
 	if err := worker.Poll(ctx); err == nil {
 		t.Fatal("failed refresh acknowledged")
@@ -169,16 +169,16 @@ func TestPan115EventsRespectMappingRules(t *testing.T) {
 			})
 			files := &strmPan115Stub{pages: map[string]domain.Pan115FilePage{
 				"10": {Files: []domain.Pan115File{
-					{ID: "41", Name: "accepted.mkv", Size: 10 * 1024 * 1024},
-					{ID: "42", Name: "small.mkv", Size: 10*1024*1024 - 1},
-					{ID: "43", Name: "wrong.mp4", Size: 20 * 1024 * 1024},
-					{ID: "44", Name: "SAMPLE.mkv", Size: 20 * 1024 * 1024},
+					{ID: "41", PickCode: "pc-41", Name: "accepted.mkv", Size: 10 * 1024 * 1024},
+					{ID: "42", PickCode: "pc-42", Name: "small.mkv", Size: 10*1024*1024 - 1},
+					{ID: "43", PickCode: "pc-43", Name: "wrong.mp4", Size: 20 * 1024 * 1024},
+					{ID: "44", PickCode: "pc-44", Name: "SAMPLE.mkv", Size: 20 * 1024 * 1024},
 					{ID: "excluded", Name: "Samples", IsDirectory: true},
 					{ID: "11", Name: "nested", IsDirectory: true},
 				}},
-				"11":         {Files: []domain.Pan115File{{ID: "45", Name: "nested.mkv", Size: 20 * 1024 * 1024}}},
-				"20":         {Files: []domain.Pan115File{{ID: "46", Name: "episode.mp4"}, {ID: "47", Name: "wrong.mkv"}}},
-				"unselected": {Files: []domain.Pan115File{{ID: "48", Name: "outside.mkv", Size: 20 * 1024 * 1024}}},
+				"11":         {Files: []domain.Pan115File{{ID: "45", PickCode: "pc-45", Name: "nested.mkv", Size: 20 * 1024 * 1024}}},
+				"20":         {Files: []domain.Pan115File{{ID: "46", PickCode: "pc-46", Name: "episode.mp4"}, {ID: "47", PickCode: "pc-47", Name: "wrong.mkv"}}},
+				"unselected": {Files: []domain.Pan115File{{ID: "48", PickCode: "pc-48", Name: "outside.mkv", Size: 20 * 1024 * 1024}}},
 			}}
 			root := t.TempDir()
 			strm := newStrmTestService(t, root, files, nil, values)
@@ -228,7 +228,7 @@ func TestPan115EventsRespectMappingRules(t *testing.T) {
 				t.Fatal(err)
 			}
 			content, err := os.ReadFile(target)
-			if err != nil || string(content) != "https://new.example.com/files/play/115/41\n" {
+			if err != nil || string(content) != "https://new.example.com/files/play/115/pc-41\n" {
 				t.Fatalf("update=%q err=%v", content, err)
 			}
 		})
@@ -245,7 +245,7 @@ func TestPan115EventsPaginationAndPersistenceFailure(t *testing.T) {
 		0: {Total: 3, Events: []pan115.LifeEvent{{ID: 8, Type: 8, UpdatedAt: 20}}},
 		1: {Total: 3, Events: []pan115.LifeEvent{{ID: 7, Type: 2, UpdatedAt: 20}, {ID: 5, Type: 2, UpdatedAt: 20}}},
 	}}
-	files := &strmPan115Stub{pages: map[string]domain.Pan115FilePage{"10": {Files: []domain.Pan115File{{ID: "42", Name: "film.mkv"}}}}}
+	files := &strmPan115Stub{pages: map[string]domain.Pan115FilePage{"10": {Files: []domain.Pan115File{{ID: "42", PickCode: "pc-42", Name: "film.mkv"}}}}}
 	root := t.TempDir()
 	strm := newStrmTestService(t, root, files, nil, values)
 	worker := NewPan115EventService(source, strm, repo, strmTestSettings(values), func(context.Context) (string, error) { return "123", nil })
@@ -270,7 +270,7 @@ func TestPan115EventsPaginationAndPersistenceFailure(t *testing.T) {
 		t.Fatal("CD2 must not be scanned")
 	}
 	// A rename produces the new path without deleting an existing STRM.
-	files.pages["10"] = domain.Pan115FilePage{Files: []domain.Pan115File{{ID: "42", Name: "renamed.mkv"}}}
+	files.pages["10"] = domain.Pan115FilePage{Files: []domain.Pan115File{{ID: "42", PickCode: "pc-42", Name: "renamed.mkv"}}}
 	source.pages[0] = pan115.LifePage{Total: 1, Events: []pan115.LifeEvent{{ID: 9, Type: 24, UpdatedAt: 21}}}
 	if err := worker.Poll(ctx); err != nil {
 		t.Fatal(err)

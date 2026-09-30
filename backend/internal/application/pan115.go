@@ -364,26 +364,16 @@ func (s *Pan115Service) DirectoryPath(ctx context.Context, directoryID string) (
 	return path, nil
 }
 
-// PlayURL 把 115 文件标识解析为带时效的播放直链：先取文件信息得到提取码，再换取下载地址。
+// PlayURL 直接用扫描时取得的 pick_code 换取带时效的播放直链，无需查询文件信息。
 // userAgent 由播放端提供：115 会把直链绑定到换取直链时的 User-Agent，播放端必须使用同一个 UA。
-func (s *Pan115Service) PlayURL(ctx context.Context, fileID, userAgent string) (string, error) {
-	fileID = strings.TrimSpace(fileID)
-	if fileID == "" {
-		return "", fmt.Errorf("%w: 文件标识不能为空", ErrPan115InvalidInput)
+func (s *Pan115Service) PlayURL(ctx context.Context, pickCode, userAgent string) (string, error) {
+	pickCode = strings.TrimSpace(pickCode)
+	if pickCode == "" {
+		return "", fmt.Errorf("%w: pick_code 不能为空", ErrPan115InvalidInput)
 	}
 	var address string
 	err := s.withToken(ctx, func(token string) error {
-		info, err := s.client.Info(ctx, token, fileID)
-		if err != nil {
-			return err
-		}
-		if info.IsDirectory {
-			return fmt.Errorf("%w: 该标识是目录，无法播放", ErrPan115InvalidInput)
-		}
-		if strings.TrimSpace(info.PickCode) == "" {
-			return fmt.Errorf("%w: 未能获取文件的 115 提取码", ErrPan115InvalidInput)
-		}
-		found, err := s.client.DownloadURL(ctx, token, info.PickCode, userAgent)
+		found, err := s.client.DownloadURL(ctx, token, pickCode, userAgent)
 		if err != nil {
 			return err
 		}

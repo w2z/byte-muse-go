@@ -177,7 +177,7 @@ func TestStrmRootIgnoresLegacySetting(t *testing.T) {
 	root := t.TempDir()
 	legacy := t.TempDir()
 	pan115 := &strmPan115Stub{pages: map[string]domain.Pan115FilePage{
-		"100": {Files: []domain.Pan115File{{ID: "f1", Name: "A.mkv"}}},
+		"100": {Files: []domain.Pan115File{{ID: "f1", PickCode: "pc-1", Name: "A.mkv"}}},
 	}}
 	service := newStrmTestService(t, root, pan115, nil, map[string]string{
 		"STRM_ROOT":            legacy,
@@ -246,10 +246,10 @@ func TestScanWritesPlayableStrmFiles(t *testing.T) {
 	pan115 := &strmPan115Stub{pages: map[string]domain.Pan115FilePage{
 		"100": {Files: []domain.Pan115File{
 			{ID: "200", Name: "合集", IsDirectory: true},
-			{ID: "f1", Name: "A.mkv"},
+			{ID: "f1", PickCode: "pc-1", Name: "A.mkv"},
 			{ID: "f2", Name: "readme.txt"},
 		}},
-		"200": {Files: []domain.Pan115File{{ID: "f3", Name: "C.mp4"}}},
+		"200": {Files: []domain.Pan115File{{ID: "f3", PickCode: "pc-3", Name: "C.mp4"}}},
 	}}
 	cloud := &strmCloudStub{configured: true, entries: map[string][]clouddrive.Entry{
 		"/115/影片": {
@@ -266,20 +266,26 @@ func TestScanWritesPlayableStrmFiles(t *testing.T) {
 		"STRM_PLAY_BASE": "http://bm.local/",
 	}
 	service := newStrmTestService(t, root, pan115, cloud, values)
+	if err := os.MkdirAll(filepath.Join(root, "movies"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "movies", "A.mkv.strm"), []byte("http://bm.local/files/play/115/f1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	result, err := service.Scan(context.Background(), "")
 	if err != nil {
 		t.Fatalf("生成 strm 失败: %v", err)
 	}
-	if result.Files != 3 || result.Created != 3 || result.Failed != 0 {
+	if result.Files != 3 || result.Created != 2 || result.Failed != 0 {
 		t.Fatalf("生成统计不符: %+v", result)
 	}
 	if result.Emby.Attempted {
 		t.Fatalf("未开启自动刷新时不应请求 Emby: %+v", result.Emby)
 	}
 	for target, want := range map[string]string{
-		"movies/A.mkv.strm":    "http://bm.local/files/play/115/f1\n",
-		"movies/合集/C.mp4.strm": "http://bm.local/files/play/115/f3\n",
+		"movies/A.mkv.strm":    "http://bm.local/files/play/115/pc-1\n",
+		"movies/合集/C.mp4.strm": "http://bm.local/files/play/115/pc-3\n",
 		"cloud/S1/B.mkv.strm":  "http://bm.local/files/play/cd2/115/%E5%BD%B1%E7%89%87/S1/B.mkv\n",
 	} {
 		content, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(target)))
@@ -303,11 +309,34 @@ func TestScanWritesPlayableStrmFiles(t *testing.T) {
 	}
 }
 
+// TestScanMissingPickCode 验证缺少提取码时报告失败，且保留文件 ID 供扫描入库。
+func TestScanMissingPickCode(t *testing.T) {
+	root := t.TempDir()
+	pan115 := &strmPan115Stub{pages: map[string]domain.Pan115FilePage{
+		"100": {Files: []domain.Pan115File{{ID: "f1", Name: "missing.mkv"}, {ID: "f2", PickCode: "pc-2", Name: "valid.mkv"}}},
+	}}
+	values := map[string]string{
+		"STRM_PATHS": strmTestMappings(t, []domain.StrmMapping{{Kind: "115", ID: "100", Path: "/影片", LocalPath: "/movies"}}),
+	}
+	service := newStrmTestService(t, root, pan115, nil, values)
+	files, err := walkPan115Files(context.Background(), pan115, "100", strmFileFilter{formats: defaultStrmFormats})
+	if err != nil || len(files) != 2 || files[0].ID != "f1" || files[1].ID != "f2" || files[1].PickCode != "pc-2" {
+		t.Fatalf("扫描标识未保留: %+v err=%v", files, err)
+	}
+	result, err := service.Scan(context.Background(), "http://bm.local")
+	if err != nil || result.Files != 2 || result.Failed != 1 || result.Created != 1 || !strings.Contains(result.Mappings[0].Message, "pick_code") {
+		t.Fatalf("缺失提取码结果不符: %+v err=%v", result, err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "movies", "missing.mkv.strm")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("缺失提取码不得生成无效 STRM")
+	}
+}
+
 // TestScanUsesMappingFormats 验证每条映射只生成自己选择的文件格式，且扩展名匹配不区分大小写。
 func TestScanUsesMappingFormats(t *testing.T) {
 	root := t.TempDir()
 	pan115 := &strmPan115Stub{pages: map[string]domain.Pan115FilePage{
-		"100": {Files: []domain.Pan115File{{ID: "f1", Name: "movie.MKV"}, {ID: "f2", Name: "movie.mp4"}}},
+		"100": {Files: []domain.Pan115File{{ID: "f1", PickCode: "pc-1", Name: "movie.MKV"}, {ID: "f2", PickCode: "pc-2", Name: "movie.mp4"}}},
 	}}
 	values := map[string]string{
 		"STRM_PATHS":     strmTestMappings(t, []domain.StrmMapping{{Kind: domain.StrmKindPan115, ID: "100", Path: "/影片", LocalPath: "/movies", Formats: []string{"mkv"}}}),
@@ -542,10 +571,10 @@ func TestScanSkipsExcludedDirectoriesAndSmallFiles(t *testing.T) {
 	pan115 := &strmPan115Stub{pages: map[string]domain.Pan115FilePage{
 		"100": {Files: []domain.Pan115File{
 			{ID: "200", Name: "Sample", IsDirectory: true},
-			{ID: "f1", Name: "A.mkv", Size: 200 * mb},
+			{ID: "f1", PickCode: "pc-1", Name: "A.mkv", Size: 200 * mb},
 			{ID: "f2", Name: "B.trailer.mkv", Size: 200 * mb},
 			{ID: "f3", Name: "C.mkv", Size: 10 * mb},
-			{ID: "f4", Name: "D.mkv"},
+			{ID: "f4", PickCode: "pc-4", Name: "D.mkv"},
 		}},
 	}}
 	values := map[string]string{

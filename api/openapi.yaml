@@ -1321,7 +1321,7 @@ paths:
     post:
       operationId: scanStrm
       summary: 生成 strm 文件
-      description: 按设置项 STRM_PATHS 把网盘目录镜像成本地 strm 文件，写入固定 /strm 根目录，每条映射仅处理其 formats 中的文件扩展名，文件内容为 {基址}/files/play/{网盘类型}/{文件标识}。递归扫描时按该映射的 exclude 规则跳过文件与文件夹：equals 要求完整名称相等、prefix 前缀、suffix 后缀、contains 包含，一律不区分大小写；命中文件夹时整棵子树都不生成。同时跳过体积小于 min_size_mb 的视频，网盘未返回体积的文件不受体积限制。重复执行幂等，内容一致时不改写磁盘。基址取 STRM_PLAY_BASE，为空时使用本次请求的来源地址；STRM_EMBY_REFRESH 为 true 且已配置 Emby 地址与密钥时额外刷新媒体库。单条映射失败不影响其他映射，失败原因通过 message 返回。
+      description: 按设置项 STRM_PATHS 把网盘目录镜像成本地 strm 文件，写入固定 /strm 根目录，每条映射仅处理其 formats 中的文件扩展名，文件内容为 {基址}/files/play/{网盘类型}/{文件标识}，115 的文件标识为扫描返回的 pick_code，CloudDrive2 为文件路径；缺失 pick_code 的文件计为生成失败，重新生成会改写旧版 file_id 链接。递归扫描时按该映射的 exclude 规则跳过文件与文件夹：equals 要求完整名称相等、prefix 前缀、suffix 后缀、contains 包含，一律不区分大小写；命中文件夹时整棵子树都不生成。同时跳过体积小于 min_size_mb 的视频，网盘未返回体积的文件不受体积限制。重复执行幂等，内容一致时不改写磁盘。基址取 STRM_PLAY_BASE，为空时使用本次请求的来源地址；STRM_EMBY_REFRESH 为 true 且已配置 Emby 地址与密钥时额外刷新媒体库。单条映射失败不影响其他映射，失败原因通过 message 返回。
       parameters:
         - {$ref: '#/components/parameters/ScanProgressAccept'}
         - {in: cookie, name: bytemuse_session, required: true, schema: {type: string}, description: 登录签发的管理员会话 Cookie}
@@ -1361,11 +1361,11 @@ paths:
     get:
       operationId: playStrmFile
       summary: 解析并跳转网盘播放地址
-      description: 'strm 文件里的播放地址入口，不要求登录会话：实际地址为 {ByteMuse 地址}/files/play/{kind}/{fileId}，位于 /api/v1 之外。115 返回 302 跳转到绑定换取时 User-Agent 的直链；CloudDrive2 直链要求固定请求头时由服务端代理转发。CloudDrive2 的文件标识是网盘绝对路径，按 / 拆段后逐段 URL 编码，因此 fileId 会占用多个路径段。'
+      description: 'strm 文件里的播放地址入口，不要求登录会话：实际地址为 {ByteMuse 地址}/files/play/{kind}/{fileId}，位于 /api/v1 之外。115 使用 pick_code 直接换取直链并返回 302，直链绑定换取时的 User-Agent；旧版使用 file_id 的 STRM 需重新生成；CloudDrive2 直链要求固定请求头时由服务端代理转发。CloudDrive2 的文件标识是网盘绝对路径，按 / 拆段后逐段 URL 编码，因此 fileId 会占用多个路径段。'
       security: []
       parameters:
         - {in: path, name: kind, required: true, schema: {type: string, enum: ['115', 'cd2']}, description: '网盘类型；115 为 115 网盘，cd2 为 CloudDrive2'}
-        - {in: path, name: fileId, required: true, schema: {type: string}, description: '网盘文件标识；115 为文件 ID，CloudDrive2 为网盘绝对路径'}
+        - {in: path, name: fileId, required: true, schema: {type: string}, description: '网盘文件标识；115 为 pick_code（提取码），直接换取直链；CloudDrive2 为网盘绝对路径'}
       responses:
         '302':
           description: 重定向到网盘直链

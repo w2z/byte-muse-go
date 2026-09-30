@@ -48,7 +48,7 @@ var defaultStrmFormats = []string{
 // strmPan115API 是 strm 生成与播放需要的 115 能力。
 type strmPan115API interface {
 	Files(ctx context.Context, directoryID string, offset, limit int) (domain.Pan115FilePage, error)
-	PlayURL(ctx context.Context, fileID, userAgent string) (string, error)
+	PlayURL(ctx context.Context, pickCode, userAgent string) (string, error)
 }
 
 // strmCloudDriveAPI 是 strm 生成与播放需要的 CloudDrive2 能力。
@@ -62,6 +62,7 @@ type strmCloudDriveAPI interface {
 // Directory 是从映射根目录到该文件所在目录的相对路径（以 / 分隔，根目录为空串）。
 type strmSourceFile struct {
 	ID        string
+	PickCode  string
 	Name      string
 	Directory string
 }
@@ -415,7 +416,17 @@ func (s *StrmService) scanMapping(ctx context.Context, root string, mapping doma
 			advance()
 			continue
 		}
-		created, changed, err := writeStrmFile(absolute, strmPlayURL(base, mapping.Kind, file.ID)+"\n")
+		identifier := file.ID
+		if mapping.Kind == domain.StrmKindPan115 {
+			identifier = strings.TrimSpace(file.PickCode)
+			if identifier == "" {
+				entry.Failed++
+				entry.Message = "115 文件缺少 pick_code，无法生成播放链接"
+				advance()
+				continue
+			}
+		}
+		created, changed, err := writeStrmFile(absolute, strmPlayURL(base, mapping.Kind, identifier)+"\n")
 		switch {
 		case err != nil:
 			entry.Failed++
@@ -434,7 +445,7 @@ type pan115FileAPI interface {
 	Files(ctx context.Context, directoryID string, offset, limit int) (domain.Pan115FilePage, error)
 }
 
-// walkPan115Files 递归收集 115 目录下通过 filter 的媒体文件；115 的目录标识就是播放标识。
+// walkPan115Files 递归收集 115 媒体文件；保留 ID 供扫描入库，pick_code 供生成播放链接。
 // 每页固定读取 pan115FilePageLimit 条并按 HasMore 翻页，返回的 Directory 是相对扫描根目录的路径。
 // 生成 strm 与扫描入库共用这一份递归实现，避免两条链路的分页与格式过滤规则漂移。
 func walkPan115Files(ctx context.Context, api pan115FileAPI, rootID string, filter strmFileFilter) ([]strmSourceFile, error) {
@@ -462,7 +473,7 @@ func walkPan115Files(ctx context.Context, api pan115FileAPI, rootID string, filt
 				if !filter.acceptFile(file.Name, file.Size) {
 					continue
 				}
-				collected = append(collected, strmSourceFile{ID: file.ID, Name: file.Name, Directory: relative})
+				collected = append(collected, strmSourceFile{ID: file.ID, PickCode: file.PickCode, Name: file.Name, Directory: relative})
 				reportScanDiscovery(ctx)
 			}
 			if !page.HasMore || len(page.Files) == 0 {

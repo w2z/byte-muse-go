@@ -49,6 +49,7 @@ type pan115ClientStub struct {
 	infoFileID    string
 	downloadPick  string
 	downloadUA    string
+	downloadCalls int
 }
 
 func (s *pan115ClientStub) BeginLogin(context.Context) (*pan115.Login, error) {
@@ -140,6 +141,7 @@ func (s *pan115ClientStub) Info(_ context.Context, _ string, fileID string) (pan
 }
 
 func (s *pan115ClientStub) DownloadURL(_ context.Context, _ string, pickCode, userAgent string) (string, error) {
+	s.downloadCalls++
 	s.downloadPick, s.downloadUA = pickCode, userAgent
 	if s.downloadErr != nil {
 		return "", s.downloadErr
@@ -148,6 +150,28 @@ func (s *pan115ClientStub) DownloadURL(_ context.Context, _ string, pickCode, us
 }
 
 func (s *pan115ClientStub) Close() {}
+
+// TestPan115PlayUsesPickCode 验证有效令牌下只换取一次直链，且不查询文件信息。
+func TestPan115PlayUsesPickCode(t *testing.T) {
+	secret := strings.Repeat("x", 32)
+	client := &pan115ClientStub{download: "https://example.com/video", infoErr: errors.New("不得查询文件信息")}
+	service := newPan115TestService(t, pan115BoundAccounts(t, secret), client, pan115TestSettings(""), secret)
+	defer service.Close()
+	address, err := service.PlayURL(context.Background(), " pc-example ", "Emby/4.8")
+	if err != nil || address != client.download {
+		t.Fatalf("播放地址 = %q err=%v", address, err)
+	}
+	if client.infoFileID != "" || client.downloadCalls != 1 || client.refreshCalls != 0 || client.downloadPick != "pc-example" || client.downloadUA != "Emby/4.8" {
+		t.Fatalf("播放请求未直接使用 pick_code: %+v", client)
+	}
+	if _, err := service.PlayURL(context.Background(), " ", ""); !errors.Is(err, ErrPan115InvalidInput) || client.downloadCalls != 1 {
+		t.Fatalf("空 pick_code 应在请求网盘前被拒绝: %v", err)
+	}
+	client.downloadErr = pan115.ErrDownloadUnavailable
+	if _, err := service.PlayURL(context.Background(), "pc-missing", ""); !errors.Is(err, pan115.ErrDownloadUnavailable) || client.infoFileID != "" {
+		t.Fatalf("下载地址错误应原样返回且不回退文件查询: %v", err)
+	}
+}
 
 // pan115MemoryAccounts 只在测试中保存绑定行，用于核验密文落库与清除语义。
 type pan115MemoryAccounts struct {
