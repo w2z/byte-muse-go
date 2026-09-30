@@ -653,6 +653,7 @@ button.code-card-still-cell:hover img { opacity: .85; }
 .settings-strm-path-label { flex: 0 0 76px; color: var(--muted); font-size: 12px; line-height: 20px; }
 .settings-strm-kind { flex: 0 0 auto; }
 .settings-strm-path-line > .arco-input { flex: 1 1 160px; min-width: 0; }
+.settings-strm-path-line > .arco-select { flex: 1 1 240px; min-width: 240px; }
 .settings-strm-path-line > .arco-btn { flex: 0 0 auto; }
 .settings-strm-scan { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .settings-strm-picker-create { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }

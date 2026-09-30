@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -286,6 +287,34 @@ func TestSettingsPan115ScanPaths(t *testing.T) {
 	} {
 		if _, err := service.Update(ctx, map[string]string{"PAN115_SCAN_PATHS": invalid}); !errors.Is(err, ErrInvalidSetting) {
 			t.Fatalf("should reject %q, got %v", invalid, err)
+		}
+	}
+}
+
+// TestStrmRootSettingValidation 验证本地 strm 根目录只接受绝对路径：
+// 相对路径会随进程工作目录漂移，使目录浏览与生成落到非预期位置；
+// 空值表示清除该项并回退部署默认值，必须允许。
+func TestStrmRootSettingValidation(t *testing.T) {
+	service, err := NewSettingsService(&settingsMemoryRepository{}, "sqlite", strings.Repeat("x", 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	// 用临时目录拼出当前平台的绝对路径：Windows 的 \strm 不是绝对路径，只有盘符路径才是。
+	absolute := filepath.Join(t.TempDir(), "strm")
+	saved, err := service.Update(ctx, map[string]string{"STRM_ROOT": absolute})
+	if err != nil {
+		t.Fatalf("保存绝对路径失败: %v", err)
+	}
+	if saved.Values["STRM_ROOT"] != absolute {
+		t.Fatalf("strm 根目录未按原值回读: %q", saved.Values["STRM_ROOT"])
+	}
+	if _, err := service.Update(ctx, map[string]string{"STRM_ROOT": ""}); err != nil {
+		t.Fatalf("空值应清除该设置并回退部署默认值: %v", err)
+	}
+	for _, invalid := range []string{"strm", "strm/root", "./strm", "../strm"} {
+		if _, err := service.Update(ctx, map[string]string{"STRM_ROOT": invalid}); !errors.Is(err, ErrInvalidSetting) {
+			t.Fatalf("应拒绝相对路径 %q，得到 %v", invalid, err)
 		}
 	}
 }

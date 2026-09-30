@@ -11,10 +11,11 @@ const (
 // ID 是网盘目录标识（115 为目录 ID，CloudDrive2 为目录绝对路径），是扫描与播放时的权威依据；
 // Path 是网盘目录展示路径，只用于界面展示。
 type StrmMapping struct {
-	Kind      string `json:"kind"`
-	ID        string `json:"id"`
-	Path      string `json:"path"`
-	LocalPath string `json:"local_path"`
+	Kind      string   `json:"kind"`
+	ID        string   `json:"id"`
+	Path      string   `json:"path"`
+	LocalPath string   `json:"local_path"`
+	Formats   []string `json:"formats"`
 }
 
 // StrmProxyTarget 描述一次需要服务端转发的播放请求。

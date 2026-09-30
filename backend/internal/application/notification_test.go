@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"errors"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -272,6 +273,49 @@ func TestMediaCoverPrefersBannerThenPoster(t *testing.T) {
 		t.Run(item.name, func(t *testing.T) {
 			if got := MediaCover(item.item); got != item.want {
 				t.Fatalf("MediaCover = %q，期望 %q", got, item.want)
+			}
+		})
+	}
+}
+
+// TestWechatCoverUsesExternalDomainCacheEntry 验证配置「外网访问地址」后，微信封面指向本机缓存入口，
+// 与页面显示同一地址；其他渠道不受影响，仍使用原图地址。
+func TestWechatCoverUsesExternalDomainCacheEntry(t *testing.T) {
+	telegram, wechat := &recordingSender{}, &recordingSender{}
+	values := map[string]string{
+		"TELEGRAM_NOTIFY_SUBSCRIBE": "true", "TELEGRAM_CHAT_ID": "1001",
+		"WECHAT_NOTIFY_SUBSCRIBE": "true", "WECHAT_TO_USER": "@all",
+		"EXTERNAL_DOMAIN": "https://muse.example.com/",
+	}
+	service := NewNotificationService(settingsFrom(values), recordingChannels{ports.ChannelTelegram: telegram, ports.ChannelWeChat: wechat})
+
+	service.Notify(context.Background(), NotificationSubscribe, NotificationMessage{
+		Title: "番号SSIS-001已加入订阅列表", CoverURL: "https://img.example/banner.jpg", Code: "SSIS-001",
+	})
+
+	wantWechat := "@all|photo:https://muse.example.com/api/v1/covers/SSIS-001?source=" + url.QueryEscape("https://img.example/banner.jpg") + "|番号SSIS-001已加入订阅列表"
+	if len(wechat.sent) != 1 || wechat.sent[0] != wantWechat {
+		t.Fatalf("微信封面地址 = %v，期望 %s", wechat.sent, wantWechat)
+	}
+	if len(telegram.sent) != 1 || telegram.sent[0] != "1001|photo:https://img.example/banner.jpg|番号SSIS-001已加入订阅列表" {
+		t.Fatalf("其他渠道应保持原图地址，实际 %v", telegram.sent)
+	}
+}
+
+// TestWechatCoverURLKeepsSourceWhenIncomplete 验证外网地址、番号或可下载封面缺失时不改写地址，
+// 避免把封面换成必然取不到的链接。
+func TestWechatCoverURLKeepsSourceWhenIncomplete(t *testing.T) {
+	const cover = "https://img.example/banner.jpg"
+	for _, item := range []struct{ name, domain, code, cover, want string }{
+		{name: "完整", domain: "https://muse.example.com", code: "SSIS-001", cover: cover, want: "https://muse.example.com/api/v1/covers/SSIS-001?source=" + url.QueryEscape(cover)},
+		{name: "外网地址为空", code: "SSIS-001", cover: cover, want: cover},
+		{name: "番号为空", domain: "https://muse.example.com", cover: cover, want: cover},
+		{name: "封面不是绝对地址", domain: "https://muse.example.com", code: "SSIS-001", cover: "/cover.jpg", want: "/cover.jpg"},
+		{name: "封面缺失", domain: "https://muse.example.com", code: "SSIS-001", cover: " ", want: " "},
+	} {
+		t.Run(item.name, func(t *testing.T) {
+			if got := wechatCoverURL(item.domain, item.code, item.cover); got != item.want {
+				t.Fatalf("wechatCoverURL(%q,%q,%q) = %q，期望 %q", item.domain, item.code, item.cover, got, item.want)
 			}
 		})
 	}

@@ -3,7 +3,7 @@ import dayjs from "dayjs";
 import { IconCopy, IconImage, IconPlayArrow } from "@arco-design/web-react/icon";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState, type ReactNode } from "react";
-import { apiRequest } from "../api/client";
+import { apiRequest, coverCacheURL } from "../api/client";
 import type { Media, MediaDisplayStatus, SystemSettings } from "../api/types";
 import { MediaPlayer } from "./MediaPlayer";
 import { DragScrollRow } from "./DragScrollRow";
@@ -77,7 +77,9 @@ export function CodeCard({ media, meta, actions, onSelect, hideActions = false, 
     if (actionsHidden) { setStillsVisible(false); setPreviewVisible(false); }
   }, [actionsHidden]);
   const title = media.translated_title || media.title;
-  const coverURL = media.banner_url || media.poster_url;
+  // 主封面统一走服务端缓存入口，按番号落盘到 /data/cover；配置了「外网访问地址」时用绝对地址，
+  // 与微信封面推送取同一张图；剧照与资料图仍用源站地址。
+  const coverURL = coverCacheURL(media.code, media.banner_url || media.poster_url, settings.data?.values.EXTERNAL_DOMAIN);
   const stills = media.still_photos ?? [];
   const status: MediaDisplayStatus = media.display_status ?? (media.subscription_status === "active" ? "subscribed" : "unsubscribed");
   const statusView = displayStatus[status];

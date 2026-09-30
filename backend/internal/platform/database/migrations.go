@@ -27,7 +27,25 @@ func MigrationPlan(dialect Dialect) []Migration {
 	default:
 		return nil
 	}
-	return append(plan, settingsMigration(dialect), activeSubscriptionMigration(dialect), defaultSettingsMigration(dialect), systemLogsMigration(dialect), logRetentionSettingMigration(dialect), cleanupCanceledSubscriptionsMigration(dialect), catalogQueryIndexesMigration(dialect), downloaderAndBypassSettingsMigration(dialect), collectionMigration(dialect), collectionQueueMigration(dialect), mediaTypeMigration(dialect), subscriptionDownloadMigration(dialect), downloadTransferMigration(dialect), ptSiteSettingsMigration(dialect), siteAuthSettingsMigration(dialect), tagSubscriptionMigration(dialect), bypassProxySettingMigration(dialect), actorSubscriptionMigration(dialect), translationModelSettingsMigration(dialect), notificationSettingsMigration(dialect), tagAliasMigration(dialect), pan115AccountMigration(dialect), pan115ScanPathsSettingMigration(dialect), strmSettingsMigration(dialect), downloadOriginMigration(dialect), actorAliasesMigration(dialect))
+	return append(plan, settingsMigration(dialect), activeSubscriptionMigration(dialect), defaultSettingsMigration(dialect), systemLogsMigration(dialect), logRetentionSettingMigration(dialect), cleanupCanceledSubscriptionsMigration(dialect), catalogQueryIndexesMigration(dialect), downloaderAndBypassSettingsMigration(dialect), collectionMigration(dialect), collectionQueueMigration(dialect), mediaTypeMigration(dialect), subscriptionDownloadMigration(dialect), downloadTransferMigration(dialect), ptSiteSettingsMigration(dialect), siteAuthSettingsMigration(dialect), tagSubscriptionMigration(dialect), bypassProxySettingMigration(dialect), actorSubscriptionMigration(dialect), translationModelSettingsMigration(dialect), notificationSettingsMigration(dialect), tagAliasMigration(dialect), pan115AccountMigration(dialect), pan115ScanPathsSettingMigration(dialect), strmSettingsMigration(dialect), downloadOriginMigration(dialect), dropUnusedJavdbHostSettingMigration(dialect), actorAliasesMigration(dialect), dropUnusedPhotoCacheSettingMigration(dialect), strmRootSettingMigration(dialect))
+}
+
+// dropUnusedPhotoCacheSettingMigration 清理已废弃的 ENABLE_PHOTO_CACHE 配置行。
+// 图片缓存已改为固定开启、不再有开关，Go 版只从 COVER_ROOT 环境变量取缓存目录，不读取该键；
+// 这里只删除这一行历史数据，不改表结构，重复执行安全。
+func dropUnusedPhotoCacheSettingMigration(dialect Dialect) Migration {
+	return Migration{Version: 32, Name: "drop_unused_photo_cache_setting", Statements: []string{
+		"DELETE FROM app_settings WHERE setting_key = 'ENABLE_PHOTO_CACHE'",
+	}}
+}
+
+// dropUnusedJavdbHostSettingMigration 清理已废弃的 JAVDB_HOST 配置行。
+// 该键只有迁移 7 种下的默认值，采集、调度与通知均不读取它（榜单采集固定访问 javdb.com），
+// 属于可写清单之外的死配置；这里只删除这一行历史数据，不改表结构，重复执行安全。
+func dropUnusedJavdbHostSettingMigration(dialect Dialect) Migration {
+	return Migration{Version: 30, Name: "drop_unused_javdb_host_setting", Statements: []string{
+		"DELETE FROM app_settings WHERE setting_key = 'JAVDB_HOST'",
+	}}
 }
 
 // downloadOriginMigration 记录每次下载尝试的发起方：VARCHAR(16)、NOT NULL、默认 'schedule'。

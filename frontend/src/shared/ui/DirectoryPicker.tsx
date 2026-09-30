@@ -21,7 +21,7 @@ export type DirectoryPickerView = "list" | "grid";
  * 且末级为蓝色，单击目录选中、再次单击取消选中、双击进入下一级；只有选中目录后「确认」才可用。
  * 点击末级蓝色路径表示选中当前目录（同样可再次点击取消），因此根目录也能被选中。
  * 目录图标统一使用 icons8 文件夹图片，不展示日期与灰色底；选中的目录带高亮背景与边框，
- * 底部展示「当前选择: 完整路径 文件夹」，未选中时不显示。
+ * 底部展示「当前选择: 完整路径」，未选中时不显示。
  * 数据、状态与导航全部由调用方注入，115 网盘、CloudDrive2 与本地 strm 目录共用这一份实现。
  */
 export function DirectoryPicker({
@@ -81,7 +81,7 @@ export function DirectoryPicker({
           }
         : entries.find((entry) => entry.key === selectedKey);
   // 底部只展示选中项的完整路径；未选中时不显示文案。
-  const selectedLabel = selected ? `当前选择: ${selected.path ?? selected.name} 文件夹` : "";
+  const selectedLabel = selected ? `当前选择: ${selected.path ?? selected.name}` : "";
 
   return (
     <div className="directory-picker">

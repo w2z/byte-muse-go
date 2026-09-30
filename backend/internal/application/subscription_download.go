@@ -104,6 +104,7 @@ func (s *SubscriptionDownloadService) notifyDownloadStart(ctx context.Context, c
 		Title:    NotificationHeadline(code, "开始下载"),
 		Text:     strings.Join(lines, "\n"),
 		CoverURL: cover,
+		Code:     code,
 	})
 }
 
@@ -121,6 +122,7 @@ func (s *SubscriptionDownloadService) notifyDownloadFailed(ctx context.Context, 
 		Title:    NotificationHeadline(code, "下载失败"),
 		Text:     strings.Join(lines, "\n"),
 		CoverURL: cover,
+		Code:     code,
 	})
 }
 

@@ -43,24 +43,27 @@ type fileEntryWire struct {
 	PickCode string      `json:"pc"`
 }
 
-// fileListWire 是 115 对普通目录返回的对象形式；
-// 根目录（cid=0）只返回条目数组，由 List 单独处理。
+// directoryWire 是 115 回传的父目录树节点；115 会用数字或字符串表示同一个目录 ID。
+type directoryWire struct {
+	ID   json.Number `json:"cid"`
+	Name string      `json:"name"`
+}
+
+// fileListWire 是 115 文件列表接口的完整响应：
+// 条目在 data，当前目录的总数与父目录树（末级为当前目录）在 data 同级的 count、path。
+// 只解析 data 段会丢掉路径与总数，因此这里读取完整响应体。
 type fileListWire struct {
-	CID   json.Number     `json:"cid"`
 	Count json.Number     `json:"count"`
 	Data  []fileEntryWire `json:"data"`
-	Path  []struct {
-		ID   json.Number `json:"cid"`
-		Name string      `json:"name"`
-	} `json:"path"`
+	Path  []directoryWire `json:"path"`
 }
 
 // List 读取一个目录的分页内容。排序固定为文件名升序，
-// 保证同一目录多次读取顺序稳定；返回的 cid 与路径末级必须等于请求的目录。
+// 保证同一目录多次读取顺序稳定；回传的父目录树末级必须等于请求的目录。
 //
-// 115 对普通目录返回 {cid,count,data,path} 对象，对根目录只返回条目数组，
-// 两种形式在这里归一化为同一个 FilePage；数组形式不带路径与总数，
-// 路径由上层用目录信息接口补齐，总数按本页条目数推断分页。
+// 115 的文件列表接口同时返回条目、当前目录总数与父目录树，
+// 一次请求即可拿到面包屑与分页总数，不需要再调用目录信息接口补齐路径。
+// 仅当 115 未回传父目录树时才返回空路径，由上层用目录信息接口兜底。
 func (c *Client) List(ctx context.Context, accessToken, directoryID string, offset, limit int) (FilePage, error) {
 	query := url.Values{
 		"cid":      {directoryID},
@@ -72,36 +75,26 @@ func (c *Client) List(ctx context.Context, accessToken, directoryID string, offs
 		"o":        {"file_name"},
 		"asc":      {"1"},
 	}
-	raw, err := c.apiCall(ctx, http.MethodGet, appendQuery(c.api+"/open/ufile/files", query), accessToken, nil, "文件列表")
-	if err != nil {
+	var wire fileListWire
+	if err := c.apiCallInto(ctx, http.MethodGet, appendQuery(c.api+"/open/ufile/files", query), accessToken, nil, "文件列表", &wire); err != nil {
 		return FilePage{}, err
 	}
-	if len(raw) == 0 || string(raw) == "null" {
-		return FilePage{}, fmt.Errorf("115 未返回文件列表")
-	}
-	if raw[0] == '[' {
-		var entries []fileEntryWire
-		if err := json.Unmarshal(raw, &entries); err != nil {
-			return FilePage{}, fmt.Errorf("解码 115 文件列表失败: %w", err)
-		}
-		return buildFilePage(entries, nil, -1, offset, limit)
-	}
-	var data fileListWire
-	if err := json.Unmarshal(raw, &data); err != nil {
-		return FilePage{}, fmt.Errorf("解码 115 文件列表失败: %w", err)
-	}
-	if data.CID.String() != directoryID || len(data.Path) == 0 || data.Path[len(data.Path)-1].ID.String() != directoryID {
-		return FilePage{}, fmt.Errorf("115 返回的目录与请求不一致")
-	}
-	total, err := data.Count.Int64()
-	if err != nil && data.Count != "" {
-		return FilePage{}, fmt.Errorf("解码 115 文件数量失败: %w", err)
-	}
-	path := make([]Directory, len(data.Path))
-	for index, item := range data.Path {
+	path := make([]Directory, len(wire.Path))
+	for index, item := range wire.Path {
 		path[index] = Directory{ID: item.ID.String(), Name: item.Name}
 	}
-	return buildFilePage(data.Data, path, int(total), offset, limit)
+	if len(path) > 0 && path[len(path)-1].ID != directoryID {
+		return FilePage{}, fmt.Errorf("115 返回的目录与请求不一致")
+	}
+	total := -1
+	if wire.Count != "" {
+		value, err := wire.Count.Int64()
+		if err != nil {
+			return FilePage{}, fmt.Errorf("解码 115 文件数量失败: %w", err)
+		}
+		total = int(value)
+	}
+	return buildFilePage(wire.Data, path, total, offset, limit)
 }
 
 // buildFilePage 把 115 的目录条目转换成 FilePage；total 为 -1 表示 115 未回传总数，

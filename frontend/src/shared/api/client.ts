@@ -7,6 +7,27 @@ export const UNAUTHORIZED_EVENT = "bytemuse:unauthorized";
 /** 认证入口自身不参与“401 后自动续签重试”，否则登录失败会变成无限续签。 */
 const AUTH_ENTRY_PATHS = new Set(["/auth/login", "/auth/refresh"]);
 
+/**
+ * 把影片封面地址改写成服务端缓存入口：服务端按番号把封面持久化到 /data/cover，
+ * 命中时直接返回本地文件，未命中下载后落盘，源站不可用时回退到原地址。
+ * externalDomain 是设置页的「外网访问地址」；已配置时用它拼绝对地址，页面显示与微信封面推送使用同一个地址，
+ * 未配置时用跟随页面来源的相对地址。
+ * 没有封面地址时返回 undefined，由调用方显示占位图；没有番号时保留原地址。
+ */
+export function coverCacheURL(
+  code: string | null | undefined,
+  source: string | null | undefined,
+  externalDomain?: string | null,
+): string | undefined {
+  const url = source?.trim();
+  if (!url) return undefined;
+  const normalized = code?.trim();
+  if (!normalized) return url;
+  const path = `${API_BASE}/covers/${encodeURIComponent(normalized)}?source=${encodeURIComponent(url)}`;
+  const domain = externalDomain?.trim().replace(/\/+$/, "");
+  return domain ? `${domain}${path}` : path;
+}
+
 export type Page<T> = {
   page: number;
   page_size: number;

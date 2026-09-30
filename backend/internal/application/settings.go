@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -63,9 +64,11 @@ func SiteCookieCredential(values map[string]string, prefix string) string {
 // rankTypes 是 JAVDB 榜单自动订阅类型，空值表示不订阅。
 var rankTypes = []string{"daily", "weekly", "monthly"}
 
-// strm 设置键：网盘目录到本地 strm 目录的映射、strm 内容使用的对外基址、
-// 以及生成后是否自动刷新 Emby 媒体库。前端字段定义与此处共用同一组键名。
+// strm 设置键：本地 strm 根目录、网盘目录到本地 strm 目录的映射、
+// strm 内容使用的对外基址，以及生成后是否自动刷新 Emby 媒体库。
+// 前端字段定义与此处共用同一组键名。
 const (
+	strmRootSettingKey        = "STRM_ROOT"
 	strmPathsSettingKey       = "STRM_PATHS"
 	strmPlayBaseSettingKey    = "STRM_PLAY_BASE"
 	strmEmbyRefreshSettingKey = "STRM_EMBY_REFRESH"
@@ -174,7 +177,8 @@ var writableSettings = map[string]settingSpec{
 	"PAN115_SAVE_PATH":  {kind: settingText},
 	"PAN115_SCAN_PATHS": {kind: settingJSONArray},
 
-	// strm：网盘目录与本地 strm 目录的映射，以及 strm 内容使用的对外基址。
+	// strm：本地 strm 根目录、网盘目录与本地 strm 目录的映射，以及 strm 内容使用的对外基址。
+	strmRootSettingKey:        {kind: settingText},
 	strmPathsSettingKey:       {kind: settingJSONArray},
 	strmPlayBaseSettingKey:    {kind: settingText},
 	strmEmbyRefreshSettingKey: {kind: settingBool},
@@ -225,9 +229,7 @@ var writableSettings = map[string]settingSpec{
 	"BYPASS_URL":           {kind: settingText},
 	"BYPASS_ENGINE":        {kind: settingEnum, allowed: bypassEngines},
 	"BYPASS_USE_PROXY":     {kind: settingBool},
-	"JAVDB_HOST":           {kind: settingText},
 	"ENABLE_BT_ANTI_LEECH": {kind: settingBool},
-	"ENABLE_PHOTO_CACHE":   {kind: settingBool},
 	"ENABLE_AUTO_COMPLETE": {kind: settingBool},
 	"LOG_RETENTION_DAYS":   {kind: settingInt},
 }
@@ -386,6 +388,12 @@ func validateSettingValue(key string, spec settingSpec, value string) error {
 		return fmt.Errorf("%w: %s %s", ErrInvalidSetting, key, reason)
 	}
 	switch spec.kind {
+	case settingText:
+		// strm 根目录必须是绝对路径：相对路径会随进程工作目录漂移，
+		// 使目录浏览与 strm 生成落到非预期位置，且无法通过设置页判断。
+		if key == strmRootSettingKey && !filepath.IsAbs(value) {
+			return invalid("需要是绝对路径（容器内通常是 /strm）")
+		}
 	case settingBool:
 		if value != "true" && value != "false" {
 			return invalid("只能是 true 或 false")

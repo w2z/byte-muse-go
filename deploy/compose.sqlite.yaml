@@ -19,6 +19,7 @@ services:
     volumes:
       # 只挂载 /data 与 /strm：镜像的 /app 存放服务二进制与前端产物，挂载覆盖后容器无法启动。
       # 宿主机目录需允许容器内 UID 65532 写入：chown -R 65532:65532 /path/to/byte-muse/data /path/to/byte-muse/strm
+      # 影片封面缓存在 /data/cover，随 /data 一起持久化，不需要额外挂载。
       - /path/to/byte-muse/data:/data
       - /path/to/byte-muse/strm:/strm
   # 抓取增强服务：设置页把 BYPASS_ENGINE 选为 cloudflare_bypass_for_scraping、BYPASS_URL 填 http://cloudflarebypass_byte_muse_go:8000

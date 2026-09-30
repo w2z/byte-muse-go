@@ -98,6 +98,17 @@ func TestParseStrmMappings(t *testing.T) {
 	if len(mappings) != 2 || mappings[0].LocalPath != "/movies" {
 		t.Fatalf("映射解析结果不符: %+v", mappings)
 	}
+	if len(mappings[0].Formats) != len(defaultStrmFormats) {
+		t.Fatalf("缺少 formats 时应使用默认格式: %+v", mappings[0].Formats)
+	}
+
+	normalized, err := parseStrmMappings(`[{"kind":"115","id":"1","path":"/a","local_path":"/b","formats":[" .MP4 ","..Mkv","mp4",""]}]`)
+	if err != nil {
+		t.Fatalf("格式规范化失败: %v", err)
+	}
+	if got, want := strings.Join(normalized[0].Formats, ","), "mp4,mkv"; got != want {
+		t.Fatalf("格式规范化结果 %q，期望 %q", got, want)
+	}
 	for _, tc := range []struct{ name, raw string }{
 		{"空值表示未配置", "  "},
 		{"非数组", `{"kind":"115"}`},
@@ -105,6 +116,8 @@ func TestParseStrmMappings(t *testing.T) {
 		{"缺少网盘目录", `[{"kind":"115","id":"","path":"/a","local_path":"/b"}]`},
 		{"本地路径非绝对", `[{"kind":"115","id":"1","path":"/a","local_path":"b"}]`},
 		{"重复映射", `[{"kind":"115","id":"1","path":"/a","local_path":"/b"},{"kind":"115","id":"1","path":"/a","local_path":"/b"}]`},
+		{"重复本地目录", `[{"kind":"115","id":"1","path":"/a","local_path":"/b"},{"kind":"cd2","id":"/c","path":"/c","local_path":"/b"}]`},
+		{"没有生成格式", `[{"kind":"115","id":"1","path":"/a","local_path":"/b","formats":[]}]`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := parseStrmMappings(tc.raw)
@@ -124,7 +137,6 @@ func TestParseStrmMappings(t *testing.T) {
 // TestResolveStrmPath 约束本地目录浏览器只能访问 strm 根目录以下的内容。
 func TestResolveStrmPath(t *testing.T) {
 	root := t.TempDir()
-	service := newStrmTestService(t, root, nil, nil, nil)
 	for _, tc := range []struct {
 		relative string
 		wantPath string
@@ -138,7 +150,7 @@ func TestResolveStrmPath(t *testing.T) {
 		{`..\etc`, "/etc", false},
 		{"a\x00b", "", true},
 	} {
-		absolute, normalized, err := service.resolveStrmPath(tc.relative)
+		absolute, normalized, err := resolveStrmPath(root, tc.relative)
 		if tc.wantErr {
 			if err == nil {
 				t.Fatalf("%q 应被拒绝", tc.relative)
@@ -154,6 +166,51 @@ func TestResolveStrmPath(t *testing.T) {
 		if !withinStrmRoot(root, absolute) {
 			t.Fatalf("%q 解析到了根目录之外: %s", tc.relative, absolute)
 		}
+	}
+}
+
+// TestStrmRootSettingDrivesBrowseAndScan 验证设置项 STRM_ROOT 是本地 strm 根目录的权威来源：
+// 覆盖进程默认值、留空回退默认值、相对路径被拒绝，目录创建与 strm 生成都落在生效根目录内。
+func TestStrmRootSettingDrivesBrowseAndScan(t *testing.T) {
+	ctx := context.Background()
+	defaultRoot := t.TempDir()
+	configured := t.TempDir()
+	pan115 := &strmPan115Stub{pages: map[string]domain.Pan115FilePage{
+		"100": {Files: []domain.Pan115File{{ID: "f1", Name: "A.mkv"}}},
+	}}
+	service := newStrmTestService(t, defaultRoot, pan115, nil, map[string]string{
+		strmRootSettingKey:     configured,
+		strmPathsSettingKey:    strmTestMappings(t, []domain.StrmMapping{{Kind: "115", ID: "100", Path: "/影片", LocalPath: "/movies"}}),
+		strmPlayBaseSettingKey: "http://bm.local",
+	})
+	root, err := service.Root(ctx)
+	if err != nil || root != filepath.Clean(configured) {
+		t.Fatalf("生效根目录 = %q（err=%v），期望 %q", root, err, filepath.Clean(configured))
+	}
+	if _, err := service.CreateDirectory(ctx, "/", "movies"); err != nil {
+		t.Fatalf("在生效根目录下创建目录失败: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(configured, "movies")); err != nil {
+		t.Fatalf("目录未创建在生效根目录下: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(defaultRoot, "movies")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("设置生效时不应写入进程默认根目录")
+	}
+	result, err := service.Scan(ctx, "")
+	if err != nil || result.Created != 1 {
+		t.Fatalf("生成结果 %+v（err=%v）", result, err)
+	}
+	if _, err := os.Stat(filepath.Join(configured, "movies", "A.mkv.strm")); err != nil {
+		t.Fatalf("strm 未写入生效根目录: %v", err)
+	}
+
+	fallback := newStrmTestService(t, defaultRoot, nil, nil, map[string]string{strmRootSettingKey: "  "})
+	if root, err := fallback.Root(ctx); err != nil || root != filepath.Clean(defaultRoot) {
+		t.Fatalf("留空时应回退默认根目录，得到 %q（err=%v）", root, err)
+	}
+	invalid := newStrmTestService(t, defaultRoot, nil, nil, map[string]string{strmRootSettingKey: "strm"})
+	if _, err := invalid.Root(ctx); !errors.Is(err, ErrInvalidSetting) {
+		t.Fatalf("相对路径应被拒绝，得到 %v", err)
 	}
 }
 
@@ -225,9 +282,9 @@ func TestScanWritesPlayableStrmFiles(t *testing.T) {
 		t.Fatalf("未开启自动刷新时不应请求 Emby: %+v", result.Emby)
 	}
 	for target, want := range map[string]string{
-		"movies/A.mkv.strm":      "http://bm.local/files/play/115/f1\n",
-		"movies/合集/C.mp4.strm":  "http://bm.local/files/play/115/f3\n",
-		"cloud/S1/B.mkv.strm":    "http://bm.local/files/play/cd2/115/%E5%BD%B1%E7%89%87/S1/B.mkv\n",
+		"movies/A.mkv.strm":    "http://bm.local/files/play/115/f1\n",
+		"movies/合集/C.mp4.strm": "http://bm.local/files/play/115/f3\n",
+		"cloud/S1/B.mkv.strm":  "http://bm.local/files/play/cd2/115/%E5%BD%B1%E7%89%87/S1/B.mkv\n",
 	} {
 		content, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(target)))
 		if err != nil {
@@ -247,6 +304,29 @@ func TestScanWritesPlayableStrmFiles(t *testing.T) {
 	}
 	if second.Created != 0 || second.Mappings[0].Unchanged != 2 || second.Mappings[1].Unchanged != 1 {
 		t.Fatalf("重复扫描不是幂等的: %+v", second)
+	}
+}
+
+// TestScanUsesMappingFormats 验证每条映射只生成自己选择的文件格式，且扩展名匹配不区分大小写。
+func TestScanUsesMappingFormats(t *testing.T) {
+	root := t.TempDir()
+	pan115 := &strmPan115Stub{pages: map[string]domain.Pan115FilePage{
+		"100": {Files: []domain.Pan115File{{ID: "f1", Name: "movie.MKV"}, {ID: "f2", Name: "movie.mp4"}}},
+	}}
+	values := map[string]string{
+		"STRM_PATHS": strmTestMappings(t, []domain.StrmMapping{{Kind: domain.StrmKindPan115, ID: "100", Path: "/影片", LocalPath: "/movies", Formats: []string{"mkv"}}}),
+		"STRM_PLAY_BASE": "http://bm.local",
+	}
+	service := newStrmTestService(t, root, pan115, nil, values)
+	result, err := service.Scan(context.Background(), "")
+	if err != nil || result.Files != 1 || result.Created != 1 {
+		t.Fatalf("格式过滤结果不符: %+v（err=%v）", result, err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "movies", "movie.MKV.strm")); err != nil {
+		t.Fatalf("选中格式未生成: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "movies", "movie.mp4.strm")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("未选格式不应生成 strm")
 	}
 }
 

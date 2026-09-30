@@ -9,7 +9,7 @@ import { PageState } from "../../shared/ui/PageState";
 import { useFeedbackMessage } from "../../shared/ui/FeedbackMessage";
 import { Pan115LoginPanel } from "./Pan115LoginPanel";
 import { Pan115ScanPathsField, type Pan115ScanPath } from "./Pan115ScanPathsField";
-import { StrmPathsField, type StrmMapping } from "./StrmPathsField";
+import { DEFAULT_STRM_FORMATS, normalizeStrmFormats, StrmPathsField, type StrmMapping } from "./StrmPathsField";
 
 type FieldKind = "text" | "textarea" | "bool" | "int" | "enum" | "json" | "sort" | "paths" | "strm-paths";
 type SettingOption = {
@@ -161,7 +161,8 @@ const defaultTranslationEngine = "none";
 
 /** 扫描目录配置键；字段定义、解析与序列化共用同一处定义，避免键名漂移。 */
 const scanPathsKey = "PAN115_SCAN_PATHS";
-/** strm 配置键：网盘映射、strm 内容使用的对外基址、生成后是否刷新 Emby 媒体库。 */
+/** strm 配置键：本地 strm 根目录、网盘映射、strm 内容使用的对外基址、生成后是否刷新 Emby 媒体库。 */
+const strmRootKey = "STRM_ROOT";
 const strmPathsKey = "STRM_PATHS";
 const strmPlayBaseKey = "STRM_PLAY_BASE";
 const strmEmbyRefreshKey = "STRM_EMBY_REFRESH";
@@ -467,6 +468,13 @@ const groups: SettingGroup[] = [
     title: "STRM 生成",
     fields: [
       {
+        key: strmRootKey,
+        label: "STRM 目录",
+        kind: "text",
+        placeholder: "/strm",
+        description: "本地 strm 文件的保存根目录，必须是绝对路径；留空时使用部署默认值（容器内为 /strm）。目录浏览、新建目录与 strm 生成都限定在该目录以内，修改后已生成的 strm 文件不会自动迁移。",
+      },
+      {
         key: strmPathsKey,
         label: "网盘映射",
         kind: "strm-paths",
@@ -486,7 +494,7 @@ const groups: SettingGroup[] = [
         description: "开启后每次生成 strm 都会请求一次 Emby 媒体库刷新；需要先配置 Emby 地址与密钥。",
       },
     ],
-    note: "本地 strm 目录固定以容器内 /strm 为根，映射路径不能超出该目录。",
+    note: "本地 strm 目录以「STRM 目录」为根，映射路径不能超出该目录。",
   },
   {
     code: "filter",
@@ -713,7 +721,7 @@ const groups: SettingGroup[] = [
       {
         key: "EXTERNAL_DOMAIN",
         label: "外网访问地址",
-        description: "配置微信封面推送并开启图片缓存时用于微信图片推送",
+        description: "页面封面与微信封面推送使用的地址前缀；留空时页面用相对地址、微信直接用图床原图",
         kind: "text",
       },
       {
@@ -740,9 +748,7 @@ const groups: SettingGroup[] = [
         description: "开启后，爬虫增强使用上方配置的代理地址访问源站；未配置代理地址时不传代理。选择“不使用”会自动关闭此开关。",
         kind: "bool",
       },
-      { key: "JAVDB_HOST", label: "JAVDB API地址", kind: "text" },
       { key: "ENABLE_BT_ANTI_LEECH", label: "BT种子下完即撤种", kind: "bool" },
-      { key: "ENABLE_PHOTO_CACHE", label: "图片持久化", kind: "bool" },
       {
         key: "ENABLE_AUTO_COMPLETE",
         label: "已入库资源跳过下载",
@@ -936,20 +942,29 @@ function parseStrmPaths(raw?: string): StrmMapping[] {
   if (!Array.isArray(parsed)) return [];
   return parsed.flatMap((item) => {
     if (!item || typeof item !== "object") return [];
-    const { kind, id, path, local_path: localPath } = item as Record<string, unknown>;
+    const { kind, id, path, local_path: localPath, formats } = item as Record<string, unknown>;
     if (kind !== "115" && kind !== "cd2") return [];
     if (typeof id !== "string" || typeof path !== "string" || typeof localPath !== "string") return [];
-    return [{ kind, id, path, local_path: localPath }];
+    return [{ kind, id, path, local_path: localPath, formats: formats === undefined ? [...DEFAULT_STRM_FORMATS] : normalizeStrmFormats(formats) }];
   });
 }
 
 /**
+ * 本地 strm 根目录在目录选择器里的显示名：取已保存配置的最后一段路径，
+ * 留空时回退容器默认的 strm。只用于展示，浏览范围始终由后端按同一设置判定。
+ */
+function strmRootLabel(configured?: string): string {
+  const segments = String(configured ?? "").split(/[\\/]/).filter((item) => item !== "");
+  return segments.pop() ?? "strm";
+}
+
+/**
  * 序列化 strm 网盘映射：只提交已选齐网盘目录与本地目录的映射。
- * 本地路径必须是 /strm 根目录下的绝对形式路径，与后端 STRM_PATHS 校验保持一致。
+ * 本地路径必须是 strm 根目录下的绝对形式路径，与后端 STRM_PATHS 校验保持一致。
  */
 function serializeStrmPaths(mappings: StrmMapping[]): string {
   const complete = mappings.filter(
-    (item) => item.id.trim() !== "" && item.path.trim() !== "" && item.local_path.startsWith("/"),
+    (item) => item.id.trim() !== "" && item.path.trim() !== "" && item.local_path.startsWith("/") && item.formats.length > 0,
   );
   return complete.length === 0 ? "" : JSON.stringify(complete);
 }
@@ -1257,7 +1272,11 @@ export function SettingsPage() {
       return (
         <div className="settings-field settings-field-wide" key={field.key}>
           <span className="settings-field-label">{field.label}</span>
-          <StrmPathsField value={strmPaths} onChange={setStrmPaths} />
+          <StrmPathsField
+            value={strmPaths}
+            onChange={setStrmPaths}
+            rootLabel={strmRootLabel(savedSnapshot.values[strmRootKey])}
+          />
           {field.description ? <span className="settings-field-description">{field.description}</span> : null}
         </div>
       );

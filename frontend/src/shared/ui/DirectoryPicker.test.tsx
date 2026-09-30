@@ -77,11 +77,11 @@ describe("公共目录选择组件", () => {
     expect(screen.queryByText(/当前选择/)).toBeNull();
 
     await user.click(screen.getByRole("button", { name: "动作片" }));
-    expect(screen.getByText("当前选择: /电影/动作片 文件夹")).toBeInTheDocument();
+    expect(screen.getByText("当前选择: /电影/动作片")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "动作片" })).toHaveClass("directory-picker-entry-selected");
 
     await user.click(screen.getByRole("button", { name: "电影" }));
-    expect(screen.getByText("当前选择: /电影 文件夹")).toBeInTheDocument();
+    expect(screen.getByText("当前选择: /电影")).toBeInTheDocument();
   });
 
   it("可在列表与宫格之间切换展示方式", async () => {

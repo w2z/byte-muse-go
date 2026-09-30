@@ -186,10 +186,11 @@ func (s *SubscriptionService) notifySubscribe(ctx context.Context, command Creat
 	if s.notifier == nil {
 		return
 	}
-	label, title, cover := strings.TrimSpace(command.Label), "", ""
+	label, code, title, cover := strings.TrimSpace(command.Label), "", "", ""
 	if item.Media != nil {
-		if code := strings.TrimSpace(item.Media.Code); code != "" {
-			label = code
+		if mediaCode := strings.TrimSpace(item.Media.Code); mediaCode != "" {
+			label = mediaCode
+			code = mediaCode
 		}
 		title = MediaDisplayTitle(*item.Media)
 		cover = MediaCover(*item.Media)
@@ -199,6 +200,7 @@ func (s *SubscriptionService) notifySubscribe(ctx context.Context, command Creat
 		Title:    NotificationHeadline(label, "已加入订阅列表"),
 		Text:     title,
 		CoverURL: cover,
+		Code:     code,
 	})
 }
 

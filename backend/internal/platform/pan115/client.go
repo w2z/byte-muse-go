@@ -320,6 +320,34 @@ func (c *Client) apiCall(ctx context.Context, method, endpoint, token string, fo
 
 // apiCallWithUserAgent 与 apiCall 相同，但可显式设置 User-Agent；userAgent 为 nil 表示不干预。
 func (c *Client) apiCallWithUserAgent(ctx context.Context, method, endpoint, token string, form url.Values, userAgent *string, action string) (json.RawMessage, error) {
+	body, err := c.apiBody(ctx, method, endpoint, token, form, userAgent, action)
+	if err != nil {
+		return nil, err
+	}
+	var envelope apiEnvelope
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		return nil, fmt.Errorf("解码 115 %s响应失败: %w", action, err)
+	}
+	return envelope.Data, nil
+}
+
+// apiCallInto 发送一次 proapi 请求并把完整响应体解码到 out。
+// 115 会把分页总数、父目录树等字段放在与 data 同级的顶层，只读 data 段会丢掉这些字段，
+// 需要这些顶层字段的调用方使用本入口。
+func (c *Client) apiCallInto(ctx context.Context, method, endpoint, token string, form url.Values, action string, out any) error {
+	body, err := c.apiBody(ctx, method, endpoint, token, form, nil, action)
+	if err != nil {
+		return err
+	}
+	if err := json.Unmarshal(body, out); err != nil {
+		return fmt.Errorf("解码 115 %s响应失败: %w", action, err)
+	}
+	return nil
+}
+
+// apiBody 发送一次 proapi 请求，校验响应外壳后返回完整响应体。
+// 响应外壳的校验只有这一处实现，避免各调用方重复解析 state/code。
+func (c *Client) apiBody(ctx context.Context, method, endpoint, token string, form url.Values, userAgent *string, action string) ([]byte, error) {
 	response, err := c.doWithUserAgent(ctx, method, endpoint, token, form, userAgent)
 	if err != nil {
 		return nil, err
@@ -335,7 +363,7 @@ func (c *Client) apiCallWithUserAgent(ctx context.Context, method, endpoint, tok
 	if !envelope.State || envelope.Code != 0 {
 		return nil, &APIError{Code: envelope.Code, Message: envelope.Message}
 	}
-	return envelope.Data, nil
+	return body, nil
 }
 
 func apiGet[T any](ctx context.Context, c *Client, endpoint, token string, query url.Values, action string) (T, error) {

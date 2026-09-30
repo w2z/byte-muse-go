@@ -38,13 +38,10 @@ const (
 	strmPlayPrefix = "/files/play/"
 )
 
-// strmMediaExtensions 是需要生成 strm 的媒体扩展名；Emby 只对这些文件建索引，
-// 其余文件（字幕、图片、压缩包等）保持原样，不生成多余条目。
-var strmMediaExtensions = map[string]struct{}{
-	".mp4": {}, ".mkv": {}, ".avi": {}, ".ts": {}, ".m2ts": {}, ".mts": {},
-	".mov": {}, ".wmv": {}, ".flv": {}, ".rmvb": {}, ".rm": {}, ".mpg": {},
-	".mpeg": {}, ".webm": {}, ".m4v": {}, ".3gp": {}, ".vob": {}, ".iso": {},
-	".asf": {}, ".m2v": {}, ".divx": {}, ".f4v": {}, ".ogv": {},
+// defaultStrmFormats 是历史映射没有 formats 字段时使用的默认格式；顺序与设置页保持一致。
+var defaultStrmFormats = []string{
+	"mp4", "avi", "rmvb", "wmv", "mov", "mkv", "webm", "iso",
+	"mpg", "m4v", "ts", "flv", "strm", "vob", "m2ts",
 }
 
 // strmPan115API 是 strm 生成与播放需要的 115 能力。
@@ -70,15 +67,17 @@ type strmSourceFile struct {
 
 // StrmService 把网盘目录镜像成本地 strm 文件，并为播放请求解析真实地址。
 // 目录浏览始终以 strm 根目录为界：调用方无法访问根目录以外的路径。
+// 根目录取设置项 STRM_ROOT，留空时回退到进程配置的默认值。
 type StrmService struct {
-	root     string
-	pan115   strmPan115API
-	cloud    strmCloudDriveAPI
-	settings func(context.Context) (map[string]string, error)
-	http     *http.Client
+	// defaultRoot 是设置项 STRM_ROOT 为空时使用的本地 strm 根目录，来自进程配置。
+	defaultRoot string
+	pan115      strmPan115API
+	cloud       strmCloudDriveAPI
+	settings    func(context.Context) (map[string]string, error)
+	http        *http.Client
 }
 
-// NewStrmService 组装 strm 服务；root 是本地 strm 根目录的绝对路径，
+// NewStrmService 组装 strm 服务；root 是设置项 STRM_ROOT 为空时的本地 strm 根目录，
 // cloud 未配置时只支持 115，pan115 为 nil 时只支持 CloudDrive2。
 func NewStrmService(root string, pan115 strmPan115API, cloud strmCloudDriveAPI, settings func(context.Context) (map[string]string, error)) (*StrmService, error) {
 	trimmed := strings.TrimSpace(root)
@@ -96,25 +95,48 @@ func NewStrmService(root string, pan115 strmPan115API, cloud strmCloudDriveAPI, 
 		pan115 = nil
 	}
 	return &StrmService{
-		root:     filepath.Clean(trimmed),
-		pan115:   pan115,
-		cloud:    cloud,
-		settings: settings,
-		http:     &http.Client{Timeout: strmRequestTimeout},
+		defaultRoot: filepath.Clean(trimmed),
+		pan115:      pan115,
+		cloud:       cloud,
+		settings:    settings,
+		http:        &http.Client{Timeout: strmRequestTimeout},
 	}, nil
 }
 
-// Root 返回本地 strm 根目录的绝对路径。
-func (s *StrmService) Root() string { return s.root }
+// Root 解析当前生效的本地 strm 根目录：设置项 STRM_ROOT 优先，留空回退进程默认值。
+// 每次调用都重新读取设置，因此改设置后无需重启；取值必须是绝对路径，否则拒绝本次请求。
+func (s *StrmService) Root(ctx context.Context) (string, error) {
+	values, err := s.settings(ctx)
+	if err != nil {
+		return "", fmt.Errorf("读取 strm 配置失败: %w", err)
+	}
+	return s.resolveRoot(values)
+}
+
+// resolveRoot 从已经读到的设置快照解析根目录，避免同一次请求重复读取设置。
+func (s *StrmService) resolveRoot(values map[string]string) (string, error) {
+	configured := strings.TrimSpace(values[strmRootSettingKey])
+	if configured == "" {
+		return s.defaultRoot, nil
+	}
+	if !filepath.IsAbs(configured) {
+		return "", fmt.Errorf("%w: %s 需要是绝对路径", ErrInvalidSetting, strmRootSettingKey)
+	}
+	return filepath.Clean(configured), nil
+}
 
 // Directories 列出 strm 根目录下某个目录的直接子目录。
 // 每次调用都实时读盘，因此外部新建的目录只要重新请求就能看到，不需要额外的缓存失效逻辑。
-func (s *StrmService) Directories(_ context.Context, relative string) (domain.StrmDirectoryPage, error) {
-	absolute, normalized, err := s.resolveStrmPath(relative)
+func (s *StrmService) Directories(ctx context.Context, relative string) (domain.StrmDirectoryPage, error) {
+	root, err := s.Root(ctx)
 	if err != nil {
 		return domain.StrmDirectoryPage{}, err
 	}
-	if err := os.MkdirAll(s.root, 0o755); err != nil {
+	absolute, normalized, err := resolveStrmPath(root, relative)
+	if err != nil {
+		return domain.StrmDirectoryPage{}, err
+	}
+	if err := os.MkdirAll(root, 0o755); err != nil {
 		return domain.StrmDirectoryPage{}, fmt.Errorf("创建 strm 根目录失败: %w", err)
 	}
 	entries, err := os.ReadDir(absolute)
@@ -140,18 +162,22 @@ func (s *StrmService) Directories(_ context.Context, relative string) (domain.St
 
 // CreateDirectory 在 strm 根目录内的 parent 下新建一级目录。
 // 只创建一级：上级目录必须已经存在，避免一次请求产生难以排查的隐式目录树。
-func (s *StrmService) CreateDirectory(_ context.Context, parent, name string) (domain.StrmDirectory, error) {
+func (s *StrmService) CreateDirectory(ctx context.Context, parent, name string) (domain.StrmDirectory, error) {
 	trimmed := strings.TrimSpace(name)
 	if trimmed == "" || trimmed == "." || trimmed == ".." ||
 		strings.ContainsAny(trimmed, `/\`) || strings.ContainsRune(trimmed, 0) {
 		return domain.StrmDirectory{}, fmt.Errorf("%w: 目录名不能为空，且不能包含路径分隔符", ErrStrmInvalidInput)
 	}
-	absoluteParent, normalized, err := s.resolveStrmPath(parent)
+	root, err := s.Root(ctx)
+	if err != nil {
+		return domain.StrmDirectory{}, err
+	}
+	absoluteParent, normalized, err := resolveStrmPath(root, parent)
 	if err != nil {
 		return domain.StrmDirectory{}, err
 	}
 	target := filepath.Join(absoluteParent, trimmed)
-	if !withinStrmRoot(s.root, target) {
+	if !withinStrmRoot(root, target) {
 		return domain.StrmDirectory{}, fmt.Errorf("%w: 路径超出 strm 根目录", ErrStrmInvalidInput)
 	}
 	if err := os.Mkdir(target, 0o755); err != nil {
@@ -206,6 +232,10 @@ func (s *StrmService) Scan(ctx context.Context, playBase string) (domain.StrmSca
 	if len(mappings) == 0 {
 		return domain.StrmScanResult{}, fmt.Errorf("%w: 尚未配置网盘映射", ErrStrmNotConfigured)
 	}
+	root, err := s.resolveRoot(values)
+	if err != nil {
+		return domain.StrmScanResult{}, err
+	}
 	base := strings.TrimRight(strings.TrimSpace(values[strmPlayBaseSettingKey]), "/")
 	if base == "" {
 		base = strings.TrimRight(strings.TrimSpace(playBase), "/")
@@ -215,7 +245,7 @@ func (s *StrmService) Scan(ctx context.Context, playBase string) (domain.StrmSca
 	}
 	result := domain.StrmScanResult{Mappings: make([]domain.StrmScanMapping, 0, len(mappings))}
 	for _, mapping := range mappings {
-		entry := s.scanMapping(ctx, mapping, base)
+		entry := s.scanMapping(ctx, root, mapping, base)
 		result.Mappings = append(result.Mappings, entry)
 		result.Files += entry.Files
 		result.Created += entry.Created
@@ -265,9 +295,9 @@ func (s *StrmService) PlayURL(ctx context.Context, kind, fileID, userAgent strin
 }
 
 // scanMapping 生成一条映射的全部 strm 文件；单个映射失败不影响其他映射。
-func (s *StrmService) scanMapping(ctx context.Context, mapping domain.StrmMapping, base string) domain.StrmScanMapping {
+func (s *StrmService) scanMapping(ctx context.Context, root string, mapping domain.StrmMapping, base string) domain.StrmScanMapping {
 	entry := domain.StrmScanMapping{Kind: mapping.Kind, Path: mapping.Path, LocalPath: mapping.LocalPath}
-	target, _, err := s.resolveStrmPath(mapping.LocalPath)
+	target, _, err := resolveStrmPath(root, mapping.LocalPath)
 	if err != nil {
 		entry.Message = err.Error()
 		return entry
@@ -279,13 +309,13 @@ func (s *StrmService) scanMapping(ctx context.Context, mapping domain.StrmMappin
 			entry.Message = "115 网盘服务尚未就绪"
 			return entry
 		}
-		files, err = s.walkPan115(ctx, mapping.ID)
+		files, err = s.walkPan115(ctx, mapping.ID, mapping.Formats)
 	case domain.StrmKindCloudDrive2:
 		if s.cloud == nil || !s.cloud.Configured(ctx) {
 			entry.Message = "CloudDrive2 尚未配置"
 			return entry
 		}
-		files, err = s.walkCloudDrive(ctx, mapping.ID)
+		files, err = s.walkCloudDrive(ctx, mapping.ID, mapping.Formats)
 	default:
 		err = fmt.Errorf("不支持的网盘类型 %q", mapping.Kind)
 	}
@@ -304,7 +334,7 @@ func (s *StrmService) scanMapping(ctx context.Context, mapping domain.StrmMappin
 			continue
 		}
 		absolute := filepath.Join(target, filepath.FromSlash(file.Directory), file.Name+".strm")
-		if !withinStrmRoot(s.root, absolute) {
+		if !withinStrmRoot(root, absolute) {
 			entry.Failed++
 			continue
 		}
@@ -322,7 +352,7 @@ func (s *StrmService) scanMapping(ctx context.Context, mapping domain.StrmMappin
 }
 
 // walkPan115 递归收集 115 目录下的媒体文件；115 的目录标识就是播放标识。
-func (s *StrmService) walkPan115(ctx context.Context, rootID string) ([]strmSourceFile, error) {
+func (s *StrmService) walkPan115(ctx context.Context, rootID string, formats []string) ([]strmSourceFile, error) {
 	var collected []strmSourceFile
 	var walk func(directoryID, relative string) error
 	walk = func(directoryID, relative string) error {
@@ -338,7 +368,7 @@ func (s *StrmService) walkPan115(ctx context.Context, rootID string) ([]strmSour
 					}
 					continue
 				}
-				if !isStrmMedia(file.Name) {
+				if !isStrmMedia(file.Name, formats) {
 					continue
 				}
 				collected = append(collected, strmSourceFile{ID: file.ID, Name: file.Name, Directory: relative})
@@ -354,7 +384,7 @@ func (s *StrmService) walkPan115(ctx context.Context, rootID string) ([]strmSour
 
 // walkCloudDrive 递归收集 CloudDrive2 目录下的媒体文件。
 // CD2 的条目 ID 不保证可直接播放，这里统一用绝对路径作为播放标识。
-func (s *StrmService) walkCloudDrive(ctx context.Context, rootPath string) ([]strmSourceFile, error) {
+func (s *StrmService) walkCloudDrive(ctx context.Context, rootPath string, formats []string) ([]strmSourceFile, error) {
 	var collected []strmSourceFile
 	var walk func(directory, relative string) error
 	walk = func(directory, relative string) error {
@@ -373,7 +403,7 @@ func (s *StrmService) walkCloudDrive(ctx context.Context, rootPath string) ([]st
 				}
 				continue
 			}
-			if !isStrmMedia(item.Name) {
+			if !isStrmMedia(item.Name, formats) {
 				continue
 			}
 			collected = append(collected, strmSourceFile{ID: full, Name: item.Name, Directory: relative})
@@ -425,6 +455,7 @@ func parseStrmMappings(raw string) ([]domain.StrmMapping, error) {
 		return nil, errors.New("需要是 JSON 数组，元素为网盘类型、网盘目录与本地路径")
 	}
 	seen := make(map[string]struct{}, len(mappings))
+	seenLocalPaths := make(map[string]struct{}, len(mappings))
 	for index := range mappings {
 		mapping := &mappings[index]
 		mapping.Kind = strings.TrimSpace(mapping.Kind)
@@ -441,19 +472,50 @@ func parseStrmMappings(raw string) ([]domain.StrmMapping, error) {
 			return nil, fmt.Errorf("第 %d 项的本地 strm 路径必须以 / 开头", index+1)
 		}
 		mapping.LocalPath = path.Clean(mapping.LocalPath)
+		if mapping.Formats == nil {
+			mapping.Formats = append([]string(nil), defaultStrmFormats...)
+		} else {
+			mapping.Formats = normalizeStrmFormats(mapping.Formats)
+		}
+		if len(mapping.Formats) == 0 {
+			return nil, fmt.Errorf("第 %d 项至少需要选择一种生成格式", index+1)
+		}
 		key := mapping.Kind + "\x00" + mapping.ID + "\x00" + mapping.LocalPath
 		if _, ok := seen[key]; ok {
 			return nil, fmt.Errorf("第 %d 项与前面的映射重复", index+1)
 		}
 		seen[key] = struct{}{}
+		if _, ok := seenLocalPaths[mapping.LocalPath]; ok {
+			return nil, fmt.Errorf("第 %d 项的本地 strm 路径与前面的映射重复", index+1)
+		}
+		seenLocalPaths[mapping.LocalPath] = struct{}{}
 	}
 	return mappings, nil
 }
 
-// resolveStrmPath 把浏览器传入的相对路径解析为 strm 根目录下的绝对路径。
+// normalizeStrmFormats 规范化格式输入，保证扩展名不受大小写、空格和前导点影响。
+func normalizeStrmFormats(formats []string) []string {
+	seen := make(map[string]struct{}, len(formats))
+	result := make([]string, 0, len(formats))
+	for _, format := range formats {
+		format = strings.ToLower(strings.TrimSpace(format))
+		format = strings.TrimLeft(format, ".")
+		if format == "" {
+			continue
+		}
+		if _, ok := seen[format]; ok {
+			continue
+		}
+		seen[format] = struct{}{}
+		result = append(result, format)
+	}
+	return result
+}
+
+// resolveStrmPath 把浏览器传入的相对路径解析为 root 目录下的绝对路径。
 // 返回值是绝对路径与规范化后的相对路径（始终以 / 开头，根目录为 /）。
-// 只允许根目录以下的路径：绝对路径、上跳与越界都会被拒绝。
-func (s *StrmService) resolveStrmPath(relative string) (string, string, error) {
+// 只允许 root 以下的路径：绝对路径、上跳与越界都会被拒绝。
+func resolveStrmPath(root, relative string) (string, string, error) {
 	trimmed := strings.TrimSpace(relative)
 	if trimmed == "" {
 		trimmed = "/"
@@ -462,8 +524,8 @@ func (s *StrmService) resolveStrmPath(relative string) (string, string, error) {
 		return "", "", fmt.Errorf("%w: 路径包含非法字符", ErrStrmInvalidInput)
 	}
 	normalized := path.Clean("/" + strings.TrimPrefix(strings.ReplaceAll(trimmed, `\`, "/"), "/"))
-	absolute := filepath.Join(s.root, filepath.FromSlash(strings.TrimPrefix(normalized, "/")))
-	if !withinStrmRoot(s.root, absolute) {
+	absolute := filepath.Join(root, filepath.FromSlash(strings.TrimPrefix(normalized, "/")))
+	if !withinStrmRoot(root, absolute) {
 		return "", "", fmt.Errorf("%w: 路径超出 strm 根目录", ErrStrmInvalidInput)
 	}
 	return absolute, normalized, nil
@@ -547,10 +609,15 @@ func strmIDSegments(kind, fileID string) []string {
 // strmAbsoluteID 报告该网盘类型的播放标识是否为网盘绝对路径。
 func strmAbsoluteID(kind string) bool { return kind == domain.StrmKindCloudDrive2 }
 
-// isStrmMedia 判断文件名是否需要生成 strm。
-func isStrmMedia(name string) bool {
-	_, ok := strmMediaExtensions[strings.ToLower(filepath.Ext(name))]
-	return ok
+// isStrmMedia 判断文件名是否符合当前映射配置的格式。
+func isStrmMedia(name string, formats []string) bool {
+	extension := strings.TrimLeft(strings.ToLower(filepath.Ext(name)), ".")
+	for _, format := range formats {
+		if extension == format {
+			return true
+		}
+	}
+	return false
 }
 
 // joinStrmRelative 拼接扫描结果里的相对目录路径，根目录为空串。

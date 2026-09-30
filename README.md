@@ -6,7 +6,7 @@
 
 - 镜像地址：`ghcr.io/w2z/byte-muse-go`
 - api公开链接: `https://s.apifox.cn/0d0f258c-8165-47ec-a98d-fbb718485c25`
-- 容器端口：`3750`；数据目录：`/data`；strm目录: `/strm`；默认时区：`Asia/Shanghai`
+- 容器端口：`3750`；数据目录：`/data`（影片封面缓存在 `/data/cover`）；strm目录: `/strm`；默认时区：`Asia/Shanghai`
 
 ## Docker 部署
 
@@ -72,6 +72,10 @@ docker run -d --name byte-muse-go \
 
 `/path/to/byte-muse/data` 与 `/path/to/byte-muse/strm` 需要允许容器内 UID 65532 写入；只挂载 `/data` 与 `/strm`，不要覆盖镜像里的 `/app`。以上命令都只启动应用容器，需要抓取增强服务时使用下面的 Compose 配置。
 
+影片封面默认持久化到 `/data/cover`，文件名是番号（例如 `sons-1223.png`），随 `/data` 一起保留，不需要额外挂载；缓存目录不可写或源站不可用时页面自动回退到源站地址。缓存目录可用 `COVER_ROOT` 覆盖，默认值 `/data/cover`。
+设置页的「外网访问地址」已配置时，页面封面与企业微信封面推送都改用 `{外网访问地址}/api/v1/covers/{番号}` 取图，第三方与页面拿到同一张缓存图；留空时页面用跟随自身来源的相对地址，企业微信直接拉取图床原图。
+strm 文件默认写入容器内 `/strm`；设置页「网盘 → STRM 生成」的「STRM 目录」可改为其它绝对路径（留空表示沿用 `/strm`），目录浏览、新建目录与 strm 生成都限定在该目录以内，修改后已生成的 strm 文件不会自动迁移。
+
 ## Docker Compose
 
 `deploy/` 下保留 `compose.sqlite.yaml`、`compose.postgres.yaml`、`compose.mysql.yaml` 三个模板，下面按数据库给出完整配置，与这三个文件内容一致。模板直接写出配置值，不使用环境变量插值。`DATABASE_DSN` 使用容器可访问的宿主机地址及映射端口；`BYPASS_URL` 使用 `http://cloudflarebypass_byte_muse_go:8000`。部署前替换宿主机地址、代理地址、挂载路径及账号密码占位值；`SESSION_SECRET` 少于 32 字节时服务会拒绝启动。真实拓扑与凭据只留在部署机上。
@@ -101,6 +105,7 @@ services:
     volumes:
       # 只挂载 /data 与 /strm：镜像的 /app 存放服务二进制与前端产物，挂载覆盖后容器无法启动。
       # 宿主机目录需允许容器内 UID 65532 写入：chown -R 65532:65532 /path/to/byte-muse/data /path/to/byte-muse/strm
+      # 影片封面缓存在 /data/cover，随 /data 一起持久化，不需要额外挂载。
       - /path/to/byte-muse/data:/data
       - /path/to/byte-muse/strm:/strm
   # 抓取增强服务：设置页把 BYPASS_ENGINE 选为 cloudflare_bypass_for_scraping、BYPASS_URL 填 http://cloudflarebypass_byte_muse_go:8000
@@ -157,6 +162,7 @@ services:
     volumes:
       # 只挂载 /data 与 /strm：镜像的 /app 存放服务二进制与前端产物，挂载覆盖后容器无法启动。
       # 宿主机目录需允许容器内 UID 65532 写入：chown -R 65532:65532 /path/to/byte-muse/data /path/to/byte-muse/strm
+      # 影片封面缓存在 /data/cover，随 /data 一起持久化，不需要额外挂载。
       - /path/to/byte-muse/data:/data
       - /path/to/byte-muse/strm:/strm
   # 内置 PostgreSQL
@@ -235,6 +241,7 @@ services:
     volumes:
       # 只挂载 /data 与 /strm：镜像的 /app 存放服务二进制与前端产物，挂载覆盖后容器无法启动。
       # 宿主机目录需允许容器内 UID 65532 写入：chown -R 65532:65532 /path/to/byte-muse/data /path/to/byte-muse/strm
+      # 影片封面缓存在 /data/cover，随 /data 一起持久化，不需要额外挂载。
       - /path/to/byte-muse/data:/data
       - /path/to/byte-muse/strm:/strm
   # 内置 MySQL

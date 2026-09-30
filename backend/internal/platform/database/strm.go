@@ -30,3 +30,17 @@ func strmSettingsMigration(dialect Dialect) Migration {
 	}
 	return Migration{Version: 28, Name: "strm_settings", Statements: statements}
 }
+
+// strmRootSettingMigration 登记本地 strm 根目录设置 STRM_ROOT。
+// 默认值为空串，表示沿用进程配置（环境变量 STRM_ROOT，缺省容器内 /strm），
+// 因此升级后的行为与升级前完全一致；只新增键值，不改表结构、不覆盖已有配置；重复执行安全。
+func strmRootSettingMigration(dialect Dialect) Migration {
+	statement := fmt.Sprintf("INSERT INTO app_settings (setting_key, setting_value, is_secret, updated_at) VALUES (%s, %s, FALSE, %s)",
+		sqlLiteral("STRM_ROOT"), sqlLiteral(""), currentTimestampExpression(dialect))
+	if dialect == DialectMySQL {
+		statement = strings.Replace(statement, "INSERT INTO", "INSERT IGNORE INTO", 1)
+	} else {
+		statement += " ON CONFLICT (setting_key) DO NOTHING"
+	}
+	return Migration{Version: 33, Name: "strm_root_setting", Statements: []string{statement}}
+}

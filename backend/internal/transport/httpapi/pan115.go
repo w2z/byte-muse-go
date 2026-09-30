@@ -117,6 +117,7 @@ func listPan115Files(service *application.Pan115Service) http.HandlerFunc {
 			writePan115Error(response, err)
 			return
 		}
+		// 文件列表接口正常会回传父目录树，这里只在 115 未回传时兜底补一次路径。
 		if len(page.Path) == 0 {
 			path, err := service.DirectoryPath(request.Context(), page.DirectoryID)
 			if err != nil {

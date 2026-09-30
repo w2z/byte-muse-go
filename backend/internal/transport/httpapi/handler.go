@@ -23,6 +23,7 @@ import (
 	"bytemuse/backend/internal/auth"
 	"bytemuse/backend/internal/domain"
 	"bytemuse/backend/internal/logging"
+	"bytemuse/backend/internal/platform/covercache"
 	"bytemuse/backend/internal/ports"
 	"bytemuse/backend/internal/scheduler"
 )
@@ -41,17 +42,19 @@ type Dependencies struct {
 	Dashboard             *application.DashboardService
 	Settings              *application.SettingsService
 	// Version 提供当前运行版本与发布仓库版本的比较结果，供顶栏版本标签使用。
-	Version               *application.VersionService
-	Pan115                *application.Pan115Service
-	Scheduler             *scheduler.Manager
-	Logs                  *logging.Logger
-	Readiness             ports.ReadinessProbe
+	Version   *application.VersionService
+	Pan115    *application.Pan115Service
+	Scheduler *scheduler.Manager
+	Logs      *logging.Logger
+	Readiness ports.ReadinessProbe
 	// WeChatCallback 处理企业微信回调；未配置时为 nil，回调端点返回 503。
 	WeChatCallback ports.CallbackVerifier
 	// ChannelMessages 处理渠道入站消息；轮询与回调共用同一实现。
 	ChannelMessages ports.ChannelMessageHandler
 	// Strm 提供网盘目录的 strm 生成、本地 strm 目录浏览与播放地址解析。
-	Strm      *application.StrmService
+	Strm *application.StrmService
+	// Covers 是影片封面的本地缓存，页面图片统一从这里取，源站不可用时回退原地址。
+	Covers    *covercache.Cache
 	StaticDir string
 }
 
@@ -94,6 +97,8 @@ func New(dependencies Dependencies) http.Handler {
 		router.Get("/logs", listLogs(dependencies.Logs))
 		router.Delete("/logs", clearLogs(dependencies.Logs))
 		router.Get("/media/{mediaId}", getMedia(dependencies.Catalog))
+		// 封面缓存入口：命中 /data/cover 直接返回本地文件，未命中下载后按番号落盘。
+		router.Get("/covers/{code}", serveCover(dependencies.Covers))
 		router.Get("/subscriptions", listSubscriptions(dependencies.Subscriptions))
 		router.Post("/subscriptions", createSubscription(dependencies.Subscriptions))
 		router.Put("/subscriptions/{subscriptionId}", updateSubscription(dependencies.Subscriptions))

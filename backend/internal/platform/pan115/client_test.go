@@ -176,7 +176,7 @@ func TestAccountParsesSpace(t *testing.T) {
 // 避免把别的目录内容当作已挂载目录。
 func TestListRejectsMismatchedDirectory(t *testing.T) {
 	client := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(t, w, `{"state":true,"code":0,"data":{"cid":"999","count":"1","data":[],"path":[{"cid":"0","name":"根目录"},{"cid":"999","name":"其他目录"}]}}`)
+		writeJSON(t, w, `{"state":true,"code":0,"data":[],"count":1,"path":[{"cid":0,"name":"文件"},{"cid":"999","name":"其他目录"}]}`)
 	})
 	if _, err := client.List(context.Background(), "token", "123", 0, 100); err == nil {
 		t.Fatal("目录不一致时应当报错")
@@ -190,7 +190,7 @@ func TestListParsesEntries(t *testing.T) {
 		if query.Get("cid") != "123" || query.Get("offset") != "0" || query.Get("limit") != "2" || query.Get("show_dir") != "1" {
 			t.Errorf("文件列表请求参数不符合契约: %s", r.URL.RawQuery)
 		}
-		writeJSON(t, w, `{"state":true,"code":0,"data":{"cid":"123","count":"3","data":[{"fid":"f1","pid":"123","fn":"子目录","fc":"0","fs":"0","pc":""},{"fid":"f2","pid":"123","fn":"影片.mp4","fc":"1","fs":"2048","pc":"pc-2"}],"path":[{"cid":"0","name":"根目录"},{"cid":"123","name":"媒体库"}]}}`)
+		writeJSON(t, w, `{"state":true,"code":0,"data":[{"fid":"f1","pid":"123","fn":"子目录","fc":"0","fs":"0","pc":""},{"fid":"f2","pid":"123","fn":"影片.mp4","fc":"1","fs":"2048","pc":"pc-2"}],"count":3,"path":[{"cid":0,"name":"文件"},{"cid":"123","name":"媒体库"}]}`)
 	})
 	page, err := client.List(context.Background(), "token", "123", 0, 2)
 	if err != nil {
@@ -207,14 +207,14 @@ func TestListParsesEntries(t *testing.T) {
 	}
 }
 
-// TestListParsesRootArrayResponse 验证根目录（cid=0）返回的裸条目数组被正常解析。
-// 115 对根目录不回传 cid/count/path，只给条目数组，若按对象解码会直接 500。
-func TestListParsesRootArrayResponse(t *testing.T) {
+// TestListParsesRootResponse 验证根目录（cid=0）的条目、总数与父目录树被正常解析。
+// 115 对根目录同样回传 count 与 path（path 只有根目录自身），路径不该再走目录信息接口。
+func TestListParsesRootResponse(t *testing.T) {
 	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("cid") != "0" {
 			t.Errorf("根目录请求 cid = %q，期望 0", r.URL.Query().Get("cid"))
 		}
-		writeJSON(t, w, `{"state":true,"code":0,"data":[{"fid":"d1","pid":"0","fn":"云下载","fc":"0","fs":"0","pc":"pc-1"},{"fid":"d2","pid":"0","fn":"存档","fc":"0","fs":"0","pc":"pc-2"}]}`)
+		writeJSON(t, w, `{"state":true,"code":0,"data":[{"fid":"d1","pid":"0","fn":"云下载","fc":"0","fs":"0","pc":"pc-1"},{"fid":"d2","pid":"0","fn":"存档","fc":"0","fs":"0","pc":"pc-2"}],"count":2,"path":[{"name":"文件","cid":0,"pid":0}]}`)
 	})
 	page, err := client.List(context.Background(), "token", "0", 0, 100)
 	if err != nil {
@@ -223,32 +223,36 @@ func TestListParsesRootArrayResponse(t *testing.T) {
 	if len(page.Files) != 2 || page.Files[0].Name != "云下载" || !page.Files[0].IsDirectory {
 		t.Fatalf("根目录条目解析错误: %+v", page.Files)
 	}
-	if len(page.Path) != 0 {
-		t.Fatalf("数组形式不应回传路径，实际 %+v", page.Path)
+	if len(page.Path) != 1 || page.Path[0].ID != "0" || page.Path[0].Name != "文件" {
+		t.Fatalf("根目录父目录树解析错误: %+v", page.Path)
 	}
 	if page.Total != 2 || page.HasMore {
 		t.Fatalf("根目录分页 = total %d hasMore %v，期望 2/false", page.Total, page.HasMore)
 	}
 }
 
-// TestListMarksRootArrayHasMore 验证根目录没有总数时按本页条目数推断下一页。
-func TestListMarksRootArrayHasMore(t *testing.T) {
+// TestListWithoutCountInfersHasMore 验证 115 未回传总数时按本页条目数推断下一页，
+// 同时路径为空，交给上层兜底。
+func TestListWithoutCountInfersHasMore(t *testing.T) {
 	client := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(t, w, `{"state":true,"code":0,"data":[{"fid":"d1","pid":"0","fn":"云下载","fc":"0","fs":"0","pc":""},{"fid":"d2","pid":"0","fn":"存档","fc":"0","fs":"0","pc":""}]}`)
+		writeJSON(t, w, `{"state":true,"code":0,"data":[{"fid":"d1","pid":"123","fn":"云下载","fc":"0","fs":"0","pc":""},{"fid":"d2","pid":"123","fn":"存档","fc":"0","fs":"0","pc":""}]}`)
 	})
-	page, err := client.List(context.Background(), "token", "0", 0, 2)
+	page, err := client.List(context.Background(), "token", "123", 0, 2)
 	if err != nil {
-		t.Fatalf("读取根目录失败: %v", err)
+		t.Fatalf("读取目录失败: %v", err)
 	}
 	if page.Total != 2 || !page.HasMore {
-		t.Fatalf("根目录分页 = total %d hasMore %v，期望 2/true", page.Total, page.HasMore)
+		t.Fatalf("无总数分页 = total %d hasMore %v，期望 2/true", page.Total, page.HasMore)
+	}
+	if len(page.Path) != 0 {
+		t.Fatalf("无父目录树时路径应为空，实际 %+v", page.Path)
 	}
 }
 
-// TestListHandlesEmptyRootArray 验证空根目录返回空页而不是报错。
-func TestListHandlesEmptyRootArray(t *testing.T) {
+// TestListHandlesEmptyRootDirectory 验证空根目录返回空页而不是报错。
+func TestListHandlesEmptyRootDirectory(t *testing.T) {
 	client := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(t, w, `{"state":true,"code":0,"data":[]}`)
+		writeJSON(t, w, `{"state":true,"code":0,"data":[],"count":0,"path":[{"name":"文件","cid":0,"pid":0}]}`)
 	})
 	page, err := client.List(context.Background(), "token", "0", 0, 100)
 	if err != nil {

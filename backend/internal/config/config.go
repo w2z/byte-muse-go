@@ -13,24 +13,29 @@ const (
 	defaultWebStaticDir = "/app/web"
 	// defaultStrmRoot 是容器内 strm 根目录的默认挂载点，与 README、Compose 的 /strm 一致。
 	defaultStrmRoot = "/strm"
+	// defaultCoverRoot 是容器内影片封面缓存目录，位于用户自行挂载的 /data 之下。
+	defaultCoverRoot = "/data/cover"
 )
 
 // Config contains non-secret process configuration.
 type Config struct {
-	HTTPAddress     string
-	WebStaticDir    string
-	// StrmRoot 是本地 strm 文件根目录；设置页只能浏览该目录以下的内容。
-	StrmRoot        string
+	HTTPAddress  string
+	WebStaticDir string
+	// StrmRoot 是设置项 STRM_ROOT 为空时使用的本地 strm 文件根目录；
+	// 设置页只能浏览生效根目录以下的内容。
+	StrmRoot string
+	// CoverRoot 是影片封面缓存目录；封面缓存固定开启，目录不可写时图片回退源站地址。
+	CoverRoot       string
 	ShutdownTimeout time.Duration
 	Version         string
 	// ReleaseRepo 是发布仓库的 owner/name，检查更新时读取其 version.json。
-	ReleaseRepo     string
-	AppEnvironment  string
-	DatabaseDriver  string
-	DatabaseDSN     string
-	AdminUsername   string
-	AdminPassword   string
-	SessionSecret   string
+	ReleaseRepo    string
+	AppEnvironment string
+	DatabaseDriver string
+	DatabaseDSN    string
+	AdminUsername  string
+	AdminPassword  string
+	SessionSecret  string
 }
 
 // Load reads environment variables and applies production-safe defaults.
@@ -51,6 +56,10 @@ func Load() (Config, error) {
 	if strmRoot == "" {
 		strmRoot = defaultStrmRoot
 	}
+	coverRoot := strings.TrimSpace(os.Getenv("COVER_ROOT"))
+	if coverRoot == "" {
+		coverRoot = defaultCoverRoot
+	}
 	driver := envOrDefault("DATABASE_DRIVER", "sqlite")
 	if driver != "sqlite" && driver != "postgres" && driver != "mysql" {
 		return Config{}, fmt.Errorf("unsupported DATABASE_DRIVER %q", driver)
@@ -70,6 +79,7 @@ func Load() (Config, error) {
 		HTTPAddress:     httpAddress,
 		WebStaticDir:    staticDir,
 		StrmRoot:        strmRoot,
+		CoverRoot:       coverRoot,
 		ShutdownTimeout: shutdownTimeout,
 		Version:         envOrDefault("BYTEMUSE_VERSION", "dev"),
 		ReleaseRepo:     envOrDefault("BYTEMUSE_RELEASE_REPO", "w2z/byte-muse-go"),

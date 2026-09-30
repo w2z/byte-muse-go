@@ -12,7 +12,11 @@ import { CodeCard } from "./CodeCard";
 // jsdom 未实现媒体查询，提供 Arco 响应式描述列表所需的浏览器接口。
 Object.defineProperty(window, "matchMedia", { writable: true, value: (query: string) => ({ matches: false, media: query, addListener() {}, removeListener() {} }) });
 
-vi.mock("../api/client", () => ({ apiRequest: vi.fn() }));
+// 只替换网络请求：封面地址拼接沿用真实实现，断言的就是页面实际请求的地址。
+vi.mock("../api/client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../api/client")>()),
+  apiRequest: vi.fn(),
+}));
 // 播放器会创建浏览器媒体实例；保留封面入参用于检查图片模式边界。
 vi.mock("./MediaPlayer", () => ({ MediaPlayer: ({ poster }: { poster?: string }) => <video aria-label="预告播放器" poster={poster} /> }));
 afterEach(() => { cleanup(); vi.resetAllMocks(); });
@@ -24,6 +28,9 @@ const media: Media = {
   subscription_status: "none", library_status: "unknown", created_at: "", updated_at: "",
 };
 const settings = (mode: string): SystemSettings => ({ database_driver: "sqlite", values: { IMAGE_MODE: mode }, configured: {} });
+
+/** 主封面统一走服务端缓存入口：番号作为文件名，源站地址作为回退与下载来源。 */
+const coverSrc = "/api/v1/covers/TEST-001?source=" + encodeURIComponent("https://example.test/cover.jpg");
 
 function renderCard(mode?: string, props: Partial<ComponentProps<typeof CodeCard>> = {}) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
@@ -67,7 +74,7 @@ it("默认保留状态及操作，隐藏状态不会隐藏操作", () => {
 
 it("图片模式保存到共享缓存后，已有卡片立即切换为占位图", async () => {
   const { client } = renderCard("VISIBLE");
-  expect(screen.getByRole("img", { name: "TEST-001 封面" })).toHaveAttribute("src", media.banner_url);
+  expect(screen.getByRole("img", { name: "TEST-001 封面" })).toHaveAttribute("src", coverSrc);
   await act(async () => { client.setQueryData(["system-settings"], settings("INVISIBLE")); });
   await waitFor(() => expect(screen.queryByRole("img", { name: "TEST-001 封面" })).toBeNull());
   expect(screen.getByRole("img", { name: "TEST-001 封面占位图" })).toBeInTheDocument();
@@ -121,7 +128,7 @@ it("完整资料分组显示真实零值与否值，无图模式不加载详细�
 
 it("详情顶部显示完整封面，移除卡片标题和复制按钮", () => {
   const { container } = renderCard("VISIBLE", { variant: "detail" });
-  expect(screen.getByRole("img", { name: "TEST-001 封面" })).toHaveAttribute("src", media.banner_url);
+  expect(screen.getByRole("img", { name: "TEST-001 封面" })).toHaveAttribute("src", coverSrc);
   expect(screen.getByRole("img", { name: "TEST-001 封面" })).toHaveAttribute("width", "100%");
   expect(container.querySelector(".code-card")).toBeNull();
   expect(screen.queryByRole("button", { name: "复制番号 TEST-001" })).toBeNull();
@@ -159,4 +166,12 @@ it("详情模式无图时顶部封面与资料图片都显示占位图", () => {
   expect(container.querySelector("img")).toBeNull();
   expect(screen.getByRole("img", { name: "TEST-001 封面占位图" })).toBeInTheDocument();
   expect(screen.getAllByRole("img", { name: "影片资料占位图" })).toHaveLength(2);
+});
+
+/** 「外网访问地址」已配置时页面封面改用绝对缓存地址，与微信封面推送取同一张图。 */
+it("配置外网访问地址后封面改用绝对缓存地址", () => {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+  client.setQueryData(["system-settings"], { ...settings("VISIBLE"), values: { IMAGE_MODE: "VISIBLE", EXTERNAL_DOMAIN: "https://muse.example.com/" } });
+  render(<QueryClientProvider client={client}><CodeCard media={media} /></QueryClientProvider>);
+  expect(screen.getByRole("img", { name: "TEST-001 封面" })).toHaveAttribute("src", "https://muse.example.com" + coverSrc);
 });

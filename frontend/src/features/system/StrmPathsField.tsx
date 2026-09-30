@@ -1,4 +1,4 @@
-import { Button, Input, Modal, Radio } from "@arco-design/web-react";
+import { Button, Input, Modal, Radio, Select } from "@arco-design/web-react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { apiRequest } from "../../shared/api/client";
@@ -10,7 +10,25 @@ import { Pan115DirectoryPicker } from "./Pan115DirectoryPicker";
 export type StrmKind = "115" | "cd2";
 
 /** 一条「网盘目录 → 本地 strm 目录」映射，字段与后端 domain.StrmMapping 一一对应。 */
-export type StrmMapping = { kind: StrmKind; id: string; path: string; local_path: string };
+export type StrmMapping = { kind: StrmKind; id: string; path: string; local_path: string; formats: string[] };
+
+/** STRM 映射默认生成格式；用户可在 Select 中移除、恢复或手动添加格式。 */
+export const DEFAULT_STRM_FORMATS = [
+  "mp4", "avi", "rmvb", "wmv", "mov", "mkv", "webm", "iso",
+  "mpg", "m4v", "ts", "flv", "strm", "vob", "m2ts",
+] as const;
+
+/** 规范化用户输入的媒体格式，去掉扩展名前的点并统一为小写。 */
+export function normalizeStrmFormats(formats: unknown): string[] {
+  if (!Array.isArray(formats)) return [...DEFAULT_STRM_FORMATS];
+  const result: string[] = [];
+  for (const raw of formats) {
+    if (typeof raw !== "string") continue;
+    const format = raw.trim().toLowerCase().replace(/^\.+/, "");
+    if (format !== "" && !result.includes(format)) result.push(format);
+  }
+  return result;
+}
 
 /** 网盘类型选项；顺序与设置页「网盘」分类的页签一致。 */
 const strmKindOptions: { value: StrmKind; label: string }[] = [
@@ -44,12 +62,12 @@ type StrmScanResult = {
 
 /** 映射是否已选齐网盘目录与本地目录；本地路径必须落在 /strm 根目录内，即以 / 开头。 */
 function isStrmMappingComplete(item: StrmMapping): boolean {
-  return item.id.trim() !== "" && item.path.trim() !== "" && item.local_path.startsWith("/");
+  return item.id.trim() !== "" && item.path.trim() !== "" && item.local_path.startsWith("/") && item.formats.length > 0;
 }
 
-/** 本地 strm 路径的面包屑；根目录固定为 strm，不能回到更上层。 */
-function strmCrumbs(path: string): DirectoryPickerCrumb[] {
-  const crumbs = [{ name: "strm", key: strmRootPath }];
+/** 本地 strm 路径的面包屑；根目录名为生效的 strm 目录，不能回到更上层。 */
+function strmCrumbs(path: string, rootLabel: string): DirectoryPickerCrumb[] {
+  const crumbs = [{ name: rootLabel, key: strmRootPath }];
   let current = "";
   for (const segment of path.split("/").filter((item) => item !== "")) {
     current += `/${segment}`;
@@ -73,15 +91,18 @@ function cloudCrumbs(path: string): DirectoryPickerCrumb[] {
  * strm 网盘映射字段。
  *
  * 每行一条映射：先选网盘类型，再分别选择网盘目录与本地 strm 目录，支持添加多个映射。
- * 网盘目录来自 115 或 CloudDrive2 的实时目录列表；本地目录浏览固定以 /strm 为根，
- * 只能向下展开，外部新建的目录点击「刷新」即可看到。草稿由设置页统一持有并随「保存设置」提交。
+ * 网盘目录来自 115 或 CloudDrive2 的实时目录列表；本地目录浏览以设置项 STRM_ROOT 生效的
+ * 根目录为界，只能向下展开，外部新建的目录点击「刷新」即可看到。
+ * 草稿由设置页统一持有并随「保存设置」提交。
  */
 export function StrmPathsField({
   value,
   onChange,
+  rootLabel = "strm",
 }: {
   value: StrmMapping[];
   onChange: (next: StrmMapping[]) => void;
+  rootLabel?: string;
 }) {
   // index 指向正在编辑的行，target 决定打开网盘目录还是本地目录选择器。
   const [picking, setPicking] = useState<{ index: number; target: "netdisk" | "local" } | null>(null);
@@ -106,6 +127,9 @@ export function StrmPathsField({
     .filter((_, position) => position !== picking?.index)
     .map((item) => item.local_path);
   const incomplete = value.filter((item) => !isStrmMappingComplete(item)).length;
+  const duplicateLocalPaths = value.filter((item, index) =>
+    item.local_path.trim() !== "" && value.findIndex((candidate) => candidate.local_path.trim() === item.local_path.trim()) !== index,
+  ).length;
 
   const chooseNetdisk = (picked: { id: string; path: string }) => {
     if (picking === null) return;
@@ -154,10 +178,10 @@ export function StrmPathsField({
               <div className="settings-strm-path-line">
                 <span className="settings-strm-path-label">本地 strm</span>
                 <Input
-                  readOnly
                   value={item.local_path}
                   placeholder="尚未选择本地 strm 目录"
                   aria-label={`本地路径 ${index + 1}`}
+                  onChange={(localPath) => update(index, { local_path: localPath })}
                 />
                 <Button type="secondary" onClick={() => openPicker(index, "local")}>选择本地目录</Button>
                 <Button
@@ -169,6 +193,26 @@ export function StrmPathsField({
                   删除
                 </Button>
               </div>
+              <div className="settings-strm-path-line">
+                <span className="settings-strm-path-label">生成格式</span>
+                <Select
+                  mode="multiple"
+                  allowCreate={{
+                    formatter: (inputValue) => {
+                      const format = normalizeStrmFormats([inputValue])[0] ?? "";
+                      return { value: format, label: format };
+                    },
+                  }}
+                  value={item.formats}
+                  options={Array.from(new Set([...DEFAULT_STRM_FORMATS, ...item.formats])).map((format) => ({
+                    value: format,
+                    label: format,
+                  }))}
+                  placeholder="选择或输入格式"
+                  aria-label={`生成格式 ${index + 1}`}
+                  onChange={(formats) => update(index, { formats: normalizeStrmFormats(formats) })}
+                />
+              </div>
             </li>
           ))}
         </ul>
@@ -176,21 +220,24 @@ export function StrmPathsField({
       <div className="settings-pan115-actions">
         <Button
           type="primary"
-          onClick={() => onChange([...value, { kind: "115", id: "", path: "", local_path: "" }])}
+          onClick={() => onChange([...value, { kind: "115", id: "", path: "", local_path: "", formats: [...DEFAULT_STRM_FORMATS] }])}
         >
           添加映射
         </Button>
       </div>
       {incomplete > 0 ? (
         <span className="settings-field-description">
-          有 {incomplete} 条映射尚未选齐网盘目录与本地目录，保存时会跳过这些映射。
+          有 {incomplete} 条映射尚未选齐网盘目录、本地目录或生成格式，保存时会跳过这些映射。
         </span>
+      ) : null}
+      {duplicateLocalPaths > 0 ? (
+        <span className="settings-field-description">本地 strm 目录不能被多条映射重复使用，请修改后再保存。</span>
       ) : null}
       <div className="settings-strm-scan">
         <Button
           type="secondary"
           loading={scan.isPending}
-          disabled={scan.isPending || incomplete > 0}
+          disabled={scan.isPending || incomplete > 0 || duplicateLocalPaths > 0}
           onClick={() => scan.mutate()}
         >
           生成 strm
@@ -256,7 +303,7 @@ export function StrmPathsField({
             key={pickerRun}
             endpoint="/strm/directories"
             queryKeyPrefix="strm-directories"
-            crumbs={strmCrumbs}
+            crumbs={(path) => strmCrumbs(path, rootLabel)}
             selectedIDs={selectedLocalPaths}
             creatable
             onCancel={closePicker}

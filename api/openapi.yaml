@@ -674,7 +674,7 @@ paths:
     put:
       operationId: updateSystemSettings
       summary: 保存系统设置
-      description: 原子保存当前分组；密钥与 Cookie 分别加密保存，切换类型不清除隐藏凭据。AGENT_SYSTEM_PROMPT 和 TRANSLATION_PROMPT 各允许最多 61440 个 UTF-8 字节，其他值最多 8192 字节；按去除首尾空白前的输入计算，超限返回 400 invalid_setting，message 包含字段名、字节上限和当前字节数，整批不写入且不截断。
+      description: 原子保存当前分组；密钥与 Cookie 分别加密保存，切换类型不清除隐藏凭据。AGENT_SYSTEM_PROMPT 和 TRANSLATION_PROMPT 各允许最多 61440 个 UTF-8 字节，其他值最多 8192 字节；按去除首尾空白前的输入计算，超限返回 400 invalid_setting，message 包含字段名、字节上限和当前字节数，整批不写入且不截断。STRM_ROOT 必须是绝对路径（留空表示沿用部署默认值），否则返回 400 invalid_setting。
       parameters:
         - {in: cookie, name: bytemuse_session, required: true, schema: {type: string}, description: 登录签发的管理员会话 Cookie，不在示例中填写真实值}
       requestBody:
@@ -912,7 +912,7 @@ paths:
     get:
       operationId: listPan115Files
       summary: 浏览 115 目录
-      description: 读取一个 115 目录，供设置页选择离线下载的保存目录。只读，不创建、不修改、不删除任何文件。directory_id 省略或为空时读取根目录。
+      description: 读取一个 115 目录，供设置页选择离线下载与 STRM 的保存目录。只读，不创建、不修改、不删除任何文件。directory_id 省略或为空时读取根目录。115 的列表响应同时给出条目、总数与父目录树，因此一次请求即可返回 path，无需再调用目录信息接口。
       parameters:
         - {in: cookie, name: bytemuse_session, required: true, schema: {type: string}, description: 登录签发的管理员会话 Cookie}
         - {in: query, name: directory_id, schema: {type: string}, description: 115 目录 ID；省略或空串读取根目录}
@@ -920,11 +920,11 @@ paths:
         - {in: query, name: limit, schema: {type: integer, minimum: 1, maximum: 1000, default: 100}, description: 每页条数；省略或超出 1..1000 时按 100 处理}
       responses:
         '200':
-          description: 一页目录内容；path 为根目录到当前目录的完整路径
+          description: 一页目录内容；path 为根目录到当前目录的完整路径，根目录返回仅含“根目录”一项的数组
           content:
             application/json:
               schema: {$ref: '#/components/schemas/Pan115FilePage'}
-              example: {directory_id: '0', path: [], files: [{id: '341789', parent_id: '0', name: 影片目录, is_directory: true, size: 0, pick_code: ''}], total: 1, has_more: false}
+              example: {directory_id: '0', path: [{id: '0', name: 根目录}], files: [{id: '341789', parent_id: '0', name: 影片目录, is_directory: true, size: 0, pick_code: ''}], total: 1, has_more: false}
         '400':
           description: offset 或 limit 无效
           content:
@@ -1081,10 +1081,10 @@ paths:
     get:
       operationId: listStrmDirectories
       summary: 浏览本地 strm 目录
-      description: 列出容器内 strm 根目录下某个目录的直接子目录，供设置页选择 strm 生成目录。浏览范围固定为 strm 根目录，根目录以上的路径会被拒绝；每次请求实时读盘，外部新建的目录重新请求即可看到。
+      description: 列出 strm 根目录下某个目录的直接子目录，供设置页选择 strm 生成目录。根目录取设置项 STRM_ROOT，留空时回退部署默认值（容器内 /strm）；浏览范围固定在该根目录以内，根目录以上的路径会被拒绝。每次请求实时读盘，外部新建的目录重新请求即可看到。
       parameters:
         - {in: cookie, name: bytemuse_session, required: true, schema: {type: string}, description: 登录签发的管理员会话 Cookie}
-        - {in: query, name: path, schema: {type: string}, description: '相对 strm 根目录的路径，以 / 开头；省略或空串表示根目录'}
+        - {in: query, name: path, schema: {type: string}, description: '相对 strm 根目录（STRM_ROOT 生效值）的路径，以 / 开头；省略或空串表示根目录'}
       responses:
         '200':
           description: 当前目录的直接子目录；不返回文件
@@ -1093,7 +1093,7 @@ paths:
               schema: {$ref: '#/components/schemas/StrmDirectoryPage'}
               example: {path: /, directories: [{name: movies, path: /movies}]}
         '400':
-          description: 路径非法、超出 strm 根目录或目录不存在
+          description: 路径非法、超出 strm 根目录（STRM_ROOT 生效值）或目录不存在
           content:
             application/json:
               schema: {$ref: '#/components/schemas/Error'}
@@ -1110,7 +1110,7 @@ paths:
     post:
       operationId: createStrmDirectory
       summary: 新建本地 strm 目录
-      description: 在 strm 根目录内的指定父目录下新建一级目录；父目录必须已存在，目录名不能包含路径分隔符，同名目录已存在时返回 400。只创建一级，避免一次请求产生隐式目录树。
+      description: 在 strm 根目录内的指定父目录下新建一级目录；根目录取设置项 STRM_ROOT，留空时回退部署默认值（容器内 /strm）。父目录必须已存在，目录名不能包含路径分隔符，同名目录已存在时返回 400。只创建一级，避免一次请求产生隐式目录树。
       parameters:
         - {in: cookie, name: bytemuse_session, required: true, schema: {type: string}, description: 登录签发的管理员会话 Cookie}
       requestBody:
@@ -1122,7 +1122,7 @@ paths:
               required: [path, name]
               additionalProperties: false
               properties:
-                path: {type: string, description: '父目录相对 strm 根目录的路径，以 / 开头；省略或空串表示根目录'}
+                path: {type: string, description: '父目录相对 strm 根目录（STRM_ROOT 生效值）的路径，以 / 开头；省略或空串表示根目录'}
                 name: {type: string, description: 新目录名称；不能为空，不能是 . 或 ..，不能包含路径分隔符}
             example: {path: /, name: movies}
       responses:
@@ -1133,7 +1133,7 @@ paths:
               schema: {$ref: '#/components/schemas/StrmDirectory'}
               example: {name: movies, path: /movies}
         '400':
-          description: 目录名非法、目录已存在、上级目录不存在或路径超出 strm 根目录
+          description: 目录名非法、目录已存在、上级目录不存在或路径超出 strm 根目录（STRM_ROOT 生效值）
           content:
             application/json:
               schema: {$ref: '#/components/schemas/Error'}
@@ -1187,7 +1187,7 @@ paths:
     post:
       operationId: scanStrm
       summary: 生成 strm 文件
-      description: 按设置项 STRM_PATHS 把网盘目录镜像成本地 strm 文件，文件内容为 {基址}/files/play/{网盘类型}/{文件标识}。重复执行幂等，内容一致时不改写磁盘。基址取 STRM_PLAY_BASE，为空时使用本次请求的来源地址；STRM_EMBY_REFRESH 为 true 且已配置 Emby 地址与密钥时额外刷新媒体库。单条映射失败不影响其他映射，失败原因通过 message 返回。
+      description: 按设置项 STRM_PATHS 把网盘目录镜像成本地 strm 文件，写入设置项 STRM_ROOT 生效的根目录（留空回退部署默认 /strm），每条映射仅处理其 formats 中的文件扩展名，文件内容为 {基址}/files/play/{网盘类型}/{文件标识}。重复执行幂等，内容一致时不改写磁盘。基址取 STRM_PLAY_BASE，为空时使用本次请求的来源地址；STRM_EMBY_REFRESH 为 true 且已配置 Emby 地址与密钥时额外刷新媒体库。单条映射失败不影响其他映射，失败原因通过 message 返回。
       parameters:
         - {in: cookie, name: bytemuse_session, required: true, schema: {type: string}, description: 登录签发的管理员会话 Cookie}
       responses:
@@ -1255,6 +1255,37 @@ paths:
               schema: {$ref: '#/components/schemas/Error'}
         '503':
           description: strm 服务未装配
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+  /covers/{code}:
+    get:
+      operationId: getMediaCover
+      summary: 读取或缓存影片封面
+      description: '影片主封面的统一入口，页面按番号请求该地址。服务端按番号把封面持久化到 /data/cover：命中缓存直接返回本地文件，未命中先下载再落盘，落盘文件名是番号加图片真实格式，例如 sons-1223.png。source 必须是不带凭据的 http/https 绝对地址；缓存目录默认 /data/cover，可用 COVER_ROOT 环境变量覆盖。目录不可写、源站失败或番号不能作为文件名时返回 302 回退到 source，页面表现与没有缓存时一致。设置页「外网访问地址」（EXTERNAL_DOMAIN）已配置时，页面封面与企业微信封面推送都改用 {外网访问地址} 前缀访问本接口，第三方与页面取到同一张图。'
+      parameters:
+        - {in: cookie, name: bytemuse_session, required: true, schema: {type: string}, description: 登录签发的管理员会话 Cookie}
+        - {in: path, name: code, required: true, schema: {type: string}, description: 影片番号；作为缓存文件名主干，只保留字母、数字、连字符与下划线并转小写}
+        - {in: query, name: source, required: true, schema: {type: string}, description: 封面源地址，需 URL 编码的 http/https 绝对地址；缓存失败时作为回退跳转目标}
+      responses:
+        '200':
+          description: 封面图片二进制；命中缓存或下载成功后返回，Content-Type 为图片真实类型
+          headers:
+            Cache-Control:
+              description: 固定为 private, max-age=86400，浏览器一天内复用本地封面
+              schema: {type: string}
+          content:
+            image/*:
+              schema: {type: string, format: binary}
+        '302':
+          description: 缓存目录不可写、源站失败或番号不能作为文件名时回退到 source
+        '400':
+          description: source 缺失或不是不带凭据的 http/https 绝对地址
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '401':
+          description: 未登录或会话失效
           content:
             application/json:
               schema: {$ref: '#/components/schemas/Error'}
@@ -2113,7 +2144,7 @@ components:
       description: 115 目录路径上的一级
       properties:
         id: {type: string, description: 目录 ID；根目录为 0}
-        name: {type: string, description: 目录名称}
+        name: {type: string, description: '目录名称；根目录统一为“根目录”'}
     Pan115File:
       type: object
       required: [id, parent_id, name, is_directory, size, pick_code]
@@ -2131,9 +2162,9 @@ components:
       description: 一页 115 目录内容
       properties:
         directory_id: {type: string, description: 当前目录 ID；根目录为 0}
-        path: {type: array, items: {$ref: '#/components/schemas/Pan115Directory'}, description: '根目录到当前目录的完整路径；根目录为空数组'}
+        path: {type: array, items: {$ref: '#/components/schemas/Pan115Directory'}, description: '根目录到当前目录的完整路径，由 115 列表响应直接返回；根目录为仅含“根目录”一项的数组'}
         files: {type: array, items: {$ref: '#/components/schemas/Pan115File'}, description: '当前页条目；无内容为空数组'}
-        total: {type: integer, minimum: 0, description: 当前目录条目总数}
+        total: {type: integer, minimum: 0, description: 当前目录条目总数，取自 115 列表响应的 count}
         has_more: {type: boolean, description: 是否还有下一页}
     Pan115OfflineTask:
       type: object
@@ -2162,26 +2193,27 @@ components:
         directory_id: {type: string, description: '保存目录 ID；省略或空串时使用设置中的「离线下载保存目录」，该设置也为空时保存到根目录'}
     StrmMapping:
       type: object
-      required: [kind, id, path, local_path]
+      required: [kind, id, path, local_path, formats]
       description: 一条「网盘目录 → 本地 strm 目录」映射，对应设置项 STRM_PATHS 的数组元素
       properties:
         kind: {type: string, enum: ['115', 'cd2'], description: '网盘类型；115 为 115 网盘，cd2 为 CloudDrive2，取值同时用作播放地址的路径段'}
         id: {type: string, description: '网盘目录标识，扫描与播放的权威依据；115 为目录 ID，CloudDrive2 为目录绝对路径'}
         path: {type: string, description: 网盘目录展示路径；只用于界面展示，不参与扫描与播放}
-        local_path: {type: string, description: '本地 strm 目录，以 / 开头，相对容器内 strm 根目录；不能超出该根目录'}
+        local_path: {type: string, description: '本地 strm 目录，以 / 开头，相对设置项 STRM_ROOT 生效的根目录；不能超出该根目录'}
+        formats: {type: array, minItems: 1, items: {type: string, pattern: '^[a-z0-9][a-z0-9._-]*$'}, description: '该映射允许生成 strm 的文件格式；保存时转为小写并去除前导点。未提供时使用默认格式 mp4、avi、rmvb、wmv、mov、mkv、webm、iso、mpg、m4v、ts、flv、strm、vob、m2ts'}
     StrmDirectory:
       type: object
       required: [name, path]
       description: 一个可选择的目录
       properties:
         name: {type: string, description: 目录名称}
-        path: {type: string, description: '目录路径；本地 strm 目录相对 strm 根目录，CloudDrive2 目录为网盘绝对路径'}
+        path: {type: string, description: '目录路径；本地 strm 目录相对 STRM_ROOT 生效的根目录，CloudDrive2 目录为网盘绝对路径'}
     StrmDirectoryPage:
       type: object
       required: [path, directories]
       description: 一次目录浏览结果；只包含子目录，不包含文件
       properties:
-        path: {type: string, description: '当前目录路径；本地 strm 目录相对 strm 根目录，CloudDrive2 目录为网盘绝对路径'}
+        path: {type: string, description: '当前目录路径；本地 strm 目录相对 STRM_ROOT 生效的根目录，CloudDrive2 目录为网盘绝对路径'}
         directories: {type: array, items: {$ref: '#/components/schemas/StrmDirectory'}, description: '当前目录的直接子目录；无子目录为空数组'}
     StrmScanMapping:
       type: object

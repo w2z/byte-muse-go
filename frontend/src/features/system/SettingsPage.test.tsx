@@ -716,8 +716,8 @@ describe("网盘设置", () => {
 
     await user.click(screen.getByRole("button", { name: "保存设置" }));
     await waitFor(() => expect(values.STRM_PATHS).toBe(JSON.stringify([
-      { kind: "115", id: "10", path: "/电影", local_path: "/movies" },
-      { kind: "cd2", id: "/115", path: "/115", local_path: "/" },
+      { kind: "115", id: "10", path: "/电影", local_path: "/movies", formats: ["mp4", "avi", "rmvb", "wmv", "mov", "mkv", "webm", "iso", "mpg", "m4v", "ts", "flv", "strm", "vob", "m2ts"] },
+      { kind: "cd2", id: "/115", path: "/115", local_path: "/", formats: ["mp4", "avi", "rmvb", "wmv", "mov", "mkv", "webm", "iso", "mpg", "m4v", "ts", "flv", "strm", "vob", "m2ts"] },
     ])));
 
     // 删除第一条映射后只剩一条，并且删除后不再显示未选齐提示。
@@ -777,5 +777,47 @@ describe("网盘设置", () => {
     await user.click(within(dialog).getByRole("button", { name: "strm" }));
     await user.click(within(dialog).getByRole("button", { name: "确认" }));
     expect(await screen.findByLabelText("本地路径 1")).toHaveValue("/");
+  });
+
+  it("STRM 目录设置决定本地目录选择器的根名称，并随保存提交", async () => {
+    const user = userEvent.setup();
+    const values: Record<string, string> = {};
+    vi.mocked(apiRequest).mockImplementation(async (path, options) => {
+      if (path === "/system/settings" && options?.method === "PUT") {
+        const body = JSON.parse(String(options.body)) as { values: Record<string, string> };
+        Object.assign(values, body.values);
+        return { database_driver: "sqlite", values: { ...body.values }, configured: {} };
+      }
+      if (path === "/system/settings") {
+        return { database_driver: "sqlite", values: { STRM_ROOT: "/media/library/strm" }, configured: {} };
+      }
+      if (path === "/pan115/account") return { linked: true, account: boundAccount };
+      if (path.startsWith("/strm/directories")) {
+        const current = new URL(path, "http://localhost").searchParams.get("path") ?? "/";
+        return { path: current, directories: [] };
+      }
+      throw new Error(`未处理的请求 ${path}`);
+    });
+
+    renderSettings();
+    await user.click(await screen.findByRole("tab", { name: "网盘" }));
+    await user.click(screen.getByRole("tab", { name: "STRM 生成" }));
+
+    // 已保存的根目录回显在设置项里，并成为本地目录选择器的根名称。
+    expect(await screen.findByLabelText("STRM 目录")).toHaveValue("/media/library/strm");
+    await user.click(screen.getByRole("button", { name: "添加映射" }));
+    await user.click(screen.getByRole("button", { name: "选择本地目录" }));
+    const dialog = await screen.findByRole("dialog");
+    const breadcrumbs = within(dialog).getByRole("navigation", { name: "目录路径" });
+    expect(within(breadcrumbs).getAllByRole("button")).toHaveLength(1);
+    expect(within(breadcrumbs).getByRole("button", { name: "strm" })).toBeInTheDocument();
+    await user.click(within(dialog).getByRole("button", { name: "取消" }));
+    await waitForDialogClosed();
+
+    // 修改后随保存提交；留空表示沿用部署默认值。
+    await user.clear(screen.getByLabelText("STRM 目录"));
+    await user.type(screen.getByLabelText("STRM 目录"), "/mnt/strm");
+    await user.click(screen.getByRole("button", { name: "保存设置" }));
+    await waitFor(() => expect(values.STRM_ROOT).toBe("/mnt/strm"));
   });
 });

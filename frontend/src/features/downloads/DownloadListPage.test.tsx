@@ -10,7 +10,9 @@ Object.defineProperty(window, "matchMedia", { writable: true, value: (query: str
 const requests: string[] = [];
 let responseItems: Record<string, unknown>[] = [];
 let detailError = false;
-vi.mock("../../shared/api/client", () => ({
+// 只替换网络请求：封面地址拼接沿用真实实现，抽屉里的封面才会走缓存入口。
+vi.mock("../../shared/api/client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../shared/api/client")>()),
   apiRequest: (path: string) => {
     requests.push(path);
     if (path.startsWith("/media/")) return detailError ? Promise.reject(new Error("影片加载失败")) : Promise.resolve({ id: "m1", code: "TEST-001", title: "影片详情标题", release_date: "2026-09-28", subscription_status: "active", display_status: "subscribed", preview_url: "https://example.test/trailer.mp4" });

@@ -2,9 +2,11 @@ package application
 
 import (
 	"context"
+	"net/url"
 	"strings"
 
 	"bytemuse/backend/internal/logging"
+	"bytemuse/backend/internal/platform/covercache"
 	"bytemuse/backend/internal/ports"
 )
 
@@ -102,10 +104,12 @@ type Notifier interface {
 // Title 是通知标题，正文为空时也必须有它：企业微信图文消息的 title 是必填项，
 // 空标题会被平台拒绝，因此标题由业务侧生成而不是交给渠道兜底。
 // Text 是通知正文；CoverURL 是可选封面，渠道按自身能力渲染，缺失时降级为纯文本。
+// Code 是影片番号，配置「外网访问地址」后用它把封面改写成本机缓存地址（文件名即番号）。
 type NotificationMessage struct {
 	Title    string
 	Text     string
 	CoverURL string
+	Code     string
 }
 
 // NotificationService 按设置中的渠道开关推送业务通知。
@@ -154,7 +158,13 @@ func (n *NotificationService) Notify(ctx context.Context, event NotificationEven
 			skip("渠道未配置")
 			continue
 		}
-		if err := sendNotification(ctx, sender, target, message); err != nil {
+		outbound := message
+		// 企业微信的封面由企业微信服务器主动拉取，只有外网可达的绝对地址才拿得到图；
+		// 配置「外网访问地址」后改用本机封面缓存入口，与页面显示的是同一个地址。
+		if channel.Channel == ports.ChannelWeChat {
+			outbound.CoverURL = wechatCoverURL(values["EXTERNAL_DOMAIN"], message.Code, message.CoverURL)
+		}
+		if err := sendNotification(ctx, sender, target, outbound); err != nil {
 			logging.Error(logging.CategoryNotification, "消息通知发送失败", "channel", channel.Channel, "event", string(event), "error", err.Error())
 		} else {
 			// 成功也留痕：开关是否真正生效只能靠这条日志判断，静默成功无法与「开关没接线」区分。
@@ -173,6 +183,20 @@ func sendNotification(ctx context.Context, sender ports.ChannelSender, target st
 		return sender.SendPhoto(ctx, target, cover, title, text)
 	}
 	return sender.SendText(ctx, target, NotificationPlainText(title, text))
+}
+
+// wechatCoverURL 生成企业微信图文消息的封面地址。
+// 配置「外网访问地址」时指向本机封面缓存入口 /api/v1/covers/{番号}，服务端按番号落盘到 /data/cover，
+// 企业微信与页面取到同一张图；外网地址、番号或可下载的封面缺失时保持原地址，
+// 不把封面换成必然取不到的链接，企业微信仍可直接拉取图床原图。
+func wechatCoverURL(externalDomain, code, cover string) string {
+	source := strings.TrimSpace(cover)
+	domain := strings.TrimRight(strings.TrimSpace(externalDomain), "/")
+	normalized := strings.TrimSpace(code)
+	if domain == "" || normalized == "" || !covercache.AllowedSource(source) {
+		return cover
+	}
+	return domain + "/api/v1/covers/" + url.PathEscape(normalized) + "?source=" + url.QueryEscape(source)
 }
 
 // NotificationPlainText 把标题与正文合成纯文本，供无封面时降级发送；缺失部分自动省略。

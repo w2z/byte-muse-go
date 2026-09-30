@@ -245,7 +245,8 @@ func (s *Pan115Service) Files(ctx context.Context, directoryID string, offset, l
 }
 
 // DirectoryPath 返回目录在 115 中的完整路径（含根目录与目录自身），供目录选择器展示与面包屑导航。
-// 115 的文件列表接口只回传条目，路径统一由目录信息接口解析，避免前端自行拼接出不一致的路径。
+// 文件列表接口已回传父目录树，这里只在列表响应缺少父目录树时兜底，
+// 保证任何情况下路径都由后端统一解析，而不是由前端自行拼接。
 func (s *Pan115Service) DirectoryPath(ctx context.Context, directoryID string) ([]domain.Pan115Directory, error) {
 	directoryID = strings.TrimSpace(directoryID)
 	if directoryID == "" || directoryID == pan115RootDirectoryID {
@@ -614,10 +615,16 @@ func pan115FilePageView(directoryID string, page pan115.FilePage) domain.Pan115F
 }
 
 // pan115DirectoryView 把协议层的目录路径转换成对外结构。
+// 根目录在文件列表接口与目录信息接口里的名称不同，这里统一成固定名称，
+// 避免同一层级在面包屑里出现两种叫法。
 func pan115DirectoryView(path []pan115.Directory) []domain.Pan115Directory {
 	directories := make([]domain.Pan115Directory, len(path))
 	for index, item := range path {
-		directories[index] = domain.Pan115Directory{ID: item.ID, Name: item.Name}
+		name := item.Name
+		if item.ID == pan115RootDirectoryID {
+			name = pan115RootDirectoryName
+		}
+		directories[index] = domain.Pan115Directory{ID: item.ID, Name: name}
 	}
 	return directories
 }

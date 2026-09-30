@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"bytemuse/backend/internal/application"
@@ -17,6 +18,7 @@ import (
 	"bytemuse/backend/internal/config"
 	"bytemuse/backend/internal/logging"
 	"bytemuse/backend/internal/platform/collector"
+	"bytemuse/backend/internal/platform/covercache"
 	"bytemuse/backend/internal/platform/database"
 	"bytemuse/backend/internal/platform/downloadclient"
 	"bytemuse/backend/internal/platform/release"
@@ -269,6 +271,29 @@ func (c *Commands) Doctor(ctx context.Context) error {
 	return nil
 }
 
+// coverProxyTTL 是封面缓存重新读取代理设置的间隔：保存后 30 秒内生效，避免每张封面都读一次全量设置。
+const coverProxyTTL = 30 * time.Second
+
+// coverProxyReader 返回「读取当前爬虫代理」的函数，封面下载在请求时取值，改代理不需要重启进程。
+// 设置读取失败时沿用上一次成功的值，配置读取故障不阻断封面。
+func coverProxyReader(settings *application.SettingsService) func(context.Context) string {
+	var mutex sync.Mutex
+	proxy, expires := "", time.Time{}
+	return func(ctx context.Context) string {
+		mutex.Lock()
+		defer mutex.Unlock()
+		if now := time.Now(); now.Before(expires) {
+			return proxy
+		}
+		current, err := settings.Get(ctx)
+		if err != nil {
+			return proxy
+		}
+		proxy, expires = current.Values["PROXY"], time.Now().Add(coverProxyTTL)
+		return proxy
+	}
+}
+
 // settingsValues 把设置服务适配成执行时读取配置的函数；调用方每次读取最新值，不缓存凭据。
 func settingsValues(settings *application.SettingsService) func(context.Context) (map[string]string, error) {
 	return func(ctx context.Context) (map[string]string, error) {
@@ -293,12 +318,14 @@ func notifyTransferTransitions(ctx context.Context, notifier application.Notifie
 				Title:    application.NotificationHeadline(item.Code, "已完成下载"),
 				Text:     item.Title,
 				CoverURL: item.Cover,
+				Code:     item.Code,
 			})
 		case "failed":
 			notifier.Notify(ctx, application.NotificationDownloadFailed, application.NotificationMessage{
 				Title:    application.NotificationHeadline(item.Code, "下载失败"),
 				Text:     "原因：下载器报告任务失败",
 				CoverURL: item.Cover,
+				Code:     item.Code,
 			})
 		}
 	}
@@ -336,6 +363,7 @@ func (c *Commands) Serve(ctx context.Context) error {
 	defer pan115Service.Close()
 	// strm 服务：把 115 与 CloudDrive2 的网盘目录镜像成本地 strm 文件，并解析播放地址。
 	// CloudDrive2 连接参数来自设置，因此传入按设置懒构造的适配器，改配置后无需重启进程。
+	// 本地 strm 根目录同样以设置项 STRM_ROOT 为准，进程配置只在设置为空时兜底。
 	strmService, err := application.NewStrmService(c.config.StrmRoot, pan115Service,
 		application.NewCloudDriveSettings(settingsValues(settingsService)), settingsValues(settingsService))
 	if err != nil {
@@ -563,6 +591,8 @@ func (c *Commands) Serve(ctx context.Context) error {
 		RunChannelSupervisor(channelWorkerCtx, settingsService, dispatcher)
 	}()
 	defer func() { cancelChannelWorker(); <-channelWorkerDone }()
+	// 封面缓存固定开启：目录是容器内 /data/cover（随 /data 一起挂载），代理沿用设置页的爬虫代理。
+	coverCache := covercache.New(c.config.CoverRoot, coverProxyReader(settingsService))
 	handler := httpapi.New(httpapi.Dependencies{
 		Collection:            collectionService,
 		Auth:                  authService,
@@ -584,6 +614,7 @@ func (c *Commands) Serve(ctx context.Context) error {
 		WeChatCallback:  newWeChatCallback(settingsService),
 		ChannelMessages: dispatcher,
 		Strm:            strmService,
+		Covers:          coverCache,
 		StaticDir:       c.config.WebStaticDir,
 	})
 	server := &http.Server{Addr: c.config.HTTPAddress, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
