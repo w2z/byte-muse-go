@@ -158,6 +158,11 @@ func (s *sqlStore) Media() ports.MediaRepository {
 	return &sqlMediaRepository{dialect: s.dialect, exec: s.exec}
 }
 
+// MediaLibrary 返回「已在媒体库」的登记入口；写操作需要独立事务，因此直接持有连接池。
+func (s *sqlStore) MediaLibrary() ports.MediaLibraryWriter {
+	return &sqlMediaLibraryRepository{dialect: s.dialect, db: s.root}
+}
+
 func (s *sqlStore) Subscriptions() ports.SubscriptionRepository {
 	return &sqlSubscriptionRepository{dialect: s.dialect, exec: s.exec, db: s.db}
 }

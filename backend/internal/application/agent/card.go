@@ -36,7 +36,7 @@ func parseCardData(raw string) (action, code string, ok bool) {
 		return "", "", false
 	}
 	action = strings.TrimSpace(parts[1])
-	code = NormalizeCode(parts[2])
+	code = domain.NormalizeCode(parts[2])
 	if code == "" || !cardActionKnown(action) {
 		return "", "", false
 	}
@@ -76,7 +76,7 @@ func cardActionLabel(action string) string {
 // cardForCode 按番号构建状态卡片。
 // 番号无效、未入库或没有可执行操作时返回纯文本回复，卡片与文本两条路径由同一份状态判定驱动。
 func cardForCode(ctx context.Context, deps Deps, raw string) ports.Reply {
-	code := NormalizeCode(raw)
+	code := domain.NormalizeCode(raw)
 	if code == "" {
 		return ports.Reply{Text: "番号无效，请发送类似 SSIS-001 的番号"}
 	}
@@ -96,7 +96,7 @@ func cardForKnownCode(ctx context.Context, deps Deps, raw string) (ports.Reply, 
 	if deps.Queries == nil {
 		return ports.Reply{}, false
 	}
-	code := NormalizeCode(raw)
+	code := domain.NormalizeCode(raw)
 	if code == "" {
 		return ports.Reply{}, false
 	}
@@ -212,7 +212,7 @@ func controlCard(ctx context.Context, deps Deps, media domain.Media, action stri
 // cardButtons 是番号卡片按钮的唯一权威映射：订阅状态与下载任务的可用操作共同决定按钮。
 // 顺序即界面顺序，Telegram 每行两个按钮，企业微信按同一顺序渲染。
 func cardButtons(media domain.Media, task *domain.DownloadTask) []ports.ActionButton {
-	code := NormalizeCode(media.Code)
+	code := domain.NormalizeCode(media.Code)
 	if code == "" {
 		return nil
 	}

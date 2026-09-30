@@ -26,6 +26,22 @@ type Pan115LoginResult struct {
 	Account *Pan115Account   `json:"account"`
 }
 
+// Pan115CookieLoginSession 是一次 Cookie 扫码的启动结果；QRCode 为可直接渲染的 PNG data URL。
+// ClientType 回显归一化后的渠道，前端据此提示用户用哪个客户端扫码。
+type Pan115CookieLoginSession struct {
+	SessionID  string    `json:"session_id"`
+	QRCode     string    `json:"qr_code"`
+	ClientType string    `json:"client_type"`
+	ExpiresAt  time.Time `json:"expires_at"`
+}
+
+// Pan115CookieLoginResult 是一次 Cookie 扫码状态查询结果；仅授权状态携带 Cookie 明文。
+// Cookie 只在本次响应中返回，由设置页写入 PAN115_COOKIE 后统一加密保存，服务端不落库。
+type Pan115CookieLoginResult struct {
+	Status Pan115LoginState `json:"status"`
+	Cookie string           `json:"cookie"`
+}
+
 // Pan115Account 是 115 账号的对外快照，只包含展示字段，不含任何令牌。
 type Pan115Account struct {
 	ID     string      `json:"id"`
@@ -96,4 +112,27 @@ type Pan115OfflinePage struct {
 	Page      int                 `json:"page"`
 	PageCount int                 `json:"page_count"`
 	Tasks     []Pan115OfflineTask `json:"tasks"`
+}
+
+// Pan115LibraryDirectoryResult 是单个扫描目录的入库结果。
+// Files 是递归扫描到的视频文件数，Matched 是识别出番号的影片数，Skipped 是无法识别番号而跳过的文件数。
+// Message 为空表示该目录没有可报告的问题；单个目录失败不影响其他目录。
+type Pan115LibraryDirectoryResult struct {
+	ID      string `json:"id"`
+	Path    string `json:"path"`
+	Files   int    `json:"files"`
+	Matched int    `json:"matched"`
+	Created int    `json:"created"`
+	Skipped int    `json:"skipped"`
+	Message string `json:"message"`
+}
+
+// Pan115LibraryScanResult 是一次「115 扫描目录 → 递归扫描 → 视频入库」的总结果。
+// Created 只统计本次新建的影片；已存在的影片只把媒体库状态置为 present，不覆盖标题、订阅状态等已有字段。
+type Pan115LibraryScanResult struct {
+	Directories []Pan115LibraryDirectoryResult `json:"directories"`
+	Files       int                            `json:"files"`
+	Matched     int                            `json:"matched"`
+	Created     int                            `json:"created"`
+	Skipped     int                            `json:"skipped"`
 }

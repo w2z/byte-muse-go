@@ -121,3 +121,89 @@ func TestPan115AccountMigrationUpgrade(t *testing.T) {
 		t.Fatalf("升级后应为未绑定: found=%v err=%v", found, e)
 	}
 }
+
+// TestPan115CookieSettingMigrationMovesLegacySecret 验证升级把已加密的 PAN115_EVENT_COOKIE
+// 原样搬到统一的 PAN115_COOKIE 并删除旧键：密文复用同一 SESSION_SECRET，用户不需要重填；
+// 迁移重复执行安全，不会覆盖已有新键或复活旧键。
+func TestPan115CookieSettingMigrationMovesLegacySecret(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, Config{Dialect: DialectSQLite, SQLitePath: filepath.Join(t.TempDir(), "pan115-cookie.db")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err = ensureMigrationTable(ctx, store.SQLDB(), DialectSQLite); err != nil {
+		t.Fatal(err)
+	}
+	// 先升到 34 版，模拟只有 PAN115_EVENT_COOKIE 的旧库。
+	for _, migration := range MigrationPlan(DialectSQLite) {
+		if migration.Version < 35 {
+			if err = applyMigration(ctx, store.SQLDB(), DialectSQLite, migration); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if _, err = store.SQLDB().ExecContext(ctx,
+		"INSERT INTO app_settings (setting_key, setting_value, is_secret, updated_at) VALUES (?, ?, TRUE, ?)",
+		"PAN115_EVENT_COOKIE", "cipher-cookie", time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.SQLDB().ExecContext(ctx, "DELETE FROM app_settings WHERE setting_key = ?", "PAN115_COOKIE"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err = store.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// 重复执行不得改变结果。
+	if err = store.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var value string
+	var secret bool
+	if err = store.SQLDB().QueryRowContext(ctx, "SELECT setting_value, is_secret FROM app_settings WHERE setting_key = ?", "PAN115_COOKIE").Scan(&value, &secret); err != nil {
+		t.Fatal(err)
+	}
+	if value != "cipher-cookie" || !secret {
+		t.Fatalf("迁移后 PAN115_COOKIE = %q secret=%v，期望密文原样搬运且标记为敏感", value, secret)
+	}
+	var legacy int
+	if err = store.SQLDB().QueryRowContext(ctx, "SELECT count(*) FROM app_settings WHERE setting_key = ?", "PAN115_EVENT_COOKIE").Scan(&legacy); err != nil || legacy != 0 {
+		t.Fatalf("旧键残留 %d err=%v", legacy, err)
+	}
+}
+
+// TestPan115CookieSettingMigrationKeepsExistingValue 验证新键已存在时迁移不覆盖用户已保存的 Cookie。
+func TestPan115CookieSettingMigrationKeepsExistingValue(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, Config{Dialect: DialectSQLite, SQLitePath: filepath.Join(t.TempDir(), "pan115-cookie-keep.db")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err = ensureMigrationTable(ctx, store.SQLDB(), DialectSQLite); err != nil {
+		t.Fatal(err)
+	}
+	for _, migration := range MigrationPlan(DialectSQLite) {
+		if migration.Version < 35 {
+			if err = applyMigration(ctx, store.SQLDB(), DialectSQLite, migration); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if _, err = store.SQLDB().ExecContext(ctx, "UPDATE app_settings SET setting_value = ? WHERE setting_key = ?", "cipher-old", "PAN115_EVENT_COOKIE"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.SQLDB().ExecContext(ctx,
+		"INSERT INTO app_settings (setting_key, setting_value, is_secret, updated_at) VALUES (?, ?, TRUE, ?)",
+		"PAN115_COOKIE", "cipher-new", time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		t.Fatal(err)
+	}
+	if err = store.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var value string
+	if err = store.SQLDB().QueryRowContext(ctx, "SELECT setting_value FROM app_settings WHERE setting_key = ?", "PAN115_COOKIE").Scan(&value); err != nil || value != "cipher-new" {
+		t.Fatalf("新键被覆盖: %q err=%v", value, err)
+	}
+}

@@ -369,6 +369,12 @@ func (c *Commands) Serve(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("create strm service: %w", err)
 	}
+	// 115 扫描入库服务：把设置页的扫描目录递归扫描后登记到媒体库。
+	// 与生成 strm 共用同一套 115 递归与失败隔离规则，媒体库登记只写 library_status。
+	pan115LibraryService, err := application.NewPan115LibraryService(pan115Service, store.MediaLibrary(), settingsValues(settingsService))
+	if err != nil {
+		return fmt.Errorf("create 115 library service: %w", err)
+	}
 	// 对话回复与业务通知共用同一个渠道解析器，不另建第二套发送逻辑。
 	channels := newChannelRegistry(settingsService)
 	notifier := application.NewNotificationService(settingsValues(settingsService), channels)
@@ -591,6 +597,14 @@ func (c *Commands) Serve(ctx context.Context) error {
 		RunChannelSupervisor(channelWorkerCtx, settingsService, dispatcher)
 	}()
 	defer func() { cancelChannelWorker(); <-channelWorkerDone }()
+	// 事件监听与 serve 共用生命周期；保存设置后下一轮读取，无需重启。
+	pan115EventService := application.NewPan115EventService(pan115Service, strmService,
+		database.NewSettingsRepository(store.SQLDB(), database.Dialect(c.config.DatabaseDriver)),
+		settingsValues(settingsService), pan115Service.EventAccountID)
+	eventCtx, cancelEvents := context.WithCancel(ctx)
+	eventsDone := make(chan struct{})
+	go func() { defer close(eventsDone); pan115EventService.Run(eventCtx) }()
+	defer func() { cancelEvents(); <-eventsDone }()
 	// 封面缓存固定开启：目录是容器内 /data/cover（随 /data 一起挂载），代理沿用设置页的爬虫代理。
 	coverCache := covercache.New(c.config.CoverRoot, coverProxyReader(settingsService))
 	handler := httpapi.New(httpapi.Dependencies{
@@ -608,6 +622,7 @@ func (c *Commands) Serve(ctx context.Context) error {
 		// 版本检查复用运行版本与发布仓库记录，顶栏标签与 Agent 运行环境提示取同一来源。
 		Version:         application.NewVersionService(c.config.Version, release.NewGitHubSource(c.config.ReleaseRepo, nil)),
 		Pan115:          pan115Service,
+		Pan115Library:   pan115LibraryService,
 		Scheduler:       manager,
 		Logs:            logging.Default,
 		Readiness:       store.ReadinessProbe(),

@@ -1,4 +1,4 @@
-import { Button, Input, InputNumber, Radio, Select, Switch, Tabs } from "@arco-design/web-react";
+import { Button, Input, Radio, Select, Switch, Tabs } from "@arco-design/web-react";
 import { IconCheck, IconClose, IconLaunch, IconSave, IconUndo } from "@arco-design/web-react/icon";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Fragment, useEffect, useState, type ReactNode } from "react";
@@ -8,8 +8,15 @@ import { ContentCard } from "../../shared/ui/ContentCard";
 import { PageState } from "../../shared/ui/PageState";
 import { useFeedbackMessage } from "../../shared/ui/FeedbackMessage";
 import { Pan115LoginPanel } from "./Pan115LoginPanel";
-import { Pan115ScanPathsField, type Pan115ScanPath } from "./Pan115ScanPathsField";
-import { DEFAULT_STRM_FORMATS, normalizeStrmFormats, StrmGenerateAction, StrmPathsField, type StrmMapping } from "./StrmPathsField";
+import { Pan115LibraryScanAction, Pan115ScanPathsField, type Pan115ScanPath } from "./Pan115ScanPathsField";
+import {
+  DEFAULT_STRM_FORMATS,
+  normalizeStrmExcludes,
+  normalizeStrmFormats,
+  StrmGenerateAction,
+  StrmPathsField,
+  type StrmMapping,
+} from "./StrmPathsField";
 
 type FieldKind = "text" | "textarea" | "bool" | "int" | "enum" | "json" | "sort" | "paths" | "strm-paths";
 type SettingOption = {
@@ -57,6 +64,8 @@ type SettingGroup = {
   pan115Login?: boolean;
   /** 该分组字段之后展示 strm 生成操作；它不是设置项，只读取当前映射草稿判断可用性。 */
   strmGenerate?: boolean;
+  /** 该分组字段之后展示 115 扫描入库操作；它不是设置项，只读取当前扫描目录草稿判断可用性。 */
+  pan115Scan?: boolean;
   /** 分组底部的备注，用于说明该组配置的适用范围。 */
   note?: string;
 };
@@ -433,7 +442,17 @@ const groups: SettingGroup[] = [
     code: "pan115",
     title: "115网盘",
     pan115Login: true,
+    pan115Scan: true,
     fields: [
+      {
+        key: "PAN115_COOKIE",
+        label: "115 Cookie",
+        kind: "textarea",
+        secret: true,
+        placeholder: "UID=...; CID=...; SEID=...",
+        description:
+          "115 生活事件与部分接口所需的 Cookie，可点上方「扫码获取 Cookie」自动填入，也可手动粘贴；凭据加密保存，清空后自动关闭 115 事件监听。",
+      },
       {
         key: "PAN115_SAVE_PATH",
         label: "离线下载保存目录",
@@ -480,6 +499,12 @@ const groups: SettingGroup[] = [
         kind: "text",
         placeholder: "http://192.168.1.10:3750",
         description: "strm 内容使用的播放地址前缀，留空时按本次生成的请求来源兜底；容器部署建议显式填写对外可访问地址。",
+      },
+      {
+        key: "PAN115_EVENT_ENABLE",
+        label: "115事件监听",
+        kind: "bool",
+        description: "保存后每 30 秒检查 115 文件变更，按上方映射目录、媒体格式、大小及排除规则生成或更新 STRM。未填写 Cookie 时不可开启，清空 Cookie 会自动关闭。",
       },
       {
         key: strmEmbyRefreshKey,
@@ -935,10 +960,26 @@ function parseStrmPaths(raw?: string): StrmMapping[] {
   if (!Array.isArray(parsed)) return [];
   return parsed.flatMap((item) => {
     if (!item || typeof item !== "object") return [];
-    const { kind, id, path, local_path: localPath, formats } = item as Record<string, unknown>;
+    const {
+      kind,
+      id,
+      path,
+      local_path: localPath,
+      formats,
+      min_size_mb: minSizeMB,
+      exclude,
+    } = item as Record<string, unknown>;
     if (kind !== "115" && kind !== "cd2") return [];
     if (typeof id !== "string" || typeof path !== "string" || typeof localPath !== "string") return [];
-    return [{ kind, id, path, local_path: localPath, formats: formats === undefined ? [...DEFAULT_STRM_FORMATS] : normalizeStrmFormats(formats) }];
+    return [{
+      kind,
+      id,
+      path,
+      local_path: localPath,
+      formats: formats === undefined ? [...DEFAULT_STRM_FORMATS] : normalizeStrmFormats(formats),
+      min_size_mb: typeof minSizeMB === "number" && Number.isFinite(minSizeMB) && minSizeMB > 0 ? Math.trunc(minSizeMB) : 0,
+      exclude: normalizeStrmExcludes(exclude),
+    }];
   });
 }
 
@@ -1065,6 +1106,7 @@ export function SettingsPage() {
     }
     const parsed = parseFilterDraft(values.DEFAULT_FILTER);
     if (!next.BYPASS_ENGINE) next.BYPASS_USE_PROXY = false;
+    if (!String(next.PAN115_COOKIE ?? "").trim()) next.PAN115_EVENT_ENABLE = false;
     setDraft(applyTranslationEngineGuard(next));
     setFilter(parsed.draft);
     setFilterUnknown(parsed.unknown);
@@ -1102,6 +1144,7 @@ export function SettingsPage() {
       ...previous,
       [key]: value,
       ...(key === "BYPASS_ENGINE" && value === "" ? { BYPASS_USE_PROXY: false } : {}),
+      ...(key === "PAN115_COOKIE" && !String(value).trim() ? { PAN115_EVENT_ENABLE: false } : {}),
     }));
 
   const selectCategory = (categoryCode: string) => {
@@ -1293,12 +1336,12 @@ export function SettingsPage() {
               <label className="settings-field" htmlFor={filterId("min_size")}>
                 <span className="settings-field-label">最小体积(MB)</span>
                 <div className="settings-input-with-unit">
-                  <InputNumber
+                  <Input type="number"
                     aria-label="最小体积(MB)"
                     id={filterId("min_size")}
-                    value={filter.min_size === "" ? undefined : Number(filter.min_size)}
+                    value={filter.min_size}
                     min={0}
-                    suffix="MB"
+                    addAfter="MB"
                     placeholder="请输入最小体积"
                     onChange={(value) =>
                       setFilter((previous) => ({
@@ -1312,12 +1355,12 @@ export function SettingsPage() {
               <label className="settings-field" htmlFor={filterId("max_size")}>
                 <span className="settings-field-label">最大体积(MB)</span>
                 <div className="settings-input-with-unit">
-                  <InputNumber
+                  <Input type="number"
                     aria-label="最大体积(MB)"
                     id={filterId("max_size")}
-                    value={filter.max_size === "" ? undefined : Number(filter.max_size)}
+                    value={filter.max_size}
                     min={0}
-                    suffix="MB"
+                    addAfter="MB"
                     placeholder="请输入最大体积"
                     onChange={(value) =>
                       setFilter((previous) => ({
@@ -1379,7 +1422,8 @@ export function SettingsPage() {
               uncheckedIcon={<IconClose />}
               aria-label={field.label}
               checked={draft[field.key] === true}
-              disabled={field.key === "BYPASS_USE_PROXY" && !draft.BYPASS_ENGINE}
+              disabled={(field.key === "BYPASS_USE_PROXY" && !draft.BYPASS_ENGINE) ||
+                (field.key === "PAN115_EVENT_ENABLE" && !String(draft.PAN115_COOKIE ?? "").trim())}
               onChange={(checked: boolean) => setValue(field.key, checked)}
             />
             {/* 文字位于开关右侧，原生 label 关联保留点击切换和禁用行为。 */}
@@ -1512,11 +1556,11 @@ export function SettingsPage() {
           />
         ) : field.kind === "int" ? (
           <div className="settings-input-with-unit">
-            <InputNumber
+            <Input type="number"
               id={filterId(field.key)}
-              value={value === "" ? undefined : Number(value)}
+              value={value}
               min={0}
-              suffix={field.unit}
+              addAfter={field.unit}
               placeholder={placeholder}
               onChange={(nextValue) => setValue(field.key, nextValue === undefined ? "" : String(nextValue))}
             />
@@ -1631,11 +1675,18 @@ export function SettingsPage() {
             ) : null}
             <section className="settings-group-section">
               <div className="settings-fields">
-                {activeGroup.pan115Login ? <Pan115LoginPanel /> : null}
+                {activeGroup.pan115Login ? (
+                  <Pan115LoginPanel onCookie={(cookie) => setValue("PAN115_COOKIE", cookie)} />
+                ) : null}
                 {renderFieldSequence(activeFields)}
                 {activeGroup.strmGenerate ? (
                   <div className="settings-field settings-field-wide">
                     <StrmGenerateAction value={strmPaths} />
+                  </div>
+                ) : null}
+                {activeGroup.pan115Scan ? (
+                  <div className="settings-field settings-field-wide">
+                    <Pan115LibraryScanAction value={scanPaths} />
                   </div>
                 ) : null}
                 {activeTest ? (

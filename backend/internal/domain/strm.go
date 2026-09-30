@@ -7,6 +7,22 @@ const (
 	StrmKindCloudDrive2 = "cd2"
 )
 
+// 排除关键字的匹配方式。四种写法共用同一份匹配实现，取值进入设置项 STRM_PATHS，
+// 由前端渲染成「等于:xxx / 前缀:xxx* / 后缀:*xxx / 包含:*xxx*」。
+const (
+	StrmExcludeModeEquals   = "equals"
+	StrmExcludeModePrefix   = "prefix"
+	StrmExcludeModeSuffix   = "suffix"
+	StrmExcludeModeContains = "contains"
+)
+
+// StrmExcludeKeyword 是一条排除规则：Mode 决定 Value 的匹配方式，匹配一律不区分大小写。
+// Value 为空串的规则在保存时被丢弃，因此运行期不必再判空。
+type StrmExcludeKeyword struct {
+	Mode  string `json:"mode"`
+	Value string `json:"value"`
+}
+
 // StrmMapping 是一条「网盘目录 → 本地 strm 目录」映射，来自设置项 STRM_PATHS。
 // ID 是网盘目录标识（115 为目录 ID，CloudDrive2 为目录绝对路径），是扫描与播放时的权威依据；
 // Path 是网盘目录展示路径，只用于界面展示。
@@ -16,6 +32,11 @@ type StrmMapping struct {
 	Path      string   `json:"path"`
 	LocalPath string   `json:"local_path"`
 	Formats   []string `json:"formats"`
+	// MinSizeMB 是生成 strm 的最小视频体积（MB）；0 表示不限制，用于跳过样本、预告片等小文件。
+	MinSizeMB int `json:"min_size_mb"`
+	// Exclude 是排除规则：文件或文件夹名命中任一规则时跳过，不区分大小写。
+	// 命中文件夹时整棵子树跳过，命中文件时该文件不生成 strm。
+	Exclude []StrmExcludeKeyword `json:"exclude"`
 }
 
 // StrmProxyTarget 描述一次需要服务端转发的播放请求。

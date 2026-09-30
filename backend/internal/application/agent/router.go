@@ -60,14 +60,14 @@ func (r *Router) Handle(ctx context.Context, msg ports.InboundMessage) (ports.Re
 	}
 	// 已入库番号优先返回状态卡片：订阅与下载是确定性业务，不经过 AI，也不消耗模型额度。
 	// 未命中的番号保持原有分流（交给 Agent 对话或提示），避免把普通英文文本误判成番号。
-	if LooksLikeCode(text) {
+	if domain.LooksLikeCode(text) {
 		if reply, matched := cardForKnownCode(ctx, r.deps, text); matched {
 			return reply, nil
 		}
 	}
 	if r.orchestrator != nil && r.orchestrator.Enabled(ctx) {
 		if !r.agentChatEnabled(ctx, msg.Channel) {
-			if LooksLikeCode(text) {
+			if domain.LooksLikeCode(text) {
 				return cardForCode(ctx, r.deps, text), nil
 			}
 			return ports.Reply{Text: agentChatDisabled}, nil
@@ -78,13 +78,13 @@ func (r *Router) Handle(ctx context.Context, msg ports.InboundMessage) (ports.Re
 		}
 		if !errors.Is(err, ErrAgentDisabled) {
 			logging.Error(logging.CategoryAgent, "Agent 对话失败，降级处理", "channel", msg.Channel, "error", err.Error())
-			if LooksLikeCode(text) {
+			if domain.LooksLikeCode(text) {
 				return cardForCode(ctx, r.deps, text), nil
 			}
 			return ports.Reply{Text: "对话失败：" + err.Error()}, nil
 		}
 	}
-	if LooksLikeCode(text) {
+	if domain.LooksLikeCode(text) {
 		return cardForCode(ctx, r.deps, text), nil
 	}
 	return ports.Reply{Text: r.disabledHelp()}, nil
@@ -93,7 +93,7 @@ func (r *Router) Handle(ctx context.Context, msg ports.InboundMessage) (ports.Re
 // CardFailed 是卡片投递失败时的降级入口：番号消息回到「直接订阅」的原有行为，
 // 保证渠道不支持卡片时用户仍能完成订阅，而不是停在一张发不出去的卡片上。
 func (r *Router) CardFailed(ctx context.Context, msg ports.InboundMessage) string {
-	if LooksLikeCode(msg.Text) {
+	if domain.LooksLikeCode(msg.Text) {
 		return SubscribeByCode(ctx, r.deps, msg.Text)
 	}
 	return "卡片消息发送失败，请稍后重试。"

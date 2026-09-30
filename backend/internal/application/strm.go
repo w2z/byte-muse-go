@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"bytemuse/backend/internal/domain"
@@ -27,9 +28,9 @@ var (
 	ErrStrmNotConfigured = errors.New("strm 尚未配置")
 )
 
-// strmListLimit 是递归读取 115 目录时每页的条目数；取协议上限以减少请求次数。
 const (
-	strmListLimit = 1000
+	// strmListLimit 是递归读取 115 目录时每页的条目数；与扫描入库共用 115 单页上限，减少请求次数。
+	strmListLimit = pan115FilePageLimit
 	// strmRootDefault 是容器内 strm 根目录的默认挂载点，与 README、Compose 的 /strm 保持一致。
 	strmRootDefault = "/strm"
 	// strmRequestTimeout 是 strm 服务对外请求（Emby 媒体库刷新）的超时。
@@ -65,9 +66,71 @@ type strmSourceFile struct {
 	Directory string
 }
 
+// strmFileFilter 是递归扫描网盘目录时的过滤条件：媒体格式、最小体积与排除关键字。
+// 生成 strm 用映射里的完整条件；扫描入库只关心格式，因此用同一份实现传入不同条件，
+// 避免「什么算视频」与「跳过哪些名称」在两条链路上各写一套判定。
+type strmFileFilter struct {
+	formats   []string
+	minSizeMB int
+	exclude   []domain.StrmExcludeKeyword
+}
+
+// newStrmFileFilter 由一条映射构造过滤器；formats 与 exclude 已由 parseStrmMappings 规范化。
+func newStrmFileFilter(mapping domain.StrmMapping) strmFileFilter {
+	return strmFileFilter{formats: mapping.Formats, minSizeMB: mapping.MinSizeMB, exclude: mapping.Exclude}
+}
+
+// skipName 判断名称是否命中排除规则。四条规则共用这一份实现，匹配一律不区分大小写；
+// 文件夹名命中时调用方会整棵子树跳过。
+func (f strmFileFilter) skipName(name string) bool {
+	if len(f.exclude) == 0 {
+		return false
+	}
+	lower := strings.ToLower(strings.TrimSpace(name))
+	if lower == "" {
+		return false
+	}
+	for _, rule := range f.exclude {
+		value := strings.ToLower(rule.Value)
+		switch rule.Mode {
+		case domain.StrmExcludeModeEquals:
+			if lower == value {
+				return true
+			}
+		case domain.StrmExcludeModePrefix:
+			if strings.HasPrefix(lower, value) {
+				return true
+			}
+		case domain.StrmExcludeModeSuffix:
+			if strings.HasSuffix(lower, value) {
+				return true
+			}
+		default:
+			if strings.Contains(lower, value) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// acceptFile 判断一个文件是否应生成 strm：格式匹配、未命中排除关键字、体积不小于下限。
+// sizeBytes 为 0 表示网盘未返回体积，此时不按体积过滤，避免把整个目录误判成小文件而全部跳过。
+func (f strmFileFilter) acceptFile(name string, sizeBytes int64) bool {
+	if !isStrmMedia(name, f.formats) || f.skipName(name) {
+		return false
+	}
+	if f.minSizeMB <= 0 || sizeBytes <= 0 {
+		return true
+	}
+	return sizeBytes >= int64(f.minSizeMB)*1024*1024
+}
+
 // StrmService 把网盘目录镜像成本地 strm 文件，并为播放请求解析真实地址。
 // 目录浏览始终以固定 /strm 根目录为界，调用方无法访问根目录以外的路径。
 type StrmService struct {
+	// scanMu 串行化手动与事件生成，防止并发写入同一映射。
+	scanMu sync.Mutex
 	// root 是生产环境固定的 /strm；测试可在同包内替换为临时目录隔离文件。
 	root     string
 	pan115   strmPan115API
@@ -196,6 +259,12 @@ func (s *StrmService) CloudDriveDirectories(ctx context.Context, directory strin
 // Scan 按 STRM_PATHS 配置把网盘目录镜像成本地 strm 文件，并按开关触发 Emby 刷新。
 // playBase 是调用方观测到的 ByteMuse 对外基址，仅在未配置 STRM_PLAY_BASE 时兜底。
 func (s *StrmService) Scan(ctx context.Context, playBase string) (domain.StrmScanResult, error) {
+	reportScanProgress(ctx, "waiting", 0, 0, "")
+	s.scanMu.Lock()
+	defer s.scanMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return domain.StrmScanResult{}, err
+	}
 	values, err := s.settings(ctx)
 	if err != nil {
 		return domain.StrmScanResult{}, fmt.Errorf("读取 strm 配置失败: %w", err)
@@ -216,14 +285,36 @@ func (s *StrmService) Scan(ctx context.Context, playBase string) (domain.StrmSca
 		return domain.StrmScanResult{}, fmt.Errorf("%w: 缺少 ByteMuse 访问地址，无法生成 strm 内容", ErrStrmNotConfigured)
 	}
 	result := domain.StrmScanResult{Mappings: make([]domain.StrmScanMapping, 0, len(mappings))}
+	total, processed := 0, 0
 	for _, mapping := range mappings {
-		entry := s.scanMapping(ctx, root, mapping, base)
+		if err := ctx.Err(); err != nil {
+			return result, err
+		}
+		reportScanProgress(ctx, "discovering", processed, total, mapping.Path)
+		discoveryCtx := withScanDiscovery(ctx, func() {
+			total++
+			reportScanProgress(ctx, "discovering", processed, total, mapping.Path)
+		})
+		files, scanErr := s.collectMappingFiles(discoveryCtx, mapping)
+		if err := ctx.Err(); err != nil {
+			return result, err
+		}
+		reportScanProgress(ctx, "processing", processed, total, mapping.Path)
+		entry := s.scanMapping(ctx, root, mapping, base, files, scanErr, func() {
+			processed++
+			reportScanProgress(ctx, "processing", processed, total, mapping.Path)
+		})
 		result.Mappings = append(result.Mappings, entry)
 		result.Files += entry.Files
 		result.Created += entry.Created
 		result.Failed += entry.Failed
 	}
+	reportScanProgress(ctx, "finalizing", processed, total, "")
 	result.Emby = s.refreshEmby(ctx, values)
+	if err := ctx.Err(); err != nil {
+		return result, err
+	}
+	reportScanProgress(ctx, "completed", processed, total, "")
 	return result, nil
 }
 
@@ -266,48 +357,62 @@ func (s *StrmService) PlayURL(ctx context.Context, kind, fileID, userAgent strin
 	}
 }
 
-// scanMapping 生成一条映射的全部 strm 文件；单个映射失败不影响其他映射。
-func (s *StrmService) scanMapping(ctx context.Context, root string, mapping domain.StrmMapping, base string) domain.StrmScanMapping {
-	entry := domain.StrmScanMapping{Kind: mapping.Kind, Path: mapping.Path, LocalPath: mapping.LocalPath}
-	target, _, err := resolveStrmPath(root, mapping.LocalPath)
-	if err != nil {
-		entry.Message = err.Error()
-		return entry
-	}
-	var files []strmSourceFile
+// collectMappingFiles 统计一条映射的媒体文件，沿用相同过滤规则；目录失败时不处理不完整清单。
+func (s *StrmService) collectMappingFiles(ctx context.Context, mapping domain.StrmMapping) ([]strmSourceFile, error) {
+	filter := newStrmFileFilter(mapping)
 	switch mapping.Kind {
 	case domain.StrmKindPan115:
 		if s.pan115 == nil {
-			entry.Message = "115 网盘服务尚未就绪"
-			return entry
+			return nil, errors.New("115 网盘服务尚未就绪")
 		}
-		files, err = s.walkPan115(ctx, mapping.ID, mapping.Formats)
+		return walkPan115Files(ctx, s.pan115, mapping.ID, filter)
 	case domain.StrmKindCloudDrive2:
 		if s.cloud == nil || !s.cloud.Configured(ctx) {
-			entry.Message = "CloudDrive2 尚未配置"
-			return entry
+			return nil, errors.New("CloudDrive2 尚未配置")
 		}
-		files, err = s.walkCloudDrive(ctx, mapping.ID, mapping.Formats)
+		return s.walkCloudDrive(ctx, mapping.ID, filter)
 	default:
-		err = fmt.Errorf("不支持的网盘类型 %q", mapping.Kind)
+		return nil, fmt.Errorf("不支持的网盘类型 %q", mapping.Kind)
 	}
+}
+
+// scanMapping 处理已经统计的文件清单；成功、未变化和失败均计入已处理数。
+func (s *StrmService) scanMapping(ctx context.Context, root string, mapping domain.StrmMapping, base string, files []strmSourceFile, err error, advance func()) domain.StrmScanMapping {
+	entry := domain.StrmScanMapping{Kind: mapping.Kind, Path: mapping.Path, LocalPath: mapping.LocalPath}
 	if err != nil {
 		entry.Message = err.Error()
+		for range files {
+			advance()
+		}
 		return entry
 	}
-	if err := os.MkdirAll(target, 0o755); err != nil {
+	target, _, err := resolveStrmPath(root, mapping.LocalPath)
+	if err == nil {
+		err = os.MkdirAll(target, 0o755)
+	}
+	if err != nil {
 		entry.Message = "创建本地 strm 目录失败：" + err.Error()
+		entry.Files, entry.Failed = len(files), len(files)
+		for range files {
+			advance()
+		}
 		return entry
 	}
 	for _, file := range files {
+		if err := ctx.Err(); err != nil {
+			entry.Message = err.Error()
+			return entry
+		}
 		entry.Files++
 		if strings.ContainsAny(file.Name, `/\`) {
 			entry.Failed++
+			advance()
 			continue
 		}
 		absolute := filepath.Join(target, filepath.FromSlash(file.Directory), file.Name+".strm")
 		if !withinStrmRoot(root, absolute) {
 			entry.Failed++
+			advance()
 			continue
 		}
 		created, changed, err := writeStrmFile(absolute, strmPlayURL(base, mapping.Kind, file.ID)+"\n")
@@ -319,31 +424,46 @@ func (s *StrmService) scanMapping(ctx context.Context, root string, mapping doma
 		case !changed:
 			entry.Unchanged++
 		}
+		advance()
 	}
 	return entry
 }
 
-// walkPan115 递归收集 115 目录下的媒体文件；115 的目录标识就是播放标识。
-func (s *StrmService) walkPan115(ctx context.Context, rootID string, formats []string) ([]strmSourceFile, error) {
+// pan115FileAPI 是递归遍历 115 目录所需的最小能力；生成 strm 与扫描入库都只依赖它。
+type pan115FileAPI interface {
+	Files(ctx context.Context, directoryID string, offset, limit int) (domain.Pan115FilePage, error)
+}
+
+// walkPan115Files 递归收集 115 目录下通过 filter 的媒体文件；115 的目录标识就是播放标识。
+// 每页固定读取 pan115FilePageLimit 条并按 HasMore 翻页，返回的 Directory 是相对扫描根目录的路径。
+// 生成 strm 与扫描入库共用这一份递归实现，避免两条链路的分页与格式过滤规则漂移。
+func walkPan115Files(ctx context.Context, api pan115FileAPI, rootID string, filter strmFileFilter) ([]strmSourceFile, error) {
 	var collected []strmSourceFile
 	var walk func(directoryID, relative string) error
 	walk = func(directoryID, relative string) error {
 		for offset := 0; ; {
-			page, err := s.pan115.Files(ctx, directoryID, offset, strmListLimit)
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			page, err := api.Files(ctx, directoryID, offset, strmListLimit)
 			if err != nil {
 				return err
 			}
 			for _, file := range page.Files {
+				if filter.skipName(file.Name) {
+					continue
+				}
 				if file.IsDirectory {
 					if err := walk(file.ID, joinStrmRelative(relative, file.Name)); err != nil {
 						return err
 					}
 					continue
 				}
-				if !isStrmMedia(file.Name, formats) {
+				if !filter.acceptFile(file.Name, file.Size) {
 					continue
 				}
 				collected = append(collected, strmSourceFile{ID: file.ID, Name: file.Name, Directory: relative})
+				reportScanDiscovery(ctx)
 			}
 			if !page.HasMore || len(page.Files) == 0 {
 				return nil
@@ -351,15 +471,19 @@ func (s *StrmService) walkPan115(ctx context.Context, rootID string, formats []s
 			offset += len(page.Files)
 		}
 	}
-	return collected, walk(strings.TrimSpace(rootID), "")
+	err := walk(strings.TrimSpace(rootID), "")
+	return collected, err
 }
 
 // walkCloudDrive 递归收集 CloudDrive2 目录下的媒体文件。
 // CD2 的条目 ID 不保证可直接播放，这里统一用绝对路径作为播放标识。
-func (s *StrmService) walkCloudDrive(ctx context.Context, rootPath string, formats []string) ([]strmSourceFile, error) {
+func (s *StrmService) walkCloudDrive(ctx context.Context, rootPath string, filter strmFileFilter) ([]strmSourceFile, error) {
 	var collected []strmSourceFile
 	var walk func(directory, relative string) error
 	walk = func(directory, relative string) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		entries, err := s.cloud.ListSubFiles(ctx, directory)
 		if err != nil {
 			return err
@@ -369,20 +493,25 @@ func (s *StrmService) walkCloudDrive(ctx context.Context, rootPath string, forma
 			if full == "" {
 				full = joinCloudPath(directory, item.Name)
 			}
+			if filter.skipName(item.Name) {
+				continue
+			}
 			if item.Directory {
 				if err := walk(full, joinStrmRelative(relative, item.Name)); err != nil {
 					return err
 				}
 				continue
 			}
-			if !isStrmMedia(item.Name, formats) {
+			if !filter.acceptFile(item.Name, item.Size) {
 				continue
 			}
 			collected = append(collected, strmSourceFile{ID: full, Name: item.Name, Directory: relative})
+			reportScanDiscovery(ctx)
 		}
 		return nil
 	}
-	return collected, walk(strings.TrimSpace(rootPath), "")
+	err := walk(strings.TrimSpace(rootPath), "")
+	return collected, err
 }
 
 // refreshEmby 按设置触发一次 Emby 媒体库刷新；未开启或未配置时不做任何外部请求。
@@ -452,6 +581,14 @@ func parseStrmMappings(raw string) ([]domain.StrmMapping, error) {
 		if len(mapping.Formats) == 0 {
 			return nil, fmt.Errorf("第 %d 项至少需要选择一种生成格式", index+1)
 		}
+		if mapping.MinSizeMB < 0 {
+			return nil, fmt.Errorf("第 %d 项的最小视频大小不能为负数", index+1)
+		}
+		excludes, err := normalizeStrmExcludes(mapping.Exclude)
+		if err != nil {
+			return nil, fmt.Errorf("第 %d 项%w", index+1, err)
+		}
+		mapping.Exclude = excludes
 		key := mapping.Kind + "\x00" + mapping.ID + "\x00" + mapping.LocalPath
 		if _, ok := seen[key]; ok {
 			return nil, fmt.Errorf("第 %d 项与前面的映射重复", index+1)
@@ -463,6 +600,34 @@ func parseStrmMappings(raw string) ([]domain.StrmMapping, error) {
 		seenLocalPaths[mapping.LocalPath] = struct{}{}
 	}
 	return mappings, nil
+}
+
+// normalizeStrmExcludes 规范化排除规则：统一匹配方式、去空白、丢弃空关键字，并按「方式 + 小写关键字」去重。
+// 关键字保留用户输入的大小写用于回显，匹配时才转小写，因此这里的小写只用于判重。
+// 匹配方式不受支持时返回错误，避免保存出运行期无法解释的规则。
+func normalizeStrmExcludes(excludes []domain.StrmExcludeKeyword) ([]domain.StrmExcludeKeyword, error) {
+	seen := make(map[string]struct{}, len(excludes))
+	result := make([]domain.StrmExcludeKeyword, 0, len(excludes))
+	for _, exclude := range excludes {
+		mode := strings.ToLower(strings.TrimSpace(exclude.Mode))
+		switch mode {
+		case domain.StrmExcludeModeEquals, domain.StrmExcludeModePrefix,
+			domain.StrmExcludeModeSuffix, domain.StrmExcludeModeContains:
+		default:
+			return nil, fmt.Errorf("的排除规则匹配方式 %q 不受支持", exclude.Mode)
+		}
+		value := strings.TrimSpace(exclude.Value)
+		if value == "" {
+			continue
+		}
+		key := mode + "\x00" + strings.ToLower(value)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		result = append(result, domain.StrmExcludeKeyword{Mode: mode, Value: value})
+	}
+	return result, nil
 }
 
 // normalizeStrmFormats 规范化格式输入，保证扩展名不受大小写、空格和前导点影响。

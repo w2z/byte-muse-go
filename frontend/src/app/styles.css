@@ -578,8 +578,6 @@ button.code-card-still-cell:hover img { opacity: .85; }
 }
 .settings-filter-row > .arco-switch { flex: 0 0 auto; margin: 0; }
 .settings-input-with-unit { display: block; }
-.settings-input-with-unit > .arco-input-number { width: 100%; }
-.settings-input-with-unit .arco-input-number-suffix { color: var(--ink-2); font-size: var(--control-font-size); }
 .settings-option-radio { display: flex; flex-direction: column; gap: 8px; }
 .settings-option-radio .arco-radio-group { display: flex; flex-wrap: wrap; gap: 8px var(--settings-radio-gap, 20px); }
 .settings-main-site-options { --settings-radio-gap: 8px; }
@@ -596,6 +594,8 @@ button.code-card-still-cell:hover img { opacity: .85; }
 /* 115 网盘账号面板：二维码、账号信息与操作按钮纵向排列，沿用字段间的 8px/12px 间距。 */
 .settings-pan115-block { display: flex; min-width: 0; flex-direction: column; gap: 12px; }
 .settings-pan115-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+/* 扫码渠道选择：固定宽度，与右侧按钮同排；不随描述文字换行而伸缩。 */
+.settings-pan115-channel { flex: 0 0 auto; width: 168px; }
 .settings-pan115-qrcode { width: 200px; height: 200px; padding: 8px; background: #fff; border: 1px solid var(--line); border-radius: var(--content-radius); }
 .settings-pan115-account { display: flex; min-width: 0; align-items: center; gap: 12px; }
 .settings-pan115-avatar { width: 44px; height: 44px; flex: 0 0 auto; border-radius: 50%; object-fit: cover; }
@@ -682,8 +682,16 @@ button.code-card-still-cell:hover img { opacity: .85; }
 .settings-strm-scan { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 /* strm 生成操作：放在分组字段之后，按钮与结果说明各自一行，间距与字段内部一致。 */
 .settings-strm-generate { display: flex; min-width: 0; flex-direction: column; gap: 8px; }
+.settings-scan-progress { display: flex; min-width: 0; flex-direction: column; gap: 8px; width: 100%; }
+.settings-scan-progress-summary { display: flex; flex-wrap: wrap; gap: 8px 20px; font-size: 14px; }
+.settings-scan-progress-current { overflow-wrap: anywhere; }
 .settings-strm-picker-create { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .settings-strm-picker-create > .arco-input { flex: 1 1 160px; min-width: 0; }
+/* 排除规则录入：贴合式组合输入框（左前置匹配方式下拉 + 关键字输入框）与「添加」按钮同一行，规则标签另起一行自动换行。 */
+.settings-strm-exclude { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.settings-strm-exclude > .arco-input-group-wrapper { flex: 1 1 200px; min-width: 0; }
+.settings-strm-exclude .arco-input-group-addbefore .settings-strm-exclude-mode { width: 96px; }
+.settings-strm-exclude-tags { display: flex; flex-wrap: wrap; gap: 8px; }
 /* 底部操作栏：sticky 贴在滚动容器底部（页面撑满可视高度时即视口底部）。
    横向用负外边距抵消内容区的 20px 左右内边距，拉通铺满整个内容区宽度 ——
    展开 40px 后正好等于内容区可视宽度（clientWidth 已扣掉纵向滚动条），不会撑出横向滚动。

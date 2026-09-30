@@ -41,6 +41,29 @@ func pan115ScanPathsSettingMigration(dialect Dialect) Migration {
 	return Migration{Version: 27, Name: "pan115_scan_paths_setting", Statements: []string{setting}}
 }
 
+// pan115CookieSettingMigration 把 115 生活事件凭据并入统一的 PAN115_COOKIE。
+// 扫码换取与手动填写只维护这一份 Cookie，事件监听与后续能力共用同一凭据；
+// 升级时把已加密的旧值原样搬到新键（同一 SESSION_SECRET，密文可直接复用），再删除旧键，
+// 避免用户升级后需要重新填写。只增删配置行，不改表结构；重复执行安全。
+func pan115CookieSettingMigration(dialect Dialect) Migration {
+	now := currentTimestampExpression(dialect)
+	// 先按旧键搬运密文，再补空默认值，最后删除旧键；三步都幂等。
+	copyValue := fmt.Sprintf("INSERT INTO app_settings (setting_key, setting_value, is_secret, updated_at) SELECT %s, setting_value, is_secret, updated_at FROM app_settings WHERE setting_key = %s AND NOT EXISTS (SELECT 1 FROM app_settings WHERE setting_key = %s)",
+		sqlLiteral("PAN115_COOKIE"), sqlLiteral("PAN115_EVENT_COOKIE"), sqlLiteral("PAN115_COOKIE"))
+	defaultValue := fmt.Sprintf("INSERT INTO app_settings (setting_key, setting_value, is_secret, updated_at) VALUES (%s, %s, TRUE, %s)",
+		sqlLiteral("PAN115_COOKIE"), sqlLiteral(""), now)
+	if dialect == DialectMySQL {
+		defaultValue = strings.Replace(defaultValue, "INSERT INTO", "INSERT IGNORE INTO", 1)
+	} else {
+		defaultValue += " ON CONFLICT (setting_key) DO NOTHING"
+	}
+	return Migration{Version: 35, Name: "pan115_cookie_setting", Statements: []string{
+		copyValue,
+		defaultValue,
+		"DELETE FROM app_settings WHERE setting_key = 'PAN115_EVENT_COOKIE'",
+	}}
+}
+
 // Pan115AccountRepository 读写 115 账号绑定；令牌密文由应用层负责加解密。
 type Pan115AccountRepository struct {
 	db      *sql.DB

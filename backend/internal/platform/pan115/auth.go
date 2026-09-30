@@ -69,7 +69,17 @@ func (c *Client) BeginLogin(ctx context.Context) (*Login, error) {
 	if data.UID == "" || data.Time == 0 || data.Sign == "" {
 		return nil, fmt.Errorf("115 授权响应缺少设备码字段")
 	}
-	response, err := c.do(ctx, http.MethodGet, c.qrcode+"/api/1.0/web/1.0/qrcode?uid="+url.QueryEscape(data.UID), "", nil)
+	image, err := c.qrCodeImage(ctx, CookieClientWeb, data.UID)
+	if err != nil {
+		return nil, err
+	}
+	return &Login{QRCode: image, uid: data.UID, issuedAt: data.Time, sign: data.Sign, verifier: verifier}, nil
+}
+
+// qrCodeImage 下载一次登录二维码图片。
+// 令牌扫码与 Cookie 扫码都使用 115 的 qrcode 图片入口，状态码、大小上限与内容类型校验集中在这里。
+func (c *Client) qrCodeImage(ctx context.Context, app, uid string) ([]byte, error) {
+	response, err := c.do(ctx, http.MethodGet, c.qrcode+"/api/1.0/"+app+"/1.0/qrcode?uid="+url.QueryEscape(uid), "", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -85,11 +95,10 @@ func (c *Client) BeginLogin(ctx context.Context) (*Login, error) {
 	if http.DetectContentType(image) != "image/png" {
 		return nil, fmt.Errorf("115 未返回登录二维码图片")
 	}
-	return &Login{QRCode: image, uid: data.UID, issuedAt: data.Time, sign: data.Sign, verifier: verifier}, nil
+	return image, nil
 }
 
-// LoginStatus 查询一次扫码状态。uid/time/sign 由 do 作为查询参数提交，
-// 未识别的状态一律按「等待中」处理，避免把仍在进行的登录误判为失败；超时由调用方控制。
+// LoginStatus 查询一次扫码状态。uid/time/sign 由 do 作为查询参数提交；超时由调用方控制。
 func (c *Client) LoginStatus(ctx context.Context, login *Login) (LoginState, error) {
 	data, err := authRequest[struct {
 		Status *int `json:"status"`
@@ -101,23 +110,7 @@ func (c *Client) LoginStatus(ctx context.Context, login *Login) (LoginState, err
 	if err != nil {
 		return "", err
 	}
-	if data.Status == nil {
-		return LoginWaiting, nil
-	}
-	switch *data.Status {
-	case 0:
-		return LoginWaiting, nil
-	case 1:
-		return LoginScanned, nil
-	case 2:
-		return LoginAuthorized, nil
-	case -1:
-		return LoginExpired, nil
-	case -2:
-		return LoginCanceled, nil
-	default:
-		return LoginWaiting, nil
-	}
+	return loginStateFromCode(data.Status), nil
 }
 
 // ExchangeToken 用已授权的设备码换取访问令牌。

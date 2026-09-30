@@ -95,6 +95,7 @@ type Client struct {
 	passport string
 	qrcode   string
 	api      string
+	life     string
 
 	mu       sync.Mutex
 	nextCall time.Time
@@ -116,6 +117,7 @@ func New(client *http.Client) *Client {
 		passport: passportBase,
 		qrcode:   qrcodeBase,
 		api:      apiBase,
+		life:     "https://webapi.115.com",
 	}
 }
 

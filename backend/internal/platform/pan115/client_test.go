@@ -391,3 +391,139 @@ func TestAPIErrorCarriesProviderMessage(t *testing.T) {
 		t.Fatalf("业务错误 = %+v", apiErr)
 	}
 }
+
+// TestNormalizeCookieClientType 验证扫码渠道归一化：合法值原样保留，空值与未知值回落默认渠道。
+func TestNormalizeCookieClientType(t *testing.T) {
+	for _, value := range cookieClientTypes {
+		if got := NormalizeCookieClientType(value); got != value {
+			t.Fatalf("渠道 %q 归一化 = %q", value, got)
+		}
+	}
+	for _, value := range []string{"", "  ", "unknown", "WEB"} {
+		if got := NormalizeCookieClientType(value); got != CookieClientAlipayMini {
+			t.Fatalf("渠道 %q 归一化 = %q，期望 %q", value, got, CookieClientAlipayMini)
+		}
+	}
+}
+
+// TestBeginCookieLoginUsesWebTokenAndKeepsChannel 验证二维码始终取自 web 入口，
+// 渠道只记录在会话上，供换取 Cookie 时选择客户端。
+func TestBeginCookieLoginUsesWebTokenAndKeepsChannel(t *testing.T) {
+	var tokenPath string
+	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/api/1.0/web/1.0/token/"):
+			tokenPath = r.URL.Path
+			writeJSON(t, w, `{"state":1,"data":{"uid":"uid-1","time":1700000000,"sign":"sign-1"}}`)
+		case strings.HasSuffix(r.URL.Path, "/api/1.0/web/1.0/qrcode"):
+			w.Header().Set("Content-Type", "image/png")
+			if _, err := w.Write(pngSignature); err != nil {
+				t.Errorf("写入二维码失败: %v", err)
+			}
+		default:
+			t.Errorf("未预期的请求路径 %s", r.URL.Path)
+		}
+	})
+	login, err := client.BeginCookieLogin(context.Background(), CookieClientIPad)
+	if err != nil {
+		t.Fatalf("申请 Cookie 扫码失败: %v", err)
+	}
+	if tokenPath == "" {
+		t.Fatal("未使用 web 入口申请扫码令牌")
+	}
+	if string(login.QRCode) != string(pngSignature) {
+		t.Fatalf("二维码内容 = %v，期望 PNG 头", login.QRCode)
+	}
+	if login.clientType != CookieClientIPad {
+		t.Fatalf("会话渠道 = %q，期望 %q", login.clientType, CookieClientIPad)
+	}
+	if login.uid != "uid-1" || login.issuedAt != "1700000000" || login.sign != "sign-1" {
+		t.Fatalf("扫码参数 = %+v", login)
+	}
+}
+
+// TestBeginCookieLoginRejectsIncompleteToken 验证扫码令牌字段缺失时不产出无法使用的会话。
+func TestBeginCookieLoginRejectsIncompleteToken(t *testing.T) {
+	client := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(t, w, `{"state":1,"data":{"uid":"uid-1"}}`)
+	})
+	if _, err := client.BeginCookieLogin(context.Background(), CookieClientWeb); err == nil {
+		t.Fatal("缺少扫码参数时应当报错")
+	}
+}
+
+// TestCookieLoginStatusMapsProviderCodes 验证 Cookie 扫码状态映射，
+// 并把 115 用 key invalid 表达的过期响应视为二维码过期而不是上游故障。
+func TestCookieLoginStatusMapsProviderCodes(t *testing.T) {
+	login := &CookieLogin{uid: "uid-1", issuedAt: "1700000000", sign: "sign-1", clientType: CookieClientWeb}
+	cases := []struct {
+		body string
+		want LoginState
+	}{
+		{`{"state":1,"data":{"status":0}}`, LoginWaiting},
+		{`{"state":1,"data":{"status":1}}`, LoginScanned},
+		{`{"state":1,"data":{"status":2}}`, LoginAuthorized},
+		{`{"state":1,"data":{"status":-1}}`, LoginExpired},
+		{`{"state":1,"data":{"status":-2}}`, LoginCanceled},
+	}
+	for _, testCase := range cases {
+		client := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+			writeJSON(t, w, testCase.body)
+		})
+		got, err := client.CookieLoginStatus(context.Background(), login)
+		if err != nil {
+			t.Fatalf("查询 %s 失败: %v", testCase.body, err)
+		}
+		if got != testCase.want {
+			t.Fatalf("状态 %s = %q，期望 %q", testCase.body, got, testCase.want)
+		}
+	}
+
+	invalid := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(t, w, `{"state":0,"message":"key invalid"}`)
+	})
+	got, err := invalid.CookieLoginStatus(context.Background(), login)
+	if err != nil {
+		t.Fatalf("过期响应不应报错: %v", err)
+	}
+	if got != LoginExpired {
+		t.Fatalf("key invalid 状态 = %q，期望 %q", got, LoginExpired)
+	}
+}
+
+// TestExchangeCookieFormatsAndSorts 验证 Cookie 按名排序拼接、丢弃空项，并由渠道决定换取端点。
+func TestExchangeCookieFormatsAndSorts(t *testing.T) {
+	var gotPath, gotAccount string
+	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		if err := r.ParseForm(); err != nil {
+			t.Errorf("解析表单失败: %v", err)
+		}
+		gotAccount = r.PostForm.Get("account")
+		writeJSON(t, w, `{"state":true,"data":{"cookie":{"SEID":"seid","UID":"123_abc","CID":"cid","":"","KID":""}}}`)
+	})
+	login := &CookieLogin{uid: "uid-9", issuedAt: "1", sign: "s", clientType: CookieClientIOS}
+	cookie, err := client.ExchangeCookie(context.Background(), login)
+	if err != nil {
+		t.Fatalf("换取 Cookie 失败: %v", err)
+	}
+	if gotPath != "/app/1.0/115ios/1.0/login/qrcode/" {
+		t.Fatalf("换取端点 = %q", gotPath)
+	}
+	if gotAccount != "uid-9" {
+		t.Fatalf("account 参数 = %q", gotAccount)
+	}
+	if cookie != "CID=cid; SEID=seid; UID=123_abc" {
+		t.Fatalf("Cookie = %q", cookie)
+	}
+}
+
+// TestExchangeCookieRejectsEmptyPayload 验证 115 未返回 Cookie 时不产出空凭据。
+func TestExchangeCookieRejectsEmptyPayload(t *testing.T) {
+	client := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(t, w, `{"state":true,"data":{"cookie":{}}}`)
+	})
+	if _, err := client.ExchangeCookie(context.Background(), &CookieLogin{uid: "u", clientType: CookieClientWeb}); err == nil {
+		t.Fatal("空 Cookie 应当报错")
+	}
+}

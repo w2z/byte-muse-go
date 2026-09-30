@@ -674,7 +674,7 @@ paths:
     put:
       operationId: updateSystemSettings
       summary: 保存系统设置
-      description: 原子保存当前分组；密钥与 Cookie 分别加密保存，切换类型不清除隐藏凭据。AGENT_SYSTEM_PROMPT 和 TRANSLATION_PROMPT 各允许最多 61440 个 UTF-8 字节，其他值最多 8192 字节；按去除首尾空白前的输入计算，超限返回 400 invalid_setting，message 包含字段名、字节上限和当前字节数，整批不写入且不截断。本地 strm 根目录固定为 /strm，不接受 STRM_ROOT 配置。
+      description: 原子保存当前分组；密钥与 Cookie 分别加密保存，切换类型不清除隐藏凭据。AGENT_SYSTEM_PROMPT 和 TRANSLATION_PROMPT 各允许最多 61440 个 UTF-8 字节，其他值最多 8192 字节；按去除首尾空白前的输入计算，超限返回 400 invalid_setting，message 包含字段名、字节上限和当前字节数，整批不写入且不截断。本地 strm 根目录固定为 /strm，不接受 STRM_ROOT 配置；STRM_PATHS 中每项的 min_size_mb 不能为负数，exclude 的 mode 必须是 equals / prefix / suffix / contains，value 保存时去除首尾空白、转为小写并去重，空 value 规则被丢弃；PAN115_COOKIE 为空字符串时同一批请求强制把 PAN115_EVENT_ENABLE 保存为 false。
       parameters:
         - {in: cookie, name: bytemuse_session, required: true, schema: {type: string}, description: 登录签发的管理员会话 Cookie，不在示例中填写真实值}
       requestBody:
@@ -855,6 +855,96 @@ paths:
           content:
             application/json:
               schema: {$ref: '#/components/schemas/Error'}
+  /pan115/cookie/login/sessions:
+    post:
+      operationId: startPan115CookieLogin
+      summary: 申请 115 扫码获取 Cookie
+      description: '按渠道申请一次扫码会话，返回可直接渲染的二维码 PNG data URL；渠道取 alipaymini（支付宝小程序）、wechatmini（微信小程序）、115android（安卓 App）、115ios（iOS App）、web（网页版）、115ipad（iPad）、tv（TV），默认 alipaymini。二维码与状态查询固定走 115 web 入口，渠道只决定最终换取哪个客户端的 Cookie。请求体可省略或用空对象表示默认渠道；未知渠道按默认渠道处理，不返回 400。二维码 5 分钟内有效，服务端内存中同时最多保留 32 个扫码会话，超出时淘汰最早的一个。uid/time/sign 只存在于内存，不落库也不返回。需要登录会话。'
+      parameters:
+        - {in: cookie, name: bytemuse_session, required: true, schema: {type: string}, description: 登录签发的管理员会话 Cookie}
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                client_type: {type: string, enum: [alipaymini, wechatmini, 115android, 115ios, web, 115ipad, tv], description: 扫码渠道；缺省或未知值使用 alipaymini}
+            example: {client_type: alipaymini}
+      responses:
+        '201':
+          description: 已创建扫码会话；client_type 为归一化后的渠道
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Pan115CookieLoginSession'}
+              example: {session_id: 3f1c2f9d8b7a6c5e4d3b2a1908172635445566778899aabbccddeeff00112233, qr_code: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAGQAAABkCAYAAABw4pVUAAAA', client_type: alipaymini, expires_at: '2026-09-29T10:05:00Z'}
+        '401':
+          description: 未登录或会话失效
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '502':
+          description: '115 返回错误或暂时不可用；message 为本地生成的脱敏中文说明'
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+              example: {code: pan115_unavailable, message: 115 网盘暂时不可用，请稍后重试}
+        '503':
+          description: 115 网盘服务未装配
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+  /pan115/cookie/login/sessions/{sessionId}:
+    get:
+      operationId: getPan115CookieLoginStatus
+      summary: 查询 115 扫码获取 Cookie 状态
+      description: '轮询扫码状态。首次返回 authorized 时立即用 uid 换取 Cookie，并在该次响应中返回明文；之后重复查询返回同一份缓存 Cookie。Cookie 不落库，由设置页写入 PAN115_COOKIE 后统一加密保存，因此该接口是 Cookie 明文的唯一出口，前端拿到后应立即写入设置草稿。会话不存在、已消费或已被清理返回 404，前端应重新申请二维码。'
+      parameters:
+        - {in: cookie, name: bytemuse_session, required: true, schema: {type: string}, description: 登录签发的管理员会话 Cookie}
+        - {in: path, name: sessionId, required: true, schema: {type: string}, description: 申请接口返回的 session_id}
+      responses:
+        '200':
+          description: 当前扫码状态；authorized 时携带 Cookie 明文
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Pan115CookieLoginResult'}
+              example: {status: authorized, cookie: 'UID=12345678_A1; CID=abcdef123456; SEID=xyz789; KID=abc'}
+        '401':
+          description: 未登录或会话失效
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '404':
+          description: 扫码会话不存在或已过期，请重新获取二维码
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+              example: {code: pan115_login_unknown, message: 115 扫码会话不存在或已过期，请重新获取二维码}
+        '502':
+          description: '115 返回错误或暂时不可用；message 为本地生成的脱敏中文说明'
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '503':
+          description: 115 网盘服务未装配
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+    delete:
+      operationId: cancelPan115CookieLogin
+      summary: 取消 115 扫码获取 Cookie 会话
+      description: 结束一次扫码会话，使二维码立即失效，避免页面关闭后仍可被扫描。会话不存在时同样返回 204。
+      parameters:
+        - {in: cookie, name: bytemuse_session, required: true, schema: {type: string}, description: 登录签发的管理员会话 Cookie}
+        - {in: path, name: sessionId, required: true, schema: {type: string}, description: 申请接口返回的 session_id}
+      responses:
+        '204':
+          description: 会话已结束；重复取消同样返回 204
+        '401':
+          description: 未登录或会话失效
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
   /pan115/account:
     get:
       operationId: getPan115Account
@@ -917,7 +1007,7 @@ paths:
         - {in: cookie, name: bytemuse_session, required: true, schema: {type: string}, description: 登录签发的管理员会话 Cookie}
         - {in: query, name: directory_id, schema: {type: string}, description: 115 目录 ID；省略或空串读取根目录}
         - {in: query, name: offset, schema: {type: integer, minimum: 0, default: 0}, description: 分页偏移，必须是非负整数}
-        - {in: query, name: limit, schema: {type: integer, minimum: 1, maximum: 1000, default: 100}, description: 每页条数；省略或超出 1..1000 时按 100 处理}
+        - {in: query, name: limit, schema: {type: integer, minimum: 1, maximum: 1150, default: 100}, description: 每页条数；省略或超出 1..1150 时按 100 处理}
       responses:
         '200':
           description: 一页目录内容；path 为根目录到当前目录的完整路径，根目录返回仅含“根目录”一项的数组
@@ -941,6 +1031,50 @@ paths:
             application/json:
               schema: {$ref: '#/components/schemas/Error'}
               example: {code: pan115_not_linked, message: 115 网盘尚未绑定账号，请先在设置中扫码登录}
+        '502':
+          description: '115 返回错误或暂时不可用；message 为本地生成的脱敏中文说明'
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '503':
+          description: 115 网盘服务未装配
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+  /pan115/library/scan:
+    post:
+      operationId: scanPan115Library
+      summary: 扫描 115 目录并入库
+      description: 按设置项 PAN115_SCAN_PATHS 逐目录递归扫描 115 网盘，把识别出番号的视频登记为「已在媒体库」（library_status=present）；文件扩展名沿用生成 strm 的默认视频格式表。每页读取 1150 条，识别不到番号的文件只计入 skipped，不会凭空生成番号；同番号在一个目录里只登记一次。已存在的影片只刷新媒体库状态与更新时间，不覆盖标题、译文、封面与订阅状态。单个目录失败不影响其他目录，失败原因通过 directories[].message 返回。扫描不触发采集、订阅或下载。
+      parameters:
+        - {$ref: '#/components/parameters/ScanProgressAccept'}
+        - {in: cookie, name: bytemuse_session, required: true, schema: {type: string}, description: 登录签发的管理员会话 Cookie}
+      responses:
+        '200':
+          description: 本次扫描入库的汇总结果；无失败目录时 directories[].message 为空串
+          content:
+            application/x-ndjson:
+              schema: {$ref: '#/components/schemas/LibraryScanStreamEvent'}
+              example: '{"type":"progress","progress":{"phase":"discovering","processed":20,"total":50,"percent":40,"current":"/movies"}}'
+            application/json:
+              schema: {$ref: '#/components/schemas/Pan115LibraryScanResult'}
+              example: {directories: [{id: '341789', path: /影片/新片, files: 12, matched: 11, created: 8, skipped: 1, message: ''}], files: 12, matched: 11, created: 8, skipped: 1}
+        '400':
+          description: PAN115_SCAN_PATHS 配置非法
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '401':
+          description: 未登录或会话失效
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '409':
+          description: 尚未配置扫描目录，或 115 尚未绑定账号
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+              example: {code: pan115_scan_not_configured, message: 尚未配置 115 扫描目录，请先在设置中添加目录}
         '502':
           description: '115 返回错误或暂时不可用；message 为本地生成的脱敏中文说明'
           content:
@@ -1187,13 +1321,17 @@ paths:
     post:
       operationId: scanStrm
       summary: 生成 strm 文件
-      description: 按设置项 STRM_PATHS 把网盘目录镜像成本地 strm 文件，写入固定 /strm 根目录，每条映射仅处理其 formats 中的文件扩展名，文件内容为 {基址}/files/play/{网盘类型}/{文件标识}。重复执行幂等，内容一致时不改写磁盘。基址取 STRM_PLAY_BASE，为空时使用本次请求的来源地址；STRM_EMBY_REFRESH 为 true 且已配置 Emby 地址与密钥时额外刷新媒体库。单条映射失败不影响其他映射，失败原因通过 message 返回。
+      description: 按设置项 STRM_PATHS 把网盘目录镜像成本地 strm 文件，写入固定 /strm 根目录，每条映射仅处理其 formats 中的文件扩展名，文件内容为 {基址}/files/play/{网盘类型}/{文件标识}。递归扫描时按该映射的 exclude 规则跳过文件与文件夹：equals 要求完整名称相等、prefix 前缀、suffix 后缀、contains 包含，一律不区分大小写；命中文件夹时整棵子树都不生成。同时跳过体积小于 min_size_mb 的视频，网盘未返回体积的文件不受体积限制。重复执行幂等，内容一致时不改写磁盘。基址取 STRM_PLAY_BASE，为空时使用本次请求的来源地址；STRM_EMBY_REFRESH 为 true 且已配置 Emby 地址与密钥时额外刷新媒体库。单条映射失败不影响其他映射，失败原因通过 message 返回。
       parameters:
+        - {$ref: '#/components/parameters/ScanProgressAccept'}
         - {in: cookie, name: bytemuse_session, required: true, schema: {type: string}, description: 登录签发的管理员会话 Cookie}
       responses:
         '200':
           description: 本次生成的汇总结果；无失败映射时 mappings[].message 为空串
           content:
+            application/x-ndjson:
+              schema: {$ref: '#/components/schemas/StrmScanStreamEvent'}
+              example: '{"type":"progress","progress":{"phase":"processing","processed":20,"total":50,"percent":40,"current":"/movies"}}'
             application/json:
               schema: {$ref: '#/components/schemas/StrmScanResult'}
               example: {mappings: [{kind: '115', path: /电影, local_path: /movies, files: 12, created: 12, unchanged: 0, failed: 0, message: ''}], files: 12, created: 12, failed: 0, emby: {attempted: false, refreshed: false, message: ''}}
@@ -1388,6 +1526,12 @@ components:
       in: cookie
       name: bytemuse_session
   parameters:
+    ScanProgressAccept:
+      in: header
+      name: Accept
+      required: false
+      description: '传 application/x-ndjson 接收逐行进度事件和最终结果；省略或 application/json 保持原同步 JSON 响应。进度按当前已发现总数计算并动态更新。'
+      schema: {type: string, enum: [application/json, application/x-ndjson], default: application/json}
     Page:
       name: page
       in: query
@@ -1943,8 +2087,11 @@ components:
             PTTime 仅使用 PTT_COOKIE 搜索和下载，不使用受限 RSS。PTT_AUTH_TYPE、PTT_PASSKEY、PTT_UID 为兼容历史配置保留，运行时不读取，设置页不再提供。
             MAIN_SITE 取 ALL / 馒头 / BT / PTT / NicePT / PTFans / RousiPro；PTFANS_COOKIE 用于 PTFans 9KG 专区，ROUSIPRO_COOKIE 用于 RousiPro 9KG 目录，均为加密保存的管理员凭据，空值表示未配置；旧 ROUSI_COOKIE 不再显示或接受写入。IMAGE_MODE 取 INVISIBLE / VISIBLE / BLUR；PT_DEFAULT_DOWNLOADER 取 qbittorrent / transmission；BT_DEFAULT_DOWNLOADER 取 qbittorrent / transmission / aria2 / thunder / pan115（不含 CloudDrive2）；BYPASS_ENGINE 取 cloudflare_bypass_for_scraping / flaresolverr / scrapling，空值表示关闭；BYPASS_URL 为所选增强服务地址；LOG_RETENTION_DAYS 为日志保留天数，默认 30，0 或空值表示不自动删除；TRANSLATION_ENGINE 取 none / openai / google / baidu / deeplx；DEEPLX_URL 为 DeepLX 服务地址，可只填服务地址（例如 http://127.0.0.1:1188）或直接填 /translate 完整地址；TRANSLATION_PROMPT 仅在 OpenAI 翻译时作为翻译 system prompt，留空使用内置提示词；翻译的 OpenAI 兼容配置独立保存在 TRANSLATION_OPENAI_URL、TRANSLATION_OPENAI_MODEL、TRANSLATION_OPENAI_API_KEY，与对话 Agent 的配置互不影响，三者任一为空时 OpenAI 翻译引擎视为未配置，设置页禁用 OpenAI 选项并把已选引擎回落为 none；AGENT_ENABLE 为 true 时启用 Telegram 与企业微信的对话 Agent，默认 false；Agent 使用 OPENAI_URL、OPENAI_MODEL、OPENAI_API_KEY，三者任一为空时对话入口返回未启用提示，斜杠命令与番号订阅不受影响；AGENT_SYSTEM_PROMPT 仅用于渠道 Agent 对话，留空使用内置提示词。
             PAN115_SAVE_PATH 为 115 网盘离线下载的保存目录 ID，空值表示保存到根目录；
+            PAN115_COOKIE 为 115 Cookie（UID、CID、SEID），用于 115 生活事件；可手动填写，也可用 POST /pan115/cookie/login/sessions 按渠道扫码获取，加密保存，空字符串清除；Cookie 与 OpenAPI 令牌是两套独立凭据，互不替代。
             PAN115_SCAN_PATHS 为 115 网盘扫描目录的 JSON 数组字符串，元素形如 {"id":"目录 ID","path":"展示用绝对路径"}，
             ID 与路径都不可为空、ID 不可重复，空字符串或 [] 表示不扫描任何目录；目录 ID 由 GET /pan115/files 逐级读取，前端以只读输入框加目录选择弹窗维护，避免手填无效 ID。
+            保存后由 POST /pan115/library/scan 逐目录递归扫描（每页读取 1150 条），把识别出番号的视频登记为「已在媒体库」；
+            识别不到番号的文件只计入 skipped，已存在的影片只刷新媒体库状态，不覆盖标题、译文、封面与订阅状态。
             115 账号、令牌与离线任务由 /pan115 接口管理，令牌加密落库，不通过设置接口读写。
             GOOGLE_API_KEY 为 Google Cloud Translation API 密钥，留空时 Google 引擎改用免密钥接口（无需申请，按来源 IP 限流）；填写后走官方接口，配额与计费按 key 所属项目结算。
             BAIDU_APP_ID 与 BAIDU_API_KEY 为百度翻译开放平台的 APPID 与开发者密钥（密钥），请求按 MD5(appid+q+salt+密钥) 计算 sign 签名，需先在开放平台开通文本翻译服务，二者任一为空时百度引擎视为未配置。
@@ -1957,6 +2104,8 @@ components:
             （分 时 日 月 周，如 0 20 * * * 表示每天 20:00），空值表示不注册该定时任务；非法表达式保存时返回 400 invalid_setting；保存后立即重排，无需重启后端。
           properties:
             PTT_AUTH_TYPE: {type: string, deprecated: true, enum: [key, cookie, ''], description: '历史兼容字段，不参与运行；PTTime 固定使用 PTT_COOKIE'}
+            PAN115_EVENT_ENABLE: {type: string, enum: ['true', 'false', ''], default: 'false', description: '115 生活事件监听；Cookie 为空时强制关闭并保存 false（包括部分更新），空值或 false 关闭，保存后下一轮生效。每 30 秒轮询，失败后 60 秒重试；需同账号 OpenAPI 绑定、事件 Cookie、115 STRM 映射和 STRM_PLAY_BASE。首次启用建立当前事件基线，不回放历史；后续按持久化游标续接。批次合并后仅扫描所选 115 映射，遵循各映射格式、min_size_mb 和排除文件/夹规则生成或更新 STRM，失败不前移游标，不自动删除旧文件。'}
+            PAN115_COOKIE: {type: string, description: '115 Cookie，含 UID、CID、SEID，禁止换行；用于 115 生活事件，需与 OpenAPI 绑定为同一账号并在 115 开启生活事件记录。可手动填写，也可用 POST /pan115/cookie/login/sessions 扫码获取。加密存储，空字符串清除并同时强制关闭 PAN115_EVENT_ENABLE；不可用于 OpenAPI Bearer 认证。管理员设置接口沿用现有敏感字段回显约定。'}
             RANK_SCHEDULE_TIME: {type: string, default: '0 20 * * *', example: '0 20 * * *', description: '榜单订阅定时任务，标准 5 段 cron（分 时 日 月 周）；空值表示不注册该任务，非法表达式保存时返回 400 invalid_setting；保存后立即重排，无需重启后端'}
             ACTOR_SCHEDULE_TIME: {type: string, default: '0 21 * * *', example: '0 21 * * *', description: '演员订阅定时任务，标准 5 段 cron（分 时 日 月 周）；空值表示不注册该任务，非法表达式保存时返回 400 invalid_setting；保存后立即重排，无需重启后端'}
             TAG_SCHEDULE_TIME: {type: string, default: '30 21 * * *', example: '30 21 * * *', description: '标签订阅定时任务，标准 5 段 cron（分 时 日 月 周）；空值表示不注册该任务，非法表达式保存时返回 400 invalid_setting；保存后立即重排，无需重启后端'}
@@ -2008,6 +2157,8 @@ components:
             RANK_SCHEDULE_TIME、ACTOR_SCHEDULE_TIME、TAG_SCHEDULE_TIME、DOWNLOAD_SCHEDULE_TIME 只接受标准 5 段 cron（分 时 日 月 周），空字符串表示不注册该定时任务，非法表达式返回 400 invalid_setting；保存后立即重排，无需重启后端。
           properties:
             RANK_SCHEDULE_TIME: {type: string, example: '0 20 * * *', description: '榜单订阅定时任务，标准 5 段 cron（分 时 日 月 周）；空字符串清除即不注册该任务；非法表达式返回 400 invalid_setting；保存后立即重排，无需重启后端'}
+            PAN115_EVENT_ENABLE: {type: string, enum: ['true', 'false', ''], description: '115 事件监听开关，默认关闭；Cookie 为空时强制保存为 false，包括仅清空 Cookie 的部分更新；保存后下一轮（正常 30 秒、失败 60 秒）生效。首次建立当前事件基线，重启续接成功游标，按全部 115 映射生成或更新 STRM，不删除旧文件。'}
+            PAN115_COOKIE: {type: string, description: '115 Cookie，需包含有效 UID、CID、SEID 且不含换行；与 OpenAPI 绑定须为同一账号，加密保存，空字符串清除并强制关闭 PAN115_EVENT_ENABLE；需在 115 开启生活事件记录。可手动填写或用 POST /pan115/cookie/login/sessions 扫码获取。'}
             ACTOR_SCHEDULE_TIME: {type: string, example: '0 21 * * *', description: '演员订阅定时任务，标准 5 段 cron（分 时 日 月 周）；空字符串清除即不注册该任务；非法表达式返回 400 invalid_setting；保存后立即重排，无需重启后端'}
             TAG_SCHEDULE_TIME: {type: string, example: '30 21 * * *', description: '标签订阅定时任务，标准 5 段 cron（分 时 日 月 周）；空字符串清除即不注册该任务；非法表达式返回 400 invalid_setting；保存后立即重排，无需重启后端'}
             DOWNLOAD_SCHEDULE_TIME: {type: string, example: '0 22 * * *', description: '番号订阅定时任务，标准 5 段 cron（分 时 日 月 周），建议排在榜单与演员订阅之后；空字符串清除即不注册该任务；非法表达式返回 400 invalid_setting；保存后立即重排，无需重启后端'}
@@ -2046,6 +2197,48 @@ components:
         status:
           type: string
           enum: [ok]
+    ScanProgress:
+      type: object
+      description: 当前请求的动态文件处理进度；总数为已发现且符合过滤规则的媒体文件数，扫描时持续增加。仅 result 事件表示操作已返回结果，百分比 100 不代表全部成功。
+      required: [phase, processed, total, percent, current]
+      properties:
+        phase: {type: string, enum: [waiting, discovering, processing, finalizing, completed], description: '阶段：等待、发现文件、处理文件、汇总或刷新、完成；completed 后仍须等待 result 事件'}
+        processed: {type: integer, minimum: 0, description: '已处理文件数，包含成功、未变化、跳过及失败；目录读取失败时已发现但放弃的文件计入跳过处理'}
+        total: {type: integer, minimum: 0, description: '本次扫描累计发现的符合规则文件数，初始为 0，随扫描动态增加；非预估总数'}
+        percent: {type: integer, minimum: 0, maximum: 100, description: '向下取整的 processed / total × 100；总数增加时允许降低。total 为 0 时处理期间为 0，完成后为 100'}
+        current: {type: string, description: '当前扫描目录或映射的展示路径；等待或完成时为空串'}
+    ScanProgressEvent:
+      type: object
+      required: [type, progress]
+      properties:
+        type: {type: string, enum: [progress], description: 进度事件}
+        progress: {$ref: '#/components/schemas/ScanProgress'}
+    ScanErrorEvent:
+      type: object
+      required: [type, error]
+      properties:
+        type: {type: string, enum: [error], description: '流式失败终态；HTTP 头发送后错误通过此事件报告，不应仅判断 HTTP 200'}
+        error: {$ref: '#/components/schemas/Error'}
+    LibraryScanStreamEvent:
+      description: 'NDJSON 每行一个事件。progress 可重复；最终返回 result 或 error。断开连接取消后续处理，已落库数据不回滚；无终态表示结果未确认，不自动重试。'
+      oneOf:
+        - {$ref: '#/components/schemas/ScanProgressEvent'}
+        - {$ref: '#/components/schemas/ScanErrorEvent'}
+        - type: object
+          required: [type, result]
+          properties:
+            type: {type: string, enum: [result], description: '结果事件；应继续检查 directories[].message'}
+            result: {$ref: '#/components/schemas/Pan115LibraryScanResult'}
+    StrmScanStreamEvent:
+      description: 'NDJSON 每行一个事件。progress 可重复；最终返回 result 或 error。断开连接取消后续处理，已生成文件不回滚；无终态表示结果未确认，不自动重试。'
+      oneOf:
+        - {$ref: '#/components/schemas/ScanProgressEvent'}
+        - {$ref: '#/components/schemas/ScanErrorEvent'}
+        - type: object
+          required: [type, result]
+          properties:
+            type: {type: string, enum: [result], description: '结果事件；应继续检查 failed、mappings[].message 与 emby'}
+            result: {$ref: '#/components/schemas/StrmScanResult'}
     Error:
       type: object
       required: [code, message]
@@ -2106,6 +2299,22 @@ components:
       properties:
         size: {type: integer, format: int64, description: 字节数；115 未返回该字段时为 0}
         formatted: {type: string, description: '115 提供的展示文本，例如 5.0TB；缺失时为空串'}
+    Pan115CookieLoginSession:
+      type: object
+      required: [session_id, qr_code, client_type, expires_at]
+      description: 一次 Cookie 扫码的启动结果；二维码 5 分钟内有效
+      properties:
+        session_id: {type: string, description: 会话标识，用于轮询扫码状态与主动取消}
+        qr_code: {type: string, description: '可直接放入 img src 的 data:image/png;base64 二维码'}
+        client_type: {type: string, enum: [alipaymini, wechatmini, 115android, 115ios, web, 115ipad, tv], description: 归一化后的扫码渠道；未知渠道回落到 alipaymini}
+        expires_at: {type: string, format: date-time, description: 二维码失效时间，为申请时刻起 5 分钟}
+    Pan115CookieLoginResult:
+      type: object
+      required: [status, cookie]
+      description: 一次 Cookie 扫码状态查询结果；仅 authorized 携带 Cookie 明文
+      properties:
+        status: {type: string, enum: [waiting, scanned, authorized, expired, canceled], description: 'waiting 等待扫码；scanned 已扫码待确认；authorized 已授权并返回 Cookie；expired 二维码过期；canceled 用户取消'}
+        cookie: {type: string, description: '授权后返回的 Cookie 明文，形如 UID=...; CID=...; SEID=...；其他状态为空串。仅在该次响应返回，前端应写入 PAN115_COOKIE 设置项'}
     Pan115Account:
       type: object
       required: [id, name, avatar, level, space, quota]
@@ -2192,6 +2401,28 @@ components:
       properties:
         uri: {type: string, description: 磁力链接或下载地址，去除首尾空格后必须非空}
         directory_id: {type: string, description: '保存目录 ID；省略或空串时使用设置中的「离线下载保存目录」，该设置也为空时保存到根目录'}
+    Pan115LibraryDirectoryResult:
+      type: object
+      required: [id, path, files, matched, created, skipped, message]
+      description: 单个 115 扫描目录的入库结果
+      properties:
+        id: {type: string, description: 115 目录 ID}
+        path: {type: string, description: 选择目录时的展示用绝对路径}
+        files: {type: integer, minimum: 0, description: 递归扫描到的视频文件数；只统计默认视频扩展名}
+        matched: {type: integer, minimum: 0, description: '识别出番号的影片数；同番号在一个目录里只算一次'}
+        created: {type: integer, minimum: 0, description: 本次新建的影片数；已存在的影片不计入}
+        skipped: {type: integer, minimum: 0, description: 无法识别番号而跳过的文件数}
+        message: {type: string, description: 该目录的错误说明；正常时为空串}
+    Pan115LibraryScanResult:
+      type: object
+      required: [directories, files, matched, created, skipped]
+      description: 一次「115 扫描目录 → 递归扫描 → 视频入库」的总结果
+      properties:
+        directories: {type: array, items: {$ref: '#/components/schemas/Pan115LibraryDirectoryResult'}, description: '各扫描目录的入库结果，顺序与 PAN115_SCAN_PATHS 一致'}
+        files: {type: integer, minimum: 0, description: 全部目录扫描到的视频文件总数}
+        matched: {type: integer, minimum: 0, description: 识别出番号的影片总数}
+        created: {type: integer, minimum: 0, description: 本次新建的影片总数}
+        skipped: {type: integer, minimum: 0, description: 无法识别番号而跳过的文件总数}
     StrmMapping:
       type: object
       required: [kind, id, path, local_path, formats]
@@ -2202,6 +2433,16 @@ components:
         path: {type: string, description: 网盘目录展示路径；只用于界面展示，不参与扫描与播放}
         local_path: {type: string, description: '本地 strm 目录，以 / 开头，相对固定 /strm 根目录；不能超出该根目录'}
         formats: {type: array, minItems: 1, items: {type: string, pattern: '^[a-z0-9][a-z0-9._-]*$'}, description: '该映射允许生成 STRM 的媒体格式；保存时转为小写并去除前导点。未提供时使用默认格式 mp4、avi、rmvb、wmv、mov、mkv、webm、iso、mpg、m4v、ts、flv、strm、vob、m2ts'}
+        min_size_mb: {type: integer, minimum: 0, default: 0, description: '最小视频大小，单位 MB；小于该体积的视频不生成 strm。0 表示不限制；网盘未返回体积（size 为 0）的文件同样不受体积限制。负数返回 400 invalid_setting'}
+        exclude:
+          type: array
+          description: '排除文件/夹规则列表；命中任一规则的文件夹或文件都跳过，不区分大小写。mode 决定匹配方式：equals 完整名称相等、prefix 前缀、suffix 后缀、contains 包含；因此完整文件夹名称、前缀、后缀与包含指定字符分别用四条规则表达。保存时去除 value 首尾空白、转为小写并去重，value 为空的规则被丢弃。命中文件夹时整个文件夹及其子目录都不生成 strm。空数组表示不排除任何名称'
+          items:
+            type: object
+            required: [mode, value]
+            properties:
+              mode: {type: string, enum: [equals, prefix, suffix, contains], description: '匹配方式；equals 完整名称相等、prefix 前缀、suffix 后缀、contains 包含'}
+              value: {type: string, description: '匹配内容；保存时去除首尾空白并转为小写，空值规则被丢弃'}
     StrmDirectory:
       type: object
       required: [name, path]

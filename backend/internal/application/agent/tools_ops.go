@@ -62,7 +62,7 @@ func queryDownloadTasks(ctx context.Context, deps Deps, rawKeyword, rawStatus st
 	if keyword != "" && deps.Queries != nil {
 		if found, searchErr := deps.Queries.Search(ctx, keyword, 1, mediaSearchLimit); searchErr == nil {
 			for _, media := range found.Items {
-				matched[NormalizeCode(media.Code)] = true
+				matched[domain.NormalizeCode(media.Code)] = true
 			}
 		}
 	}
@@ -97,11 +97,11 @@ func downloadTaskMatches(task domain.DownloadTask, keyword string, matched map[s
 	if task.Code == nil {
 		return false
 	}
-	code := NormalizeCode(*task.Code)
+	code := domain.NormalizeCode(*task.Code)
 	if code == "" {
 		return false
 	}
-	if needle := NormalizeCode(keyword); needle != "" && strings.Contains(code, needle) {
+	if needle := domain.NormalizeCode(keyword); needle != "" && strings.Contains(code, needle) {
 		return true
 	}
 	return matched[code]

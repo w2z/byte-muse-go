@@ -33,6 +33,7 @@ type Store interface {
 	Migrate(ctx context.Context) error
 	WithTx(ctx context.Context, fn func(Store) error) error
 	Media() ports.MediaRepository
+	MediaLibrary() ports.MediaLibraryWriter
 	Subscriptions() ports.SubscriptionRepository
 	Downloads() ports.DownloadRepository
 	ReadinessProbe() ports.ReadinessProbe

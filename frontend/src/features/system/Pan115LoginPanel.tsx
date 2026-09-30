@@ -1,4 +1,4 @@
-import { Button, Modal, Progress } from "@arco-design/web-react";
+import { Button, Modal, Progress, Select } from "@arco-design/web-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { apiRequest } from "../../shared/api/client";
@@ -28,6 +28,55 @@ type Pan115Account = {
 
 type Pan115LoginResult = { status: Pan115LoginStatus; account: Pan115Account | null };
 type Pan115AccountResponse = { linked: boolean; account: Pan115Account | null };
+
+/** Cookie 扫码渠道；取值与后端 pan115 渠道常量一一对应。 */
+type Pan115CookieClientType =
+  | "alipaymini"
+  | "wechatmini"
+  | "115android"
+  | "115ios"
+  | "web"
+  | "115ipad"
+  | "tv";
+
+/** Cookie 扫码会话；client_type 是后端归一化后的渠道回显。 */
+type Pan115CookieSession = {
+  session_id: string;
+  qr_code: string;
+  client_type: Pan115CookieClientType;
+  expires_at: string;
+};
+
+type Pan115CookieResult = { status: Pan115LoginStatus; cookie: string };
+
+/**
+ * 扫码渠道选项。
+ * 115 按渠道下发不同客户端的 Cookie，因此这里必须与后端允许清单保持一致，
+ * 默认渠道与 115 官方默认一致（支付宝小程序）。
+ */
+const cookieChannelOptions: { value: Pan115CookieClientType; label: string }[] = [
+  { value: "alipaymini", label: "支付宝小程序" },
+  { value: "wechatmini", label: "微信小程序" },
+  { value: "115android", label: "安卓 App" },
+  { value: "115ios", label: "iOS App" },
+  { value: "web", label: "网页版" },
+  { value: "115ipad", label: "iPad" },
+  { value: "tv", label: "TV" },
+];
+
+/** 渠道中文名；用于扫码弹窗里的扫码提示，未知渠道回落到原值。 */
+function channelLabel(value: string): string {
+  return cookieChannelOptions.find((item) => item.value === value)?.label ?? value;
+}
+
+/**
+ * 面板属性。
+ * onCookie 由设置页注入：扫码拿到的 Cookie 只写入设置草稿，是否保存仍由用户决定，
+ * 面板不直接调用设置接口，避免绕过设置页的统一校验与联动（如清空 Cookie 关闭事件监听）。
+ */
+type Pan115LoginPanelProps = {
+  onCookie: (cookie: string) => void;
+};
 
 const accountQueryKey = ["pan115-account"] as const;
 /** 二维码有效期约 5 分钟，2 秒轮询兼顾反馈及时与上游压力。 */
@@ -87,8 +136,10 @@ function MeterRow({ label, value, percent }: { label: string; value: string; per
  * 115 网盘账号面板：扫码绑定、展示已绑定账号与容量、解除绑定。
  * 只负责 115 账号生命周期；离线下载目录等配置仍由设置表单统一保存。
  */
-export function Pan115LoginPanel() {
+export function Pan115LoginPanel({ onCookie }: Pan115LoginPanelProps) {
   const [session, setSession] = useState<Pan115LoginSession | null>(null);
+  const [channel, setChannel] = useState<Pan115CookieClientType>("alipaymini");
+  const [cookieSession, setCookieSession] = useState<Pan115CookieSession | null>(null);
   const [message, messageHolder] = useFeedbackMessage();
   const queryClient = useQueryClient();
   // useFeedbackMessage 每次渲染都会新建回调对象，用 ref 固定引用，避免 effect 依赖它反复触发。
@@ -146,6 +197,54 @@ export function Pan115LoginPanel() {
     setSession(null);
     void queryClient.invalidateQueries({ queryKey: accountQueryKey });
   }, [loginStatus, authorizedName, queryClient]);
+
+  // Cookie 扫码：按渠道申请二维码，授权后把 Cookie 交给设置页草稿，服务端不落库。
+  const startCookie = useMutation({
+    mutationFn: (clientType: Pan115CookieClientType) =>
+      apiRequest<Pan115CookieSession>("/pan115/cookie/login/sessions", {
+        method: "POST",
+        body: JSON.stringify({ client_type: clientType }),
+      }),
+    onSuccess: (result) => setCookieSession(result),
+    onError: (error: Error) => messageRef.current.error(error.message),
+  });
+
+  const cookieSessionID = cookieSession?.session_id ?? null;
+  const cookieStatus = useQuery({
+    queryKey: ["pan115-cookie-login-session", cookieSessionID],
+    queryFn: () => apiRequest<Pan115CookieResult>(`/pan115/cookie/login/sessions/${cookieSessionID}`),
+    enabled: cookieSessionID !== null,
+    // 与令牌扫码同源：重试预算吸收上游抖动，连续失败才把结论交给用户。
+    retry: pollRetries,
+    retryDelay: pollInterval,
+    refetchInterval: (query) => {
+      const value = query.state.data?.status;
+      if (query.state.error || value === "authorized" || value === "expired" || value === "canceled") return false;
+      return pollInterval;
+    },
+  });
+
+  // 会话结束时作废二维码，避免关闭弹窗后旧二维码仍可被扫描。
+  useEffect(() => {
+    if (cookieSessionID === null) return;
+    return () => {
+      void apiRequest<void>(`/pan115/cookie/login/sessions/${cookieSessionID}`, { method: "DELETE" }).catch(
+        () => undefined,
+      );
+    };
+  }, [cookieSessionID]);
+
+  const cookieLoginStatus = cookieStatus.data?.status ?? null;
+  const cookieValue = cookieStatus.data?.cookie ?? "";
+  useEffect(() => {
+    if (cookieLoginStatus !== "authorized" || cookieValue === "") return;
+    onCookie(cookieValue);
+    setCookieSession(null);
+    messageRef.current.success("已获取 115 Cookie 并填入设置，请点击保存生效");
+  }, [cookieLoginStatus, cookieValue, onCookie]);
+
+  const cookieFailed = cookieLoginStatus === "expired" || cookieLoginStatus === "canceled";
+  const cookieRetrying = cookieStatus.failureCount > 0 && !cookieStatus.isError;
 
   const bound = account.data?.linked === true ? account.data.account : null;
   const failed = loginStatus === "expired" || loginStatus === "canceled";
@@ -212,6 +311,35 @@ export function Pan115LoginPanel() {
           <span className="settings-field-description">使用 115 手机客户端扫码授权，令牌加密保存在本地，可随时解除绑定。</span>
         </div>
       )}
+      {/* Cookie 扫码独立于账号绑定：它换取生活事件等接口所需的 Cookie，与 OpenAPI 令牌互不影响。 */}
+      <div className="settings-pan115-block settings-pan115-cookie">
+        <span className="settings-field-description">
+          选择扫码渠道后获取 Cookie，授权成功会自动填入「115 Cookie」设置项，点击保存后生效。
+        </span>
+        <div className="settings-pan115-actions">
+          <Select
+            className="settings-pan115-channel"
+            size="small"
+            value={channel}
+            aria-label="扫码渠道"
+            options={cookieChannelOptions}
+            onChange={(value) => {
+              const next = value as Pan115CookieClientType;
+              setChannel(next);
+              // 弹窗已打开时切换渠道直接换一张二维码，避免用户误扫上一个渠道的码。
+              if (cookieSession !== null) startCookie.mutate(next);
+            }}
+          />
+          <Button
+            type="secondary"
+            loading={startCookie.isPending}
+            disabled={startCookie.isPending}
+            onClick={() => startCookie.mutate(channel)}
+          >
+            扫码获取 Cookie
+          </Button>
+        </div>
+      </div>
       {/* 二维码用弹窗展示：内联展开会把设置表单撑高，且关闭弹窗即作废当前扫码会话。 */}
       <Modal
         title="115 扫码登录"
@@ -238,6 +366,43 @@ export function Pan115LoginPanel() {
                 </Button>
               ) : (
                 <Button type="secondary" onClick={() => setSession(null)}>取消</Button>
+              )}
+            </div>
+          </div>
+        ) : null}
+      </Modal>
+      <Modal
+        title={`115 扫码获取 Cookie（${channelLabel(cookieSession?.client_type ?? channel)}）`}
+        visible={cookieSession !== null}
+        footer={null}
+        unmountOnExit
+        maskClosable={false}
+        onCancel={() => setCookieSession(null)}
+      >
+        {cookieSession ? (
+          <div className="settings-pan115-block settings-pan115-login">
+            <img className="settings-pan115-qrcode" src={cookieSession.qr_code} alt="115 获取 Cookie 二维码" />
+            <span className="settings-field-description">
+              {cookieRetrying
+                ? "网络异常，正在重试…"
+                : `请使用${channelLabel(cookieSession.client_type)}扫码并确认授权`}
+              {cookieFailed ? "，请重新获取二维码" : ""}
+            </span>
+            {cookieStatus.isError ? (
+              <span className="settings-field-description">查询扫码状态失败：{cookieStatus.error.message}</span>
+            ) : null}
+            <div className="settings-pan115-actions">
+              {cookieFailed ? (
+                <Button
+                  type="primary"
+                  loading={startCookie.isPending}
+                  disabled={startCookie.isPending}
+                  onClick={() => startCookie.mutate(channel)}
+                >
+                  重新获取二维码
+                </Button>
+              ) : (
+                <Button type="secondary" onClick={() => setCookieSession(null)}>取消</Button>
               )}
             </div>
           </div>

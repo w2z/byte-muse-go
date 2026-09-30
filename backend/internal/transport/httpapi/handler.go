@@ -42,11 +42,13 @@ type Dependencies struct {
 	Dashboard             *application.DashboardService
 	Settings              *application.SettingsService
 	// Version 提供当前运行版本与发布仓库版本的比较结果，供顶栏版本标签使用。
-	Version   *application.VersionService
-	Pan115    *application.Pan115Service
-	Scheduler *scheduler.Manager
-	Logs      *logging.Logger
-	Readiness ports.ReadinessProbe
+	Version *application.VersionService
+	Pan115  *application.Pan115Service
+	// Pan115Library 把设置页的 115 扫描目录递归扫描后登记到媒体库。
+	Pan115Library *application.Pan115LibraryService
+	Scheduler     *scheduler.Manager
+	Logs          *logging.Logger
+	Readiness     ports.ReadinessProbe
 	// WeChatCallback 处理企业微信回调；未配置时为 nil，回调端点返回 503。
 	WeChatCallback ports.CallbackVerifier
 	// ChannelMessages 处理渠道入站消息；轮询与回调共用同一实现。
@@ -114,9 +116,13 @@ func New(dependencies Dependencies) http.Handler {
 		router.Post("/pan115/login/sessions", startPan115Login(dependencies.Pan115))
 		router.Get("/pan115/login/sessions/{sessionId}", pan115LoginStatus(dependencies.Pan115))
 		router.Delete("/pan115/login/sessions/{sessionId}", cancelPan115Login(dependencies.Pan115))
+		router.Post("/pan115/cookie/login/sessions", startPan115CookieLogin(dependencies.Pan115))
+		router.Get("/pan115/cookie/login/sessions/{sessionId}", pan115CookieLoginStatus(dependencies.Pan115))
+		router.Delete("/pan115/cookie/login/sessions/{sessionId}", cancelPan115CookieLogin(dependencies.Pan115))
 		router.Get("/pan115/account", pan115Account(dependencies.Pan115))
 		router.Delete("/pan115/account", unlinkPan115(dependencies.Pan115))
 		router.Get("/pan115/files", listPan115Files(dependencies.Pan115))
+		router.Post("/pan115/library/scan", scanPan115Library(dependencies.Pan115Library))
 		router.Get("/pan115/offline/tasks", listPan115OfflineTasks(dependencies.Pan115))
 		router.Post("/pan115/offline/tasks", addPan115OfflineTask(dependencies.Pan115))
 		router.Delete("/pan115/offline/tasks/{hash}", removePan115OfflineTask(dependencies.Pan115))

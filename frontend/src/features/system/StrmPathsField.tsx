@@ -1,17 +1,41 @@
-import { Button, Input, Modal, Select, Tooltip } from "@arco-design/web-react";
+import {
+  Button,
+  Input,
+  Modal,
+  Select,
+  Tag,
+  Tooltip,
+} from "@arco-design/web-react";
 import { IconDelete, IconFolder } from "@arco-design/web-react/icon";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { useState } from "react";
+import { useRef, useState, type ComponentRef } from "react";
 import { apiRequest } from "../../shared/api/client";
 import { DirectoryPicker, type DirectoryPickerCrumb } from "../../shared/ui/DirectoryPicker";
 import { useFeedbackMessage } from "../../shared/ui/FeedbackMessage";
 import { Pan115DirectoryPicker } from "./Pan115DirectoryPicker";
+import { ScanProgressDisplay, useScanProgress } from "./ScanProgress";
 
 /** 网盘类型；取值与后端 domain.StrmKind* 一致，同时用作播放地址 /files/play/{kind}/ 的路径段。 */
 export type StrmKind = "115" | "cd2";
 
+/** 排除关键字的匹配方式；取值与后端 domain.StrmExcludeMode* 一致。 */
+export type StrmExcludeMode = "equals" | "prefix" | "suffix" | "contains";
+
+/** 一条排除规则：mode 决定 value 的匹配方式，匹配一律不区分大小写。 */
+export type StrmExcludeKeyword = { mode: StrmExcludeMode; value: string };
+
 /** 一条「网盘目录 → 本地 strm 目录」映射，字段与后端 domain.StrmMapping 一一对应。 */
-export type StrmMapping = { kind: StrmKind; id: string; path: string; local_path: string; formats: string[] };
+export type StrmMapping = {
+  kind: StrmKind;
+  id: string;
+  path: string;
+  local_path: string;
+  formats: string[];
+  /** 最小视频体积（MB）；0 表示不限制。 */
+  min_size_mb: number;
+  /** 排除规则：文件名或文件夹名命中任一规则即跳过；命中文件夹时整棵子树跳过。 */
+  exclude: StrmExcludeKeyword[];
+};
 
 /** STRM 映射默认媒体格式；用户可在 Select 中移除、恢复或手动添加格式。 */
 export const DEFAULT_STRM_FORMATS = [
@@ -29,6 +53,56 @@ export function normalizeStrmFormats(formats: unknown): string[] {
     if (format !== "" && !result.includes(format)) result.push(format);
   }
   return result;
+}
+
+/** 排除规则的匹配方式选项；顺序即下拉顺序，label 与标签文案的写法一一对应。 */
+const strmExcludeModes: { value: StrmExcludeMode; label: string }[] = [
+  { value: "equals", label: "等于" },
+  { value: "prefix", label: "前缀" },
+  { value: "suffix", label: "后缀" },
+  { value: "contains", label: "包含" },
+];
+
+/** 判断取值是否为受支持的匹配方式。 */
+function isStrmExcludeMode(value: string): value is StrmExcludeMode {
+  return strmExcludeModes.some((item) => item.value === value);
+}
+
+/**
+ * 规范化排除规则：统一匹配方式、去空白、丢弃空关键字，并按「方式 + 小写关键字」去重；
+ * 与后端 normalizeStrmExcludes 保持一致。关键字保留用户输入的大小写用于回显，只有判重忽略大小写。
+ */
+export function normalizeStrmExcludes(excludes: unknown): StrmExcludeKeyword[] {
+  if (!Array.isArray(excludes)) return [];
+  const result: StrmExcludeKeyword[] = [];
+  const seen = new Set<string>();
+  for (const raw of excludes) {
+    if (raw === null || typeof raw !== "object") continue;
+    const candidate = raw as { mode?: unknown; value?: unknown };
+    const mode = typeof candidate.mode === "string" ? candidate.mode.trim().toLowerCase() : "";
+    if (!isStrmExcludeMode(mode)) continue;
+    const value = typeof candidate.value === "string" ? candidate.value.trim() : "";
+    if (value === "") continue;
+    const key = `${mode}\u0000${value.toLowerCase()}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push({ mode, value });
+  }
+  return result;
+}
+
+/** 把一条排除规则渲染成标签文案：等于:xxx / 前缀:xxx* / 后缀:*xxx / 包含:*xxx*。 */
+export function formatStrmExclude(rule: StrmExcludeKeyword): string {
+  switch (rule.mode) {
+    case "equals":
+      return `等于:${rule.value}`;
+    case "prefix":
+      return `前缀:${rule.value}*`;
+    case "suffix":
+      return `后缀:*${rule.value}`;
+    default:
+      return `包含:*${rule.value}*`;
+  }
 }
 
 /** 网盘类型选项；顺序与设置页「网盘」分类的页签一致。 */
@@ -120,6 +194,12 @@ export function StrmPathsField({
   const [picking, setPicking] = useState<{ index: number; target: "netdisk" | "local" } | null>(null);
   // 每次打开都换 key 重建选择器：弹窗关闭后 DOM 可能被保留，靠 key 保证每次都从根目录开始。
   const [pickerRun, setPickerRun] = useState(0);
+  // 排除关键字的输入草稿；点「添加」选择匹配方式后才写入映射，输入框本身不参与保存。
+  const [excludeDraft, setExcludeDraft] = useState("");
+  // 组合输入框左侧的匹配方式；点「添加」直接按当前方式生成规则。
+  const [excludeMode, setExcludeMode] = useState<StrmExcludeMode>("equals");
+  const excludeInputRef = useRef<ComponentRef<typeof Input>>(null);
+  const [message, messageHolder] = useFeedbackMessage();
 
   const openPicker = (index: number, target: "netdisk" | "local") => {
     setPickerRun((previous) => previous + 1);
@@ -141,10 +221,35 @@ export function StrmPathsField({
   const incomplete = countIncompleteMappings(value);
   const duplicateLocalPaths = countDuplicateLocalPaths(value);
   const selectedFormats = value[0]?.formats ?? [...DEFAULT_STRM_FORMATS];
+  const selectedMinSizeMB = value[0]?.min_size_mb ?? 0;
+  const selectedExcludes = value[0]?.exclude ?? [];
 
   const updateFormats = (formats: unknown) => {
     const normalized = normalizeStrmFormats(formats);
     onChange(value.map((item) => ({ ...item, formats: normalized })));
+  };
+  // 媒体格式、最小体积与排除关键字对所有映射统一生效，与「媒体格式」共用同一份草稿传播方式。
+  const updateMinSizeMB = (size: unknown) => {
+    const normalized = Math.max(0, Math.trunc(Number(size) || 0));
+    onChange(value.map((item) => ({ ...item, min_size_mb: normalized })));
+  };
+  // 排除规则对所有映射统一生效，与「媒体格式」共用同一份草稿传播方式。
+  const updateExcludes = (excludes: StrmExcludeKeyword[]) => {
+    onChange(value.map((item) => ({ ...item, exclude: excludes })));
+  };
+  // 「添加」始终可点：输入框为空时提示并聚焦输入框，避免出现点不动的禁用按钮。
+  const addExclude = () => {
+    const keyword = excludeDraft.trim();
+    if (keyword === "") {
+      message.error("请先输入文件或文件夹名称");
+      excludeInputRef.current?.focus();
+      return;
+    }
+    setExcludeDraft("");
+    updateExcludes(normalizeStrmExcludes([...selectedExcludes, { mode: excludeMode, value: keyword }]));
+  };
+  const removeExclude = (rule: StrmExcludeKeyword) => {
+    updateExcludes(selectedExcludes.filter((item) => !(item.mode === rule.mode && item.value === rule.value)));
   };
 
   const chooseNetdisk = (picked: { id: string; path: string }) => {
@@ -160,6 +265,7 @@ export function StrmPathsField({
 
   return (
     <div className="settings-strm-paths">
+      {messageHolder}
       {value.length === 0 ? (
         <span className="settings-field-placeholder">尚未添加 strm 映射</span>
       ) : (
@@ -234,7 +340,20 @@ export function StrmPathsField({
       <div className="settings-pan115-actions">
         <Button
           type="primary"
-          onClick={() => onChange([...value, { kind: "115", id: "", path: "", local_path: "", formats: [...selectedFormats] }])}
+          onClick={() =>
+            onChange([
+              ...value,
+              {
+                kind: "115",
+                id: "",
+                path: "",
+                local_path: "",
+                formats: [...selectedFormats],
+                min_size_mb: selectedMinSizeMB,
+                exclude: [...selectedExcludes],
+              },
+            ])
+          }
         >
           添加映射
         </Button>
@@ -258,6 +377,67 @@ export function StrmPathsField({
           aria-label="媒体格式"
           onChange={updateFormats}
         />
+      </div>
+      <div className="settings-field settings-strm-format-line">
+        <span className="settings-field-label">最小视频大小</span>
+        <div className="settings-input-with-unit">
+          <Input type="number"
+            min={0}
+            addAfter="MB"
+            value={selectedMinSizeMB > 0 ? String(selectedMinSizeMB) : ""}
+            placeholder="0"
+            aria-label="最小视频大小 MB"
+            onChange={updateMinSizeMB}
+          />
+        </div>
+        <span className="settings-field-description">
+          小于该体积的视频不生成 strm，单位 MB；留空或 0 表示不限制，网盘未返回体积的文件同样不受限制。
+        </span>
+      </div>
+      <div className="settings-field settings-strm-format-line">
+        <span className="settings-field-label">排除文件/夹</span>
+        <div className="settings-strm-exclude">
+          <Input
+            ref={excludeInputRef}
+            allowClear
+            value={excludeDraft}
+            placeholder="输入文件或文件夹名称"
+            aria-label="排除关键字"
+            addBefore={
+              <Select
+                value={excludeMode}
+                options={strmExcludeModes}
+                className="settings-strm-exclude-mode"
+                aria-label="排除匹配方式"
+                onChange={(mode) => {
+                  const next = String(mode);
+                  if (isStrmExcludeMode(next)) setExcludeMode(next);
+                }}
+              />
+            }
+            onChange={(next) => setExcludeDraft(next)}
+          />
+          <Button type="secondary" onClick={addExclude}>
+            添加
+          </Button>
+        </div>
+        {selectedExcludes.length > 0 ? (
+          <div className="settings-strm-exclude-tags">
+            {selectedExcludes.map((rule) => (
+              <Tag
+                key={`${rule.mode}-${rule.value}`}
+                closable
+                aria-label={`删除排除规则 ${formatStrmExclude(rule)}`}
+                onClose={() => removeExclude(rule)}
+              >
+                {formatStrmExclude(rule)}
+              </Tag>
+            ))}
+          </div>
+        ) : null}
+        <span className="settings-field-description">
+          先选匹配方式再输入名称，点「添加」即生成规则；标签中的 * 表示通配位置。匹配不区分大小写，命中文件夹时整个文件夹都不生成 strm。
+        </span>
       </div>
       {incomplete > 0 ? (
         <span className="settings-field-description">
@@ -333,9 +513,7 @@ export function StrmPathsField({
 export function StrmGenerateAction({ value }: { value: StrmMapping[] }) {
   const incomplete = countIncompleteMappings(value);
   const duplicateLocalPaths = countDuplicateLocalPaths(value);
-  const scan = useMutation({
-    mutationFn: () => apiRequest<StrmScanResult>("/strm/scan", { method: "POST" }),
-  });
+  const { scan, progress } = useScanProgress<StrmScanResult>("/strm/scan");
   const failedMappings = scan.data?.mappings.filter((item) => item.message !== "") ?? [];
 
   return (
@@ -353,6 +531,7 @@ export function StrmGenerateAction({ value }: { value: StrmMapping[] }) {
           生成使用已保存的映射；修改后请先保存设置再生成。
         </span>
       </div>
+      <ScanProgressDisplay label="生成" progress={progress} pending={scan.isPending} error={scan.isError} warning={failedMappings.length > 0 || (scan.data?.failed ?? 0) > 0 || Boolean(scan.data?.emby.message)} />
       {scan.isError ? (
         <span className="settings-field-description">生成失败：{scan.error.message}</span>
       ) : scan.data ? (

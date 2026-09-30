@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"errors"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -50,6 +51,57 @@ func cancelPan115Login(service *application.Pan115Service) http.HandlerFunc {
 	return func(response http.ResponseWriter, request *http.Request) {
 		if service != nil {
 			service.CancelLogin(chi.URLParam(request, "sessionId"))
+		}
+		response.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// startPan115CookieLogin 按渠道申请一次 Cookie 扫码，返回二维码与会话标识。
+// 请求体缺省（空体）表示使用默认渠道，因此空体不算调用方错误。
+func startPan115CookieLogin(service *application.Pan115Service) http.HandlerFunc {
+	type requestBody struct {
+		ClientType string `json:"client_type"`
+	}
+	return func(response http.ResponseWriter, request *http.Request) {
+		if service == nil {
+			writeError(response, http.StatusServiceUnavailable, "service_unavailable", "115 网盘服务尚未就绪")
+			return
+		}
+		var body requestBody
+		if err := decodeJSON(response, request, &body); err != nil && !errors.Is(err, io.EOF) {
+			writeError(response, http.StatusBadRequest, "invalid_request", "请求体不是有效的扫码渠道")
+			return
+		}
+		session, err := service.StartCookieLogin(request.Context(), body.ClientType)
+		if err != nil {
+			writePan115Error(response, err)
+			return
+		}
+		writeJSON(response, http.StatusCreated, session)
+	}
+}
+
+// pan115CookieLoginStatus 查询 Cookie 扫码状态；授权当次返回 Cookie 明文，之后不再重复返回。
+func pan115CookieLoginStatus(service *application.Pan115Service) http.HandlerFunc {
+	return func(response http.ResponseWriter, request *http.Request) {
+		if service == nil {
+			writeError(response, http.StatusServiceUnavailable, "service_unavailable", "115 网盘服务尚未就绪")
+			return
+		}
+		result, err := service.CookieLoginStatus(request.Context(), chi.URLParam(request, "sessionId"))
+		if err != nil {
+			writePan115Error(response, err)
+			return
+		}
+		writeJSON(response, http.StatusOK, result)
+	}
+}
+
+// cancelPan115CookieLogin 主动结束一次 Cookie 扫码会话，避免页面关闭后二维码仍可被扫描。
+func cancelPan115CookieLogin(service *application.Pan115Service) http.HandlerFunc {
+	return func(response http.ResponseWriter, request *http.Request) {
+		if service != nil {
+			service.CancelCookieLogin(chi.URLParam(request, "sessionId"))
 		}
 		response.WriteHeader(http.StatusNoContent)
 	}
@@ -127,6 +179,18 @@ func listPan115Files(service *application.Pan115Service) http.HandlerFunc {
 			page.Path = path
 		}
 		writeJSON(response, http.StatusOK, page)
+	}
+}
+
+// scanPan115Library 递归扫描设置页配置的 115 目录，把识别出番号的视频登记为「已在媒体库」。
+// 目录、格式与失败隔离规则由应用层统一决定，这里只负责把结果原样返回。
+func scanPan115Library(service *application.Pan115LibraryService) http.HandlerFunc {
+	return func(response http.ResponseWriter, request *http.Request) {
+		if service == nil {
+			writeError(response, http.StatusServiceUnavailable, "service_unavailable", "115 网盘服务尚未就绪")
+			return
+		}
+		streamScan(response, request, service.Scan, writePan115Error)
 	}
 }
 
@@ -209,6 +273,10 @@ func pan115Offset(raw string) (int, error) {
 func writePan115Error(response http.ResponseWriter, err error) {
 	var apiErr *pan115.APIError
 	switch {
+	case errors.Is(err, application.ErrPan115ScanNotConfigured):
+		writeError(response, http.StatusConflict, "pan115_scan_not_configured", "尚未配置 115 扫描目录，请先在设置中添加目录")
+	case errors.Is(err, application.ErrInvalidSetting):
+		writeError(response, http.StatusBadRequest, "invalid_request", trimErrorPrefix(err, application.ErrInvalidSetting))
 	case errors.Is(err, application.ErrPan115NotLinked):
 		writeError(response, http.StatusConflict, "pan115_not_linked", "115 网盘尚未绑定账号，请先在设置中扫码登录")
 	case errors.Is(err, application.ErrPan115LoginUnknown):

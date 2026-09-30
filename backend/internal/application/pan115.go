@@ -26,8 +26,13 @@ const (
 	pan115RootDirectoryID = "0"
 	// pan115RootDirectoryName 是 115 对根目录的固定名称，用于目录选择器的面包屑。
 	pan115RootDirectoryName = "根目录"
-	pan115DefaultFileLimit  = 100
-	pan115MaxFileLimit      = 1000
+	// pan115FilePageLimit 是 115 文件列表接口单页可读取的最大条目数（115 开放接口上限为 1150）。
+	// 生成 strm 与扫描入库的递归遍历都按这个粒度分页，页大小只有这一处权威定义。
+	pan115FilePageLimit = 1150
+	// pan115DefaultFileLimit 是调用方未指定或传入非法 limit 时的兜底页大小。
+	pan115DefaultFileLimit = 100
+	// pan115MaxFileLimit 是 Files 接受的最大 limit；超过即视为非法输入并回落默认值。
+	pan115MaxFileLimit = pan115FilePageLimit
 )
 
 var (
@@ -45,6 +50,9 @@ var (
 // 使扫码、刷新与离线受理可以在不访问 115 真实接口的情况下被验证。
 type pan115API interface {
 	BeginLogin(context.Context) (*pan115.Login, error)
+	BeginCookieLogin(context.Context, string) (*pan115.CookieLogin, error)
+	CookieLoginStatus(context.Context, *pan115.CookieLogin) (pan115.LoginState, error)
+	ExchangeCookie(context.Context, *pan115.CookieLogin) (string, error)
 	LoginStatus(context.Context, *pan115.Login) (pan115.LoginState, error)
 	ExchangeToken(context.Context, *pan115.Login) (pan115.Tokens, error)
 	RefreshToken(context.Context, string) (pan115.Tokens, error)
@@ -69,6 +77,8 @@ type Pan115Service struct {
 
 	mu     sync.Mutex
 	logins map[string]*pan115Login
+	// cookieLogins 与 logins 分开存放：Cookie 扫码不落库，只在内存中完成一次换取。
+	cookieLogins map[string]*pan115CookieLogin
 }
 
 // pan115Login 保存一次扫码会话。设备码与 PKCE 校验值只存在于内存，
@@ -79,6 +89,16 @@ type pan115Login struct {
 	expiresAt time.Time
 	state     pan115.LoginState
 	account   *domain.Pan115Account
+}
+
+// pan115CookieLogin 保存一次 Cookie 扫码会话。扫码参数只存在于内存，
+// 换回的 Cookie 仅在授权当次响应中返回给设置页，服务端不落库、不写日志。
+type pan115CookieLogin struct {
+	mu        sync.Mutex
+	login     *pan115.CookieLogin
+	expiresAt time.Time
+	state     pan115.LoginState
+	cookie    string
 }
 
 // NewPan115Service 组装 115 服务；settings 用于读取离线下载的目标目录。
@@ -96,7 +116,14 @@ func NewPan115Service(accounts ports.Pan115AccountRepository, settings func(cont
 	if client == nil {
 		client = pan115.New(nil)
 	}
-	return &Pan115Service{client: client, accounts: accounts, secrets: secrets, settings: settings, logins: map[string]*pan115Login{}}, nil
+	return &Pan115Service{
+		client:       client,
+		accounts:     accounts,
+		secrets:      secrets,
+		settings:     settings,
+		logins:       map[string]*pan115Login{},
+		cookieLogins: map[string]*pan115CookieLogin{},
+	}, nil
 }
 
 // Close 释放 115 的空闲连接；进程退出时调用。
@@ -176,6 +203,75 @@ func (s *Pan115Service) LoginStatus(ctx context.Context, sessionID string) (doma
 // CancelLogin 结束一次扫码会话；会话不存在时同样视为已取消。
 func (s *Pan115Service) CancelLogin(sessionID string) {
 	s.forgetLogin(sessionID)
+}
+
+// StartCookieLogin 按渠道申请一次 Cookie 扫码；渠道为空或非法时回落到 115 默认渠道。
+// 二维码与状态查询固定走 web 入口，渠道只决定最终换取哪个客户端的 Cookie。
+func (s *Pan115Service) StartCookieLogin(ctx context.Context, clientType string) (domain.Pan115CookieLoginSession, error) {
+	clientType = pan115.NormalizeCookieClientType(clientType)
+	login, err := s.client.BeginCookieLogin(ctx, clientType)
+	if err != nil {
+		return domain.Pan115CookieLoginSession{}, err
+	}
+	sessionID, err := pan115SessionID()
+	if err != nil {
+		return domain.Pan115CookieLoginSession{}, err
+	}
+	expiresAt := time.Now().Add(pan115LoginTTL)
+	s.mu.Lock()
+	s.pruneLoginsLocked(time.Now())
+	s.pruneCookieLoginsLocked(time.Now())
+	if len(s.cookieLogins) >= pan115LoginLimit {
+		s.dropOldestCookieLoginLocked()
+	}
+	s.cookieLogins[sessionID] = &pan115CookieLogin{login: login, expiresAt: expiresAt, state: pan115.LoginWaiting}
+	s.mu.Unlock()
+	return domain.Pan115CookieLoginSession{
+		SessionID:  sessionID,
+		QRCode:     "data:image/png;base64," + base64.StdEncoding.EncodeToString(login.QRCode),
+		ClientType: clientType,
+		ExpiresAt:  expiresAt,
+	}, nil
+}
+
+// CookieLoginStatus 查询一次 Cookie 扫码状态；已授权时立刻换取 Cookie，并在本次响应中返回一次。
+// Cookie 不落库：设置页拿到后写入 PAN115_COOKIE 统一加密保存，避免同一凭据出现两个权威来源。
+func (s *Pan115Service) CookieLoginStatus(ctx context.Context, sessionID string) (domain.Pan115CookieLoginResult, error) {
+	entry, err := s.cookieLogin(sessionID)
+	if err != nil {
+		return domain.Pan115CookieLoginResult{}, err
+	}
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+	if entry.state == pan115.LoginAuthorized {
+		return domain.Pan115CookieLoginResult{Status: domain.Pan115LoginAuthorized, Cookie: entry.cookie}, nil
+	}
+	if time.Now().After(entry.expiresAt) {
+		s.forgetCookieLogin(sessionID)
+		return domain.Pan115CookieLoginResult{Status: domain.Pan115LoginExpired}, nil
+	}
+	state, err := s.client.CookieLoginStatus(ctx, entry.login)
+	if err != nil {
+		return domain.Pan115CookieLoginResult{}, err
+	}
+	switch state {
+	case pan115.LoginAuthorized:
+		cookie, err := s.client.ExchangeCookie(ctx, entry.login)
+		if err != nil {
+			return domain.Pan115CookieLoginResult{}, err
+		}
+		entry.state = pan115.LoginAuthorized
+		entry.cookie = cookie
+		return domain.Pan115CookieLoginResult{Status: domain.Pan115LoginAuthorized, Cookie: cookie}, nil
+	case pan115.LoginExpired, pan115.LoginCanceled:
+		s.forgetCookieLogin(sessionID)
+	}
+	return domain.Pan115CookieLoginResult{Status: pan115LoginState(state)}, nil
+}
+
+// CancelCookieLogin 结束一次 Cookie 扫码会话；会话不存在时同样视为已取消。
+func (s *Pan115Service) CancelCookieLogin(sessionID string) {
+	s.forgetCookieLogin(sessionID)
 }
 
 // Linked 报告是否已绑定 115 账号；订阅下载装配据此决定是否注册 115 下载器。
@@ -484,6 +580,23 @@ func (s *Pan115Service) forgetLogin(sessionID string) {
 	s.mu.Unlock()
 }
 
+// cookieLogin 取出一个 Cookie 扫码会话；不改变会话状态。
+func (s *Pan115Service) cookieLogin(sessionID string) (*pan115CookieLogin, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	entry, ok := s.cookieLogins[sessionID]
+	if !ok {
+		return nil, ErrPan115LoginUnknown
+	}
+	return entry, nil
+}
+
+func (s *Pan115Service) forgetCookieLogin(sessionID string) {
+	s.mu.Lock()
+	delete(s.cookieLogins, sessionID)
+	s.mu.Unlock()
+}
+
 // pruneLoginsLocked 清理已过期的扫码会话；expiresAt 创建后不再变化，可无锁读取。
 func (s *Pan115Service) pruneLoginsLocked(now time.Time) {
 	for id, entry := range s.logins {
@@ -504,6 +617,29 @@ func (s *Pan115Service) dropOldestLoginLocked() {
 	}
 	if oldestID != "" {
 		delete(s.logins, oldestID)
+	}
+}
+
+// pruneCookieLoginsLocked 清理已过期的 Cookie 扫码会话；expiresAt 创建后不再变化，可无锁读取。
+func (s *Pan115Service) pruneCookieLoginsLocked(now time.Time) {
+	for id, entry := range s.cookieLogins {
+		if now.After(entry.expiresAt) {
+			delete(s.cookieLogins, id)
+		}
+	}
+}
+
+// dropOldestCookieLoginLocked 在会话数达到上限时淘汰最早创建的一个，避免内存无限增长。
+func (s *Pan115Service) dropOldestCookieLoginLocked() {
+	oldestID := ""
+	var oldest time.Time
+	for id, entry := range s.cookieLogins {
+		if oldestID == "" || entry.expiresAt.Before(oldest) {
+			oldestID, oldest = id, entry.expiresAt
+		}
+	}
+	if oldestID != "" {
+		delete(s.cookieLogins, oldestID)
 	}
 }
 

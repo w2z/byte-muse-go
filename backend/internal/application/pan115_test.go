@@ -15,6 +15,10 @@ import (
 type pan115ClientStub struct {
 	login       *pan115.Login
 	loginState  pan115.LoginState
+	cookieLogin *pan115.CookieLogin
+	cookieState pan115.LoginState
+	cookieValue string
+	cookieErr   error
 	tokens      pan115.Tokens
 	account     pan115.Account
 	quota       pan115.OfflineQuota
@@ -30,6 +34,8 @@ type pan115ClientStub struct {
 	downloadErr error
 
 	exchangeCalls int
+	cookieCalls   int
+	cookieClients []string
 	refreshCalls  int
 	accountCalls  int
 	quotaCalls    int
@@ -54,6 +60,26 @@ func (s *pan115ClientStub) BeginLogin(context.Context) (*pan115.Login, error) {
 
 func (s *pan115ClientStub) LoginStatus(context.Context, *pan115.Login) (pan115.LoginState, error) {
 	return s.loginState, nil
+}
+
+func (s *pan115ClientStub) BeginCookieLogin(_ context.Context, clientType string) (*pan115.CookieLogin, error) {
+	s.cookieClients = append(s.cookieClients, clientType)
+	if s.cookieLogin == nil {
+		return &pan115.CookieLogin{QRCode: []byte("png")}, nil
+	}
+	return s.cookieLogin, nil
+}
+
+func (s *pan115ClientStub) CookieLoginStatus(context.Context, *pan115.CookieLogin) (pan115.LoginState, error) {
+	return s.cookieState, nil
+}
+
+func (s *pan115ClientStub) ExchangeCookie(context.Context, *pan115.CookieLogin) (string, error) {
+	s.cookieCalls++
+	if s.cookieErr != nil {
+		return "", s.cookieErr
+	}
+	return s.cookieValue, nil
 }
 
 func (s *pan115ClientStub) ExchangeToken(context.Context, *pan115.Login) (pan115.Tokens, error) {
@@ -468,5 +494,104 @@ func TestPan115DirectoryPathForRoot(t *testing.T) {
 	}
 	if len(path) != 1 || path[0].ID != "0" || path[0].Name != "根目录" {
 		t.Fatalf("根目录路径 = %+v", path)
+	}
+}
+
+// TestPan115CookieLoginReturnsCookieOnceAndKeepsChannel 验证 Cookie 扫码按渠道申请二维码、
+// 授权后返回一次 Cookie 且重复轮询不再重复换取；Cookie 只存在于内存，不写账号仓储。
+func TestPan115CookieLoginReturnsCookieOnceAndKeepsChannel(t *testing.T) {
+	secret := strings.Repeat("x", 32)
+	repo := &pan115MemoryAccounts{}
+	client := &pan115ClientStub{
+		cookieLogin: &pan115.CookieLogin{QRCode: []byte("png")},
+		cookieState: pan115.LoginScanned,
+		cookieValue: "UID=1_A; CID=c; SEID=s",
+	}
+	service := newPan115TestService(t, repo, client, pan115TestSettings(""), secret)
+
+	session, err := service.StartCookieLogin(context.Background(), "115ipad")
+	if err != nil {
+		t.Fatalf("开始 Cookie 扫码失败: %v", err)
+	}
+	if session.ClientType != "115ipad" || !strings.HasPrefix(session.QRCode, "data:image/png;base64,") {
+		t.Fatalf("Cookie 扫码会话 = %+v", session)
+	}
+	if len(client.cookieClients) != 1 || client.cookieClients[0] != "115ipad" {
+		t.Fatalf("渠道透传 = %v", client.cookieClients)
+	}
+	// 未知渠道回落默认值，不把非法值透传给 115。
+	if _, err := service.StartCookieLogin(context.Background(), "unknown-app"); err != nil {
+		t.Fatalf("未知渠道申请失败: %v", err)
+	}
+	if len(client.cookieClients) != 2 || client.cookieClients[1] != "alipaymini" {
+		t.Fatalf("未知渠道兜底 = %v", client.cookieClients)
+	}
+
+	pending, err := service.CookieLoginStatus(context.Background(), session.SessionID)
+	if err != nil || pending.Status != "scanned" || pending.Cookie != "" {
+		t.Fatalf("已扫码状态 = %+v err=%v", pending, err)
+	}
+
+	client.cookieState = pan115.LoginAuthorized
+	authorized, err := service.CookieLoginStatus(context.Background(), session.SessionID)
+	if err != nil {
+		t.Fatalf("授权状态查询失败: %v", err)
+	}
+	if authorized.Status != "authorized" || authorized.Cookie != "UID=1_A; CID=c; SEID=s" {
+		t.Fatalf("授权结果 = %+v", authorized)
+	}
+	if repo.found {
+		t.Fatal("Cookie 扫码不应写入账号仓储")
+	}
+
+	exchanges := client.cookieCalls
+	again, err := service.CookieLoginStatus(context.Background(), session.SessionID)
+	if err != nil || again.Cookie != authorized.Cookie || client.cookieCalls != exchanges {
+		t.Fatalf("重复查询 = %+v err=%v calls=%d", again, err, client.cookieCalls)
+	}
+}
+
+// TestPan115CookieLoginRejectsUnknownSession 验证不存在的 Cookie 扫码会话不会被当作等待中。
+func TestPan115CookieLoginRejectsUnknownSession(t *testing.T) {
+	service := newPan115TestService(t, &pan115MemoryAccounts{}, &pan115ClientStub{}, pan115TestSettings(""), strings.Repeat("x", 32))
+	if _, err := service.CookieLoginStatus(context.Background(), "missing"); !errors.Is(err, ErrPan115LoginUnknown) {
+		t.Fatalf("未知会话错误 = %v", err)
+	}
+}
+
+// TestPan115CookieLoginDropsSessionAfterFailure 验证过期或取消后会话被清理，再次查询按未知会话处理，
+// 避免前端在二维码失效后仍反复拿到旧状态。
+func TestPan115CookieLoginDropsSessionAfterFailure(t *testing.T) {
+	for _, state := range []pan115.LoginState{pan115.LoginExpired, pan115.LoginCanceled} {
+		client := &pan115ClientStub{
+			cookieLogin: &pan115.CookieLogin{QRCode: []byte("png")},
+			cookieState: state,
+		}
+		service := newPan115TestService(t, &pan115MemoryAccounts{}, client, pan115TestSettings(""), strings.Repeat("x", 32))
+		session, err := service.StartCookieLogin(context.Background(), "")
+		if err != nil {
+			t.Fatalf("开始 Cookie 扫码失败: %v", err)
+		}
+		result, err := service.CookieLoginStatus(context.Background(), session.SessionID)
+		if err != nil || string(result.Status) != string(state) {
+			t.Fatalf("状态 %s 结果 = %+v err=%v", state, result, err)
+		}
+		if _, err := service.CookieLoginStatus(context.Background(), session.SessionID); !errors.Is(err, ErrPan115LoginUnknown) {
+			t.Fatalf("状态 %s 二次查询错误 = %v", state, err)
+		}
+	}
+}
+
+// TestPan115CancelCookieLoginForgetsSession 验证主动取消后会话立即失效。
+func TestPan115CancelCookieLoginForgetsSession(t *testing.T) {
+	client := &pan115ClientStub{cookieLogin: &pan115.CookieLogin{QRCode: []byte("png")}}
+	service := newPan115TestService(t, &pan115MemoryAccounts{}, client, pan115TestSettings(""), strings.Repeat("x", 32))
+	session, err := service.StartCookieLogin(context.Background(), "tv")
+	if err != nil {
+		t.Fatalf("开始 Cookie 扫码失败: %v", err)
+	}
+	service.CancelCookieLogin(session.SessionID)
+	if _, err := service.CookieLoginStatus(context.Background(), session.SessionID); !errors.Is(err, ErrPan115LoginUnknown) {
+		t.Fatalf("取消后查询错误 = %v", err)
 	}
 }

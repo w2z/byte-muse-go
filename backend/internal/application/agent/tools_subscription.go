@@ -52,7 +52,7 @@ func addSubscribe(ctx context.Context, deps Deps, raw string) (any, error) {
 
 // cancelSubscribe 取消某个番号的有效订阅；订阅状态转换仍由 SubscriptionService 负责。
 func cancelSubscribe(ctx context.Context, deps Deps, raw string) (any, error) {
-	code := NormalizeCode(raw)
+	code := domain.NormalizeCode(raw)
 	if code == "" {
 		return "请提供要取消的番号，例如 SSIS-001", nil
 	}
@@ -64,7 +64,7 @@ func cancelSubscribe(ctx context.Context, deps Deps, raw string) (any, error) {
 		return nil, fmt.Errorf("查询订阅失败: %w", err)
 	}
 	for _, item := range page.Items {
-		if item.Media == nil || NormalizeCode(item.Media.Code) != code {
+		if item.Media == nil || domain.NormalizeCode(item.Media.Code) != code {
 			continue
 		}
 		if _, err := deps.Subscriptions.Cancel(ctx, item.ID); err != nil {

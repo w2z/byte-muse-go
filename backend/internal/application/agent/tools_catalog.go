@@ -63,7 +63,7 @@ func lookupToolMedia(ctx context.Context, deps Deps, code string) (domain.Media,
 
 // searchCode 按番号返回一部影片的完整精简资料。
 func searchCode(ctx context.Context, deps Deps, raw string) (any, error) {
-	code := NormalizeCode(raw)
+	code := domain.NormalizeCode(raw)
 	if code == "" {
 		return "请提供番号，例如 SSIS-001", nil
 	}
@@ -191,7 +191,7 @@ func getDashboard(ctx context.Context, deps Deps) (any, error) {
 
 // queryLibrary 判断番号是否已存在媒体库中。
 func queryLibrary(ctx context.Context, deps Deps, raw string) (any, error) {
-	code := NormalizeCode(raw)
+	code := domain.NormalizeCode(raw)
 	if code == "" {
 		return "请提供番号，例如 SSIS-001", nil
 	}
@@ -200,7 +200,7 @@ func queryLibrary(ctx context.Context, deps Deps, raw string) (any, error) {
 		return failure, nil
 	}
 	return map[string]any{
-		"code":       NormalizeCode(item.Code),
+		"code":       domain.NormalizeCode(item.Code),
 		"in_library": item.LibraryStatus == domain.LibraryStatusPresent,
 	}, nil
 }

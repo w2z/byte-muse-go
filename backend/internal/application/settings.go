@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"bytemuse/backend/internal/domain"
+	"bytemuse/backend/internal/platform/pan115"
 	"bytemuse/backend/internal/ports"
 
 	"github.com/robfig/cron/v3"
@@ -72,6 +73,9 @@ const (
 	strmEmbyRefreshSettingKey = "STRM_EMBY_REFRESH"
 )
 
+// pan115ScanPathsSettingKey 是 115 扫描入库目录设置键；元素形如 {"id":"目录 ID","path":"展示用路径"}。
+const pan115ScanPathsSettingKey = "PAN115_SCAN_PATHS"
+
 // settingSpec 描述一个可写配置项：是否敏感，以及取值范围。
 type settingSpec struct {
 	secret   bool
@@ -83,6 +87,7 @@ type settingSpec struct {
 // writableSettings 是可写配置项的唯一权威清单，key 与旧版 template.env、对标站 /config 完全一致。
 // 顺序按对标站设置页的分组排列，便于逐组核对。
 var writableSettings = map[string]settingSpec{
+	"PAN115_EVENT_ENABLE": {kind: settingBool},
 	// 站点
 	"MTEAM_API_KEY":      {secret: true, kind: settingText},
 	"PTT_COOKIE":         {secret: true, kind: settingText},
@@ -171,9 +176,11 @@ var writableSettings = map[string]settingSpec{
 	"CLOUDNAS_PASSWORD": {secret: true, kind: settingText},
 	"CLOUDNAS_SAVEPATH": {kind: settingText},
 
-	// 115 网盘：账号与令牌由扫码登录管理并单独落库，这里只保存离线下载的目标目录与扫描目录。
-	"PAN115_SAVE_PATH":  {kind: settingText},
-	"PAN115_SCAN_PATHS": {kind: settingJSONArray},
+	// 115 网盘：OpenAPI 令牌由扫码绑定管理并单独落库；Cookie 是生活事件与扫码换取共用的唯一凭据，
+	// 这里只保存 Cookie、离线下载的目标目录与扫描目录。
+	"PAN115_COOKIE":           {secret: true, kind: settingText},
+	"PAN115_SAVE_PATH":        {kind: settingText},
+	pan115ScanPathsSettingKey: {kind: settingJSONArray},
 
 	// strm：网盘目录与本地 strm 目录的映射，以及 strm 内容使用的对外基址。
 	strmPathsSettingKey:       {kind: settingJSONArray},
@@ -292,6 +299,10 @@ func (s *SettingsService) Get(ctx context.Context) (domain.SystemSettings, error
 	if result.Values["BYPASS_ENGINE"] == "" || result.Values["BYPASS_USE_PROXY"] != "true" {
 		result.Values["BYPASS_USE_PROXY"] = "false"
 	}
+	// Cookie 缺失或无法解密时，历史开关值也不能启动事件监听。
+	if strings.TrimSpace(result.Values["PAN115_COOKIE"]) == "" || result.Values["PAN115_EVENT_ENABLE"] != "true" {
+		result.Values["PAN115_EVENT_ENABLE"] = "false"
+	}
 	return result, nil
 }
 
@@ -349,6 +360,31 @@ func (s *SettingsService) Update(ctx context.Context, values map[string]string) 
 			}
 		}
 	}
+	// 部分更新按最终 Cookie 判断；清空凭据与关闭监听在同一批次原子保存。
+	_, changesCookie := values["PAN115_COOKIE"]
+	_, changesListener := values["PAN115_EVENT_ENABLE"]
+	if changesCookie || changesListener {
+		cookie, supplied := values["PAN115_COOKIE"]
+		if !supplied {
+			current, err := s.Get(ctx)
+			if err != nil {
+				return domain.SystemSettings{}, err
+			}
+			cookie = current.Values["PAN115_COOKIE"]
+		}
+		if strings.TrimSpace(cookie) == "" {
+			found := false
+			for i := range items {
+				if items[i].Key == "PAN115_EVENT_ENABLE" {
+					items[i].Value = "false"
+					found = true
+				}
+			}
+			if !found {
+				items = append(items, ports.StoredSetting{Key: "PAN115_EVENT_ENABLE", Value: "false"})
+			}
+		}
+	}
 	if len(items) > 0 {
 		if err := s.repository.Upsert(ctx, items); err != nil {
 			return domain.SystemSettings{}, fmt.Errorf("save settings: %w", err)
@@ -376,6 +412,37 @@ type pan115ScanPath struct {
 	Path string `json:"path"`
 }
 
+// parsePan115ScanPaths 解析 PAN115_SCAN_PATHS 设置；空值表示没有配置任何扫描目录。
+// 设置保存校验与扫描入库共用这一份实现，避免两套规则漂移。
+// 返回的错误只说明原因，由调用方补充设置键等上下文。
+func parsePan115ScanPaths(raw string) ([]pan115ScanPath, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return nil, nil
+	}
+	if !strings.HasPrefix(trimmed, "[") {
+		return nil, errors.New("需要是 JSON 数组")
+	}
+	var entries []pan115ScanPath
+	if err := json.Unmarshal([]byte(trimmed), &entries); err != nil {
+		return nil, errors.New("需要是 JSON 数组，元素为目录 ID 与目录路径")
+	}
+	seen := make(map[string]bool, len(entries))
+	for index := range entries {
+		entries[index].ID = strings.TrimSpace(entries[index].ID)
+		entries[index].Path = strings.TrimSpace(entries[index].Path)
+		entry := entries[index]
+		if entry.ID == "" || entry.Path == "" {
+			return nil, errors.New("每一项都需要包含目录 ID 与目录路径")
+		}
+		if seen[entry.ID] {
+			return nil, errors.New("目录重复: " + entry.ID)
+		}
+		seen[entry.ID] = true
+	}
+	return entries, nil
+}
+
 // validateSettingValue 按配置项取值域校验输入；空值表示清除该项。
 func validateSettingValue(key string, spec settingSpec, value string) error {
 	if value == "" {
@@ -383,6 +450,9 @@ func validateSettingValue(key string, spec settingSpec, value string) error {
 	}
 	invalid := func(reason string) error {
 		return fmt.Errorf("%w: %s %s", ErrInvalidSetting, key, reason)
+	}
+	if key == "PAN115_COOKIE" && pan115.LifeCookieUserID(value) == "" {
+		return invalid("需要有效的 UID、CID、SEID，且不能含换行")
 	}
 	switch spec.kind {
 	case settingBool:
@@ -413,20 +483,8 @@ func validateSettingValue(key string, spec settingSpec, value string) error {
 			}
 			return nil
 		}
-		var entries []pan115ScanPath
-		if err := json.Unmarshal([]byte(value), &entries); err != nil {
-			return invalid("需要是 JSON 数组，元素为目录 ID 与目录路径")
-		}
-		seen := make(map[string]bool, len(entries))
-		for _, entry := range entries {
-			id := strings.TrimSpace(entry.ID)
-			if id == "" || strings.TrimSpace(entry.Path) == "" {
-				return invalid("每一项都需要包含目录 ID 与目录路径")
-			}
-			if seen[id] {
-				return invalid("目录重复: " + id)
-			}
-			seen[id] = true
+		if _, err := parsePan115ScanPaths(value); err != nil {
+			return invalid(err.Error())
 		}
 	case settingEnum:
 		if !containsValue(spec.allowed, value) {

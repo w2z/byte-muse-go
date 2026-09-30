@@ -589,6 +589,72 @@ describe("网盘设置", () => {
     expect(screen.queryByRole("button", { name: "取消" })).not.toBeInTheDocument();
   });
 
+  it("扫码获取 Cookie 按渠道申请二维码，授权后自动填入 115 Cookie 设置项", async () => {
+    const user = userEvent.setup();
+    let requestedChannel = "";
+    vi.mocked(apiRequest).mockImplementation(async (path, options) => {
+      if (path === "/system/settings") return { database_driver: "sqlite", values: {}, configured: {} };
+      if (path === "/pan115/account") return { linked: false, account: null };
+      if (path === "/pan115/cookie/login/sessions" && options?.method === "POST") {
+        requestedChannel = JSON.parse(String(options.body)).client_type;
+        return {
+          session_id: "cookie-1",
+          qr_code: "data:image/png;base64,BBB",
+          client_type: requestedChannel,
+          expires_at: "2026-09-29T10:00:00Z",
+        };
+      }
+      if (path === "/pan115/cookie/login/sessions/cookie-1" && options?.method === "DELETE") return undefined;
+      if (path === "/pan115/cookie/login/sessions/cookie-1") {
+        return { status: "authorized", cookie: "CID=c; SEID=s; UID=1_A" };
+      }
+      throw new Error(`未处理的请求 ${path}`);
+    });
+
+    renderSettings();
+    await user.click(await screen.findByRole("tab", { name: "网盘" }));
+    // 默认渠道与 115 官方一致：支付宝小程序。
+    await user.click(await screen.findByRole("button", { name: "扫码获取 Cookie" }));
+    expect(requestedChannel).toBe("alipaymini");
+    expect(await screen.findByAltText("115 获取 Cookie 二维码")).toHaveAttribute("src", "data:image/png;base64,BBB");
+    // 授权后把 Cookie 写回设置草稿并关闭弹窗；是否保存由用户决定。
+    await waitFor(() => expect(screen.getByLabelText("115 Cookie")).toHaveValue("CID=c; SEID=s; UID=1_A"));
+    expect(screen.queryByAltText("115 获取 Cookie 二维码")).not.toBeInTheDocument();
+  });
+
+  it("切换扫码渠道后按新渠道重新申请二维码", async () => {
+    const user = userEvent.setup();
+    const requestedChannels: string[] = [];
+    vi.mocked(apiRequest).mockImplementation(async (path, options) => {
+      if (path === "/system/settings") return { database_driver: "sqlite", values: {}, configured: {} };
+      if (path === "/pan115/account") return { linked: false, account: null };
+      if (path === "/pan115/cookie/login/sessions" && options?.method === "POST") {
+        const channel = JSON.parse(String(options.body)).client_type as string;
+        requestedChannels.push(channel);
+        return {
+          session_id: `cookie-${requestedChannels.length}`,
+          qr_code: `data:image/png;base64,${channel}`,
+          client_type: channel,
+          expires_at: "2026-09-29T10:00:00Z",
+        };
+      }
+      if (path.startsWith("/pan115/cookie/login/sessions/") && options?.method === "DELETE") return undefined;
+      if (path.startsWith("/pan115/cookie/login/sessions/")) return { status: "waiting", cookie: "" };
+      throw new Error(`未处理的请求 ${path}`);
+    });
+
+    renderSettings();
+    await user.click(await screen.findByRole("tab", { name: "网盘" }));
+    await user.click(await screen.findByRole("button", { name: "扫码获取 Cookie" }));
+    expect(await screen.findByText("115 扫码获取 Cookie（支付宝小程序）")).toBeInTheDocument();
+
+    // 弹窗打开时切换渠道立即换一张二维码，避免用户误扫上一个渠道的码。
+    await user.click(screen.getByRole("combobox", { name: "扫码渠道" }));
+    fireEvent.click(await screen.findByRole("option", { name: "微信小程序" }));
+    expect(await screen.findByText("115 扫码获取 Cookie（微信小程序）")).toBeInTheDocument();
+    expect(requestedChannels).toEqual(["alipaymini", "wechatmini"]);
+  });
+
   it("扫描目录可添加多个 115 目录，重复目录不可再添加，保存为 JSON 数组", async () => {
     const user = userEvent.setup();
     const values: Record<string, string> = {};
@@ -662,6 +728,54 @@ describe("网盘设置", () => {
     // 删除第二个目录后只剩一个地址。
     await user.click(screen.getAllByRole("button", { name: "删除" })[1]);
     expect(screen.queryByLabelText("扫描目录 2")).not.toBeInTheDocument();
+  });
+
+  it("115 扫描入库按钮使用已保存的扫描目录，展示汇总结果与失败目录原因", async () => {
+    const user = userEvent.setup();
+    vi.mocked(apiRequest).mockImplementation(async (path, options) => {
+      if (path === "/pan115/library/scan" && options?.method === "POST") {
+        return {
+          directories: [
+            { id: "10", path: "/电影", files: 12, matched: 11, created: 8, skipped: 1, message: "" },
+            { id: "20", path: "/剧集", files: 3, matched: 0, created: 0, skipped: 0, message: "115 目录读取失败" },
+          ],
+          files: 15,
+          matched: 11,
+          created: 8,
+          skipped: 1,
+        };
+      }
+      if (path === "/pan115/account") return { linked: true, account: boundAccount };
+      if (path === "/system/settings") {
+        return {
+          database_driver: "sqlite",
+          values: { PAN115_SCAN_PATHS: JSON.stringify([{ id: "10", path: "/电影" }]) },
+          configured: {},
+        };
+      }
+      throw new Error(`未处理的请求 ${path}`);
+    });
+
+    renderSettings();
+    await user.click(await screen.findByRole("tab", { name: "网盘" }));
+    // 草稿来自已保存配置，按钮可直接点击。
+    const scanButton = await screen.findByRole("button", { name: "扫描入库" });
+    expect(scanButton).toBeEnabled();
+    expect(screen.getByText("扫描使用已保存的扫描目录；修改后请先保存设置再扫描。")).toBeInTheDocument();
+    await user.click(scanButton);
+    expect(await screen.findByText(/共 15 个视频文件，识别 11 个番号，新增 8 部影片，跳过 1 个。/)).toBeInTheDocument();
+    expect(screen.getByText(/\/剧集：115 目录读取失败/)).toBeInTheDocument();
+  });
+
+  it("未配置扫描目录时禁用 115 扫描入库按钮", async () => {
+    const user = userEvent.setup();
+    vi.mocked(apiRequest).mockImplementation(async (path) => {
+      if (path === "/pan115/account") return { linked: false, account: null };
+      return { database_driver: "sqlite", values: {}, configured: {} };
+    });
+    renderSettings();
+    await user.click(await screen.findByRole("tab", { name: "网盘" }));
+    expect(await screen.findByRole("button", { name: "扫描入库" })).toBeDisabled();
   });
 
   /** 等待弹窗完全卸载：退出动画在 jsdom 里靠定时器收尾，立刻打开下一个弹窗会同时命中两个。 */
@@ -787,10 +901,13 @@ describe("网盘设置", () => {
     await waitForDialogClosed();
     expect(await screen.findByLabelText("本地路径 2")).toHaveValue("/");
 
+    // 最小视频大小与媒体格式一样对所有映射统一生效：填一次即写入每条映射。
+    await user.type(screen.getByLabelText("最小视频大小 MB"), "300");
+
     await user.click(screen.getByRole("button", { name: "保存设置" }));
     await waitFor(() => expect(values.STRM_PATHS).toBe(JSON.stringify([
-      { kind: "115", id: "10", path: "/电影", local_path: "/movies", formats: ["mp4", "avi", "rmvb", "wmv", "mov", "mkv", "webm", "iso", "mpg", "m4v", "ts", "flv", "strm", "vob", "m2ts"] },
-      { kind: "cd2", id: "/115", path: "/115", local_path: "/", formats: ["mp4", "avi", "rmvb", "wmv", "mov", "mkv", "webm", "iso", "mpg", "m4v", "ts", "flv", "strm", "vob", "m2ts"] },
+      { kind: "115", id: "10", path: "/电影", local_path: "/movies", formats: ["mp4", "avi", "rmvb", "wmv", "mov", "mkv", "webm", "iso", "mpg", "m4v", "ts", "flv", "strm", "vob", "m2ts"], min_size_mb: 300, exclude: [] },
+      { kind: "cd2", id: "/115", path: "/115", local_path: "/", formats: ["mp4", "avi", "rmvb", "wmv", "mov", "mkv", "webm", "iso", "mpg", "m4v", "ts", "flv", "strm", "vob", "m2ts"], min_size_mb: 300, exclude: [] },
     ])));
 
     // 删除第一条映射后只剩一条，并且删除后不再显示未选齐提示。
@@ -798,6 +915,95 @@ describe("网盘设置", () => {
     expect(screen.getByLabelText("网盘路径 1")).toHaveValue("/115");
     expect(screen.queryByLabelText("网盘路径 2")).not.toBeInTheDocument();
   }, 20000);
+
+  it("STRM 排除规则按匹配方式与关键字去重回显，并随最小视频大小一起保存", async () => {
+    const user = userEvent.setup();
+    const values: Record<string, string> = {};
+    vi.mocked(apiRequest).mockImplementation(async (path, options) => {
+      if (path === "/system/settings" && options?.method === "PUT") {
+        const body = JSON.parse(String(options.body)) as { values: Record<string, string> };
+        Object.assign(values, body.values);
+        return { database_driver: "sqlite", values: { ...body.values }, configured: {} };
+      }
+      if (path === "/system/settings") {
+        return {
+          database_driver: "sqlite",
+          values: {
+            STRM_PATHS: JSON.stringify([
+              { kind: "115", id: "10", path: "/电影", local_path: "/movies", formats: ["mp4"], min_size_mb: 200, exclude: [{ mode: "contains", value: "Sample" }, { mode: "contains", value: "sample" }] },
+            ]),
+          },
+          configured: {},
+        };
+      }
+      if (path === "/pan115/account") return { linked: true, account: boundAccount };
+      throw new Error(`未处理的请求 ${path}`);
+    });
+
+    renderSettings();
+    await user.click(await screen.findByRole("tab", { name: "网盘" }));
+    await user.click(screen.getByRole("tab", { name: "STRM 生成" }));
+    // 已保存的最小体积回显到输入框；同方式同关键字忽略大小写去重后只剩一个标签，并保留用户输入的大小写。
+    expect(await screen.findByLabelText("最小视频大小 MB")).toHaveValue(200);
+    expect(screen.getAllByText("包含:*Sample*")).toHaveLength(1);
+
+    // 「添加」始终可点：输入框为空时只提示并聚焦输入框。
+    fireEvent.click(screen.getByRole("button", { name: "添加" }));
+    expect(await screen.findByText("请先输入文件或文件夹名称")).toBeInTheDocument();
+    expect(screen.getByLabelText("排除关键字")).toHaveFocus();
+
+    // 先在输入框左侧的匹配方式下拉里选「包含」，输入名称后点「添加」直接生成规则标签并清空输入框。
+    await user.click(screen.getByRole("combobox", { name: "排除匹配方式" }));
+    fireEvent.click(await screen.findByRole("option", { name: "包含" }));
+    await user.type(screen.getByLabelText("排除关键字"), "Trailer");
+    fireEvent.click(screen.getByRole("button", { name: "添加" }));
+    await waitFor(() => expect(screen.getByText("包含:*Trailer*")).toBeInTheDocument());
+    expect(screen.getByLabelText("排除关键字")).toHaveValue("");
+
+    await user.click(screen.getByRole("button", { name: "保存设置" }));
+    await waitFor(() => expect(values.STRM_PATHS).toBe(JSON.stringify([
+      { kind: "115", id: "10", path: "/电影", local_path: "/movies", formats: ["mp4"], min_size_mb: 200, exclude: [{ mode: "contains", value: "Sample" }, { mode: "contains", value: "Trailer" }] },
+    ])));
+  });
+
+  it("STRM 排除规则标签带关闭图标，移除后随设置一起保存", async () => {
+    const user = userEvent.setup();
+    const values: Record<string, string> = {};
+    vi.mocked(apiRequest).mockImplementation(async (path, options) => {
+      if (path === "/system/settings" && options?.method === "PUT") {
+        const body = JSON.parse(String(options.body)) as { values: Record<string, string> };
+        Object.assign(values, body.values);
+        return { database_driver: "sqlite", values: { ...body.values }, configured: {} };
+      }
+      if (path === "/system/settings") {
+        return {
+          database_driver: "sqlite",
+          values: {
+            STRM_PATHS: JSON.stringify([
+              { kind: "115", id: "10", path: "/电影", local_path: "/movies", formats: ["mp4"], min_size_mb: 0, exclude: [{ mode: "prefix", value: "Trailer" }] },
+            ]),
+          },
+          configured: {},
+        };
+      }
+      if (path === "/pan115/account") return { linked: true, account: boundAccount };
+      throw new Error(`未处理的请求 ${path}`);
+    });
+
+    renderSettings();
+    await user.click(await screen.findByRole("tab", { name: "网盘" }));
+    await user.click(screen.getByRole("tab", { name: "STRM 生成" }));
+    // 规则按匹配方式渲染成「前缀:xxx*」，标签自带关闭图标，点击即移除该条规则。
+    const tag = (await screen.findByText("前缀:Trailer*")).closest(".arco-tag") as HTMLElement;
+    expect(tag).not.toBeNull();
+    fireEvent.click(within(tag).getByLabelText("Close"));
+    await waitFor(() => expect(screen.queryByText("前缀:Trailer*")).not.toBeInTheDocument());
+
+    await user.click(screen.getByRole("button", { name: "保存设置" }));
+    await waitFor(() => expect(values.STRM_PATHS).toBe(JSON.stringify([
+      { kind: "115", id: "10", path: "/电影", local_path: "/movies", formats: ["mp4"], min_size_mb: 0, exclude: [] },
+    ])));
+  });
 
   it("本地 strm 目录选择器固定以 /strm 为根，可新建目录并刷新出外部创建的目录", async () => {
     const user = userEvent.setup();

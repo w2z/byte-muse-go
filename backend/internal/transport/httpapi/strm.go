@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -94,12 +95,9 @@ func scanStrm(service *application.StrmService) http.HandlerFunc {
 			writeError(response, http.StatusServiceUnavailable, "service_unavailable", "strm 服务尚未就绪")
 			return
 		}
-		result, err := service.Scan(request.Context(), requestBaseURL(request))
-		if err != nil {
-			writeStrmError(response, err)
-			return
-		}
-		writeJSON(response, http.StatusOK, result)
+		streamScan(response, request, func(ctx context.Context) (domain.StrmScanResult, error) {
+			return service.Scan(ctx, requestBaseURL(request))
+		}, writeStrmError)
 	}
 }
 

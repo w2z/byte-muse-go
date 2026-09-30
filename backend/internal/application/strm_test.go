@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -447,5 +448,158 @@ func TestWriteStrmFileIsIdempotent(t *testing.T) {
 	created, changed, err = writeStrmFile(target, "http://bm.local/files/play/115/f2\n")
 	if err != nil || created || !changed {
 		t.Fatalf("内容变化时应覆盖: %v %v %v", created, changed, err)
+	}
+}
+
+// TestParseStrmMappingsNormalizesFilters 验证排除规则统一匹配方式、按「方式 + 关键字」去重保存，
+// 并拒绝负数的最小视频大小与不受支持的匹配方式。
+func TestParseStrmMappingsNormalizesFilters(t *testing.T) {
+	mappings, err := parseStrmMappings(`[{"kind":"115","id":"1","path":"/a","local_path":"/b","min_size_mb":300,` +
+		`"exclude":[{"mode":" PREFIX ","value":" Sample "},{"mode":"contains","value":"trailer"},` +
+		`{"mode":"contains","value":"TRAILER"},{"mode":"suffix","value":"  "}]}]`)
+	if err != nil {
+		t.Fatalf("带过滤条件的映射被拒绝: %v", err)
+	}
+	if got := mappings[0].MinSizeMB; got != 300 {
+		t.Fatalf("最小视频大小解析为 %d，期望 300", got)
+	}
+	// 关键字保留用户输入的大小写用于回显，仅判重时忽略大小写；空关键字与重复规则被丢弃。
+	want := []domain.StrmExcludeKeyword{
+		{Mode: domain.StrmExcludeModePrefix, Value: "Sample"},
+		{Mode: domain.StrmExcludeModeContains, Value: "trailer"},
+	}
+	if !reflect.DeepEqual(mappings[0].Exclude, want) {
+		t.Fatalf("排除规则规范化为 %+v，期望 %+v", mappings[0].Exclude, want)
+	}
+
+	if _, err := parseStrmMappings(`[{"kind":"115","id":"1","path":"/a","local_path":"/b","min_size_mb":-1}]`); err == nil {
+		t.Fatal("负数的最小视频大小应被拒绝")
+	}
+	if _, err := parseStrmMappings(`[{"kind":"115","id":"1","path":"/a","local_path":"/b","exclude":[{"mode":"regex","value":"x"}]}]`); err == nil {
+		t.Fatal("不受支持的匹配方式应被拒绝")
+	}
+}
+
+// TestStrmFileFilterMatchesKeywordsAndSize 约束四种匹配方式互不等价：等于只认完整名称，
+// 前缀、后缀、包含各按对应位置匹配且不区分大小写；体积为 0 表示网盘未返回体积，不应被最小体积过滤。
+func TestStrmFileFilterMatchesKeywordsAndSize(t *testing.T) {
+	filter := strmFileFilter{
+		formats:   []string{"mkv"},
+		minSizeMB: 100,
+		exclude: []domain.StrmExcludeKeyword{
+			{Mode: domain.StrmExcludeModeEquals, Value: "Sample"},
+			{Mode: domain.StrmExcludeModePrefix, Value: "cd2"},
+			{Mode: domain.StrmExcludeModeSuffix, Value: "-Trailer"},
+			{Mode: domain.StrmExcludeModeContains, Value: "rip"},
+		},
+	}
+	for _, tc := range []struct {
+		name string
+		want bool
+	}{
+		{"sample", true},               // 等于：完整名称，忽略大小写
+		{"Sample.mkv", false},          // 等于不匹配更长的名称
+		{"CD2-rip.mkv", true},          // 前缀：忽略大小写
+		{"my-CD2.mkv", false},          // 前缀不匹配中间出现的关键字
+		{"movie-Trailer", true},        // 后缀：忽略大小写
+		{"movie-Trailer-2.mkv", false}, // 后缀不匹配结尾以外的位置
+		{"my-rip.mkv", true},           // 包含
+		{"movie.mkv", false},
+	} {
+		if got := filter.skipName(tc.name); got != tc.want {
+			t.Fatalf("%s 的排除判定为 %v，期望 %v", tc.name, got, tc.want)
+		}
+	}
+
+	const mb = 1024 * 1024
+	if !filter.acceptFile("movie.mkv", 100*mb) {
+		t.Fatal("达到最小体积的文件应保留")
+	}
+	if filter.acceptFile("movie.mkv", 100*mb-1) {
+		t.Fatal("小于最小体积的文件应跳过")
+	}
+	if !filter.acceptFile("movie.mkv", 0) {
+		t.Fatal("网盘未返回体积时不应按体积过滤")
+	}
+	if filter.acceptFile("movie.mp4", 100*mb) {
+		t.Fatal("未选中的格式应跳过")
+	}
+
+	unlimited := newStrmFileFilter(domain.StrmMapping{Formats: []string{"mkv"}})
+	if !unlimited.acceptFile("movie.mkv", 1) {
+		t.Fatal("未设置最小体积时不应按体积过滤")
+	}
+	if unlimited.skipName("Sample.mkv") {
+		t.Fatal("未设置排除关键字时不应跳过任何名称")
+	}
+}
+
+// TestScanSkipsExcludedDirectoriesAndSmallFiles 验证生成 strm 时命中排除关键字的目录整棵跳过，
+// 小文件不生成，而网盘未返回体积的文件仍然保留。
+func TestScanSkipsExcludedDirectoriesAndSmallFiles(t *testing.T) {
+	root := t.TempDir()
+	const mb = 1024 * 1024
+	pan115 := &strmPan115Stub{pages: map[string]domain.Pan115FilePage{
+		"100": {Files: []domain.Pan115File{
+			{ID: "200", Name: "Sample", IsDirectory: true},
+			{ID: "f1", Name: "A.mkv", Size: 200 * mb},
+			{ID: "f2", Name: "B.trailer.mkv", Size: 200 * mb},
+			{ID: "f3", Name: "C.mkv", Size: 10 * mb},
+			{ID: "f4", Name: "D.mkv"},
+		}},
+	}}
+	values := map[string]string{
+		"STRM_PATHS": strmTestMappings(t, []domain.StrmMapping{{
+			Kind: domain.StrmKindPan115, ID: "100", Path: "/影片", LocalPath: "/movies",
+			MinSizeMB: 100, Exclude: []domain.StrmExcludeKeyword{
+				{Mode: domain.StrmExcludeModeEquals, Value: "Sample"},
+				{Mode: domain.StrmExcludeModeContains, Value: "trailer"},
+			},
+		}}),
+		"STRM_PLAY_BASE": "http://bm.local",
+	}
+	service := newStrmTestService(t, root, pan115, nil, values)
+	result, err := service.Scan(context.Background(), "")
+	if err != nil {
+		t.Fatalf("生成 strm 失败: %v", err)
+	}
+	// stub 中不存在 "200"，命中排除关键字的目录若被进入会直接报错。
+	if result.Files != 2 || result.Created != 2 || result.Failed != 0 {
+		t.Fatalf("过滤结果不符: %+v", result)
+	}
+	for _, target := range []string{"movies/A.mkv.strm", "movies/D.mkv.strm"} {
+		if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(target))); err != nil {
+			t.Fatalf("%s 应生成: %v", target, err)
+		}
+	}
+	for _, target := range []string{"movies/Sample/A.mkv.strm", "movies/B.trailer.mkv.strm", "movies/C.mkv.strm"} {
+		if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(target))); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("%s 不应生成", target)
+		}
+	}
+}
+
+// TestWalkCloudDriveAppliesFilter 验证 CloudDrive2 与 115 共用同一份排除与最小体积规则。
+func TestWalkCloudDriveAppliesFilter(t *testing.T) {
+	const mb = 1024 * 1024
+	cloud := &strmCloudStub{configured: true, entries: map[string][]clouddrive.Entry{
+		"/115/影片": {
+			{Name: "Trailer", FullPath: "/115/影片/Trailer", Directory: true},
+			{Name: "A.mkv", FullPath: "/115/影片/A.mkv", Size: 200 * mb},
+			{Name: "B.mkv", FullPath: "/115/影片/B.mkv", Size: 1},
+			{Name: "C.srt", FullPath: "/115/影片/C.srt", Size: 200 * mb},
+		},
+	}}
+	service := newStrmTestService(t, t.TempDir(), nil, cloud, map[string]string{})
+	files, err := service.walkCloudDrive(context.Background(), "/115/影片", strmFileFilter{
+		formats:   []string{"mkv"},
+		minSizeMB: 100,
+		exclude:   []domain.StrmExcludeKeyword{{Mode: domain.StrmExcludeModePrefix, Value: "trailer"}},
+	})
+	if err != nil {
+		t.Fatalf("遍历 CloudDrive2 目录失败: %v", err)
+	}
+	if len(files) != 1 || files[0].Name != "A.mkv" || files[0].Directory != "" {
+		t.Fatalf("过滤结果不符: %+v", files)
 	}
 }

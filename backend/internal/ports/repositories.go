@@ -57,6 +57,20 @@ type MediaTranslationWriter interface {
 	UpdateTranslatedTitle(ctx context.Context, id, translatedTitle string) error
 }
 
+// LibraryMediaItem 是一个待登记为「已在媒体库」的影片；Code 必须是归一化番号，Title 为空时调用方已兜底。
+type LibraryMediaItem struct {
+	Code      string
+	Title     string
+	VideoType string
+}
+
+// MediaLibraryWriter 登记「影片已在媒体库中」的扫描结果。
+// 只把 library_status 置为 present，不覆盖标题、译文、封面、订阅状态等人工或采集数据。
+type MediaLibraryWriter interface {
+	// MarkLibraryPresent 幂等登记一批影片，返回本次新建的 media 行数；已存在的行只刷新媒体库状态。
+	MarkLibraryPresent(ctx context.Context, items []LibraryMediaItem) (int, error)
+}
+
 // CreateSubscription is an atomic idempotent subscription write request.
 type CreateSubscription struct {
 	IdempotencyKey string
