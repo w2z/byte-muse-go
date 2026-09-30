@@ -179,10 +179,17 @@ func cookieStateOK(raw json.RawMessage) bool {
 	}
 }
 
-// cookieRequest 发送一次扫码接口请求并返回 data 段。
+// cookieRequest 发送一次扫码接口请求并返回 data 段；命中限流时统一退避重试。
 // 扫码接口的响应外壳与 passport/proapi 不同（state 可能是布尔值），这里单独实现，
 // 避免把类型差异带进已有的令牌解析逻辑。
 func cookieRequest[T any](ctx context.Context, c *Client, method, endpoint string, form url.Values, action string) (T, error) {
+	return callValue(c, method, func() (T, error) {
+		return cookieRequestOnce[T](ctx, c, method, endpoint, form, action)
+	})
+}
+
+// cookieRequestOnce 是 cookieRequest 的单次实现；重试由 cookieRequest 统一驱动。
+func cookieRequestOnce[T any](ctx context.Context, c *Client, method, endpoint string, form url.Values, action string) (T, error) {
 	var zero T
 	response, err := c.do(ctx, method, endpoint, "", form)
 	if err != nil {

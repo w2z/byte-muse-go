@@ -8,18 +8,23 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 // pngSignature 是 PNG 文件头，用于让 http.DetectContentType 识别二维码图片。
 var pngSignature = []byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A}
 
-// newTestClient 返回指向测试服务器的客户端，并关闭节流以免拖慢测试。
+// newTestClient 返回指向测试服务器的客户端，并关闭节流与退避等待以免拖慢测试；
+// 需要验证退避行为的用例自行改写 gap/playGap/cooldown/backoff。
 func newTestClient(t *testing.T, handler http.HandlerFunc) *Client {
 	t.Helper()
 	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)
 	client := New(server.Client())
 	client.gap = 0
+	client.playGap = 0
+	client.cooldown = 0
+	client.backoff = 0
 	client.passport = server.URL
 	client.qrcode = server.URL
 	client.api = server.URL
@@ -525,5 +530,317 @@ func TestExchangeCookieRejectsEmptyPayload(t *testing.T) {
 	})
 	if _, err := client.ExchangeCookie(context.Background(), &CookieLogin{uid: "u", clientType: CookieClientWeb}); err == nil {
 		t.Fatal("空 Cookie 应当报错")
+	}
+}
+
+// TestRetryDelayClassifiesProviderFailures 固定重试边界：
+// 限流对所有方法都重试，网络错误与 5xx 只重试可安全重放的读请求，其余错误一律不重试。
+func TestRetryDelayClassifiesProviderFailures(t *testing.T) {
+	client := New(nil)
+	client.cooldown = 70 * time.Second
+	client.backoff = time.Second
+	cases := []struct {
+		name     string
+		method   string
+		err      error
+		attempt  int
+		wantWait time.Duration
+		want     bool
+	}{
+		{
+			name:     "业务限流对写操作也重试",
+			method:   http.MethodPost,
+			err:      &APIError{Message: "已达到当前访问上限"},
+			attempt:  1,
+			wantWait: 70 * time.Second,
+			want:     true,
+		},
+		{
+			name:    "其他业务错误不重试",
+			method:  http.MethodGet,
+			err:     &APIError{Code: invalidFileIDCode, Message: "参数错误"},
+			attempt: 1,
+			want:    false,
+		},
+		{
+			name:     "429 无 Retry-After 时按默认冷却",
+			method:   http.MethodPost,
+			err:      &HTTPError{StatusCode: http.StatusTooManyRequests},
+			attempt:  1,
+			wantWait: 70 * time.Second,
+			want:     true,
+		},
+		{
+			name:     "429 优先采用 Retry-After",
+			method:   http.MethodPost,
+			err:      &HTTPError{StatusCode: http.StatusTooManyRequests, RetryAfter: 3 * time.Second},
+			attempt:  1,
+			wantWait: 3 * time.Second,
+			want:     true,
+		},
+		{
+			name:     "读请求 5xx 按指数退避",
+			method:   http.MethodGet,
+			err:      &HTTPError{StatusCode: http.StatusServiceUnavailable},
+			attempt:  3,
+			wantWait: 4 * time.Second,
+			want:     true,
+		},
+		{
+			name:    "写请求 5xx 不重试",
+			method:  http.MethodPost,
+			err:     &HTTPError{StatusCode: http.StatusServiceUnavailable},
+			attempt: 1,
+			want:    false,
+		},
+		{
+			name:     "读请求网络错误按指数退避",
+			method:   http.MethodGet,
+			err:      &TransportError{Err: errors.New("连接被重置")},
+			attempt:  1,
+			wantWait: time.Second,
+			want:     true,
+		},
+		{
+			name:    "写请求网络错误不重试",
+			method:  http.MethodPost,
+			err:     &TransportError{Err: errors.New("连接被重置")},
+			attempt: 1,
+			want:    false,
+		},
+		{
+			name:    "令牌失效交给上层刷新",
+			method:  http.MethodGet,
+			err:     ErrUnauthorized,
+			attempt: 1,
+			want:    false,
+		},
+		{
+			name:    "调用方取消不重试",
+			method:  http.MethodGet,
+			err:     &TransportError{Err: context.Canceled},
+			attempt: 1,
+			want:    false,
+		},
+	}
+	for _, testCase := range cases {
+		gotWait, got := client.retryDelay(testCase.method, testCase.err, testCase.attempt)
+		if got != testCase.want || gotWait != testCase.wantWait {
+			t.Errorf("%s：retryDelay = (%v, %v)，期望 (%v, %v)", testCase.name, gotWait, got, testCase.wantWait, testCase.want)
+		}
+	}
+}
+
+// TestParseRetryAfterReadsSecondsAndHTTPDate 验证 Retry-After 的两种合法格式与无效输入。
+func TestParseRetryAfterReadsSecondsAndHTTPDate(t *testing.T) {
+	if got := parseRetryAfter("30"); got != 30*time.Second {
+		t.Errorf("秒数格式 = %v，期望 30s", got)
+	}
+	if got := parseRetryAfter("0"); got != 0 {
+		t.Errorf("零秒 = %v，期望 0", got)
+	}
+	if got := parseRetryAfter("  "); got != 0 {
+		t.Errorf("空值 = %v，期望 0", got)
+	}
+	if got := parseRetryAfter("not-a-date"); got != 0 {
+		t.Errorf("非法值 = %v，期望 0", got)
+	}
+	future := time.Now().Add(45 * time.Second).UTC().Format(http.TimeFormat)
+	if got := parseRetryAfter(future); got < 40*time.Second || got > 50*time.Second {
+		t.Errorf("HTTP 日期 = %v，期望约 45s", got)
+	}
+	past := time.Now().Add(-time.Minute).UTC().Format(http.TimeFormat)
+	if got := parseRetryAfter(past); got != 0 {
+		t.Errorf("过期日期 = %v，期望 0", got)
+	}
+}
+
+// TestExtendCooldownKeepsLatestDeadline 验证并发命中限流时冷却窗口只延长不缩短。
+func TestExtendCooldownKeepsLatestDeadline(t *testing.T) {
+	client := New(nil)
+	client.extendCooldown(80 * time.Millisecond)
+	first := client.retryAt
+	client.extendCooldown(10 * time.Millisecond)
+	if !client.retryAt.Equal(first) {
+		t.Fatalf("较短冷却改写了截止时间：%v → %v", first, client.retryAt)
+	}
+	client.extendCooldown(0)
+	if !client.retryAt.Equal(first) {
+		t.Fatalf("零冷却不应改写截止时间：%v", client.retryAt)
+	}
+	client.extendCooldown(120 * time.Millisecond)
+	if !client.retryAt.After(first) {
+		t.Fatalf("较长冷却未延长截止时间：%v", client.retryAt)
+	}
+}
+
+// TestCooldownDelaysFollowingRequests 验证冷却窗口对所有链路生效：
+// 命中限流后，即使节流间隔为 0，下一次请求也必须等冷却结束。
+func TestCooldownDelaysFollowingRequests(t *testing.T) {
+	client := New(nil)
+	client.gap = 0
+	client.playGap = 0
+	client.extendCooldown(60 * time.Millisecond)
+
+	start := time.Now()
+	release, err := client.admit(context.Background())
+	if err != nil {
+		t.Fatalf("冷却期间取得请求配额失败: %v", err)
+	}
+	release()
+	if elapsed := time.Since(start); elapsed < 60*time.Millisecond {
+		t.Fatalf("冷却后首次请求等待 %v，期望不小于 60ms", elapsed)
+	}
+
+	start = time.Now()
+	client.extendCooldown(60 * time.Millisecond)
+	if err := client.admitPlay(context.Background()); err != nil {
+		t.Fatalf("冷却期间取得直链配额失败: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed < 60*time.Millisecond {
+		t.Fatalf("直链换取等待 %v，期望不小于 60ms", elapsed)
+	}
+}
+
+// TestAdmitStopsOnContextCancelWhileCoolingDown 验证冷却等待可被上下文取消打断，
+// 扫描任务取消后不会继续占用并发槽与连接。
+func TestAdmitStopsOnContextCancelWhileCoolingDown(t *testing.T) {
+	client := New(nil)
+	client.gap = 0
+	client.extendCooldown(time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	if _, err := client.admit(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("错误 = %v，期望 context.DeadlineExceeded", err)
+	}
+}
+
+// TestAdmitPlayEnforcesMinimumGap 验证直链换取有独立的更小配额，
+// 避免播放端批量探测与目录扫描争抢同一份请求窗口。
+func TestAdmitPlayEnforcesMinimumGap(t *testing.T) {
+	client := New(nil)
+	client.playGap = 40 * time.Millisecond
+	start := time.Now()
+	for index := 0; index < 3; index++ {
+		if err := client.admitPlay(context.Background()); err != nil {
+			t.Fatalf("取得直链配额失败: %v", err)
+		}
+	}
+	if elapsed := time.Since(start); elapsed < 2*client.playGap {
+		t.Fatalf("三次直链换取耗时 %v，期望不小于 %v", elapsed, 2*client.playGap)
+	}
+}
+
+// TestListRetriesRateLimitResponse 验证 115 用业务错误表达限流时会被识别并重试，
+// 而不是把「已达到当前访问上限」直接当成目录扫描失败。
+func TestListRetriesRateLimitResponse(t *testing.T) {
+	var calls int
+	client := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		if calls == 1 {
+			writeJSON(t, w, `{"state":false,"code":0,"message":"已达到当前访问上限"}`)
+			return
+		}
+		writeJSON(t, w, `{"state":true,"code":0,"count":1,"data":[{"fid":"f1","pid":"0","fn":"a.mkv","fc":"1","fs":10,"pc":"pc1"}],"path":[{"cid":"0","name":"根目录"}]}`)
+	})
+	page, err := client.List(context.Background(), "token", "0", 0, 100)
+	if err != nil {
+		t.Fatalf("限流后重试仍失败: %v", err)
+	}
+	if calls != 2 {
+		t.Fatalf("请求次数 = %d，期望 2", calls)
+	}
+	if len(page.Files) != 1 || page.Files[0].Name != "a.mkv" {
+		t.Fatalf("文件列表 = %+v", page.Files)
+	}
+}
+
+// TestListRetriesServerErrorOnGet 验证可安全重放的读请求在 5xx 时按退避重试。
+func TestListRetriesServerErrorOnGet(t *testing.T) {
+	var calls int
+	client := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		if calls == 1 {
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		writeJSON(t, w, `{"state":true,"code":0,"count":0,"data":[],"path":[{"cid":"0","name":"根目录"}]}`)
+	})
+	page, err := client.List(context.Background(), "token", "0", 0, 100)
+	if err != nil {
+		t.Fatalf("5xx 后重试仍失败: %v", err)
+	}
+	if calls != 2 || page.Total != 0 {
+		t.Fatalf("请求次数 = %d，总数 = %d，期望 2 / 0", calls, page.Total)
+	}
+}
+
+// TestListStopsAfterAttemptsExhausted 验证重试次数用尽后返回真实的 115 错误，不静默返回空结果。
+func TestListStopsAfterAttemptsExhausted(t *testing.T) {
+	var calls int
+	client := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		writeJSON(t, w, `{"state":false,"code":0,"message":"已达到当前访问上限"}`)
+	})
+	_, err := client.List(context.Background(), "token", "0", 0, 100)
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) || !strings.Contains(apiErr.Message, "已达到当前访问上限") {
+		t.Fatalf("错误 = %v，期望携带 115 限流消息的 APIError", err)
+	}
+	if calls != maxRequestAttempts {
+		t.Fatalf("请求次数 = %d，期望 %d", calls, maxRequestAttempts)
+	}
+}
+
+// TestAddOfflineRetriesRateLimitButNotServerError 验证写操作的重试边界：
+// 被限流的提交不会在 115 侧生效，可以重试；5xx 可能已经受理，重复提交会产生重复任务，因此不重试。
+func TestAddOfflineRetriesRateLimitButNotServerError(t *testing.T) {
+	var calls int
+	client := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		if calls == 1 {
+			writeJSON(t, w, `{"state":false,"code":0,"message":"已达到当前访问上限"}`)
+			return
+		}
+		writeJSON(t, w, `{"state":true,"code":0,"data":[{"state":true,"code":0,"info_hash":"hash-1"}]}`)
+	})
+	hash, err := client.AddOffline(context.Background(), "token", "magnet:?xt=1", "0")
+	if err != nil {
+		t.Fatalf("限流后重试提交失败: %v", err)
+	}
+	if hash != "hash-1" || calls != 2 {
+		t.Fatalf("哈希 = %q，请求次数 = %d，期望 hash-1 / 2", hash, calls)
+	}
+
+	calls = 0
+	client = newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusServiceUnavailable)
+	})
+	if _, err := client.AddOffline(context.Background(), "token", "magnet:?xt=2", "0"); err == nil {
+		t.Fatal("5xx 时应当报错")
+	}
+	if calls != 1 {
+		t.Fatalf("5xx 请求次数 = %d，期望 1（写操作不重试）", calls)
+	}
+}
+
+// TestDownloadURLRetriesRateLimitResponse 验证播放链路同样享受限流退避，不会直接失败。
+func TestDownloadURLRetriesRateLimitResponse(t *testing.T) {
+	var calls int
+	client := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		if calls == 1 {
+			writeJSON(t, w, `{"state":false,"code":0,"message":"已达到当前访问上限"}`)
+			return
+		}
+		writeJSON(t, w, `{"state":true,"code":0,"data":{"f1":{"url":{"url":"https://cdn.example.com/a.mkv"}}}}`)
+	})
+	address, err := client.DownloadURL(context.Background(), "token", "pc-1", "UA")
+	if err != nil {
+		t.Fatalf("限流后重试换取直链失败: %v", err)
+	}
+	if address != "https://cdn.example.com/a.mkv" || calls != 2 {
+		t.Fatalf("直链 = %q，请求次数 = %d，期望 cdn 地址 / 2", address, calls)
 	}
 }

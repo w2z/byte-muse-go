@@ -85,7 +85,10 @@ func (c *Client) qrCodeImage(ctx context.Context, app, uid string) ([]byte, erro
 	}
 	if response.StatusCode != http.StatusOK {
 		_ = response.Body.Close()
-		return nil, &TransportError{Err: fmt.Errorf("115 返回 HTTP %d", response.StatusCode)}
+		return nil, &HTTPError{
+			StatusCode: response.StatusCode,
+			RetryAfter: parseRetryAfter(response.Header.Get("Retry-After")),
+		}
 	}
 	image, err := io.ReadAll(io.LimitReader(response.Body, maxResponseBytes))
 	_ = response.Body.Close()

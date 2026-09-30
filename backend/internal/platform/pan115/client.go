@@ -15,6 +15,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -36,6 +37,23 @@ const (
 	maxResponseBytes = 4 << 20
 )
 
+// playRequestGap 是换取下载直链（/open/ufile/downurl）的最小间隔。
+// 播放端（Emby 等）会在媒体探测时批量换取直链，若不与目录扫描隔离，
+// 会占满全局配额并反复触发 115 的访问上限，使目录扫描与 strm 生成长时间无法推进。
+const playRequestGap = time.Second
+
+// 限流退避参数。
+// maxRequestAttempts 是单个请求的最大尝试次数（含首次），与 MoviePilot 的 retry_limit=5 一致；
+// rateLimitBackoff 是命中 115 限流后的冷却时长，与 MoviePilot 的 retry_delay=70 秒一致，
+// 115 显式返回 Retry-After 时以响应头为准；
+// 网络错误与 5xx 按指数退避，且只重试可安全重放的 GET/HEAD。
+const (
+	maxRequestAttempts  = 5
+	rateLimitBackoff    = 70 * time.Second
+	serverRetryBaseWait = 1 * time.Second
+	serverRetryMaxWait  = 30 * time.Second
+)
+
 // ErrUnauthorized 表示 115 拒绝了当前访问令牌，调用方刷新令牌后重试。
 var ErrUnauthorized = errors.New("115 访问令牌已失效")
 
@@ -47,10 +65,24 @@ func (e *TransportError) Error() string { return e.Err.Error() }
 
 func (e *TransportError) Unwrap() error { return e.Err }
 
+// HTTPError 表示 115 返回了非 2xx 的 HTTP 状态码，而不是业务错误码。
+// 调用方据此区分「115 暂时不可用」与「115 明确拒绝了本次业务操作」；
+// RetryAfter 保留响应头声明的冷却时间，供退避重试判断。
+type HTTPError struct {
+	StatusCode int
+	RetryAfter time.Duration
+}
+
+func (e *HTTPError) Error() string { return fmt.Sprintf("115 返回 HTTP %d", e.StatusCode) }
+
 // Unavailable 判断错误是否来自 115 侧的网络或 HTTP 层失败。
 func Unavailable(err error) bool {
 	var transportErr *TransportError
-	return errors.As(err, &transportErr)
+	if errors.As(err, &transportErr) {
+		return true
+	}
+	var httpErr *HTTPError
+	return errors.As(err, &httpErr)
 }
 
 // unauthorizedCodes 是 115 表示访问令牌失效的错误码。
@@ -88,17 +120,28 @@ func Unauthorized(err error) bool {
 // Client 是直连 115 开放平台的协议客户端。
 type Client struct {
 	http  *http.Client
-	gap   time.Duration
 	slots chan struct{}
 
-	// 三个入口默认指向 115 生产环境；仅包内测试会改写它们。
+	// 节流参数：gap 是普通请求的最小间隔，playGap 是直链换取的最小间隔，
+	// cooldown 是命中限流后的冷却时长，backoff 是网络错误与 5xx 的退避基数。
+	// 默认取包内常量，仅包内测试会改写。
+	gap      time.Duration
+	playGap  time.Duration
+	cooldown time.Duration
+	backoff  time.Duration
+
+	// 四个入口默认指向 115 生产环境；仅包内测试会改写它们。
 	passport string
 	qrcode   string
 	api      string
 	life     string
 
+	// mu 保护下面三个截止时间：nextCall 与 nextPlay 是各链路的下次可发起时间，
+	// retryAt 是命中限流后的全局冷却截止时间，所有链路共享。
 	mu       sync.Mutex
 	nextCall time.Time
+	nextPlay time.Time
+	retryAt  time.Time
 }
 
 // New 创建协议客户端；client 为空时使用内置超时。
@@ -112,8 +155,11 @@ func New(client *http.Client) *Client {
 	}
 	return &Client{
 		http:     &clone,
-		gap:      requestGap,
 		slots:    make(chan struct{}, maxInFlight),
+		gap:      requestGap,
+		playGap:  playRequestGap,
+		cooldown: rateLimitBackoff,
+		backoff:  serverRetryBaseWait,
 		passport: passportBase,
 		qrcode:   qrcodeBase,
 		api:      apiBase,
@@ -132,33 +178,162 @@ func (c *Client) Close() {
 	}
 }
 
-// admit 取得一次请求配额：先占用并发槽，再等待全局最小间隔。
+// admit 取得一次普通请求配额：先占用并发槽，再等待全局冷却与最小间隔。
+// 返回的释放函数必须调用，否则并发槽不会归还。
 func (c *Client) admit(ctx context.Context) (func(), error) {
+	return c.admitWith(ctx, c.gap, &c.nextCall)
+}
+
+// admitWith 是 admit 的通用实现：把最小间隔与「下次可发起时间」参数化，
+// 使直链换取能用更小的配额复用同一套冷却与取消语义。
+func (c *Client) admitWith(ctx context.Context, gap time.Duration, next *time.Time) (func(), error) {
 	select {
 	case c.slots <- struct{}{}:
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
+	release := func() { <-c.slots }
+	for {
+		wait, cooling := c.reserve(gap, next)
+		if wait > 0 {
+			timer := time.NewTimer(wait)
+			select {
+			case <-timer.C:
+			case <-ctx.Done():
+				timer.Stop()
+				release()
+				return nil, ctx.Err()
+			}
+		}
+		if !cooling {
+			return release, nil
+		}
+	}
+}
+
+// admitPlay 取得一次直链换取配额：只保证 playGap 的间隔，不占用并发槽，
+// 避免与 admit 的两套槽位互相等待；并发上限仍由 admit 统一控制。
+func (c *Client) admitPlay(ctx context.Context) error {
+	for {
+		wait, cooling := c.reserve(c.playGap, &c.nextPlay)
+		if wait > 0 {
+			timer := time.NewTimer(wait)
+			select {
+			case <-timer.C:
+			case <-ctx.Done():
+				timer.Stop()
+				return ctx.Err()
+			}
+		}
+		if !cooling {
+			return nil
+		}
+	}
+}
+
+// reserve 计算本次请求需要等待的时间并推进「下次可发起时间」。
+// cooling 为真表示此刻仍处于全局冷却窗口内：调用方等待后必须重新计算，
+// 因为其他并发响应可能已经延长了冷却截止时间。
+func (c *Client) reserve(gap time.Duration, next *time.Time) (time.Duration, bool) {
 	c.mu.Lock()
+	defer c.mu.Unlock()
 	now := time.Now()
-	wait := c.gap - now.Sub(c.nextCall)
+	wait := gap - now.Sub(*next)
+	if cooldown := c.retryAt.Sub(now); cooldown > wait {
+		wait = cooldown
+	}
 	if wait < 0 {
 		wait = 0
 	}
-	c.nextCall = now.Add(wait)
-	c.mu.Unlock()
+	*next = now.Add(wait)
+	return wait, now.Before(c.retryAt)
+}
+
+// extendCooldown 延长全局冷却窗口；并发请求同时命中限流时保留最晚的截止时间，
+// 使 HTTP、定时任务与播放链路共享同一份退避，而不是各自重试。
+func (c *Client) extendCooldown(wait time.Duration) {
 	if wait <= 0 {
-		return func() { <-c.slots }, nil
+		return
 	}
-	timer := time.NewTimer(wait)
-	defer timer.Stop()
-	select {
-	case <-timer.C:
-		return func() { <-c.slots }, nil
-	case <-ctx.Done():
-		<-c.slots
-		return nil, ctx.Err()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if until := time.Now().Add(wait); until.After(c.retryAt) {
+		c.retryAt = until
 	}
+}
+
+// rateLimitMessage 是 115 用业务错误码表达的限流提示。
+// 115 未为该场景提供专用错误码，只能按消息文本识别，与 MoviePilot 的处理方式一致。
+const rateLimitMessage = "已达到当前访问上限"
+
+// callValue 执行一次可能被 115 限流的调用，并在限流或临时故障时退避重试。
+// attempt 每次都必须重新发起完整请求，重试不复用上一次的响应；
+// 退避通过延长全局冷却窗口实现，因此等待对所有链路同时生效。
+// 尝试次数用尽后返回最后一次的错误，不把真实失败吞成空结果。
+// 上下文取消由 attempt 内部的配额等待负责，取消后立即返回 context 错误而不是继续重试。
+func callValue[T any](c *Client, method string, attempt func() (T, error)) (T, error) {
+	var zero T
+	for index := 1; ; index++ {
+		value, err := attempt()
+		if err == nil {
+			return value, nil
+		}
+		if index >= maxRequestAttempts {
+			return zero, err
+		}
+		wait, retryable := c.retryDelay(method, err, index)
+		if !retryable {
+			return zero, err
+		}
+		c.extendCooldown(wait)
+	}
+}
+
+// retryDelay 判断错误是否值得重试并给出冷却时长。
+// 限流（HTTP 429 与业务提示「已达到当前访问上限」）对所有方法都重试，
+// 因为被 115 限流的请求不会在上游生效；网络错误与 5xx 只重试可安全重放的 GET/HEAD，
+// 避免离线任务提交等写操作被重复执行。
+func (c *Client) retryDelay(method string, err error, attempt int) (time.Duration, bool) {
+	// 调用方主动取消不是 115 的故障：立即返回，既不重试也不延长全局冷却。
+	if errors.Is(err, context.Canceled) {
+		return 0, false
+	}
+	var httpErr *HTTPError
+	if errors.As(err, &httpErr) {
+		switch {
+		case httpErr.StatusCode == http.StatusTooManyRequests:
+			if httpErr.RetryAfter > 0 {
+				return httpErr.RetryAfter, true
+			}
+			return c.cooldown, true
+		case httpErr.StatusCode >= 500 && isReplayable(method):
+			return c.serverBackoff(attempt), true
+		}
+		return 0, false
+	}
+	var transportErr *TransportError
+	if errors.As(err, &transportErr) && isReplayable(method) {
+		return c.serverBackoff(attempt), true
+	}
+	var apiErr *APIError
+	if errors.As(err, &apiErr) && strings.Contains(apiErr.Message, rateLimitMessage) {
+		return c.cooldown, true
+	}
+	return 0, false
+}
+
+// serverBackoff 给出网络错误与 5xx 的指数退避时长，按尝试次数翻倍并封顶。
+func (c *Client) serverBackoff(attempt int) time.Duration {
+	wait := c.backoff << (attempt - 1)
+	if wait > serverRetryMaxWait {
+		return serverRetryMaxWait
+	}
+	return wait
+}
+
+// isReplayable 判断请求方法是否可以安全重放；写操作不参与网络错误与 5xx 重试。
+func isReplayable(method string) bool {
+	return method == http.MethodGet || method == http.MethodHead
 }
 
 // send 发送一次已编码的请求；响应体由调用方关闭。
@@ -250,16 +425,38 @@ func (c *Client) doMultipart(ctx context.Context, endpoint, token string, form u
 }
 
 // readBody 读取并校验响应；非 2xx 直接报错，不把错误页当作业务数据解码。
+// 错误保留状态码与 Retry-After，供调用方判断是否值得退避重试。
 func readBody(response *http.Response) ([]byte, error) {
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return nil, &TransportError{Err: fmt.Errorf("115 返回 HTTP %d", response.StatusCode)}
+		return nil, &HTTPError{
+			StatusCode: response.StatusCode,
+			RetryAfter: parseRetryAfter(response.Header.Get("Retry-After")),
+		}
 	}
 	body, err := io.ReadAll(io.LimitReader(response.Body, maxResponseBytes))
 	if err != nil {
 		return nil, fmt.Errorf("读取 115 响应失败: %w", err)
 	}
 	return body, nil
+}
+
+// parseRetryAfter 解析 Retry-After 响应头，兼容秒数与 HTTP 日期两种格式；
+// 缺失、非法或已过期时返回零，由调用方回落到默认冷却时长。
+func parseRetryAfter(header string) time.Duration {
+	header = strings.TrimSpace(header)
+	if header == "" {
+		return 0
+	}
+	if seconds, err := strconv.Atoi(header); err == nil && seconds > 0 {
+		return time.Duration(seconds) * time.Second
+	}
+	if deadline, err := http.ParseTime(header); err == nil {
+		if wait := time.Until(deadline); wait > 0 {
+			return wait
+		}
+	}
+	return 0
 }
 
 // decodeData 把响应里的 data 段解码为目标类型；空 data 视为零值。
@@ -284,7 +481,15 @@ type authEnvelope struct {
 	Data    json.RawMessage `json:"data"`
 }
 
+// authRequest 发送一次授权请求并解析响应外壳；命中限流时统一退避重试。
 func authRequest[T any](ctx context.Context, c *Client, method, endpoint string, form url.Values) (T, error) {
+	return callValue(c, method, func() (T, error) {
+		return authRequestOnce[T](ctx, c, method, endpoint, form)
+	})
+}
+
+// authRequestOnce 是 authRequest 的单次实现；重试由 authRequest 统一驱动。
+func authRequestOnce[T any](ctx context.Context, c *Client, method, endpoint string, form url.Values) (T, error) {
 	var zero T
 	response, err := c.do(ctx, method, endpoint, "", form)
 	if err != nil {
@@ -321,8 +526,17 @@ func (c *Client) apiCall(ctx context.Context, method, endpoint, token string, fo
 }
 
 // apiCallWithUserAgent 与 apiCall 相同，但可显式设置 User-Agent；userAgent 为 nil 表示不干预。
+// 命中限流或临时故障时在这里统一退避重试。
 func (c *Client) apiCallWithUserAgent(ctx context.Context, method, endpoint, token string, form url.Values, userAgent *string, action string) (json.RawMessage, error) {
-	body, err := c.apiBody(ctx, method, endpoint, token, form, userAgent, action)
+	return callValue(c, method, func() (json.RawMessage, error) {
+		return c.apiCallOnceWithUserAgent(ctx, method, endpoint, token, form, userAgent, action)
+	})
+}
+
+// apiCallOnceWithUserAgent 是 apiCallWithUserAgent 的单次实现，
+// 供需要自行控制重试节奏的调用方（例如直链换取）复用。
+func (c *Client) apiCallOnceWithUserAgent(ctx context.Context, method, endpoint, token string, form url.Values, userAgent *string, action string) (json.RawMessage, error) {
+	body, err := c.apiBodyOnce(ctx, method, endpoint, token, form, userAgent, action)
 	if err != nil {
 		return nil, err
 	}
@@ -347,9 +561,16 @@ func (c *Client) apiCallInto(ctx context.Context, method, endpoint, token string
 	return nil
 }
 
-// apiBody 发送一次 proapi 请求，校验响应外壳后返回完整响应体。
+// apiBody 发送一次 proapi 请求，校验响应外壳后返回完整响应体；命中限流时统一退避重试。
 // 响应外壳的校验只有这一处实现，避免各调用方重复解析 state/code。
 func (c *Client) apiBody(ctx context.Context, method, endpoint, token string, form url.Values, userAgent *string, action string) ([]byte, error) {
+	return callValue(c, method, func() ([]byte, error) {
+		return c.apiBodyOnce(ctx, method, endpoint, token, form, userAgent, action)
+	})
+}
+
+// apiBodyOnce 是 apiBody 的单次实现；重试由 apiBody 统一驱动。
+func (c *Client) apiBodyOnce(ctx context.Context, method, endpoint, token string, form url.Values, userAgent *string, action string) ([]byte, error) {
 	response, err := c.doWithUserAgent(ctx, method, endpoint, token, form, userAgent)
 	if err != nil {
 		return nil, err

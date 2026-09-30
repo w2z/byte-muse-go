@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"strconv"
 )
@@ -66,7 +67,15 @@ func (wire offlineTaskWire) task() (OfflineTask, error) {
 }
 
 // AddOffline 提交一个磁力或 URL 离线任务到指定目录，返回 115 侧的信息哈希。
+// 命中限流时统一退避重试；被限流的提交不会在 115 侧生效，重试不会产生重复任务。
 func (c *Client) AddOffline(ctx context.Context, accessToken, uri, directoryID string) (string, error) {
+	return callValue(c, http.MethodPost, func() (string, error) {
+		return c.addOfflineOnce(ctx, accessToken, uri, directoryID)
+	})
+}
+
+// addOfflineOnce 是 AddOffline 的单次实现；重试由 AddOffline 统一驱动。
+func (c *Client) addOfflineOnce(ctx context.Context, accessToken, uri, directoryID string) (string, error) {
 	type addItem struct {
 		State   bool   `json:"state"`
 		Code    int    `json:"code"`

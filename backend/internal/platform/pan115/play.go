@@ -110,7 +110,20 @@ func (c *Client) Info(ctx context.Context, accessToken, fileID string) (FileInfo
 // DownloadURL 用提取码换取带时效的下载直链。
 // 115 会把直链绑定到换取直链时的 User-Agent，因此 userAgent 必须与最终播放端一致；
 // 空字符串表示不携带 UA，与 115 官方客户端行为一致。
+//
+// 直链换取走单独的 1 请求/秒配额（见 admitPlay），并与其他链路共享限流冷却，
+// 避免播放端批量探测占满全局配额后使目录扫描与 strm 生成无法推进。
 func (c *Client) DownloadURL(ctx context.Context, accessToken, pickCode, userAgent string) (string, error) {
+	return callValue(c, http.MethodPost, func() (string, error) {
+		if err := c.admitPlay(ctx); err != nil {
+			return "", err
+		}
+		return c.downloadURLOnce(ctx, accessToken, pickCode, userAgent)
+	})
+}
+
+// downloadURLOnce 是 DownloadURL 的单次实现；重试与直链配额由 DownloadURL 统一驱动。
+func (c *Client) downloadURLOnce(ctx context.Context, accessToken, pickCode, userAgent string) (string, error) {
 	// 115 的下载接口把结果直接放在 data 段里，以文件标识为键，不再嵌套 data 字段。
 	type downloadEntry struct {
 		URL struct {
@@ -118,7 +131,7 @@ func (c *Client) DownloadURL(ctx context.Context, accessToken, pickCode, userAge
 		} `json:"url"`
 	}
 	ua := strings.TrimSpace(userAgent)
-	raw, err := c.apiCallWithUserAgent(ctx, http.MethodPost, c.api+"/open/ufile/downurl", accessToken,
+	raw, err := c.apiCallOnceWithUserAgent(ctx, http.MethodPost, c.api+"/open/ufile/downurl", accessToken,
 		url.Values{"pick_code": {pickCode}}, &ua, "下载地址")
 	if err != nil {
 		return "", err
