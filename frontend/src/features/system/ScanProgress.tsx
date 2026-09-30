@@ -28,7 +28,7 @@ export function useScanProgress<T extends { files: number }>(path: string) {
   return { scan, progress };
 }
 
-/** 扫描与生成共用的进度展示；完成、部分失败以最终响应为准，100% 不单独表示业务成功。 */
+/** 扫描与生成共用的进度展示；数值统一放在进度条右侧，完成、部分失败以最终响应为准。 */
 export function ScanProgressDisplay({ progress, pending, error, warning, label }: {
   progress?: ScanProgress; pending: boolean; error: boolean; warning: boolean; label: string;
 }) {
@@ -39,12 +39,14 @@ export function ScanProgressDisplay({ progress, pending, error, warning, label }
       : progress.phase === "finalizing" || progress.phase === "completed" ? "正在汇总结果" : "处理中";
   return (
     <div className="settings-scan-progress" aria-label={`${label}处理进度`}>
-      <div className="settings-scan-progress-summary" role="status">
-        <span>{phase}</span>
-        <span>已处理 / 总数：{progress.processed} / {progress.total}</span>
-        <span>百分比：{progress.percent}%</span>
-      </div>
-      <Progress percent={progress.percent} status={status} animation={pending} showText={false} aria-label={`${label}进度条`} />
+      <span role="status">{phase}</span>
+      <Progress
+        percent={progress.percent}
+        status={status}
+        animation={pending}
+        formatText={(percent) => `${percent}% - ${progress.processed}/${progress.total}`}
+        aria-label={`${label}进度条`}
+      />
       {pending && progress.current ? <span className="settings-scan-progress-current settings-field-description">{progress.current}</span> : null}
     </div>
   );

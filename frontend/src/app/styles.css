@@ -683,7 +683,6 @@ button.code-card-still-cell:hover img { opacity: .85; }
 /* strm 生成操作：放在分组字段之后，按钮与结果说明各自一行，间距与字段内部一致。 */
 .settings-strm-generate { display: flex; min-width: 0; flex-direction: column; gap: 8px; }
 .settings-scan-progress { display: flex; min-width: 0; flex-direction: column; gap: 8px; width: 100%; }
-.settings-scan-progress-summary { display: flex; flex-wrap: wrap; gap: 8px 20px; font-size: 14px; }
 .settings-scan-progress-current { overflow-wrap: anywhere; }
 .settings-strm-picker-create { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .settings-strm-picker-create > .arco-input { flex: 1 1 160px; min-width: 0; }
