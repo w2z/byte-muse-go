@@ -320,3 +320,17 @@ func TestWechatCoverURLKeepsSourceWhenIncomplete(t *testing.T) {
 		})
 	}
 }
+
+func TestWechatCoverURLUsesWordPressProxyPath(t *testing.T) {
+	for _, host := range []string{"i0", "i1", "i3", "i4"} {
+		for _, suffix := range []string{"", "/"} {
+			domain := "https://" + host + ".wp.com"
+			for _, source := range []string{"https://c0.jdbstatic.com/covers/p9/P98NVa.jpg", "http://img.example/a%20b.jpg?width=640&v=2"} {
+				want := domain + "/" + strings.SplitN(source, "://", 2)[1]
+				if got := wechatCoverURL(domain+suffix, "START-640", source); got != want {
+					t.Fatalf("wechatCoverURL() = %q，期望 %q", got, want)
+				}
+			}
+		}
+	}
+}

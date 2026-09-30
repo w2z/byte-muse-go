@@ -5,7 +5,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import userEvent from "@testing-library/user-event";
 import type { ComponentProps } from "react";
 import { afterEach, expect, it, vi } from "vitest";
-import { apiRequest } from "../api/client";
+import { apiRequest, coverCacheURL } from "../api/client";
 import type { Media, SystemSettings } from "../api/types";
 import { CodeCard } from "./CodeCard";
 
@@ -174,4 +174,20 @@ it("配置外网访问地址后封面改用绝对缓存地址", () => {
   client.setQueryData(["system-settings"], { ...settings("VISIBLE"), values: { IMAGE_MODE: "VISIBLE", EXTERNAL_DOMAIN: "https://muse.example.com/" } });
   render(<QueryClientProvider client={client}><CodeCard media={media} /></QueryClientProvider>);
   expect(screen.getByRole("img", { name: "TEST-001 封面" })).toHaveAttribute("src", "https://muse.example.com" + coverSrc);
+});
+
+it.each(["i0", "i1", "i3", "i4"])("%s.wp.com 图片代理直接拼接源站路径", (host) => {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+  client.setQueryData(["system-settings"], { ...settings("VISIBLE"), values: { IMAGE_MODE: "VISIBLE", EXTERNAL_DOMAIN: `https://${host}.wp.com/` } });
+  render(<QueryClientProvider client={client}><CodeCard media={{ ...media, code: "START-640", banner_url: "https://c0.jdbstatic.com/covers/p9/P98NVa.jpg" }} /></QueryClientProvider>);
+  expect(screen.getByRole("img", { name: "START-640 封面" })).toHaveAttribute("src", `https://${host}.wp.com/c0.jdbstatic.com/covers/p9/P98NVa.jpg`);
+});
+
+it("图片代理保留原图编码与查询参数，普通域名继续使用缓存接口", () => {
+  const source = "http://img.example/a%20b.jpg?width=640&v=2";
+  expect(coverCacheURL("TEST-001", source, " https://i1.wp.com "))
+    .toBe("https://i1.wp.com/img.example/a%20b.jpg?width=640&v=2");
+  expect(coverCacheURL("TEST-001", source, "https://i0.wp.com.example.test/"))
+    .toBe("https://i0.wp.com.example.test/api/v1/covers/TEST-001?source=" + encodeURIComponent(source));
+  expect(coverCacheURL("TEST-001", null, "https://i0.wp.com/")).toBeUndefined();
 });

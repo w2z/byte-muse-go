@@ -1400,7 +1400,7 @@ paths:
     get:
       operationId: getMediaCover
       summary: 读取或缓存影片封面
-      description: '影片主封面的统一入口，页面按番号请求该地址。服务端按番号把封面持久化到 /data/cover：命中缓存直接返回本地文件，未命中先下载再落盘，落盘文件名是番号加图片真实格式，例如 sons-1223.png。source 必须是不带凭据的 http/https 绝对地址；缓存目录默认 /data/cover，可用 COVER_ROOT 环境变量覆盖。目录不可写、源站失败或番号不能作为文件名时返回 302 回退到 source，页面表现与没有缓存时一致。设置页「外网访问地址」（EXTERNAL_DOMAIN）已配置时，页面封面与企业微信封面推送都改用 {外网访问地址} 前缀访问本接口，第三方与页面取到同一张图。'
+      description: '影片主封面的统一入口，页面按番号请求该地址。服务端按番号把封面持久化到 /data/cover：命中缓存直接返回本地文件，未命中先下载再落盘，落盘文件名是番号加图片真实格式，例如 sons-1223.png。source 必须是不带凭据的 http/https 绝对地址；缓存目录默认 /data/cover，可用 COVER_ROOT 环境变量覆盖。目录不可写、源站失败或番号不能作为文件名时返回 302 回退到 source，页面表现与没有缓存时一致。设置页「外网访问地址」（EXTERNAL_DOMAIN）已配置时，页面封面与企业微信封面推送都改用 {外网访问地址} 前缀访问本接口，第三方与页面取到同一张图。当该前缀为 https://i0.wp.com/、https://i1.wp.com/、https://i3.wp.com/ 或 https://i4.wp.com/ 时，页面与企业微信封面直接使用代理域名加原图主机、路径和查询参数，例如 https://i0.wp.com/c0.jdbstatic.com/covers/p9/P98NVa.jpg，不拼接 /api/v1/covers。'
       parameters:
         - {in: cookie, name: bytemuse_session, required: true, schema: {type: string}, description: 登录签发的管理员会话 Cookie}
         - {in: path, name: code, required: true, schema: {type: string}, description: 影片番号；作为缓存文件名主干，只保留字母、数字、连字符与下划线并转小写}

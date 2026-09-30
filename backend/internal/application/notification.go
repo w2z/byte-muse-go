@@ -189,6 +189,8 @@ func sendNotification(ctx context.Context, sender ports.ChannelSender, target st
 // 配置「外网访问地址」时指向本机封面缓存入口 /api/v1/covers/{番号}，服务端按番号落盘到 /data/cover，
 // 企业微信与页面取到同一张图；外网地址、番号或可下载的封面缺失时保持原地址，
 // 不把封面换成必然取不到的链接，企业微信仍可直接拉取图床原图。
+// WordPress 图片代理（i0/i1/i3/i4.wp.com）是例外：它要求源站主机与路径直接拼接，
+// 否则会把 /api/v1/covers 当作源站路径而返回错误地址。
 func wechatCoverURL(externalDomain, code, cover string) string {
 	source := strings.TrimSpace(cover)
 	domain := strings.TrimRight(strings.TrimSpace(externalDomain), "/")
@@ -196,7 +198,26 @@ func wechatCoverURL(externalDomain, code, cover string) string {
 	if domain == "" || normalized == "" || !covercache.AllowedSource(source) {
 		return cover
 	}
+	if proxy, err := url.Parse(domain); err == nil && isWordPressImageProxy(proxy) {
+		if sourceURL, err := url.Parse(source); err == nil {
+			return proxy.Scheme + "://" + proxy.Host + "/" + sourceURL.Host + sourceURL.RequestURI()
+		}
+	}
 	return domain + "/api/v1/covers/" + url.PathEscape(normalized) + "?source=" + url.QueryEscape(source)
+}
+
+// isWordPressImageProxy 判断外网地址是否为支持的 WordPress 图片代理根地址。
+// 这些代理要求把源站主机与路径直接拼到代理域名后，不能访问本服务的缓存接口。
+func isWordPressImageProxy(proxy *url.URL) bool {
+	if proxy == nil || proxy.User != nil || proxy.Scheme != "https" || proxy.Path != "" || proxy.RawQuery != "" || proxy.ForceQuery || proxy.Fragment != "" {
+		return false
+	}
+	switch strings.ToLower(proxy.Hostname()) {
+	case "i0.wp.com", "i1.wp.com", "i3.wp.com", "i4.wp.com":
+		return proxy.Port() == ""
+	default:
+		return false
+	}
 }
 
 // NotificationPlainText 把标题与正文合成纯文本，供无封面时降级发送；缺失部分自动省略。

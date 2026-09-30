@@ -46,7 +46,7 @@ test.each([["加入开始", "added"], ["完成开始", "completed"]])("%s支持�
   const exactStart = before.subtract(1, "day").hour(10).minute(11).second(12).millisecond(0);
   fireEvent.click(screen.getByPlaceholderText(placeholder));
   fireEvent.change(screen.getByPlaceholderText(placeholder), { target: { value: exactStart.format("YYYY-MM-DD HH:mm:ss") } });
-  fireEvent.click(screen.getByRole("button", { name: "确定", exact: true }));
+  fireEvent.click(screen.getByRole("button", { name: "确定" }));
   fireEvent.click(screen.getByRole("button", { name: "搜索" }));
   await waitFor(() => expect(new URLSearchParams(requests.at(-1)!.split("?")[1]).get(prefix + "_from")).toBe(exactStart.toISOString()));
   fireEvent.click(screen.getByRole("button", { name: "重置" }));

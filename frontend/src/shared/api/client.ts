@@ -4,13 +4,17 @@ import { ApiError, toApiError } from "./errors";
 export const API_BASE = "/api/v1";
 export const UNAUTHORIZED_EVENT = "bytemuse:unauthorized";
 
+const WORDPRESS_IMAGE_PROXY_HOSTS = new Set(["i0.wp.com", "i1.wp.com", "i3.wp.com", "i4.wp.com"]);
+
 /** 认证入口自身不参与“401 后自动续签重试”，否则登录失败会变成无限续签。 */
 const AUTH_ENTRY_PATHS = new Set(["/auth/login", "/auth/refresh"]);
 
 /**
  * 把影片封面地址改写成服务端缓存入口：服务端按番号把封面持久化到 /data/cover，
  * 命中时直接返回本地文件，未命中下载后落盘，源站不可用时回退到原地址。
- * externalDomain 是设置页的「外网访问地址」；已配置时用它拼绝对地址，页面显示与微信封面推送使用同一个地址，
+ * externalDomain 是设置页的「外网访问地址」；已配置时用它拼绝对地址，页面显示与微信封面推送使用同一个地址。
+ * WordPress 图片代理（i0/i1/i3/i4.wp.com）要求把源站主机与路径直接拼接，不使用本服务缓存接口；
+ * 其他地址仍使用服务端缓存入口。
  * 未配置时用跟随页面来源的相对地址。
  * 没有封面地址时返回 undefined，由调用方显示占位图；没有番号时保留原地址。
  */
@@ -23,8 +27,28 @@ export function coverCacheURL(
   if (!url) return undefined;
   const normalized = code?.trim();
   if (!normalized) return url;
-  const path = `${API_BASE}/covers/${encodeURIComponent(normalized)}?source=${encodeURIComponent(url)}`;
   const domain = externalDomain?.trim().replace(/\/+$/, "");
+  if (domain) {
+    try {
+      const proxy = new URL(domain);
+      const sourceURL = new URL(url);
+      if (
+        proxy.protocol === "https:" &&
+        !proxy.port && !proxy.username && !proxy.password &&
+        proxy.pathname === "/" &&
+        !proxy.search &&
+        !proxy.hash &&
+        (sourceURL.protocol === "http:" || sourceURL.protocol === "https:") &&
+        !sourceURL.username && !sourceURL.password &&
+        WORDPRESS_IMAGE_PROXY_HOSTS.has(proxy.hostname.toLowerCase())
+      ) {
+        return `${proxy.origin}/${sourceURL.host}${sourceURL.pathname}${sourceURL.search}`;
+      }
+    } catch {
+      // 非绝对地址沿用通用缓存地址逻辑；服务端会继续校验 source。
+    }
+  }
+  const path = `${API_BASE}/covers/${encodeURIComponent(normalized)}?source=${encodeURIComponent(url)}`;
   return domain ? `${domain}${path}` : path;
 }
 
