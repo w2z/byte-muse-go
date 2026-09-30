@@ -24,18 +24,32 @@ func NewActorCatalogRepository(db *sql.DB, d Dialect) *ActorCatalogRepository {
 
 // SaveActorProfile 新演员建档，已有演员只补空头像；别名只登记关联，不合并历史实体。
 func (r *ActorCatalogRepository) SaveActorProfile(ctx context.Context, p ports.ActorProfile) (bool, error) {
-	if strings.TrimSpace(p.Name) == "" || utf8.RuneCountInString(p.Name) > 255 || len(p.Photo) > 2048 {
-		return false, fmt.Errorf("invalid actor profile")
-	}
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return false, err
 	}
 	defer tx.Rollback()
+	inserted, err := saveActorProfileTx(ctx, tx, r.dialect, p)
+	if err != nil {
+		return false, err
+	}
+	if err = tx.Commit(); err != nil {
+		return false, err
+	}
+	return inserted, nil
+}
+
+// saveActorProfileTx 是目录导入和逐影片入库共用的演员资料写入规则；不改订阅和已有头像。
+func saveActorProfileTx(ctx context.Context, tx *sql.Tx, dialect Dialect, p ports.ActorProfile) (bool, error) {
+	p.Name = strings.TrimSpace(p.Name)
+	if p.Name == "" || utf8.RuneCountInString(p.Name) > 255 || len(p.Photo) > 2048 || len(p.Aliases) > 500 {
+		return false, fmt.Errorf("invalid actor profile")
+	}
+	r := &ActorCatalogRepository{dialect: dialect}
 	now := encodeTime(time.Now().UTC(), r.dialect)
 	q := (&CollectionRepository{dialect: r.dialect}).q
 	var n int
-	if err = tx.QueryRowContext(ctx, q("SELECT COUNT(*) FROM actors WHERE name=?"), p.Name).Scan(&n); err != nil {
+	if err := tx.QueryRowContext(ctx, q("SELECT COUNT(*) FROM actors WHERE name=?"), p.Name).Scan(&n); err != nil {
 		return false, err
 	}
 	insert := "INSERT INTO actors(name,photo,created_at,updated_at) VALUES(?,?,?,?)"
@@ -44,11 +58,11 @@ func (r *ActorCatalogRepository) SaveActorProfile(ctx context.Context, p ports.A
 	} else {
 		insert += " ON CONFLICT(name) DO NOTHING"
 	}
-	if _, err = tx.ExecContext(ctx, q(insert), p.Name, nullIfEmpty(p.Photo), now, now); err != nil {
+	if _, err := tx.ExecContext(ctx, q(insert), p.Name, nullIfEmpty(p.Photo), now, now); err != nil {
 		return false, err
 	}
 	if p.Photo != "" {
-		if _, err = tx.ExecContext(ctx, q("UPDATE actors SET photo=?,updated_at=? WHERE name=? AND (photo IS NULL OR photo='')"), p.Photo, now, p.Name); err != nil {
+		if _, err := tx.ExecContext(ctx, q("UPDATE actors SET photo=?,updated_at=? WHERE name=? AND (photo IS NULL OR photo='')"), p.Photo, now, p.Name); err != nil {
 			return false, err
 		}
 	}
@@ -63,12 +77,9 @@ func (r *ActorCatalogRepository) SaveActorProfile(ctx context.Context, p ports.A
 		} else {
 			query += " ON CONFLICT(actor_name,alias) DO NOTHING"
 		}
-		if _, err = tx.ExecContext(ctx, q(query), p.Name, alias); err != nil {
+		if _, err := tx.ExecContext(ctx, q(query), p.Name, alias); err != nil {
 			return false, err
 		}
-	}
-	if err = tx.Commit(); err != nil {
-		return false, err
 	}
 	return n == 0, nil
 }

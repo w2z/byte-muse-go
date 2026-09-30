@@ -406,8 +406,9 @@ func (c *Commands) Serve(ctx context.Context) error {
 	downloadRepository := database.NewSubscriptionDownloadRepository(store.SQLDB(), database.Dialect(c.config.DatabaseDriver))
 	downloadService := application.NewSubscriptionDownloadService(downloadRepository, nil, nil, settingsValues(settingsService))
 	downloadService.SetNotifier(notifier)
+	javdbResources := &javdbResourceSearcher{load: settingsValues(settingsService)}
 	downloadService.SetRuntimeFactory(func(values map[string]string) (application.ResourceSearcher, application.PrivateTorrentSource, map[string]application.MagnetDownloader) {
-		searcher, privateSources := newResourceSearcher(values)
+		searcher, privateSources := newResourceSearcher(values, javdbResources)
 		var private application.PrivateTorrentSource
 		if len(privateSources) > 0 {
 			private = application.PrivateTorrentSources{Sources: privateSources}
@@ -580,7 +581,7 @@ func (c *Commands) Serve(ctx context.Context) error {
 		Dashboard:             dashboardService,
 		Scheduler:             manager,
 		Logs:                  logging.Default,
-		Torrents:              settingsResourceSearcher{settings: settingsService},
+		Torrents:              settingsResourceSearcher{settings: settingsService, javdb: javdbResources},
 		Version:               c.config.Version,
 		Channels:              channels,
 		Notifier:              notifier,

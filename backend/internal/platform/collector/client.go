@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"bytemuse/backend/internal/platform/javdbapp"
 )
 
 var (
@@ -45,6 +47,7 @@ type Client struct {
 	next   map[string]time.Time
 	bypass *bypassClient
 	proxy  string
+	app    *javdbapp.Client
 }
 
 // NewClientWithProxy 使用管理员配置的 HTTP/SOCKS 代理；错误不泄露代理凭据。
@@ -81,7 +84,24 @@ func NewClient(client *http.Client) *Client {
 		}
 		return nil
 	}
-	return &Client{http: &clone, next: make(map[string]time.Time)}
+	app, _ := javdbapp.NewAutomatic(&clone)
+	return &Client{http: &clone, next: make(map[string]time.Time), app: app}
+}
+
+// MovieDetail 复用同一代理和 App 客户端读取影片与演员，不依赖 HTML 验证页。
+func (c *Client) MovieDetail(ctx context.Context, movieID string) (javdbapp.Movie, error) {
+	if c == nil || c.app == nil {
+		return javdbapp.Movie{}, ErrUnavailable
+	}
+	return c.app.Detail(ctx, movieID)
+}
+
+// ActorMovies 按 JavDB 演员 ID 读取作品页，不将演员名作为来源 ID。
+func (c *Client) ActorMovies(ctx context.Context, id string, page int) ([]javdbapp.Movie, error) {
+	if c == nil || c.app == nil {
+		return nil, ErrUnavailable
+	}
+	return c.app.ActorMovies(ctx, id, page)
 }
 
 func allowedURL(u *url.URL) bool {

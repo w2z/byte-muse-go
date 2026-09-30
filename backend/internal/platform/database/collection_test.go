@@ -342,6 +342,83 @@ func TestCollectionAtomicIdempotentAndPreservesExisting(t *testing.T) {
 	}
 }
 
+func TestCollectionPersistsAppActorPhotoAndAliasWithoutChangingSubscription(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(ctx, Config{Dialect: DialectSQLite, SQLitePath: filepath.Join(t.TempDir(), "actor-app.db")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if err = s.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	r := NewCollectionRepository(s.SQLDB(), DialectSQLite)
+	_, err = r.SaveCollection(ctx, ports.CollectionRequest{Source: "javdb", Kind: "detail", Query: "movie-1", Page: 1}, ports.CollectionBatch{Items: []ports.CollectedMedia{{SourceID: "movie-1", URL: "https://javdb.com/v/movie-1", Code: "TEST-001", Title: "测试影片", Actors: []ports.CollectedActor{{Name: "演员甲"}}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.SQLDB().ExecContext(ctx, "UPDATE actors SET limit_date='2026-09-01' WHERE name='演员甲'"); err != nil {
+		t.Fatal(err)
+	}
+	_, err = r.SaveCollection(ctx, ports.CollectionRequest{Source: "javdb", Kind: "detail", Query: "movie-1", Page: 1}, ports.CollectionBatch{Items: []ports.CollectedMedia{{SourceID: "movie-1", URL: "https://javdb.com/v/movie-1", Code: "TEST-001", Title: "测试影片", Actors: []ports.CollectedActor{{Name: "演员甲", Photo: "https://img.example/a.jpg", Aliases: []string{"演員甲"}}}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var photo, limit string
+	if err = s.SQLDB().QueryRowContext(ctx, "SELECT photo,limit_date FROM actors WHERE name='演员甲'").Scan(&photo, &limit); err != nil {
+		t.Fatal(err)
+	}
+	if photo != "https://img.example/a.jpg" || limit != "2026-09-01" {
+		t.Fatalf("photo=%q limit=%q", photo, limit)
+	}
+	var aliases int
+	if err = s.SQLDB().QueryRowContext(ctx, "SELECT count(*) FROM actor_aliases WHERE actor_name='演员甲' AND alias='演員甲'").Scan(&aliases); err != nil || aliases != 1 {
+		t.Fatalf("aliases=%d err=%v", aliases, err)
+	}
+}
+
+// TestLiveJavDBActorIngestion 在隔离临时库验证真实详情采集、演员保存与幂等；不写用户业务库。
+func TestLiveJavDBActorIngestion(t *testing.T) {
+	if os.Getenv("BYTEMUSE_LIVE_JAVDB") != "1" {
+		t.Skip("需要显式实网验证")
+	}
+	ctx := context.Background()
+	c, err := collector.NewClientWithProxy(os.Getenv("BYTEMUSE_COLLECTION_PROXY"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := ports.CollectionRequest{Source: "javdb", Kind: "detail", Query: "DRJeGM", Page: 1}
+	batch, err := collector.NewRegistry(c).Collect(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(batch.Items) != 1 || len(batch.Items[0].Actors) == 0 {
+		t.Fatal("no actors")
+	}
+	s, err := Open(ctx, Config{Dialect: DialectSQLite, SQLitePath: filepath.Join(t.TempDir(), "live-actors.db")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if err = s.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	repo := NewCollectionRepository(s.SQLDB(), DialectSQLite)
+	for i := 0; i < 2; i++ {
+		if _, err = repo.SaveCollection(ctx, req, batch); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var count, photos, subscriptions, downloads int
+	s.SQLDB().QueryRow("SELECT COUNT(*),COUNT(photo) FROM actors").Scan(&count, &photos)
+	s.SQLDB().QueryRow("SELECT COUNT(*) FROM actors WHERE limit_date IS NOT NULL").Scan(&subscriptions)
+	s.SQLDB().QueryRow("SELECT COUNT(*) FROM download_tasks").Scan(&downloads)
+	if count == 0 || photos == 0 || subscriptions != 0 || downloads != 0 {
+		t.Fatalf("actors=%d photos=%d subscriptions=%d downloads=%d", count, photos, subscriptions, downloads)
+	}
+	t.Logf("actors=%d photos=%d subscriptions=%d downloads=%d", count, photos, subscriptions, downloads)
+}
+
 func TestCollectionMigrationUpgradesTwelveWithoutChangingHistory(t *testing.T) {
 	ctx := context.Background()
 	s, e := Open(ctx, Config{Dialect: DialectSQLite, SQLitePath: filepath.Join(t.TempDir(), "test.db")})

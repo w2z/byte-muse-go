@@ -18,7 +18,7 @@ func ValidCollectionSource(source string) bool {
 // 保留既有 JavDB 能力；解析器存在不等于已启用，每次返回独立值。
 func CollectionSources() []CollectionSource {
 	return []CollectionSource{
-		{ID: "javdb", Kinds: []string{"search", "detail", "rank"}},
+		{ID: "javdb", Kinds: []string{"search", "detail", "rank", "actor"}},
 		{ID: "netflav", Kinds: []string{"search", "detail"}},
 		{ID: "javlibrary", Kinds: []string{"rank"}},
 		{ID: "avbase", Kinds: []string{"search", "actor"}},
@@ -58,8 +58,10 @@ type CollectionRequest struct {
 
 // CollectedActor 是站点提供的演员资料，不包含订阅意图。
 type CollectedActor struct {
-	Name  string `json:"name"`
-	Photo string `json:"photo,omitempty"`
+	SourceID string   `json:"source_id,omitempty"` // 来源站点内演员 ID；仅与该批次 source 联合使用。
+	Name     string   `json:"name"`
+	Photo    string   `json:"photo,omitempty"`
+	Aliases  []string `json:"aliases,omitempty"`
 }
 
 // CollectedMedia 保留站点身份；无可靠番号时不得用标题猜测关联。

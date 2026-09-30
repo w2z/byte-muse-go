@@ -31,6 +31,9 @@ func (r *Registry) Collect(ctx context.Context, req ports.CollectionRequest) (po
 	}
 	switch req.Source {
 	case "javdb":
+		if req.Kind == "actor" {
+			return collectJavDBActor(ctx, r.fetch, req)
+		}
 		return collectJavDB(ctx, r.fetch, req)
 	case "netflav":
 		return collectNetflav(ctx, r.fetch, req)
@@ -71,8 +74,8 @@ func (r *Registry) Validate(req ports.CollectionRequest) error {
 	} else if strings.TrimSpace(req.Query) == "" {
 		return ErrInvalidRequest
 	}
-	if req.Kind == "detail" {
-		if req.Page != 1 {
+	if req.Kind == "detail" || (req.Source == "javdb" && req.Kind == "actor") {
+		if req.Kind == "detail" && req.Page != 1 {
 			return ErrInvalidRequest
 		}
 		for _, c := range req.Query {

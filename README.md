@@ -4,6 +4,10 @@
 
 演员目录与热门演员：后台任务「同步热门演员」按 ACTOR_SCHEDULE_TIME 更新 JavDB 演员月榜并执行已订阅演员追新；固定任务「同步演员目录」每天 04:00 从 gfriends 官方 Filetree.json 幂等导入演员姓名、别名和头像 URL。演员页的「全部演员」包含系统已有及目录导入演员，「热门」仅显示最近一次成功发布的热门榜。也可在维护窗口执行 bytemuse sync-actors gfriends 或 bytemuse sync-actors hot，命令不会创建订阅或下载任务。
 
+JavDB App 接入：详情采集优先读取 App JSON 的影片及演员资料，补空头像、追加别名并保存来源演员 ID 到采集快照，不覆盖订阅日期。`POST /api/v1/collection/runs` 支持 `{"source":"javdb","kind":"actor","query":"演员来源ID","page":1}`，查询指定作品页；它不同于 AVBase 的演员名查询。热门演员仍使用网页月榜，gfriends 目录不变。磁力资源搜索按精确番号匹配后归入 BT，与 Nyaa 共用 `BT_DEFAULT_DOWNLOADER` 及下载状态机；资料采集本身不触发下载。
+
+协议参考 [miyabi](https://github.com/ppxb/miyabi/tree/88c5f95f7a0c278b806563874c109908f7be1fe8/internal/javdb) 的上游路径、请求参数与签名协议，适配器在本项目独立实现。当前使用 4 条固定初始线路和进程内故障切换；动态备用域名解密、最快线路探测、跨重启线路保存、发现页及其磁力操作 UI 尚未接入。
+
 - 镜像地址：`ghcr.io/w2z/byte-muse-go`
 - api公开链接: `https://s.apifox.cn/0d0f258c-8165-47ec-a98d-fbb718485c25`
 - 容器端口：`3750`；数据目录：`/data`（影片封面缓存在 `/data/cover`）；strm目录: `/strm`；默认时区：`Asia/Shanghai`

@@ -42,3 +42,12 @@ func TestUnsetSizeFilterDoesNotRejectResources(t *testing.T) {
 		t.Fatalf("unset numeric filters rejected resource: %#v", selected)
 	}
 }
+
+func TestBTPreferenceIncludesJavDBAndNyaa(t *testing.T) {
+	for _, site := range []string{"JavDB", "Nyaa BT"} {
+		selected, _ := selectResource([]torrentsearch.Resource{{Kind: "pt", Site: "Private", InfoHash: "a"}, {Kind: "bt", Site: site, InfoHash: "z"}}, domain.SubscriptionModeStrict, nil, "site", "BT")
+		if selected == nil || selected.Kind != "bt" {
+			t.Fatalf("site=%s selected=%+v", site, selected)
+		}
+	}
+}

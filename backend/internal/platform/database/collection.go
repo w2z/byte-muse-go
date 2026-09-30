@@ -173,27 +173,14 @@ func (r *CollectionRepository) saveCollectionTx(ctx context.Context, tx *sql.Tx,
 		}
 		counts.MediaInserted++
 	}
-	seenActors := map[string]bool{}
 	for _, a := range actors {
-		a.Name = strings.TrimSpace(a.Name)
-		if a.Name == "" || utf8.RuneCountInString(a.Name) > 255 || len(a.Photo) > 2048 {
-			return empty, fmt.Errorf("invalid actor")
+		inserted, err := saveActorProfileTx(ctx, tx, r.dialect, ports.ActorProfile{Name: a.Name, Photo: a.Photo, Aliases: a.Aliases})
+		if err != nil {
+			return empty, err
 		}
-		if seenActors[a.Name] {
-			continue
+		if inserted {
+			counts.ActorsInserted++
 		}
-		seenActors[a.Name] = true
-		var n int
-		if e = tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM actors WHERE name = "+placeholder(r.dialect, 1), a.Name).Scan(&n); e != nil {
-			return empty, e
-		}
-		if n > 0 {
-			continue
-		}
-		if _, e = tx.ExecContext(ctx, "INSERT INTO actors (name,photo,created_at,updated_at) VALUES ("+placeholders(r.dialect, 4, 1)+")", a.Name, nullIfEmpty(a.Photo), now, now); e != nil {
-			return empty, e
-		}
-		counts.ActorsInserted++
 	}
 	return counts, nil
 }

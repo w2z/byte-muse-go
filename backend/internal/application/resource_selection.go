@@ -76,14 +76,22 @@ func selectResource(items []torrentsearch.Resource, mode domain.SubscriptionMode
 					return a.Free
 				}
 			case "site":
-				if mainSite != "" && mainSite != "ALL" && (a.Site == mainSite) != (b.Site == mainSite) {
-					return a.Site == mainSite
+				if mainSite != "" && mainSite != "ALL" && preferredResourceSite(a, mainSite) != preferredResourceSite(b, mainSite) {
+					return preferredResourceSite(a, mainSite)
 				}
 			}
 		}
 		return a.InfoHash < b.InfoHash
 	})
 	return &candidates[0], passed
+}
+
+// preferredResourceSite 的 BT 是下载资源类型；JavDB、Nyaa 都属于该类型，不按站点名称猜测。
+func preferredResourceSite(item torrentsearch.Resource, site string) bool {
+	if site == "BT" {
+		return item.Kind == "bt"
+	}
+	return item.Site == site
 }
 
 func resourceMatches(item torrentsearch.Resource, filter map[string]any) bool {

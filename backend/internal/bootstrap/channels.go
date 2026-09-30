@@ -95,7 +95,10 @@ func (r *channelRegistry) cached(channel, signature string, build func() ports.C
 }
 
 // settingsResourceSearcher 按当前设置构造资源搜索器，使 Agent 与订阅下载复用同一套站点配置。
-type settingsResourceSearcher struct{ settings *application.SettingsService }
+type settingsResourceSearcher struct {
+	settings *application.SettingsService
+	javdb    application.ResourceSearcher
+}
 
 // Search 读取最新设置后执行一次资源搜索。
 func (s settingsResourceSearcher) Search(ctx context.Context, code string) ([]torrentsearch.Resource, error) {
@@ -103,14 +106,19 @@ func (s settingsResourceSearcher) Search(ctx context.Context, code string) ([]to
 	if err != nil {
 		return nil, err
 	}
-	searcher, _ := newResourceSearcher(values.Values)
+	searcher, _ := newResourceSearcher(values.Values, s.javdb)
 	return searcher.Search(ctx, code)
 }
 
 // newResourceSearcher 构造公开站点与已配置私有站点合并后的资源搜索器。
 // 订阅下载与 Agent 搜种必须共用这里，避免两处站点配置漂移。
-func newResourceSearcher(values map[string]string) (application.ResourceSearcher, map[string]application.PrivateTorrentSource) {
+func newResourceSearcher(values map[string]string, javdb ...application.ResourceSearcher) (application.ResourceSearcher, map[string]application.PrivateTorrentSource) {
 	sources := []application.ResourceSearcher{torrentsearch.NewNyaaSearcher(nil, "")}
+	for _, source := range javdb {
+		if source != nil {
+			sources = append(sources, source)
+		}
+	}
 	privateSearchers, privateSources := configuredPrivateSites(values, nil)
 	sources = append(sources, privateSearchers...)
 	return application.MultiResourceSearcher{Sources: sources}, privateSources
