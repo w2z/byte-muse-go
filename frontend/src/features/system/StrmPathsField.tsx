@@ -130,6 +130,12 @@ export function StrmPathsField({
   const duplicateLocalPaths = value.filter((item, index) =>
     item.local_path.trim() !== "" && value.findIndex((candidate) => candidate.local_path.trim() === item.local_path.trim()) !== index,
   ).length;
+  const selectedFormats = value[0]?.formats ?? [...DEFAULT_STRM_FORMATS];
+
+  const updateFormats = (formats: unknown) => {
+    const normalized = normalizeStrmFormats(formats);
+    onChange(value.map((item) => ({ ...item, formats: normalized })));
+  };
 
   const chooseNetdisk = (picked: { id: string; path: string }) => {
     if (picking === null) return;
@@ -156,7 +162,15 @@ export function StrmPathsField({
           {value.map((item, index) => (
             <li className="settings-strm-path-row" key={`${item.kind}-${item.id}-${index}`}>
               <div className="settings-strm-path-line">
-                <span className="settings-strm-path-label">网盘目录</span>
+                <span className="settings-strm-path-label">本地 STRM 目录</span>
+                <Input
+                  value={item.local_path}
+                  placeholder="尚未选择本地 strm 目录"
+                  aria-label={`本地路径 ${index + 1}`}
+                  onChange={(localPath) => update(index, { local_path: localPath })}
+                />
+                <Button type="secondary" onClick={() => openPicker(index, "local")}>选择本地目录</Button>
+                <span className="settings-strm-path-arrow" aria-hidden="true">→</span>
                 <div className="settings-strm-kind" role="group" aria-label={`网盘类型 ${index + 1}`}>
                   <Radio.Group
                     value={item.kind}
@@ -170,20 +184,10 @@ export function StrmPathsField({
                 <Input
                   readOnly
                   value={item.path}
-                  placeholder="尚未选择网盘目录"
+                  placeholder="尚未选择远程网盘目录"
                   aria-label={`网盘路径 ${index + 1}`}
                 />
                 <Button type="secondary" onClick={() => openPicker(index, "netdisk")}>选择网盘目录</Button>
-              </div>
-              <div className="settings-strm-path-line">
-                <span className="settings-strm-path-label">本地 strm</span>
-                <Input
-                  value={item.local_path}
-                  placeholder="尚未选择本地 strm 目录"
-                  aria-label={`本地路径 ${index + 1}`}
-                  onChange={(localPath) => update(index, { local_path: localPath })}
-                />
-                <Button type="secondary" onClick={() => openPicker(index, "local")}>选择本地目录</Button>
                 <Button
                   type="secondary"
                   status="danger"
@@ -193,26 +197,6 @@ export function StrmPathsField({
                   删除
                 </Button>
               </div>
-              <div className="settings-strm-path-line">
-                <span className="settings-strm-path-label">生成格式</span>
-                <Select
-                  mode="multiple"
-                  allowCreate={{
-                    formatter: (inputValue) => {
-                      const format = normalizeStrmFormats([inputValue])[0] ?? "";
-                      return { value: format, label: format };
-                    },
-                  }}
-                  value={item.formats}
-                  options={Array.from(new Set([...DEFAULT_STRM_FORMATS, ...item.formats])).map((format) => ({
-                    value: format,
-                    label: format,
-                  }))}
-                  placeholder="选择或输入格式"
-                  aria-label={`生成格式 ${index + 1}`}
-                  onChange={(formats) => update(index, { formats: normalizeStrmFormats(formats) })}
-                />
-              </div>
             </li>
           ))}
         </ul>
@@ -220,10 +204,30 @@ export function StrmPathsField({
       <div className="settings-pan115-actions">
         <Button
           type="primary"
-          onClick={() => onChange([...value, { kind: "115", id: "", path: "", local_path: "", formats: [...DEFAULT_STRM_FORMATS] }])}
+          onClick={() => onChange([...value, { kind: "115", id: "", path: "", local_path: "", formats: [...selectedFormats] }])}
         >
           添加映射
         </Button>
+      </div>
+      <div className="settings-strm-format-line">
+        <span className="settings-strm-path-label">生成格式</span>
+        <Select
+          mode="multiple"
+          allowCreate={{
+            formatter: (inputValue) => {
+              const format = normalizeStrmFormats([inputValue])[0] ?? "";
+              return { value: format, label: format };
+            },
+          }}
+          value={selectedFormats}
+          options={Array.from(new Set([...DEFAULT_STRM_FORMATS, ...selectedFormats])).map((format) => ({
+            value: format,
+            label: format,
+          }))}
+          placeholder="选择或输入格式"
+          aria-label="生成格式"
+          onChange={updateFormats}
+        />
       </div>
       {incomplete > 0 ? (
         <span className="settings-field-description">

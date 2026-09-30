@@ -644,7 +644,7 @@ button.code-card-still-cell:hover img { opacity: .85; }
 .directory-picker-pagination { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
 .directory-picker-footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
 .directory-picker-selection { min-width: 0; overflow: hidden; color: var(--ink); font-size: 12px; line-height: 20px; text-overflow: ellipsis; white-space: nowrap; }
-/* strm 网盘映射：一条映射两行（网盘目录 / 本地 strm 目录），只读输入框占满剩余宽度，
+/* strm 网盘映射：每条映射把本地目录与远程网盘目录放在同一行，
    按钮保持原尺寸不被压缩；窄屏按 flex-wrap 换行，不做固定列数的栅格。 */
 .settings-strm-paths { display: flex; min-width: 0; flex-direction: column; gap: 8px; }
 .settings-strm-path-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; margin: 0; padding: 0; list-style: none; }
@@ -653,8 +653,10 @@ button.code-card-still-cell:hover img { opacity: .85; }
 .settings-strm-path-label { flex: 0 0 76px; color: var(--muted); font-size: 12px; line-height: 20px; }
 .settings-strm-kind { flex: 0 0 auto; }
 .settings-strm-path-line > .arco-input { flex: 1 1 160px; min-width: 0; }
-.settings-strm-path-line > .arco-select { flex: 1 1 240px; min-width: 240px; }
 .settings-strm-path-line > .arco-btn { flex: 0 0 auto; }
+.settings-strm-path-arrow { flex: 0 0 auto; color: var(--muted); font-size: 18px; line-height: 20px; }
+.settings-strm-format-line { display: flex; min-width: 0; flex-wrap: wrap; align-items: center; gap: 8px; }
+.settings-strm-format-line > .arco-select { flex: 1 1 320px; min-width: 240px; }
 .settings-strm-scan { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .settings-strm-picker-create { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .settings-strm-picker-create > .arco-input { flex: 1 1 160px; min-width: 0; }
