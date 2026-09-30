@@ -57,6 +57,20 @@ function DownloadActions({ task, onChanged }: { task: DownloadTask; onChanged: (
 
 type DownloadFilters = { status: string; added: string[]; completed: string[] };
 
+/** 将下载时间筛选限制在当前时刻，避免手动输入或日期选择产生未来范围。 */
+export function clampDownloadDateRange(value: dayjs.Dayjs[] | null, now = dayjs()): string[] {
+  if (!value || value.length !== 2 || !value[0] || !value[1]) return [];
+  const start = value[0].isAfter(now) ? now.startOf("day") : value[0];
+  const end = value[1].isAfter(now) ? now : value[1];
+  return (start.isAfter(end) ? [end, end] : [start, end]).map((date) => date.toISOString());
+}
+
+/** 日期选择器只显示日期，但当天的结束边界必须落在当前时刻而不是明天零点。 */
+export function downloadFilterEnd(value: string, now = dayjs()): string {
+  const end = dayjs(value);
+  return end.isSame(now, "day") ? now.toISOString() : end.add(1, "day").startOf("day").toISOString();
+}
+
 /** 按媒体 ID 加载封面及分组资料；抽屉关闭或切换影片时取消未完成请求。 */
 function DownloadMediaDrawer({ mediaId, onClose }: { mediaId: string | null; onClose: () => void }) {
   const detail = useQuery({
@@ -97,8 +111,8 @@ export function DownloadListPage() {
     queryFn: () => {
       const params = new URLSearchParams({ page: String(page), page_size: String(pageSize) });
       if (applied.status) params.set("transfer_status", applied.status);
-      if (applied.added.length === 2) { params.set("added_from", dayjs(applied.added[0]).startOf("day").toISOString()); params.set("added_to", dayjs(applied.added[1]).add(1, "day").startOf("day").toISOString()); }
-      if (applied.completed.length === 2) { params.set("completed_from", dayjs(applied.completed[0]).startOf("day").toISOString()); params.set("completed_to", dayjs(applied.completed[1]).add(1, "day").startOf("day").toISOString()); }
+      if (applied.added.length === 2) { params.set("added_from", dayjs(applied.added[0]).startOf("day").toISOString()); params.set("added_to", downloadFilterEnd(applied.added[1])); }
+      if (applied.completed.length === 2) { params.set("completed_from", dayjs(applied.completed[0]).startOf("day").toISOString()); params.set("completed_to", downloadFilterEnd(applied.completed[1])); }
       return apiRequest<Page<DownloadTask>>("/downloads?" + params.toString());
     },
   });
@@ -151,11 +165,11 @@ export function DownloadListPage() {
               ]} /></div>
             </Grid.Col>
             <Grid.Col xs={24} sm={12} md={8} xl={4}>
-              <div className="download-filter-field filter-field filter-field--range"><span className="download-filter-label filter-label">加入时间</span><DatePicker.RangePicker className="filter-control" aria-label="加入时间筛选" value={draft.added.length === 2 ? [dayjs(draft.added[0]), dayjs(draft.added[1])] : undefined} onChange={(value) => setDraft((current) => ({ ...current, added: value ?? [] }))} placeholder={["加入开始", "加入结束"]} />
+              <div className="download-filter-field filter-field filter-field--range"><span className="download-filter-label filter-label">加入时间</span><DatePicker.RangePicker className="filter-control" aria-label="加入时间筛选" value={draft.added.length === 2 ? [dayjs(draft.added[0]), dayjs(draft.added[1])] : undefined} disabledDate={(current) => current.isAfter(dayjs(), "day")} onChange={(_dateStrings, values) => setDraft((current) => ({ ...current, added: clampDownloadDateRange(values ?? null) }))} placeholder={["加入开始", "加入结束"]} />
               </div>
             </Grid.Col>
             <Grid.Col xs={24} sm={12} md={8} xl={4}>
-              <div className="download-filter-field filter-field filter-field--range"><span className="download-filter-label filter-label">下载完成时间</span><DatePicker.RangePicker className="filter-control" aria-label="下载完成时间筛选" value={draft.completed.length === 2 ? [dayjs(draft.completed[0]), dayjs(draft.completed[1])] : undefined} onChange={(value) => setDraft((current) => ({ ...current, completed: value ?? [] }))} placeholder={["完成开始", "完成结束"]} /></div>
+              <div className="download-filter-field filter-field filter-field--range"><span className="download-filter-label filter-label">下载完成时间</span><DatePicker.RangePicker className="filter-control" aria-label="下载完成时间筛选" value={draft.completed.length === 2 ? [dayjs(draft.completed[0]), dayjs(draft.completed[1])] : undefined} disabledDate={(current) => current.isAfter(dayjs(), "day")} onChange={(_dateStrings, values) => setDraft((current) => ({ ...current, completed: clampDownloadDateRange(values ?? null) }))} placeholder={["完成开始", "完成结束"]} /></div>
             </Grid.Col>
             <Grid.Col xs={24} sm={12} md={8} xl={4}>
               <div className="download-filter-actions filter-actions"><Button type="primary" htmlType="submit">搜索</Button><Button onClick={reset}>重置</Button></div>

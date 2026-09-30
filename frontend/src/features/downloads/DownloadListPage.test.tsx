@@ -2,7 +2,8 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, expect, test, vi } from "vitest";
-import { DownloadListPage } from "./DownloadListPage";
+import dayjs from "dayjs";
+import { clampDownloadDateRange, downloadFilterEnd, DownloadListPage } from "./DownloadListPage";
 
 // jsdom 未实现媒体查询，提供 Arco 响应式描述列表所需的浏览器接口。
 Object.defineProperty(window, "matchMedia", { writable: true, value: (query: string) => ({ matches: false, media: query, addListener() {}, removeListener() {} }) });
@@ -21,6 +22,14 @@ vi.mock("../../shared/api/client", async (importOriginal) => ({
   },
 }));
 afterEach(() => { cleanup(); requests.length = 0; responseItems = []; detailError = false; });
+
+test("下载时间范围会钳制到当前时刻", () => {
+  const now = dayjs("2026-09-30T15:30:45+08:00");
+  const range = clampDownloadDateRange([dayjs("2026-10-01"), dayjs("2026-10-02")], now);
+  expect(range).toEqual([now.startOf("day").toISOString(), now.toISOString()]);
+  expect(downloadFilterEnd("2026-09-30", now)).toBe(now.toISOString());
+  expect(downloadFilterEnd("2026-09-29", now)).toBe(dayjs("2026-09-30").startOf("day").toISOString());
+});
 
 test("点击番号加载封面和资料，详情无卡片与操作并可关闭重开", async () => {
   responseItems = [{ id: "d1", media_id: "media/id", code: "TEST-001", status: "failed" }];
