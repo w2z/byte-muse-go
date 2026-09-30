@@ -3,7 +3,7 @@ import { IconDelete, IconSearch } from "@arco-design/web-react/icon";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import dayjs from "dayjs";
-import { clampLogTimeRange, getDisabledLogTime, getLogTimeShortcuts, isFutureLogDate } from "./logTimeRange";
+import { getDisabledDateTime, getDateTimeShortcuts, isFutureDate, serializeDateTimeRange } from "../../shared/dateTimeRange";
 import { formatLogMessage, shouldDisplayLog } from "./logMessage";
 import { apiRequest, type Page } from "../../shared/api/client";
 import type { LogRecord } from "../../shared/api/types";
@@ -23,10 +23,6 @@ type Level = LogRecord["level"];
 function toISOString(value: string): string | undefined {
   const parsed = dayjs(value);
   return parsed.isValid() ? parsed.toISOString() : undefined;
-}
-
-function rangeToStrings(range: [dayjs.Dayjs, dayjs.Dayjs] | undefined): [string, string] | undefined {
-  return range ? [range[0].toISOString(), range[1].toISOString()] : undefined;
 }
 
 function levelClass(level: Level): string {
@@ -167,10 +163,10 @@ export function LogsPage() {
                     showTime={{ format: "HH:mm:ss" }}
                     format="YYYY-MM-DD HH:mm:ss"
                     value={draftTimeRange?.map((value) => dayjs(value))}
-                    shortcuts={getLogTimeShortcuts()}
-                    disabledDate={(current) => isFutureLogDate(current)}
-                    disabledTime={(current) => getDisabledLogTime()(current)}
-                    onChange={(_dateStrings, values) => setDraftTimeRange(values?.length === 2 && values[0] && values[1] ? rangeToStrings(clampLogTimeRange([values[0], values[1]])) : undefined)}
+                    shortcuts={getDateTimeShortcuts()}
+                    disabledDate={(current) => isFutureDate(current)}
+                    disabledTime={(current) => getDisabledDateTime()(current)}
+                    onChange={(_dateStrings, values) => setDraftTimeRange(serializeDateTimeRange(values))}
                     allowClear
                     className="logs-time-range filter-control"
                   />

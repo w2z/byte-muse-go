@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, expect, test, vi } from "vitest";
 import dayjs from "dayjs";
-import { clampDownloadDateRange, downloadFilterEnd, DownloadListPage } from "./DownloadListPage";
+import { DownloadListPage } from "./DownloadListPage";
 
 // jsdom 未实现媒体查询，提供 Arco 响应式描述列表所需的浏览器接口。
 Object.defineProperty(window, "matchMedia", { writable: true, value: (query: string) => ({ matches: false, media: query, addListener() {}, removeListener() {} }) });
@@ -23,12 +23,34 @@ vi.mock("../../shared/api/client", async (importOriginal) => ({
 }));
 afterEach(() => { cleanup(); requests.length = 0; responseItems = []; detailError = false; });
 
-test("下载时间范围会钳制到当前时刻", () => {
-  const now = dayjs("2026-09-30T15:30:45+08:00");
-  const range = clampDownloadDateRange([dayjs("2026-10-01"), dayjs("2026-10-02")], now);
-  expect(range).toEqual([now.startOf("day").toISOString(), now.toISOString()]);
-  expect(downloadFilterEnd("2026-09-30", now)).toBe(now.toISOString());
-  expect(downloadFilterEnd("2026-09-29", now)).toBe(dayjs("2026-09-30").startOf("day").toISOString());
+test.each([["加入开始", "added"], ["完成开始", "completed"]])("%s支持时间选择和四个快捷范围，查询保留所选时刻", async (placeholder, prefix) => {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(<QueryClientProvider client={client}><DownloadListPage /></QueryClientProvider>);
+  await waitFor(() => expect(requests.length).toBeGreaterThan(0));
+  fireEvent.click(screen.getByPlaceholderText(placeholder));
+  for (const name of ["今天", "昨天", "本周", "本月"]) expect(await screen.findByText(name, { exact: true })).not.toBeNull();
+  expect(screen.getByText("选择时间", { exact: true })).not.toBeNull();
+  const before = dayjs();
+  fireEvent.click(screen.getByText("今天", { exact: true }));
+  fireEvent.click(screen.getByRole("button", { name: "搜索" }));
+  await waitFor(() => expect(requests.at(-1)).toContain(prefix + "_from="));
+  const params = new URLSearchParams(requests.at(-1)!.split("?")[1]);
+  const end = dayjs(params.get(prefix + "_to")!);
+  expect(dayjs(params.get(prefix + "_from")!).valueOf()).toBe(before.startOf("day").valueOf());
+  expect(end.valueOf()).toBeGreaterThanOrEqual(before.startOf("second").valueOf());
+  expect(end.valueOf()).toBeLessThanOrEqual(Date.now());
+  const appliedEnd = params.get(prefix + "_to");
+  fireEvent.click(screen.getByRole("button", { name: "搜索" }));
+  await waitFor(() => expect(requests.length).toBeGreaterThan(2));
+  expect(new URLSearchParams(requests.at(-1)!.split("?")[1]).get(prefix + "_to")).toBe(appliedEnd);
+  const exactStart = before.subtract(1, "day").hour(10).minute(11).second(12).millisecond(0);
+  fireEvent.click(screen.getByPlaceholderText(placeholder));
+  fireEvent.change(screen.getByPlaceholderText(placeholder), { target: { value: exactStart.format("YYYY-MM-DD HH:mm:ss") } });
+  fireEvent.click(screen.getByRole("button", { name: "确定", exact: true }));
+  fireEvent.click(screen.getByRole("button", { name: "搜索" }));
+  await waitFor(() => expect(new URLSearchParams(requests.at(-1)!.split("?")[1]).get(prefix + "_from")).toBe(exactStart.toISOString()));
+  fireEvent.click(screen.getByRole("button", { name: "重置" }));
+  await waitFor(() => expect(requests.at(-1)).toBe("/downloads?page=1&page_size=15"));
 });
 
 test("点击番号加载封面和资料，详情无卡片与操作并可关闭重开", async () => {
