@@ -681,6 +681,9 @@ describe("网盘设置", () => {
     await user.click(await screen.findByRole("tab", { name: "网盘" }));
     await user.click(screen.getByRole("tab", { name: "STRM 生成" }));
     expect(screen.getByText("尚未添加 strm 映射")).toBeInTheDocument();
+    expect(screen.getByText("网盘strm映射", { exact: true })).toBeInTheDocument();
+    expect(screen.queryByText("本地 strm 目录以「STRM 目录」为根，映射路径不能超出该目录。", { exact: true })).not.toBeInTheDocument();
+    expect(screen.queryByText("把网盘目录生成到本地 strm 目录，可添加多个映射；每条映射由网盘目录与本地 strm 目录组成。", { exact: true })).not.toBeInTheDocument();
 
     // 第一条映射：115 网盘目录 + 本地 strm 目录，类型默认 115。
     await user.click(screen.getByRole("button", { name: "添加映射" }));
@@ -692,9 +695,21 @@ describe("网盘设置", () => {
     const localPickerButton = screen.getByRole("button", { name: "选择本地目录" });
     expect(localPickerButton).toHaveClass("arco-btn-primary");
     expect(localPickerButton.textContent).toBe("");
+    expect(localPickerButton).not.toHaveAttribute("title");
+    await user.hover(localPickerButton);
+    expect(await screen.findByRole("tooltip")).toHaveTextContent("选择本地目录");
+    await user.unhover(localPickerButton);
+    await waitFor(() => expect(screen.queryByRole("tooltip")).not.toBeInTheDocument());
     const netdiskPickerButton = screen.getByRole("button", { name: "选择网盘目录" });
     expect(netdiskPickerButton).toHaveClass("arco-btn-primary");
     expect(netdiskPickerButton.textContent).toBe("");
+    expect(netdiskPickerButton).not.toHaveAttribute("title");
+    await user.hover(netdiskPickerButton);
+    expect(await screen.findByRole("tooltip")).toHaveTextContent("选择网盘目录");
+    await user.unhover(netdiskPickerButton);
+    await waitFor(() => expect(screen.queryByRole("tooltip")).not.toBeInTheDocument());
+    expect(within(mappingCard as HTMLElement).getByText("本地路径", { exact: true })).toBeInTheDocument();
+    expect(within(mappingCard as HTMLElement).getByText("网盘路径", { exact: true })).toBeInTheDocument();
     expect(screen.getByLabelText("本地路径 1").closest(".arco-input-group-wrapper"))
       .toContainElement(screen.getByRole("button", { name: "选择本地目录" }));
     const remoteGroup = screen.getByLabelText("网盘路径 1").closest(".arco-input-group-wrapper");

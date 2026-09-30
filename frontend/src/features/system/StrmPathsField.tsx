@@ -1,4 +1,4 @@
-import { Button, Input, Modal, Select } from "@arco-design/web-react";
+import { Button, Input, Modal, Select, Tooltip } from "@arco-design/web-react";
 import { IconDelete, IconFolder } from "@arco-design/web-react/icon";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useState } from "react";
@@ -164,7 +164,7 @@ export function StrmPathsField({
             <li className="settings-strm-path-row" key={`${item.kind}-${item.id}-${index}`}>
               <div className="settings-strm-path-card">
                 <div className="settings-strm-path-line">
-                  <span className="settings-strm-path-label">本地 STRM 目录</span>
+                  <span className="settings-strm-path-label">本地路径</span>
                   <div className="settings-strm-field">
                     <Input
                       value={item.local_path}
@@ -173,13 +173,15 @@ export function StrmPathsField({
                       onChange={(localPath) => update(index, { local_path: localPath })}
                       afterStyle={{ padding: 0, border: 0 }}
                       addAfter={(
-                        <Button type="primary" icon={<IconFolder />} aria-label="选择本地目录" title="选择本地目录" onClick={() => openPicker(index, "local")} />
+                        <Tooltip content="选择本地目录">
+                          <Button type="primary" icon={<IconFolder />} aria-label="选择本地目录" onClick={() => openPicker(index, "local")} />
+                        </Tooltip>
                       )}
                     />
                   </div>
                 </div>
                 <div className="settings-strm-path-line">
-                  <span className="settings-strm-path-label">网盘目录</span>
+                  <span className="settings-strm-path-label">网盘路径</span>
                   <div className="settings-strm-field settings-strm-remote-field">
                     <Input
                       readOnly
@@ -188,7 +190,9 @@ export function StrmPathsField({
                       aria-label={`网盘路径 ${index + 1}`}
                       afterStyle={{ padding: 0, border: 0 }}
                       addAfter={(
-                        <Button type="primary" icon={<IconFolder />} aria-label="选择网盘目录" title="选择网盘目录" onClick={() => openPicker(index, "netdisk")} />
+                        <Tooltip content="选择网盘目录">
+                          <Button type="primary" icon={<IconFolder />} aria-label="选择网盘目录" onClick={() => openPicker(index, "netdisk")} />
+                        </Tooltip>
                       )}
                       addBefore={(
                         <Select
@@ -207,16 +211,18 @@ export function StrmPathsField({
                   </div>
                 </div>
               </div>
-              <Button
-                className="settings-strm-delete-button"
-                type="secondary"
-                status="danger"
-                icon={<IconDelete />}
-                aria-label={`删除映射 ${index + 1}`}
-                onClick={() => onChange(value.filter((_, position) => position !== index))}
-              >
-                <span className="settings-strm-delete-label">删除</span>
-              </Button>
+              <Tooltip content="删除映射">
+                <Button
+                  className="settings-strm-delete-button"
+                  type="secondary"
+                  status="danger"
+                  icon={<IconDelete />}
+                  aria-label={`删除映射 ${index + 1}`}
+                  onClick={() => onChange(value.filter((_, position) => position !== index))}
+                >
+                  <span className="settings-strm-delete-label">删除</span>
+                </Button>
+              </Tooltip>
             </li>
           ))}
         </ul>

@@ -668,8 +668,9 @@ button.code-card-still-cell:hover img { opacity: .85; }
   .settings-strm-delete-button { width: 32px; padding: 0; }
   .settings-strm-delete-label { display: none; }
 }
-.settings-strm-format-line { display: flex; min-width: 0; flex-wrap: wrap; align-items: center; gap: 8px; }
-.settings-strm-format-line > .arco-select { flex: 1 1 320px; min-width: 240px; }
+.settings-strm-format-line { display: flex; min-width: 0; flex-direction: column; align-items: stretch; gap: 8px; }
+.settings-strm-format-line > .settings-strm-path-label { flex-basis: auto; }
+.settings-strm-format-line > .arco-select { width: 100%; min-width: 0; }
 .settings-strm-scan { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .settings-strm-picker-create { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .settings-strm-picker-create > .arco-input { flex: 1 1 160px; min-width: 0; }

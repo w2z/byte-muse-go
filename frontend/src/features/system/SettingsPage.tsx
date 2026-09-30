@@ -476,9 +476,8 @@ const groups: SettingGroup[] = [
       },
       {
         key: strmPathsKey,
-        label: "网盘映射",
+        label: "网盘strm映射",
         kind: "strm-paths",
-        description: "把网盘目录生成到本地 strm 目录，可添加多个映射；每条映射由网盘目录与本地 strm 目录组成。",
       },
       {
         key: strmPlayBaseKey,
@@ -494,7 +493,6 @@ const groups: SettingGroup[] = [
         description: "开启后每次生成 strm 都会请求一次 Emby 媒体库刷新；需要先配置 Emby 地址与密钥。",
       },
     ],
-    note: "本地 strm 目录以「STRM 目录」为根，映射路径不能超出该目录。",
   },
   {
     code: "filter",
