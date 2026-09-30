@@ -512,9 +512,42 @@ describe("网盘设置", () => {
     expect(screen.getByText("已用 30 / 1500")).toBeInTheDocument();
     expect(screen.getByLabelText("空间容量 已用 1TB / 5TB")).toBeInTheDocument();
     expect(screen.getByLabelText("云下载配额 已用 30 / 1500")).toBeInTheDocument();
+    // 百分比跟随进度条展示：整数不带小数点。
+    expect(screen.getByText("20%")).toBeInTheDocument();
+    expect(screen.getByText("2%")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "解除绑定" }));
     expect(await screen.findByRole("button", { name: "扫码登录" })).toBeInTheDocument();
+  });
+
+  it("115 容量百分比保留一位小数，整数与 0 不显示小数点", async () => {
+    const user = userEvent.setup();
+    vi.mocked(apiRequest).mockImplementation(async (path) => {
+      if (path === "/system/settings") return { database_driver: "sqlite", values: {}, configured: {} };
+      if (path === "/pan115/account") {
+        return {
+          linked: true,
+          account: {
+            ...boundAccount,
+            space: {
+              total: { size: 23039, formatted: "230.39TB" },
+              used: { size: 22750, formatted: "227.5TB" },
+              remaining: { size: 289, formatted: "2.89TB" },
+            },
+            quota: { total: 1500, used: 0, remaining: 1500 },
+          },
+        };
+      }
+      throw new Error(`未处理的请求 ${path}`);
+    });
+
+    renderSettings();
+    await user.click(await screen.findByRole("tab", { name: "网盘" }));
+
+    expect(await screen.findByText("115 用户")).toBeInTheDocument();
+    expect(screen.getByText("98.7%")).toBeInTheDocument();
+    expect(screen.getByText("0%")).toBeInTheDocument();
+    expect(screen.queryByText("0.0%")).not.toBeInTheDocument();
   });
 
   it("115 未返回云下载配额时只提示配额不可用，账号与容量照常展示", async () => {
@@ -592,7 +625,9 @@ describe("网盘设置", () => {
 
     renderSettings();
     await user.click(await screen.findByRole("tab", { name: "网盘" }));
-    expect(screen.getByText("尚未添加扫描目录")).toBeInTheDocument();
+    // 未添加目录时不展示占位文案，只保留说明与「添加目录」按钮。
+    expect(screen.queryByText("尚未添加扫描目录")).not.toBeInTheDocument();
+    expect(screen.getByText("选择需要扫描 115 网盘已有的视频并入库的目录，可添加多个；留空表示不扫描任何目录。")).toBeInTheDocument();
 
     // 第一次：根目录下选中「电影」后确认；未选中任何目录时确认按钮不可点。
     await user.click(screen.getByRole("button", { name: "添加目录" }));

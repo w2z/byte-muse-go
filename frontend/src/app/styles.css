@@ -597,12 +597,18 @@ button.code-card-still-cell:hover img { opacity: .85; }
 .settings-pan115-account { display: flex; min-width: 0; align-items: center; gap: 12px; }
 .settings-pan115-avatar { width: 44px; height: 44px; flex: 0 0 auto; border-radius: 50%; object-fit: cover; }
 .settings-pan115-account-text { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
-/* 115 空间容量与云下载配额：标签 + 数值一行，进度条整行铺满，两种计量共用同一结构。 */
+/* 115 空间容量与云下载配额：标签 + 数值一行，进度条与文字行同宽，两种计量共用同一结构。
+   容器按内容取宽，宽度由最长的「空间容量 已用 … / …」决定，两行的进度条与百分比合并后长度一致，
+   右边缘与文字行对齐，不再拉通到整个设置字段宽度；窄屏下以 max-width 收口，文字自动换行。 */
+.settings-pan115-meters { display: flex; min-width: 0; width: fit-content; max-width: 100%; flex-direction: column; gap: 12px; }
 .settings-pan115-meter { display: flex; min-width: 0; flex-direction: column; gap: 4px; }
 .settings-pan115-meter-head { display: flex; min-width: 0; flex-wrap: wrap; align-items: baseline; gap: 6px; }
 .settings-pan115-meter-label { color: var(--muted); font-size: 12px; line-height: 20px; }
 .settings-pan115-meter-value { font-size: 12px; line-height: 20px; }
-.settings-pan115-meter-bar { width: 100%; }
+/* 进度条占满剩余宽度，百分比紧随其后；tabular-nums 让数值变化时宽度稳定不跳动。 */
+.settings-pan115-meter-track { display: flex; min-width: 0; align-items: center; gap: 8px; }
+.settings-pan115-meter-bar { min-width: 0; flex: 1 1 auto; }
+.settings-pan115-meter-percent { flex: 0 0 auto; font-size: 12px; line-height: 20px; font-variant-numeric: tabular-nums; }
 .settings-pan115-login { align-items: center; }
 .settings-pan115-login .settings-field-description { align-items: center; text-align: center; }
 /* 115 扫描目录：每行只读输入框占满剩余宽度，选择/删除按钮保持原尺寸不被压缩。 */

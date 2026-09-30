@@ -443,7 +443,7 @@ const groups: SettingGroup[] = [
         key: scanPathsKey,
         label: "扫描目录",
         kind: "paths",
-        description: "选择需要扫描的 115 网盘目录，可添加多个；留空表示不扫描任何目录。",
+        description: "选择需要扫描 115 网盘已有的视频并入库的目录，可添加多个；留空表示不扫描任何目录。",
       },
     ],
   },

@@ -55,7 +55,13 @@ function percentOf(used: number, total: number): number {
   return Math.min(100, Math.max(0, (used / total) * 100));
 }
 
-/** 空间容量与云下载配额共用同一行结构：标签 + 数值 + 整行进度条。 */
+/** 百分比展示：整数（含 0）不带小数点，其余保留一位小数，例如 0%、98.7%、100%。 */
+function formatPercent(percent: number): string {
+  const fixed = percent.toFixed(1);
+  return `${fixed.endsWith(".0") ? fixed.slice(0, -2) : fixed}%`;
+}
+
+/** 空间容量与云下载配额共用同一行结构：标签 + 数值一行，进度条后紧跟百分比。 */
 function MeterRow({ label, value, percent }: { label: string; value: string; percent: number }) {
   return (
     <div className="settings-pan115-meter">
@@ -63,13 +69,16 @@ function MeterRow({ label, value, percent }: { label: string; value: string; per
         <span className="settings-pan115-meter-label">{label}</span>
         <span className="settings-pan115-meter-value">{value}</span>
       </div>
-      <Progress
-        className="settings-pan115-meter-bar"
-        percent={percent}
-        showText={false}
-        strokeWidth={6}
-        aria-label={`${label} ${value}`}
-      />
+      <div className="settings-pan115-meter-track">
+        <Progress
+          className="settings-pan115-meter-bar"
+          percent={percent}
+          showText={false}
+          strokeWidth={6}
+          aria-label={`${label} ${value}`}
+        />
+        <span className="settings-pan115-meter-percent">{formatPercent(percent)}</span>
+      </div>
     </div>
   );
 }
@@ -164,20 +173,23 @@ export function Pan115LoginPanel() {
               <span className="settings-field-description">等级 {bound.level || "未知"}</span>
             </div>
           </div>
-          <MeterRow
-            label="空间容量"
-            value={`已用 ${formatSpace(bound.space.used)} / ${formatSpace(bound.space.total)}`}
-            percent={percentOf(bound.space.used.size, bound.space.total.size)}
-          />
-          {bound.quota ? (
+          {/* 两个计量同宽：宽度取「空间容量 已用 … / …」文字行，进度条不再铺满整个字段。 */}
+          <div className="settings-pan115-meters">
             <MeterRow
-              label="云下载配额"
-              value={`已用 ${bound.quota.used} / ${bound.quota.total}`}
-              percent={percentOf(bound.quota.used, bound.quota.total)}
+              label="空间容量"
+              value={`已用 ${formatSpace(bound.space.used)} / ${formatSpace(bound.space.total)}`}
+              percent={percentOf(bound.space.used.size, bound.space.total.size)}
             />
-          ) : (
-            <span className="settings-field-description">云下载配额暂不可用</span>
-          )}
+            {bound.quota ? (
+              <MeterRow
+                label="云下载配额"
+                value={`已用 ${bound.quota.used} / ${bound.quota.total}`}
+                percent={percentOf(bound.quota.used, bound.quota.total)}
+              />
+            ) : (
+              <span className="settings-field-description">云下载配额暂不可用</span>
+            )}
+          </div>
           <div className="settings-pan115-actions">
             <Button
               type="secondary"

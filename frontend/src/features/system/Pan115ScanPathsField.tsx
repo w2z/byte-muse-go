@@ -40,9 +40,7 @@ export function Pan115ScanPathsField({
 
   return (
     <div className="settings-pan115-paths">
-      {value.length === 0 ? (
-        <span className="settings-field-placeholder">尚未添加扫描目录</span>
-      ) : (
+      {value.length === 0 ? null : (
         <ul className="settings-pan115-path-list">
           {value.map((item, index) => (
             <li className="settings-pan115-path-row" key={`${item.id}-${index}`}>
