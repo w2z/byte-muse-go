@@ -633,7 +633,7 @@ func (c *Commands) Serve(ctx context.Context) error {
 		StaticDir:       c.config.WebStaticDir,
 	})
 	server := &http.Server{Addr: c.config.HTTPAddress, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
-	return runtimeapp.New(server, manager, c.config.ShutdownTimeout).Run(ctx)
+	return runtimeapp.New(server, manager, c.config.ShutdownTimeout, logCleanupTaskName).Run(ctx)
 }
 
 // scheduleDefinitions 是设置键与调度任务名的唯一映射，注册、重排与说明都据此对齐。

@@ -127,6 +127,163 @@ func TestRunNowReportsUnknownTask(t *testing.T) {
 	}
 }
 
+func TestStartRunsEachNonLogTaskOnce(t *testing.T) {
+	var mu sync.Mutex
+	runs := map[string]int{}
+	manager, err := New([]Job{
+		{Name: "采集任务", Run: func(context.Context) JobResult { mu.Lock(); runs["采集任务"]++; mu.Unlock(); return nil }},
+		{Name: "清理系统日志", Run: func(context.Context) JobResult { mu.Lock(); runs["清理系统日志"]++; mu.Unlock(); return nil }},
+		{Name: "演员任务", Run: func(context.Context) JobResult { mu.Lock(); runs["演员任务"]++; mu.Unlock(); return nil }},
+	})
+	if err != nil {
+		t.Fatalf("create scheduler: %v", err)
+	}
+	if err := manager.Start("清理系统日志"); err != nil {
+		t.Fatalf("start scheduler: %v", err)
+	}
+	if err := manager.Start("清理系统日志"); err != nil {
+		t.Fatalf("start scheduler twice: %v", err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if err := manager.Stop(ctx); err != nil {
+			t.Errorf("stop scheduler: %v", err)
+		}
+	})
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		completed := runs["采集任务"] == 1 && runs["演员任务"] == 1
+		mu.Unlock()
+		if completed {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if runs["采集任务"] != 1 || runs["演员任务"] != 1 || runs["清理系统日志"] != 0 {
+		t.Fatalf("unexpected startup runs: %#v", runs)
+	}
+}
+
+func TestStartDoesNotOverlapTaskAlreadyRunning(t *testing.T) {
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+	var mu sync.Mutex
+	runs := 0
+	manager, err := New([]Job{{
+		Name: "任务",
+		Run: func(context.Context) JobResult {
+			mu.Lock()
+			runs++
+			mu.Unlock()
+			started <- struct{}{}
+			<-release
+			return nil
+		},
+	}})
+	if err != nil {
+		t.Fatalf("create scheduler: %v", err)
+	}
+	if err := manager.RunNow("任务"); err != nil {
+		t.Fatalf("run task now: %v", err)
+	}
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("task did not start")
+	}
+	if err := manager.Start(); err != nil {
+		t.Fatalf("start scheduler: %v", err)
+	}
+	t.Cleanup(func() {
+		close(release)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if err := manager.Stop(ctx); err != nil {
+			t.Errorf("stop scheduler: %v", err)
+		}
+	})
+	time.Sleep(20 * time.Millisecond)
+	mu.Lock()
+	defer mu.Unlock()
+	if runs != 1 {
+		t.Fatalf("startup run overlapped active task: %d runs", runs)
+	}
+}
+
+func TestStopWaitsForStartupTasks(t *testing.T) {
+	started := make(chan struct{})
+	cancelled := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseTask := func() { releaseOnce.Do(func() { close(release) }) }
+	defer releaseTask()
+	manager, err := New([]Job{{Name: "任务", Run: func(ctx context.Context) JobResult {
+		close(started)
+		<-ctx.Done()
+		close(cancelled)
+		<-release
+		return nil
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	startResult := make(chan error, 1)
+	go func() { startResult <- manager.Start() }()
+	select {
+	case err := <-startResult:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("startup blocked on a task")
+	}
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("startup task did not run")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	if err := manager.Stop(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("stop must wait for startup task, got %v", err)
+	}
+	select {
+	case <-cancelled:
+	default:
+		t.Fatal("stop did not cancel startup context")
+	}
+	waiting := make(chan error, 1)
+	go func() { waiting <- manager.Stop(context.Background()) }()
+	retryCtx, retryCancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer retryCancel()
+	retry := make(chan error, 1)
+	go func() { retry <- manager.Stop(retryCtx) }()
+	select {
+	case err := <-retry:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("stop retry returned before task finished: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("concurrent stop ignored its deadline")
+	}
+	releaseTask()
+	select {
+	case err := <-waiting:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("stop did not finish after startup task returned")
+	}
+	if err := manager.Start(); err == nil {
+		t.Fatal("stopped manager must not dispatch tasks with a cancelled context")
+	}
+}
+
 func TestNewRejectsDuplicateTaskNames(t *testing.T) {
 	_, err := New([]Job{
 		{Name: "重复", Spec: "* * * * *", Run: func(context.Context) JobResult { return nil }},

@@ -41,12 +41,15 @@ var ErrTaskNotFound = errors.New("scheduler task not found")
 
 // Manager owns one cron engine and makes Start and Stop idempotent.
 type Manager struct {
-	mu      sync.Mutex
-	engine  *cron.Cron
-	ctx     context.Context
-	cancel  context.CancelFunc
-	running atomic.Bool
-	jobs    map[string]*jobState
+	mu        sync.Mutex
+	startupMu sync.Mutex
+	startupWG sync.WaitGroup
+	stopDone  chan struct{}
+	engine    *cron.Cron
+	ctx       context.Context
+	cancel    context.CancelFunc
+	running   atomic.Bool
+	jobs      map[string]*jobState
 }
 
 type jobState struct {
@@ -158,33 +161,76 @@ func (m *Manager) executeClaimed(ctx context.Context, state *jobState) {
 	result = state.job.Run(ctx)
 }
 
-// Start starts the cron engine exactly once for this manager instance.
-func (m *Manager) Start() error {
+// Start starts the cron engine exactly once for this manager instance, then asynchronously
+// runs every registered task except the named exclusions. Startup runs reuse the same
+// execution guard and context as cron/manual runs, so they do not overlap an already-running
+// task and do not block the HTTP server from starting.
+func (m *Manager) Start(excluded ...string) error {
+	m.startupMu.Lock()
+	defer m.startupMu.Unlock()
+	if m.stopDone != nil {
+		return errors.New("scheduler has stopped; create a new manager to restart")
+	}
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if m.running.Load() {
+		m.mu.Unlock()
 		return nil
 	}
 	m.engine.Start()
 	m.running.Store(true)
+	m.mu.Unlock()
 	logging.Info(logging.CategorySystem, "后台调度器已启动")
+	m.runStartupTasks(excluded)
 	return nil
 }
 
-// Stop cancels job contexts and waits for cron callbacks until ctx expires.
-func (m *Manager) Stop(ctx context.Context) error {
-	m.mu.Lock()
-	if !m.running.Load() {
-		m.mu.Unlock()
-		return nil
+// runStartupTasks dispatches the startup batch while startupMu excludes concurrent Stop.
+func (m *Manager) runStartupTasks(excluded []string) {
+	excludedTasks := make(map[string]struct{}, len(excluded))
+	for _, name := range excluded {
+		excludedTasks[name] = struct{}{}
 	}
-	m.running.Store(false)
-	m.cancel()
-	stopped := m.engine.Stop()
+	m.mu.Lock()
+	states := make([]*jobState, 0, len(m.jobs))
+	for _, state := range m.jobs {
+		states = append(states, state)
+	}
 	m.mu.Unlock()
+	for _, state := range states {
+		if _, excluded := excludedTasks[state.job.Name]; excluded {
+			continue
+		}
+		if !state.running.CompareAndSwap(false, true) {
+			logging.Info(logging.CategorySystem, "定时任务正在执行，忽略启动补跑", "task", state.job.Name)
+			continue
+		}
+		m.startupWG.Add(1)
+		go func() {
+			defer m.startupWG.Done()
+			m.executeClaimed(m.ctx, state)
+		}()
+	}
+}
+
+// Stop cancels job contexts and waits for cron callbacks and startup tasks until ctx expires.
+func (m *Manager) Stop(ctx context.Context) error {
+	m.startupMu.Lock()
+	if m.stopDone == nil {
+		m.stopDone = make(chan struct{})
+		m.running.Store(false)
+		m.cancel()
+		stopped := m.engine.Stop()
+		go func() {
+			<-stopped.Done()
+			m.startupWG.Wait()
+			logging.Info(logging.CategorySystem, "后台调度器已停止")
+			close(m.stopDone)
+		}()
+	}
+	done := m.stopDone
+	m.startupMu.Unlock()
 	select {
-	case <-stopped.Done():
-		logging.Info(logging.CategorySystem, "后台调度器已停止")
+	case <-done:
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
