@@ -1,4 +1,4 @@
-import { Button, Input, Modal, Radio, Select } from "@arco-design/web-react";
+import { Button, Input, Modal, Select } from "@arco-design/web-react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { apiRequest } from "../../shared/api/client";
@@ -90,7 +90,7 @@ function cloudCrumbs(path: string): DirectoryPickerCrumb[] {
 /**
  * strm 网盘映射字段。
  *
- * 每行一条映射：先选网盘类型，再分别选择网盘目录与本地 strm 目录，支持添加多个映射。
+ * 每条映射分别展示本地 strm 目录与远程网盘目录，两个目录选择按钮均紧跟在对应输入框右侧，支持添加多个映射。
  * 网盘目录来自 115 或 CloudDrive2 的实时目录列表；本地目录浏览以设置项 STRM_ROOT 生效的
  * 根目录为界，只能向下展开，外部新建的目录点击「刷新」即可看到。
  * 草稿由设置页统一持有并随「保存设置」提交。
@@ -161,42 +161,54 @@ export function StrmPathsField({
         <ul className="settings-strm-path-list">
           {value.map((item, index) => (
             <li className="settings-strm-path-row" key={`${item.kind}-${item.id}-${index}`}>
-              <div className="settings-strm-path-line">
-                <span className="settings-strm-path-label">本地 STRM 目录</span>
-                <Input
-                  value={item.local_path}
-                  placeholder="尚未选择本地 strm 目录"
-                  aria-label={`本地路径 ${index + 1}`}
-                  onChange={(localPath) => update(index, { local_path: localPath })}
-                />
-                <Button type="secondary" onClick={() => openPicker(index, "local")}>选择本地目录</Button>
-                <span className="settings-strm-path-arrow" aria-hidden="true">→</span>
-                <div className="settings-strm-kind" role="group" aria-label={`网盘类型 ${index + 1}`}>
-                  <Radio.Group
-                    value={item.kind}
-                    onChange={(kind) => update(index, { kind: kind === "cd2" ? "cd2" : "115", id: "", path: "" })}
-                  >
-                    {strmKindOptions.map((option) => (
-                      <Radio key={option.value} value={option.value}>{option.label}</Radio>
-                    ))}
-                  </Radio.Group>
+              <div className="settings-strm-path-card">
+                <div className="settings-strm-path-line">
+                  <span className="settings-strm-path-label">本地 STRM 目录</span>
+                  <div className="settings-strm-field">
+                    <Input
+                      value={item.local_path}
+                      placeholder="尚未选择本地 strm 目录"
+                      aria-label={`本地路径 ${index + 1}`}
+                      onChange={(localPath) => update(index, { local_path: localPath })}
+                    />
+                    <Button className="settings-strm-picker-button" type="secondary" onClick={() => openPicker(index, "local")}>选择本地目录</Button>
+                  </div>
                 </div>
-                <Input
-                  readOnly
-                  value={item.path}
-                  placeholder="尚未选择远程网盘目录"
-                  aria-label={`网盘路径 ${index + 1}`}
-                />
-                <Button type="secondary" onClick={() => openPicker(index, "netdisk")}>选择网盘目录</Button>
-                <Button
-                  type="secondary"
-                  status="danger"
-                  aria-label={`删除映射 ${index + 1}`}
-                  onClick={() => onChange(value.filter((_, position) => position !== index))}
-                >
-                  删除
-                </Button>
+                <div className="settings-strm-path-line">
+                  <span className="settings-strm-path-label">网盘目录</span>
+                  <div className="settings-strm-field settings-strm-remote-field">
+                    <Input
+                      readOnly
+                      value={item.path}
+                      placeholder="尚未选择远程网盘目录"
+                      aria-label={`网盘路径 ${index + 1}`}
+                      addBefore={(
+                        <Select
+                          value={item.kind}
+                          options={strmKindOptions}
+                          style={{ width: 128 }}
+                          aria-label={`网盘类型 ${index + 1}`}
+                          onChange={(kind) => update(index, {
+                            kind: kind === "cd2" ? "cd2" : "115",
+                            id: "",
+                            path: "",
+                          })}
+                        />
+                      )}
+                    />
+                    <Button className="settings-strm-picker-button" type="secondary" onClick={() => openPicker(index, "netdisk")}>选择网盘目录</Button>
+                  </div>
+                </div>
               </div>
+              <Button
+                className="settings-strm-delete-button"
+                type="secondary"
+                status="danger"
+                aria-label={`删除映射 ${index + 1}`}
+                onClick={() => onChange(value.filter((_, position) => position !== index))}
+              >
+                删除
+              </Button>
             </li>
           ))}
         </ul>

@@ -482,7 +482,7 @@ const groups: SettingGroup[] = [
       },
       {
         key: strmPlayBaseKey,
-        label: "ByteMuse 访问地址",
+        label: "STRM文件播放地址",
         kind: "text",
         placeholder: "http://192.168.1.10:3750",
         description: "strm 内容使用的播放地址前缀，留空时按本次生成的请求来源兜底；容器部署建议显式填写对外可访问地址。",

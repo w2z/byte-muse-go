@@ -648,13 +648,17 @@ button.code-card-still-cell:hover img { opacity: .85; }
    按钮保持原尺寸不被压缩；窄屏按 flex-wrap 换行，不做固定列数的栅格。 */
 .settings-strm-paths { display: flex; min-width: 0; flex-direction: column; gap: 8px; }
 .settings-strm-path-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; margin: 0; padding: 0; list-style: none; }
-.settings-strm-path-row { display: flex; min-width: 0; flex-direction: column; gap: 8px; padding: 10px 12px; background: var(--panel-deep); border: 1px solid var(--line-soft); border-radius: var(--content-radius); }
-.settings-strm-path-line { display: flex; min-width: 0; flex-wrap: wrap; align-items: center; gap: 8px; }
+.settings-strm-path-row { display: flex; min-width: 0; align-items: center; gap: 8px; }
+.settings-strm-path-card { display: flex; min-width: 0; flex: 1 1 auto; flex-direction: column; gap: 8px; padding: 10px 12px; background: var(--panel-deep); border: 1px solid var(--line-soft); border-radius: var(--content-radius); }
+.settings-strm-path-line { display: flex; min-width: 0; align-items: center; gap: 8px; }
 .settings-strm-path-label { flex: 0 0 76px; color: var(--muted); font-size: 12px; line-height: 20px; }
-.settings-strm-kind { flex: 0 0 auto; }
-.settings-strm-path-line > .arco-input { flex: 1 1 160px; min-width: 0; }
-.settings-strm-path-line > .arco-btn { flex: 0 0 auto; }
-.settings-strm-path-arrow { flex: 0 0 auto; color: var(--muted); font-size: 18px; line-height: 20px; }
+.settings-strm-field { display: flex; min-width: 0; flex: 1 1 auto; align-items: center; gap: 8px; }
+.settings-strm-field > .arco-input,
+.settings-strm-field > .arco-input-group-wrapper { min-width: 0; flex: 1 1 160px; }
+.settings-strm-field > .arco-input-group-wrapper { width: auto; }
+.settings-strm-field > .arco-btn { flex: 0 0 auto; }
+.settings-strm-picker-button,
+.settings-strm-delete-button { flex: 0 0 auto; }
 .settings-strm-format-line { display: flex; min-width: 0; flex-wrap: wrap; align-items: center; gap: 8px; }
 .settings-strm-format-line > .arco-select { flex: 1 1 320px; min-width: 240px; }
 .settings-strm-scan { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }

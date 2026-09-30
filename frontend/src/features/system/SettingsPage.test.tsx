@@ -684,6 +684,11 @@ describe("网盘设置", () => {
 
     // 第一条映射：115 网盘目录 + 本地 strm 目录，类型默认 115。
     await user.click(screen.getByRole("button", { name: "添加映射" }));
+    const mappingCard = screen.getByLabelText("本地路径 1").closest(".settings-strm-path-card");
+    expect(mappingCard).not.toBeNull();
+    expect(within(mappingCard as HTMLElement).getByRole("button", { name: "选择本地目录" })).toBeInTheDocument();
+    expect(within(mappingCard as HTMLElement).getByRole("button", { name: "选择网盘目录" })).toBeInTheDocument();
+    expect(mappingCard).not.toContainElement(screen.getByRole("button", { name: "删除映射 1" }));
     await user.click(screen.getByRole("button", { name: "选择网盘目录" }));
     await user.click(await screen.findByRole("button", { name: "电影" }));
     await user.click(screen.getByRole("button", { name: "确认" }));
@@ -698,9 +703,10 @@ describe("网盘设置", () => {
 
     // 第二条映射：切到 CloudDrive2 后清空已选网盘目录，重新选择网盘与本地根目录。
     await user.click(screen.getByRole("button", { name: "添加映射" }));
-    await user.click(
-      within(screen.getByRole("group", { name: "网盘类型 2" })).getByRole("radio", { name: "CloudDrive2" }),
-    );
+    await user.click(screen.getByRole("combobox", { name: "网盘类型 2" }));
+    const cloudDriveOption = await screen.findByRole("option", { name: "CloudDrive2" });
+    await waitFor(() => expect(cloudDriveOption).toBeVisible());
+    fireEvent.click(cloudDriveOption);
     await user.click(screen.getAllByRole("button", { name: "选择网盘目录" })[1]);
     await user.click(await screen.findByRole("button", { name: "115" }));
     await user.click(screen.getByRole("button", { name: "确认" }));
