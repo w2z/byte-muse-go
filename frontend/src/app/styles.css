@@ -358,6 +358,9 @@ button.code-card-still-cell:hover img { opacity: .85; }
 /* 日期范围与分段筛选保留可读宽度，格子不足时标题在控件上方。 */
 .filter-field--range, .rank-filter-bar .filter-field { flex-wrap: wrap; }
 .filter-field--range > .filter-control { flex-basis: 300px; }
+/* 下载筛选保持标题在左侧，控件只占栅格内剩余宽度，不因基准宽度换行。 */
+.download-filter-field { flex-wrap: nowrap; }
+.download-filter-field > .filter-control { flex-basis: 0; width: 0; }
 .filter-actions { display: flex; min-width: 0; align-items: center; justify-content: flex-start; gap: 8px; flex-wrap: wrap; }
 .rank-filter-bar { width: 100%; }
 .rank-filter-bar .rank-filter { flex: 1 1 240px; max-width: 100%; }
