@@ -56,7 +56,6 @@ func TestRegistryRejectsUnverifiedCapabilities(t *testing.T) {
 		{Source: "javlibrary", Kind: "search", Query: "TEST", Page: 1},
 		{Source: "javlibrary", Kind: "detail", Query: "javsample", Page: 1},
 		{Source: "javlibrary", Kind: "rank", Period: "bestrated", Page: 1},
-		{Source: "avbase", Kind: "date", Query: "2026-09-28", Page: 1},
 		{Source: "avbase", Kind: "detail", Query: "TEST-001", Page: 1},
 		{Source: "jable", Kind: "detail", Query: "sample", Page: 1},
 		{Source: "supjav", Kind: "detail", Query: "123", Page: 1},

@@ -25,20 +25,21 @@ func TestScheduleSpecsAlwaysIncludesLogCleanup(t *testing.T) {
 	if specs["订阅下载"] != "0 22 * * *" {
 		t.Fatalf("设置值应去除首尾空白: %q", specs["订阅下载"])
 	}
-	if len(specs) != 5 || specs["同步热门演员"] != "0 21 * * *" || specs["同步演员目录"] != actorCatalogSpec {
-		t.Fatalf("演员目录应独立注册，追新与热门榜共用任务，得到 %d: %#v", len(specs), specs)
+	if len(specs) != 6 || specs["同步热门演员"] != "0 21 * * *" || specs["同步上新"] != releaseTodaySpec || specs["同步演员目录"] != actorCatalogSpec {
+		t.Fatalf("上新、演员目录应独立注册，得到 %d: %#v", len(specs), specs)
 	}
 }
 
-// TestScheduleReconcileKeepsLogCleanup 端到端核对：按设置重排后，可配置任务取设置值，
-// 固定日志清理任务保持 0 0 * * *，未配置的任务不排期。
-func TestScheduleReconcileKeepsLogCleanup(t *testing.T) {
+// TestScheduleReconcileKeepsFixedJobs 端到端核对：按设置重排后，可配置任务取设置值，
+// 固定上新和日志清理任务保持排期，未配置的任务不排期。
+func TestScheduleReconcileKeepsFixedJobs(t *testing.T) {
 	jobs := configuredJobs()
 	for _, job := range jobs {
 		if job.Spec != "" {
 			t.Fatalf("可配置任务不应带静态表达式: %s=%q", job.Name, job.Spec)
 		}
 	}
+	jobs = append(jobs, scheduler.Job{Name: "同步上新", Spec: releaseTodaySpec, Run: func(context.Context) scheduler.JobResult { return nil }})
 	jobs = append(jobs, scheduler.Job{Name: logCleanupTaskName, Spec: logCleanupSpec, Run: func(context.Context) scheduler.JobResult { return nil }})
 	jobs = append(jobs, scheduler.Job{Name: "同步演员目录", Run: func(context.Context) scheduler.JobResult { return nil }})
 	manager, err := scheduler.New(jobs)
@@ -57,6 +58,9 @@ func TestScheduleReconcileKeepsLogCleanup(t *testing.T) {
 	}
 	if got[logCleanupTaskName] != logCleanupSpec {
 		t.Fatalf("日志清理被重排后丢失: %q", got[logCleanupTaskName])
+	}
+	if got["同步上新"] != releaseTodaySpec {
+		t.Fatalf("同步上新被重排后丢失: %q", got["同步上新"])
 	}
 	if got["订阅下载"] != "" {
 		t.Fatalf("未配置的订阅下载不应排期: %q", got["订阅下载"])

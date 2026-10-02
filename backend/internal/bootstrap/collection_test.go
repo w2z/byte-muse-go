@@ -2,15 +2,45 @@ package bootstrap
 
 import (
 	"context"
+	"encoding/json"
 	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
 
 	"bytemuse/backend/internal/application"
 	"bytemuse/backend/internal/platform/collector"
 	"bytemuse/backend/internal/platform/database"
 	"bytemuse/backend/internal/ports"
 )
+
+func TestCollectionReleaseTodayJobEnqueuesAVBaseDate(t *testing.T) {
+	ctx := context.Background()
+	store, err := database.Open(ctx, database.Config{Dialect: database.DialectSQLite, SQLitePath: filepath.Join(t.TempDir(), "release.db")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err := store.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	service := application.NewQueuedCollectionService(collector.NewRegistry(nil), database.NewCollectionRepository(store.SQLDB(), database.DialectSQLite), nil)
+	result := collectionReleaseTodayJob(service)(ctx)
+	if result["success"] != true || result["enqueued"] != 1 || result["enqueue_failed"] != 0 {
+		t.Fatalf("unexpected enqueue result: %#v", result)
+	}
+	var query string
+	if err := store.SQLDB().QueryRow("SELECT request_json FROM collection_runs WHERE source='avbase' AND kind='date'").Scan(&query); err != nil {
+		t.Fatal(err)
+	}
+	var request ports.CollectionRequest
+	if err := json.Unmarshal([]byte(query), &request); err != nil {
+		t.Fatal(err)
+	}
+	if request.Query != time.Now().Format("2006-01-02") || request.Page != 1 {
+		t.Fatalf("unexpected release request: %+v", request)
+	}
+}
 
 // TestCollectionRankJobIgnoresSubscriptionSelection 防止订阅筛选造成漏采或空配置不采。
 func TestCollectionRankJobIgnoresSubscriptionSelection(t *testing.T) {

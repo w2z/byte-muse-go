@@ -455,6 +455,7 @@ func (c *Commands) Serve(ctx context.Context) error {
 			jobs[i].Run = actorHotAndFollowJob(actorCatalog, actorService, collectionService)
 		}
 	}
+	jobs = append(jobs, scheduler.Job{Name: "同步上新", Spec: releaseTodaySpec, Run: collectionReleaseTodayJob(collectionService)})
 	jobs = append(jobs, scheduler.Job{Name: "同步演员目录", Spec: actorCatalogSpec, Run: actorCatalogJob(actorCatalog, false)})
 	// 日志清理按服务所在时区每天零点执行，保留天数仍在执行时读取。
 	jobs = append(jobs, scheduler.Job{Name: logCleanupTaskName, Spec: logCleanupSpec, Run: func(jobCtx context.Context) scheduler.JobResult {
@@ -656,6 +657,7 @@ var scheduleDefinitions = []struct{ name, key string }{
 const (
 	logCleanupTaskName = "清理系统日志"
 	logCleanupSpec     = "0 0 * * *"
+	releaseTodaySpec   = "0 3 * * *"
 	actorCatalogSpec   = "0 4 * * *"
 )
 
@@ -677,16 +679,17 @@ func configuredJobs() []scheduler.Job {
 }
 
 // scheduleSpecs 返回调度器的完整期望排期：四个可配置任务取自设置（空值表示不排期），
-// 日志清理是固定任务，始终排期。Apply 以“未出现在 map 中即取消排期”为准，
+// 上新、演员目录和日志清理是固定任务，始终排期。Apply 以“未出现在 map 中即取消排期”为准，
 // 因此这里必须给出完整集合，不能只给可配置任务。
 func scheduleSpecs(values map[string]string) map[string]string {
-	specs := make(map[string]string, len(scheduleDefinitions)+1)
+	specs := make(map[string]string, len(scheduleDefinitions)+3)
 	for _, definition := range scheduleDefinitions {
 		if spec := strings.TrimSpace(values[definition.key]); spec != "" {
 			specs[definition.name] = spec
 		}
 	}
 	specs[logCleanupTaskName] = logCleanupSpec
+	specs["同步上新"] = releaseTodaySpec
 	specs["同步演员目录"] = actorCatalogSpec
 	return specs
 }

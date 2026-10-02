@@ -21,7 +21,7 @@ func CollectionSources() []CollectionSource {
 		{ID: "javdb", Kinds: []string{"search", "detail", "rank", "actor"}},
 		{ID: "netflav", Kinds: []string{"search", "detail"}},
 		{ID: "javlibrary", Kinds: []string{"rank"}},
-		{ID: "avbase", Kinds: []string{"search", "actor"}},
+		{ID: "avbase", Kinds: []string{"search", "actor", "date"}},
 		{ID: "jable", Kinds: []string{"search"}},
 		{ID: "supjav", Kinds: []string{"search"}},
 	}
