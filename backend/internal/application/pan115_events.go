@@ -230,7 +230,8 @@ func (s *StrmService) scanPan115EventMappings(ctx context.Context, mappings []do
 			return result, err
 		}
 		files, collectErr := s.collectMappingFiles(ctx, mapping)
-		entry := s.scanMapping(ctx, s.root, mapping, base, files, collectErr, func() {})
+		// 事件同步沿用历史语义：本地内容与当前配置一致时不写盘，播放地址变更仍会收敛。
+		entry := s.scanMapping(ctx, s.root, mapping, base, files, collectErr, domain.StrmGenerateIdempotent, func() {})
 		if entry.Message != "" || entry.Failed > 0 {
 			return result, fmt.Errorf("115 事件 STRM 映射 %s 失败：%s（失败文件 %d）", mapping.LocalPath, entry.Message, entry.Failed)
 		}

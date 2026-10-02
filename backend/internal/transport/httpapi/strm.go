@@ -89,15 +89,38 @@ func listStrmCloudDriveDirectories(service *application.StrmService) http.Handle
 }
 
 // scanStrm 按当前设置生成 strm 文件；未配置 STRM_PLAY_BASE 时用本次请求的来源兜底。
-func scanStrm(service *application.StrmService) http.HandlerFunc {
+// incremental=true 只补齐本地缺失的 strm 文件，省略或 false 时先清理映射本地目录再全量重建。
+func scanStrm(service *application.StrmService, managers ...*application.ScanTasks) http.HandlerFunc {
+	var tasks *application.ScanTasks
+	if len(managers) > 0 {
+		tasks = managers[0]
+	}
 	return func(response http.ResponseWriter, request *http.Request) {
 		if service == nil {
 			writeError(response, http.StatusServiceUnavailable, "service_unavailable", "strm 服务尚未就绪")
 			return
 		}
-		streamScan(response, request, func(ctx context.Context) (domain.StrmScanResult, error) {
-			return service.Scan(ctx, requestBaseURL(request))
+		mode, err := strmGenerateMode(request.URL.Query().Get("incremental"))
+		if err != nil {
+			writeStrmError(response, err)
+			return
+		}
+		managedScan(response, request, tasks, "strm", string(mode), func(ctx context.Context) (domain.StrmScanResult, error) {
+			return service.Scan(ctx, requestBaseURL(request), mode)
 		}, writeStrmError)
+	}
+}
+
+// strmGenerateMode 解析生成方式查询参数：省略或 false 为全量，true 为增量，其余取值直接拒绝。
+// 全量会删除映射本地目录下的 strm 文件，因此拼写错误必须报错，不能被静默当成全量执行。
+func strmGenerateMode(raw string) (domain.StrmGenerateMode, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", "false":
+		return domain.StrmGenerateFull, nil
+	case "true":
+		return domain.StrmGenerateIncremental, nil
+	default:
+		return "", fmt.Errorf("%w: incremental 只能是 true 或 false", application.ErrStrmInvalidInput)
 	}
 }
 

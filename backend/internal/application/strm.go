@@ -259,11 +259,23 @@ func (s *StrmService) CloudDriveDirectories(ctx context.Context, directory strin
 
 // Scan 按 STRM_PATHS 配置把网盘目录镜像成本地 strm 文件，并按开关触发 Emby 刷新。
 // playBase 是调用方观测到的 ByteMuse 对外基址，仅在未配置 STRM_PLAY_BASE 时兜底。
-func (s *StrmService) Scan(ctx context.Context, playBase string) (domain.StrmScanResult, error) {
+// mode 决定本地已有文件的处理方式：全量先清理映射本地目录下的 strm 内容再重建，
+// 增量保留本地文件、只补齐缺失项；两种方式共用同一套映射、过滤与写入规则。
+func (s *StrmService) Scan(ctx context.Context, playBase string, mode domain.StrmGenerateMode) (domain.StrmScanResult, error) {
 	reportScanProgress(ctx, "waiting", 0, 0, "")
-	s.scanMu.Lock()
+	// 等待事件生成释放互斥时仍响应任务暂停和取消。
+	for !s.scanMu.TryLock() {
+		if err := scanCheckpoint(ctx); err != nil {
+			return domain.StrmScanResult{}, err
+		}
+		select {
+		case <-ctx.Done():
+			return domain.StrmScanResult{}, ctx.Err()
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
 	defer s.scanMu.Unlock()
-	if err := ctx.Err(); err != nil {
+	if err := scanCheckpoint(ctx); err != nil {
 		return domain.StrmScanResult{}, err
 	}
 	values, err := s.settings(ctx)
@@ -288,7 +300,7 @@ func (s *StrmService) Scan(ctx context.Context, playBase string) (domain.StrmSca
 	result := domain.StrmScanResult{Mappings: make([]domain.StrmScanMapping, 0, len(mappings))}
 	total, processed := 0, 0
 	for _, mapping := range mappings {
-		if err := ctx.Err(); err != nil {
+		if err := scanCheckpoint(ctx); err != nil {
 			return result, err
 		}
 		reportScanProgress(ctx, "discovering", processed, total, mapping.Path)
@@ -297,22 +309,27 @@ func (s *StrmService) Scan(ctx context.Context, playBase string) (domain.StrmSca
 			reportScanProgress(ctx, "discovering", processed, total, mapping.Path)
 		})
 		files, scanErr := s.collectMappingFiles(discoveryCtx, mapping)
-		if err := ctx.Err(); err != nil {
+		if err := scanCheckpoint(ctx); err != nil {
 			return result, err
 		}
 		reportScanProgress(ctx, "processing", processed, total, mapping.Path)
-		entry := s.scanMapping(ctx, root, mapping, base, files, scanErr, func() {
+		entry := s.scanMapping(ctx, root, mapping, base, files, scanErr, mode, func() {
 			processed++
 			reportScanProgress(ctx, "processing", processed, total, mapping.Path)
 		})
 		result.Mappings = append(result.Mappings, entry)
 		result.Files += entry.Files
+		result.Deleted += entry.Deleted
 		result.Created += entry.Created
+		result.Unchanged += entry.Unchanged
 		result.Failed += entry.Failed
 	}
 	reportScanProgress(ctx, "finalizing", processed, total, "")
+	if err := scanCheckpoint(ctx); err != nil {
+		return result, err
+	}
 	result.Emby = s.refreshEmby(ctx, values)
-	if err := ctx.Err(); err != nil {
+	if err := scanCheckpoint(ctx); err != nil {
 		return result, err
 	}
 	reportScanProgress(ctx, "completed", processed, total, "")
@@ -377,8 +394,10 @@ func (s *StrmService) collectMappingFiles(ctx context.Context, mapping domain.St
 	}
 }
 
-// scanMapping 处理已经统计的文件清单；成功、未变化和失败均计入已处理数。
-func (s *StrmService) scanMapping(ctx context.Context, root string, mapping domain.StrmMapping, base string, files []strmSourceFile, err error, advance func()) domain.StrmScanMapping {
+// scanMapping 处理已经统计的文件清单；成功、跳过和失败均计入已处理数。
+// 全量先清理映射本地目录下的 strm 内容，增量跳过本地已存在的文件，内容比对方式只在内容变化时改写，
+// 三种方式共用同一套过滤、播放地址与失败计数规则。
+func (s *StrmService) scanMapping(ctx context.Context, root string, mapping domain.StrmMapping, base string, files []strmSourceFile, err error, mode domain.StrmGenerateMode, advance func()) domain.StrmScanMapping {
 	entry := domain.StrmScanMapping{Kind: mapping.Kind, Path: mapping.Path, LocalPath: mapping.LocalPath}
 	if err != nil {
 		entry.Message = err.Error()
@@ -388,11 +407,18 @@ func (s *StrmService) scanMapping(ctx context.Context, root string, mapping doma
 		return entry
 	}
 	target, _, err := resolveStrmPath(root, mapping.LocalPath)
+	if err == nil && mode == domain.StrmGenerateFull {
+		entry.Deleted, err = clearStrmContentContext(ctx, root, target)
+	}
 	if err == nil {
 		err = os.MkdirAll(target, 0o755)
 	}
 	if err != nil {
-		entry.Message = "创建本地 strm 目录失败：" + err.Error()
+		entry.Message = "准备本地 strm 目录失败：" + err.Error()
+		// 暂停/取消不会把尚未尝试的媒体项记为已处理失败。
+		if ctx.Err() != nil {
+			return entry
+		}
 		entry.Files, entry.Failed = len(files), len(files)
 		for range files {
 			advance()
@@ -400,7 +426,7 @@ func (s *StrmService) scanMapping(ctx context.Context, root string, mapping doma
 		return entry
 	}
 	for _, file := range files {
-		if err := ctx.Err(); err != nil {
+		if err := scanCheckpoint(ctx); err != nil {
 			entry.Message = err.Error()
 			return entry
 		}
@@ -422,6 +448,20 @@ func (s *StrmService) scanMapping(ctx context.Context, root string, mapping doma
 			if identifier == "" {
 				entry.Failed++
 				entry.Message = "115 文件缺少 pick_code，无法生成播放链接"
+				advance()
+				continue
+			}
+		}
+		if mode == domain.StrmGenerateIncremental {
+			exists, statErr := strmFileExists(absolute)
+			if statErr != nil {
+				entry.Failed++
+				entry.Message = "读取本地 strm 文件失败：" + statErr.Error()
+				advance()
+				continue
+			}
+			if exists {
+				entry.Unchanged++
 				advance()
 				continue
 			}
@@ -453,7 +493,7 @@ func walkPan115Files(ctx context.Context, api pan115FileAPI, rootID string, filt
 	var walk func(directoryID, relative string) error
 	walk = func(directoryID, relative string) error {
 		for offset := 0; ; {
-			if err := ctx.Err(); err != nil {
+			if err := scanCheckpoint(ctx); err != nil {
 				return err
 			}
 			page, err := api.Files(ctx, directoryID, offset, strmListLimit)
@@ -461,6 +501,9 @@ func walkPan115Files(ctx context.Context, api pan115FileAPI, rootID string, filt
 				return err
 			}
 			for _, file := range page.Files {
+				if err := scanCheckpoint(ctx); err != nil {
+					return err
+				}
 				if filter.skipName(file.Name) {
 					continue
 				}
@@ -492,7 +535,7 @@ func (s *StrmService) walkCloudDrive(ctx context.Context, rootPath string, filte
 	var collected []strmSourceFile
 	var walk func(directory, relative string) error
 	walk = func(directory, relative string) error {
-		if err := ctx.Err(); err != nil {
+		if err := scanCheckpoint(ctx); err != nil {
 			return err
 		}
 		entries, err := s.cloud.ListSubFiles(ctx, directory)
@@ -500,6 +543,9 @@ func (s *StrmService) walkCloudDrive(ctx context.Context, rootPath string, filte
 			return err
 		}
 		for _, item := range entries {
+			if err := scanCheckpoint(ctx); err != nil {
+				return err
+			}
 			full := strings.TrimSpace(item.FullPath)
 			if full == "" {
 				full = joinCloudPath(directory, item.Name)
@@ -537,11 +583,12 @@ func (s *StrmService) refreshEmby(ctx context.Context, values map[string]string)
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/emby/Library/Refresh?api_key="+url.QueryEscape(key), nil)
 	if err != nil {
-		return domain.StrmEmbyResult{Attempted: true, Message: "构造 Emby 刷新请求失败：" + err.Error()}
+		return domain.StrmEmbyResult{Attempted: true, Message: "构造 Emby 刷新请求失败，请检查 Emby 地址"}
 	}
 	response, err := s.http.Do(request)
 	if err != nil {
-		return domain.StrmEmbyResult{Attempted: true, Message: "请求 Emby 刷新失败：" + err.Error()}
+		// URL 错误可能带 api_key；任务快照和页面只保留脱敏原因。
+		return domain.StrmEmbyResult{Attempted: true, Message: "请求 Emby 刷新失败，请检查地址、密钥和连接"}
 	}
 	defer response.Body.Close()
 	_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 4096))
@@ -706,6 +753,83 @@ func writeStrmFile(target, content string) (created bool, changed bool, err erro
 		return false, false, err
 	}
 	return missing, true, nil
+}
+
+// strmFileExists 报告目标位置是否已经存在文件，供增量生成跳过本地已有文件。
+// 目录不算已有文件：生成目标是文件，同名目录会由写入逻辑报错，而不是被静默跳过。
+func strmFileExists(target string) (bool, error) {
+	info, err := os.Stat(target)
+	if err == nil {
+		return !info.IsDir(), nil
+	}
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	return false, err
+}
+
+// clearStrmContent 在全量生成前清理映射本地目录下的 strm 内容，返回删除的 strm 文件数。
+// 只删除本功能生成的 .strm 文件：映射目录内可能同时存在字幕、封面等外部文件，不能一并删除。
+// 清理后变为空的子目录一并移除，避免网盘已删除的目录在本地长期残留；映射根目录本身始终保留。
+func clearStrmContent(root, target string) (int, error) {
+	return clearStrmContentContext(context.Background(), root, target)
+}
+
+// clearStrmContentContext 在每次清理文件前响应暂停和取消。
+func clearStrmContentContext(ctx context.Context, root, target string) (int, error) {
+	if !withinStrmRoot(root, target) {
+		return 0, fmt.Errorf("%w: 路径超出 strm 根目录", ErrStrmInvalidInput)
+	}
+	deleted := 0
+	directories := make([]string, 0, 8)
+	err := filepath.WalkDir(target, func(current string, entry fs.DirEntry, walkErr error) error {
+		if err := scanCheckpoint(ctx); err != nil {
+			return err
+		}
+		if walkErr != nil {
+			if errors.Is(walkErr, fs.ErrNotExist) {
+				return nil
+			}
+			return walkErr
+		}
+		if entry.IsDir() {
+			if current != target {
+				directories = append(directories, current)
+			}
+			return nil
+		}
+		if !strings.EqualFold(filepath.Ext(entry.Name()), ".strm") {
+			return nil
+		}
+		if err := os.Remove(current); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+		deleted++
+		return nil
+	})
+	if err != nil {
+		return deleted, err
+	}
+	// WalkDir 按前序访问目录，倒序即子目录先于父目录，逐个删除已经空掉的目录。
+	for index := len(directories) - 1; index >= 0; index-- {
+		if err := scanCheckpoint(ctx); err != nil {
+			return deleted, err
+		}
+		entries, readErr := os.ReadDir(directories[index])
+		if readErr != nil {
+			if errors.Is(readErr, fs.ErrNotExist) {
+				continue
+			}
+			return deleted, readErr
+		}
+		if len(entries) > 0 {
+			continue
+		}
+		if err := os.Remove(directories[index]); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return deleted, err
+		}
+	}
+	return deleted, nil
 }
 
 // strmPlayURL 生成 strm 文件里的播放地址：{基址}/files/play/{网盘类型}/{文件标识}。

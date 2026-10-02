@@ -1048,8 +1048,14 @@ paths:
       description: 按设置项 PAN115_SCAN_PATHS 逐目录递归扫描 115 网盘，把识别出番号的视频登记为「已在媒体库」（library_status=present）；文件扩展名沿用生成 strm 的默认视频格式表。每页读取 1150 条，识别不到番号的文件只计入 skipped，不会凭空生成番号；同番号在一个目录里只登记一次。已存在的影片只刷新媒体库状态与更新时间，不覆盖标题、译文、封面与订阅状态。单个目录失败不影响其他目录，失败原因通过 directories[].message 返回。扫描不触发采集、订阅或下载。
       parameters:
         - {$ref: '#/components/parameters/ScanProgressAccept'}
+        - {in: header, name: Prefer, required: false, schema: {type: string, enum: [respond-async]}, description: '传 respond-async 返回 202 持久化任务；页面断开不取消任务，同类活动任务返回 409，扫描与生成独立。'}
         - {in: cookie, name: bytemuse_session, required: true, schema: {type: string}, description: 登录签发的管理员会话 Cookie}
       responses:
+        '202':
+          description: 已受理持久化后台任务，尚未完成；同类未结束任务返回 409
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ScanTask'}
         '200':
           description: 本次扫描入库的汇总结果；无失败目录时 directories[].message 为空串
           content:
@@ -1317,15 +1323,26 @@ paths:
           content:
             application/json:
               schema: {$ref: '#/components/schemas/Error'}
+  /pan115/library/scan/task: {"get":{"summary":"查询扫描入库任务","description":"返回该类型最新任务，尚无任务时为 null；页面刷新后从数据库恢复。服务重启标记中断，不自动续跑。","parameters":[{"in":"cookie","name":"bytemuse_session","required":true,"schema":{"type":"string"},"description":"管理员登录会话"}],"responses":{"200":{"description":"最新任务，未创建过则返回 null","content":{"application/json":{"schema":{"allOf":[{"$ref":"#/components/schemas/ScanTask"}],"nullable":true},"example":{"id":"d433936145204bbaaf4c4e9f904e4f29","kind":"library","state":"running","mode":"","progress":{"phase":"discovering","processed":20,"total":100,"percent":20,"current":"/movies"},"result":null,"error":"","created_at":"2026-10-01T01:00:00Z","updated_at":"2026-10-01T01:00:01Z"}}}},"401":{"description":"未登录"},"500":{"description":"读取失败"},"503":{"description":"任务服务不可用"}}}}
+  /pan115/library/scan/tasks/{id}/control: {"post":{"summary":"控制扫描入库任务","description":"pause 在下个文件/目录请求/清理步骤的安全点暂停；resume 继续同一次任务；cancel 终止后续工作。已发出的外部操作或数据库写入可能先完成，不回滚。与另一类型任务相互独立。","parameters":[{"in":"cookie","name":"bytemuse_session","required":true,"schema":{"type":"string"},"description":"管理员登录会话"},{"in":"path","name":"id","required":true,"schema":{"type":"string"},"description":"当前任务 ID，旧任务 ID 返回 409"}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","required":["action"],"properties":{"action":{"type":"string","enum":["pause","resume","cancel"],"description":"暂停、继续、取消；重复暂停和取消在活动任务内幂等"}}},"example":{"action":"pause"}}}},"responses":{"200":{"description":"当前任务快照","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ScanTask"},"example":{"id":"d433936145204bbaaf4c4e9f904e4f29","kind":"library","state":"running","mode":"","progress":{"phase":"discovering","processed":20,"total":100,"percent":20,"current":"/movies"},"result":null,"error":"","created_at":"2026-10-01T01:00:00Z","updated_at":"2026-10-01T01:00:01Z"}}}},"400":{"description":"动作无效"},"401":{"description":"未登录"},"409":{"description":"任务已结束、被替换或状态不允许"},"500":{"description":"状态保存失败"},"503":{"description":"任务服务不可用"}}}}
+  /strm/scan/task: {"get":{"summary":"查询STRM 生成任务","description":"返回该类型最新任务，尚无任务时为 null；页面刷新后从数据库恢复。服务重启标记中断，不自动续跑。","parameters":[{"in":"cookie","name":"bytemuse_session","required":true,"schema":{"type":"string"},"description":"管理员登录会话"}],"responses":{"200":{"description":"最新任务，未创建过则返回 null","content":{"application/json":{"schema":{"allOf":[{"$ref":"#/components/schemas/ScanTask"}],"nullable":true},"example":{"id":"d433936145204bbaaf4c4e9f904e4f29","kind":"strm","state":"running","mode":"incremental","progress":{"phase":"discovering","processed":20,"total":100,"percent":20,"current":"/movies"},"result":null,"error":"","created_at":"2026-10-01T01:00:00Z","updated_at":"2026-10-01T01:00:01Z"}}}},"401":{"description":"未登录"},"500":{"description":"读取失败"},"503":{"description":"任务服务不可用"}}}}
+  /strm/scan/tasks/{id}/control: {"post":{"summary":"控制STRM 生成任务","description":"pause 在下个文件/目录请求/清理步骤的安全点暂停；resume 继续同一次任务；cancel 终止后续工作。已发出的外部操作或数据库写入可能先完成，不回滚。与另一类型任务相互独立。","parameters":[{"in":"cookie","name":"bytemuse_session","required":true,"schema":{"type":"string"},"description":"管理员登录会话"},{"in":"path","name":"id","required":true,"schema":{"type":"string"},"description":"当前任务 ID，旧任务 ID 返回 409"}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","required":["action"],"properties":{"action":{"type":"string","enum":["pause","resume","cancel"],"description":"暂停、继续、取消；重复暂停和取消在活动任务内幂等"}}},"example":{"action":"pause"}}}},"responses":{"200":{"description":"当前任务快照","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ScanTask"},"example":{"id":"d433936145204bbaaf4c4e9f904e4f29","kind":"strm","state":"running","mode":"incremental","progress":{"phase":"discovering","processed":20,"total":100,"percent":20,"current":"/movies"},"result":null,"error":"","created_at":"2026-10-01T01:00:00Z","updated_at":"2026-10-01T01:00:01Z"}}}},"400":{"description":"动作无效"},"401":{"description":"未登录"},"409":{"description":"任务已结束、被替换或状态不允许"},"500":{"description":"状态保存失败"},"503":{"description":"任务服务不可用"}}}}
   /strm/scan:
     post:
       operationId: scanStrm
-      summary: 生成 strm 文件
-      description: 按设置项 STRM_PATHS 把网盘目录镜像成本地 strm 文件，写入固定 /strm 根目录，每条映射仅处理其 formats 中的文件扩展名，文件内容为 {基址}/files/play/{网盘类型}/{文件标识}，115 的文件标识为扫描返回的 pick_code，CloudDrive2 为文件路径；缺失 pick_code 的文件计为生成失败，重新生成会改写旧版 file_id 链接。递归扫描时按该映射的 exclude 规则跳过文件与文件夹：equals 要求完整名称相等、prefix 前缀、suffix 后缀、contains 包含，一律不区分大小写；命中文件夹时整棵子树都不生成。同时跳过体积小于 min_size_mb 的视频，网盘未返回体积的文件不受体积限制。重复执行幂等，内容一致时不改写磁盘。基址取 STRM_PLAY_BASE，为空时使用本次请求的来源地址；STRM_EMBY_REFRESH 为 true 且已配置 Emby 地址与密钥时额外刷新媒体库。单条映射失败不影响其他映射，失败原因通过 message 返回。
+      summary: 全量或增量生成 strm 文件
+      description: 按设置项 STRM_PATHS 把网盘目录镜像成本地 strm 文件，写入固定 /strm 根目录，每条映射仅处理其 formats 中的文件扩展名，文件内容为 {基址}/files/play/{网盘类型}/{文件标识}，115 的文件标识为扫描返回的 pick_code，CloudDrive2 为文件路径；缺失 pick_code 的文件计为生成失败，重新生成会改写旧版 file_id 链接。递归扫描时按该映射的 exclude 规则跳过文件与文件夹：equals 要求完整名称相等、prefix 前缀、suffix 后缀、contains 包含，一律不区分大小写；命中文件夹时整棵子树都不生成。同时跳过体积小于 min_size_mb 的视频，网盘未返回体积的文件不受体积限制。incremental 为 false 或不传时执行全量生成：先清理每条映射本地目录下的 .strm 文件，再按当前网盘内容重建，用于收敛网盘已删除或改名文件留下的历史残留；incremental 为 true 时执行增量生成：只补齐本地缺失的 strm 文件，本地已存在的文件一律跳过、不做内容比对，用于日常补齐新增文件。全量只删除本功能生成的 .strm 文件，映射目录内用户放置的其他文件保留，清理后变为空的子目录一并移除，映射根目录本身始终保留。基址取 STRM_PLAY_BASE，为空时使用本次请求的来源地址；STRM_EMBY_REFRESH 为 true 且已配置 Emby 地址与密钥时额外刷新媒体库。单条映射失败不影响其他映射，失败原因通过 message 返回。
       parameters:
         - {$ref: '#/components/parameters/ScanProgressAccept'}
+        - {in: header, name: Prefer, required: false, schema: {type: string, enum: [respond-async]}, description: '传 respond-async 返回 202 持久化任务；页面断开不取消任务，同类活动任务返回 409，扫描与生成独立。'}
+        - {in: query, name: incremental, required: false, schema: {type: boolean, default: false}, description: '是否增量生成：false 或不传为全量（先清理每条映射本地目录下的 .strm 文件再重建），true 为增量（只补齐本地缺失的 strm 文件，本地已存在文件一律跳过）；取值只接受 true 与 false，其他取值返回 400 invalid_request'}
         - {in: cookie, name: bytemuse_session, required: true, schema: {type: string}, description: 登录签发的管理员会话 Cookie}
       responses:
+        '202':
+          description: 已受理持久化后台任务，尚未完成；同类未结束任务返回 409
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ScanTask'}
         '200':
           description: 本次生成的汇总结果；无失败映射时 mappings[].message 为空串
           content:
@@ -1334,9 +1351,9 @@ paths:
               example: '{"type":"progress","progress":{"phase":"processing","processed":20,"total":50,"percent":40,"current":"/movies"}}'
             application/json:
               schema: {$ref: '#/components/schemas/StrmScanResult'}
-              example: {mappings: [{kind: '115', path: /电影, local_path: /movies, files: 12, created: 12, unchanged: 0, failed: 0, message: ''}], files: 12, created: 12, failed: 0, emby: {attempted: false, refreshed: false, message: ''}}
+              example: {mappings: [{kind: '115', path: /电影, local_path: /movies, files: 12, deleted: 3, created: 12, unchanged: 0, failed: 0, message: ''}], files: 12, deleted: 3, created: 12, unchanged: 0, failed: 0, emby: {attempted: false, refreshed: false, message: ''}}
         '400':
-          description: STRM_PATHS 配置非法
+          description: STRM_PATHS 配置非法或 incremental 取值不是 true / false
           content:
             application/json:
               schema: {$ref: '#/components/schemas/Error'}
@@ -2197,9 +2214,10 @@ components:
         status:
           type: string
           enum: [ok]
+    ScanTask: {"type":"object","required":["id","kind","state","mode","progress","result","error","created_at","updated_at"],"description":"持久化任务快照；扫描与生成独立互斥。暂停在安全处理点生效，取消不回滚已完成结果；服务重启将活动任务标记 interrupted，保留进度，须重新启动。","properties":{"id":{"type":"string","description":"任务唯一标识；控制操作必须使用当前任务 ID"},"kind":{"type":"string","enum":["library","strm"],"description":"library 扫描入库；strm 生成文件"},"state":{"type":"string","enum":["running","pausing","paused","canceling","canceled","completed","failed","interrupted"],"description":"运行、请求暂停、已暂停、请求取消、已取消、完成、失败、重启中断"},"mode":{"type":"string","enum":["","full","incremental"],"description":"扫描为空串；生成使用全量或增量"},"progress":{"$ref":"#/components/schemas/ScanProgress"},"result":{"type":"object","nullable":true,"description":"仅完成时为 Pan115LibraryScanResult 或 StrmScanResult，其余状态为 null","additionalProperties":true},"error":{"type":"string","description":"脱敏错误或中断说明，无错误为空串"},"created_at":{"type":"string","format":"date-time","description":"任务创建时间，UTC RFC3339"},"updated_at":{"type":"string","format":"date-time","description":"最后快照更新时间，UTC RFC3339；活动进度最多每 250ms 落库一次，阶段与控制状态立即落库"}}}
     ScanProgress:
       type: object
-      description: 当前请求的动态文件处理进度；总数为已发现且符合过滤规则的媒体文件数，扫描时持续增加。仅 result 事件表示操作已返回结果，百分比 100 不代表全部成功。
+      description: 当前任务的动态文件处理进度；总数为已发现且符合过滤规则的媒体文件数，扫描时持续增加。仅 result 事件表示操作已返回结果，百分比 100 不代表全部成功。
       required: [phase, processed, total, percent, current]
       properties:
         phase: {type: string, enum: [waiting, discovering, processing, finalizing, completed], description: '阶段：等待、发现文件、处理文件、汇总或刷新、完成；completed 后仍须等待 result 事件'}
@@ -2220,7 +2238,7 @@ components:
         type: {type: string, enum: [error], description: '流式失败终态；HTTP 头发送后错误通过此事件报告，不应仅判断 HTTP 200'}
         error: {$ref: '#/components/schemas/Error'}
     LibraryScanStreamEvent:
-      description: 'NDJSON 每行一个事件。progress 可重复；最终返回 result 或 error。断开连接取消后续处理，已落库数据不回滚；无终态表示结果未确认，不自动重试。'
+      description: 'NDJSON 每行一个事件。progress 可重复；最终返回 result 或 error。断开连接不取消后台任务，可查询任务接口恢复状态；显式取消不回滚已落库数据，无终态时不自动重试。'
       oneOf:
         - {$ref: '#/components/schemas/ScanProgressEvent'}
         - {$ref: '#/components/schemas/ScanErrorEvent'}
@@ -2230,7 +2248,7 @@ components:
             type: {type: string, enum: [result], description: '结果事件；应继续检查 directories[].message'}
             result: {$ref: '#/components/schemas/Pan115LibraryScanResult'}
     StrmScanStreamEvent:
-      description: 'NDJSON 每行一个事件。progress 可重复；最终返回 result 或 error。断开连接取消后续处理，已生成文件不回滚；无终态表示结果未确认，不自动重试。'
+      description: 'NDJSON 每行一个事件。progress 可重复；最终返回 result 或 error。断开连接不取消后台任务，可查询任务接口恢复状态；显式取消不回滚已生成文件，无终态时不自动重试。'
       oneOf:
         - {$ref: '#/components/schemas/ScanProgressEvent'}
         - {$ref: '#/components/schemas/ScanErrorEvent'}
@@ -2459,15 +2477,16 @@ components:
         directories: {type: array, items: {$ref: '#/components/schemas/StrmDirectory'}, description: '当前目录的直接子目录；无子目录为空数组'}
     StrmScanMapping:
       type: object
-      required: [kind, path, local_path, files, created, unchanged, failed, message]
+      required: [kind, path, local_path, files, deleted, created, unchanged, failed, message]
       description: 单条映射的生成结果；message 为空串表示该映射没有可报告的问题
       properties:
         kind: {type: string, enum: ['115', 'cd2'], description: '网盘类型；115 为 115 网盘，cd2 为 CloudDrive2'}
         path: {type: string, description: 网盘目录展示路径}
         local_path: {type: string, description: 本地 strm 目录}
         files: {type: integer, minimum: 0, description: 该映射命中的媒体文件数；只统计媒体扩展名}
+        deleted: {type: integer, minimum: 0, description: '全量生成前清理掉的本地 strm 文件数；只统计 .strm 文件，映射目录内的其他文件不删除。增量生成恒为 0'}
         created: {type: integer, minimum: 0, description: 本次新建的 strm 文件数}
-        unchanged: {type: integer, minimum: 0, description: 内容一致、未改写磁盘的 strm 文件数}
+        unchanged: {type: integer, minimum: 0, description: '未改写磁盘的 strm 文件数：全量生成为清理重建后内容一致的场景，增量生成为本地文件已存在而跳过'}
         failed: {type: integer, minimum: 0, description: 写入失败的 strm 文件数}
         message: {type: string, description: 该映射的错误说明；正常时为空串}
     StrmEmbyResult:
@@ -2480,12 +2499,14 @@ components:
         message: {type: string, description: 跳过或失败的原因；成功且无说明时为空串}
     StrmScanResult:
       type: object
-      required: [mappings, files, created, failed, emby]
+      required: [mappings, files, deleted, created, unchanged, failed, emby]
       description: 一次 strm 生成的总结果
       properties:
         mappings: {type: array, items: {$ref: '#/components/schemas/StrmScanMapping'}, description: '各条映射的生成结果，顺序与 STRM_PATHS 一致'}
         files: {type: integer, minimum: 0, description: 全部映射命中的媒体文件总数}
+        deleted: {type: integer, minimum: 0, description: '本次全量生成清理的本地 strm 文件总数；增量生成为 0'}
         created: {type: integer, minimum: 0, description: 本次新建的 strm 文件总数}
+        unchanged: {type: integer, minimum: 0, description: '未改写磁盘的 strm 文件总数：全量为内容一致，增量为本地已存在而跳过'}
         failed: {type: integer, minimum: 0, description: 写入失败的 strm 文件总数}
         emby: {$ref: '#/components/schemas/StrmEmbyResult'}
 security:

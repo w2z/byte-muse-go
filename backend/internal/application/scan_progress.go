@@ -1,19 +1,23 @@
 package application
 
-import "context"
+import (
+	"bytemuse/backend/internal/domain"
+	"context"
+)
 
-// ScanProgress 是当前请求的动态文件进度；Total 是已发现总数，扫描期间可增长。
+// ScanProgress 是当前任务的动态文件进度；Total 是已发现总数，扫描期间可增长。
 // Processed 包含成功、跳过及已尝试但失败的文件，不等同于新增文件数。
-type ScanProgress struct {
-	Phase     string `json:"phase"`
-	Processed int    `json:"processed"`
-	Total     int    `json:"total"`
-	Percent   int    `json:"percent"`
-	Current   string `json:"current"`
-}
+type ScanProgress = domain.ScanProgress
 
 type scanProgressKey struct{}
 type scanDiscoveryKey struct{}
+
+// NotifyScanProgress 向当前同步观察者转发持久化任务快照，不改变后台任务生命周期。
+func NotifyScanProgress(ctx context.Context, p ScanProgress) {
+	if report, ok := ctx.Value(scanProgressKey{}).(func(ScanProgress)); ok {
+		report(p)
+	}
+}
 
 // withScanDiscovery 在共享目录遍历器发现符合过滤条件的文件时更新当前任务总数。
 func withScanDiscovery(ctx context.Context, found func()) context.Context {

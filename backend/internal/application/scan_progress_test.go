@@ -22,7 +22,7 @@ func TestScanProgressCountsFiles(t *testing.T) {
 			} else {
 				service := newStrmTestService(t, t.TempDir(), &strmPan115Stub{pages: map[string]domain.Pan115FilePage{"1": {Files: files}, "2": {Files: files}}}, nil, map[string]string{strmPathsSettingKey: `[{"kind":"115","id":"1","path":"/a","local_path":"/a"},{"kind":"115","id":"2","path":"/b","local_path":"/b"}]`})
 				for i := 0; i < 2; i++ {
-					if _, err := service.Scan(ctx, "https://example.com"); err != nil {
+					if _, err := service.Scan(ctx, "https://example.com", domain.StrmGenerateFull); err != nil {
 						t.Fatal(err)
 					}
 				}

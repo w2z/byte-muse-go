@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -114,5 +115,34 @@ func TestStrmPlayRejectsInvalidFileID(t *testing.T) {
 	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/files/play/115/abc", nil))
 	if recorder.Code != http.StatusBadRequest {
 		t.Fatalf("非法文件标识返回 %d，期望 400：%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+// TestStrmGenerateMode 验证生成方式参数解析：省略或 false 为全量，true 为增量，
+// 其余取值必须报错，避免拼写错误被静默当成会删除本地文件的全量生成。
+func TestStrmGenerateMode(t *testing.T) {
+	for _, tc := range []struct {
+		raw     string
+		want    domain.StrmGenerateMode
+		wantErr bool
+	}{
+		{"", domain.StrmGenerateFull, false},
+		{"false", domain.StrmGenerateFull, false},
+		{" FALSE ", domain.StrmGenerateFull, false},
+		{"true", domain.StrmGenerateIncremental, false},
+		{"True", domain.StrmGenerateIncremental, false},
+		{"1", "", true},
+		{"incremental", "", true},
+	} {
+		mode, err := strmGenerateMode(tc.raw)
+		if tc.wantErr {
+			if !errors.Is(err, application.ErrStrmInvalidInput) {
+				t.Fatalf("%q 应被拒绝，实际 mode=%q err=%v", tc.raw, mode, err)
+			}
+			continue
+		}
+		if err != nil || mode != tc.want {
+			t.Fatalf("%q 解析结果 mode=%q err=%v，期望 %q", tc.raw, mode, err, tc.want)
+		}
 	}
 }

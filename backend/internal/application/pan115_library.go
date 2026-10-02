@@ -61,7 +61,7 @@ func (s *Pan115LibraryService) Scan(ctx context.Context) (domain.Pan115LibrarySc
 	result := domain.Pan115LibraryScanResult{Directories: make([]domain.Pan115LibraryDirectoryResult, 0, len(directories))}
 	total, processed := 0, 0
 	for _, directory := range directories {
-		if err := ctx.Err(); err != nil {
+		if err := scanCheckpoint(ctx); err != nil {
 			return result, err
 		}
 		reportScanProgress(ctx, "discovering", processed, total, directory.Path)
@@ -70,7 +70,7 @@ func (s *Pan115LibraryService) Scan(ctx context.Context) (domain.Pan115LibrarySc
 			reportScanProgress(ctx, "discovering", processed, total, directory.Path)
 		})
 		files, scanErr := walkPan115Files(discoveryCtx, s.pan115, directory.ID, strmFileFilter{formats: defaultStrmFormats})
-		if err := ctx.Err(); err != nil {
+		if err := scanCheckpoint(ctx); err != nil {
 			return result, err
 		}
 		reportScanProgress(ctx, "processing", processed, total, directory.Path)
@@ -84,7 +84,7 @@ func (s *Pan115LibraryService) Scan(ctx context.Context) (domain.Pan115LibrarySc
 		result.Created += entry.Created
 		result.Skipped += entry.Skipped
 	}
-	if err := ctx.Err(); err != nil {
+	if err := scanCheckpoint(ctx); err != nil {
 		return result, err
 	}
 	reportScanProgress(ctx, "completed", processed, total, "")
@@ -106,7 +106,7 @@ func (s *Pan115LibraryService) scanDirectory(ctx context.Context, directory pan1
 	items := make([]ports.LibraryMediaItem, 0, len(files))
 	seen := make(map[string]bool, len(files))
 	for _, file := range files {
-		if err := ctx.Err(); err != nil {
+		if err := scanCheckpoint(ctx); err != nil {
 			entry.Message = err.Error()
 			return entry
 		}
@@ -132,6 +132,10 @@ func (s *Pan115LibraryService) scanDirectory(ctx context.Context, directory pan1
 	}
 	entry.Matched = len(items)
 	if entry.Matched == 0 {
+		return entry
+	}
+	if err := scanCheckpoint(ctx); err != nil {
+		entry.Message = err.Error()
 		return entry
 	}
 	created, err := s.library.MarkLibraryPresent(ctx, items)

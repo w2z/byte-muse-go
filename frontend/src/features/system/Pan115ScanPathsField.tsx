@@ -1,6 +1,6 @@
 import { Button, Input, Modal } from "@arco-design/web-react";
 import { useState } from "react";
-import { ScanProgressDisplay, useScanProgress } from "./ScanProgress";
+import { ScanProgressDisplay, ScanTaskControls, useScanProgress } from "./ScanProgress";
 import { Pan115DirectoryPicker } from "./Pan115DirectoryPicker";
 
 /** 一个扫描目录；id 是 115 目录 ID，path 是展示用的完整路径。 */
@@ -105,7 +105,7 @@ type Pan115LibraryScanResult = {
  * 扫描始终使用已保存的扫描目录，草稿改动需先保存设置；草稿为空时禁用，避免提交必然失败的请求。
  */
 export function Pan115LibraryScanAction({ value }: { value: Pan115ScanPath[] }) {
-  const { scan, progress } = useScanProgress<Pan115LibraryScanResult>("/pan115/library/scan");
+  const { scan, progress, task, control, unavailable, queryError } = useScanProgress<Pan115LibraryScanResult>("/pan115/library/scan");
   const failedDirectories = scan.data?.directories.filter((item) => item.message !== "") ?? [];
 
   return (
@@ -114,16 +114,17 @@ export function Pan115LibraryScanAction({ value }: { value: Pan115ScanPath[] }) 
         <Button
           type="secondary"
           loading={scan.isPending}
-          disabled={scan.isPending || value.length === 0}
+          disabled={scan.isPending || unavailable || value.length === 0}
           onClick={() => scan.mutate()}
         >
           扫描入库
         </Button>
+        <ScanTaskControls task={task} pending={control.isPending} onAction={control.mutate} error={control.error ?? queryError} />
         <span className="settings-field-description">
           扫描使用已保存的扫描目录；修改后请先保存设置再扫描。
         </span>
       </div>
-      <ScanProgressDisplay label="扫描" progress={progress} pending={scan.isPending} error={scan.isError} warning={failedDirectories.length > 0} />
+      <ScanProgressDisplay state={task?.state} label="扫描" progress={progress} />
       {scan.isError ? (
         <span className="settings-field-description">扫描失败：{scan.error.message}</span>
       ) : scan.data ? (

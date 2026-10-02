@@ -184,13 +184,17 @@ func listPan115Files(service *application.Pan115Service) http.HandlerFunc {
 
 // scanPan115Library 递归扫描设置页配置的 115 目录，把识别出番号的视频登记为「已在媒体库」。
 // 目录、格式与失败隔离规则由应用层统一决定，这里只负责把结果原样返回。
-func scanPan115Library(service *application.Pan115LibraryService) http.HandlerFunc {
+func scanPan115Library(service *application.Pan115LibraryService, managers ...*application.ScanTasks) http.HandlerFunc {
+	var tasks *application.ScanTasks
+	if len(managers) > 0 {
+		tasks = managers[0]
+	}
 	return func(response http.ResponseWriter, request *http.Request) {
 		if service == nil {
 			writeError(response, http.StatusServiceUnavailable, "service_unavailable", "115 网盘服务尚未就绪")
 			return
 		}
-		streamScan(response, request, service.Scan, writePan115Error)
+		managedScan(response, request, tasks, "library", "", service.Scan, writePan115Error)
 	}
 }
 

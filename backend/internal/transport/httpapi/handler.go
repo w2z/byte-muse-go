@@ -30,6 +30,8 @@ import (
 
 // Dependencies contains the services required by the HTTP transport.
 type Dependencies struct {
+	// ScanTasks 管理扫描入库与 STRM 生成的独立持久化任务。
+	ScanTasks             *application.ScanTasks
 	Tags                  *application.TagService
 	Collection            *application.CollectionService
 	Auth                  *auth.Service
@@ -122,14 +124,18 @@ func New(dependencies Dependencies) http.Handler {
 		router.Get("/pan115/account", pan115Account(dependencies.Pan115))
 		router.Delete("/pan115/account", unlinkPan115(dependencies.Pan115))
 		router.Get("/pan115/files", listPan115Files(dependencies.Pan115))
-		router.Post("/pan115/library/scan", scanPan115Library(dependencies.Pan115Library))
+		router.Post("/pan115/library/scan", scanPan115Library(dependencies.Pan115Library, dependencies.ScanTasks))
+		router.Get("/pan115/library/scan/task", scanTaskEndpoint(dependencies.ScanTasks, "library", false))
+		router.Post("/pan115/library/scan/tasks/{id}/control", scanTaskEndpoint(dependencies.ScanTasks, "library", true))
 		router.Get("/pan115/offline/tasks", listPan115OfflineTasks(dependencies.Pan115))
 		router.Post("/pan115/offline/tasks", addPan115OfflineTask(dependencies.Pan115))
 		router.Delete("/pan115/offline/tasks/{hash}", removePan115OfflineTask(dependencies.Pan115))
 		router.Get("/strm/directories", listStrmDirectories(dependencies.Strm))
 		router.Post("/strm/directories", createStrmDirectory(dependencies.Strm))
 		router.Get("/strm/clouddrive/directories", listStrmCloudDriveDirectories(dependencies.Strm))
-		router.Post("/strm/scan", scanStrm(dependencies.Strm))
+		router.Post("/strm/scan", scanStrm(dependencies.Strm, dependencies.ScanTasks))
+		router.Get("/strm/scan/task", scanTaskEndpoint(dependencies.ScanTasks, "strm", false))
+		router.Post("/strm/scan/tasks/{id}/control", scanTaskEndpoint(dependencies.ScanTasks, "strm", true))
 		router.Get("/message", wechatVerify(dependencies))
 		router.Post("/message", wechatReceive(dependencies))
 	})

@@ -194,7 +194,7 @@ func TestStrmRootIgnoresLegacySetting(t *testing.T) {
 	if err != nil || len(page.Directories) != 1 || page.Directories[0].Name != "movies" {
 		t.Fatalf("目录浏览异常: %+v err=%v", page, err)
 	}
-	result, err := service.Scan(ctx, "")
+	result, err := service.Scan(ctx, "", domain.StrmGenerateFull)
 	if err != nil || result.Created != 1 {
 		t.Fatalf("生成异常: %+v err=%v", result, err)
 	}
@@ -239,8 +239,8 @@ func TestCreateDirectoryRejectsNestedName(t *testing.T) {
 	}
 }
 
-// TestScanWritesPlayableStrmFiles 验证 115 与 CloudDrive2 映射都能生成内容正确的 strm，
-// 且非媒体文件与重复扫描都不产生多余写入。
+// TestScanWritesPlayableStrmFiles 验证 115 与 CloudDrive2 映射都能生成内容正确的 strm：
+// 全量清理旧内容后重建，增量保留本地文件只补齐缺失项，非媒体文件两种方式都不生成。
 func TestScanWritesPlayableStrmFiles(t *testing.T) {
 	root := t.TempDir()
 	pan115 := &strmPan115Stub{pages: map[string]domain.Pan115FilePage{
@@ -273,11 +273,12 @@ func TestScanWritesPlayableStrmFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := service.Scan(context.Background(), "")
+	result, err := service.Scan(context.Background(), "", domain.StrmGenerateFull)
 	if err != nil {
 		t.Fatalf("生成 strm 失败: %v", err)
 	}
-	if result.Files != 3 || result.Created != 2 || result.Failed != 0 {
+	// 预置的 A.mkv.strm 内容已过期，全量生成必须先清理再按 pick_code 重建。
+	if result.Files != 3 || result.Deleted != 1 || result.Created != 3 || result.Failed != 0 {
 		t.Fatalf("生成统计不符: %+v", result)
 	}
 	if result.Emby.Attempted {
@@ -300,12 +301,99 @@ func TestScanWritesPlayableStrmFiles(t *testing.T) {
 		t.Fatal("非媒体文件不应生成 strm")
 	}
 
-	second, err := service.Scan(context.Background(), "")
+	second, err := service.Scan(context.Background(), "", domain.StrmGenerateIncremental)
 	if err != nil {
 		t.Fatalf("重复生成 strm 失败: %v", err)
 	}
-	if second.Created != 0 || second.Mappings[0].Unchanged != 2 || second.Mappings[1].Unchanged != 1 {
-		t.Fatalf("重复扫描不是幂等的: %+v", second)
+	if second.Deleted != 0 || second.Created != 0 || second.Mappings[0].Unchanged != 2 || second.Mappings[1].Unchanged != 1 {
+		t.Fatalf("增量生成应跳过本地已有文件: %+v", second)
+	}
+}
+
+// TestScanFullClearsStaleLocalStrm 验证全量生成清理网盘已删除文件对应的本地 strm：
+// 只删除本功能生成的 .strm 文件，保留映射目录内的其他文件，并移除清理后变空的目录。
+func TestScanFullClearsStaleLocalStrm(t *testing.T) {
+	root := t.TempDir()
+	pan115 := &strmPan115Stub{pages: map[string]domain.Pan115FilePage{
+		"100": {Files: []domain.Pan115File{{ID: "f1", PickCode: "pc-1", Name: "A.mkv"}}},
+	}}
+	values := map[string]string{
+		"STRM_PATHS":     strmTestMappings(t, []domain.StrmMapping{{Kind: domain.StrmKindPan115, ID: "100", Path: "/影片", LocalPath: "/movies"}}),
+		"STRM_PLAY_BASE": "http://bm.local",
+	}
+	service := newStrmTestService(t, root, pan115, nil, values)
+	for target, content := range map[string]string{
+		"movies/A.mkv.strm":       "http://bm.local/files/play/115/legacy\n",
+		"movies/removed.mkv.strm": "http://bm.local/files/play/115/gone\n",
+		"movies/合集/old.mkv.strm": "http://bm.local/files/play/115/gone\n",
+		"movies/poster.jpg":       "cover",
+	} {
+		absolute := filepath.Join(root, filepath.FromSlash(target))
+		if err := os.MkdirAll(filepath.Dir(absolute), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(absolute, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	result, err := service.Scan(context.Background(), "", domain.StrmGenerateFull)
+	if err != nil {
+		t.Fatalf("全量生成失败: %v", err)
+	}
+	if result.Files != 1 || result.Deleted != 3 || result.Created != 1 || result.Failed != 0 {
+		t.Fatalf("全量生成统计不符: %+v", result)
+	}
+	content, err := os.ReadFile(filepath.Join(root, "movies", "A.mkv.strm"))
+	if err != nil || string(content) != "http://bm.local/files/play/115/pc-1\n" {
+		t.Fatalf("本地 strm 未被清理重建: %q err=%v", string(content), err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "movies", "removed.mkv.strm")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("网盘已删除文件对应的本地 strm 应被清理")
+	}
+	if _, err := os.Stat(filepath.Join(root, "movies", "合集")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("清理后为空的目录应被移除")
+	}
+	if content, err := os.ReadFile(filepath.Join(root, "movies", "poster.jpg")); err != nil || string(content) != "cover" {
+		t.Fatalf("非 strm 文件不应被删除: %q err=%v", string(content), err)
+	}
+}
+
+// TestScanIncrementalKeepsExistingLocalStrm 验证增量生成不改写本地已有 strm，只补齐缺失项。
+func TestScanIncrementalKeepsExistingLocalStrm(t *testing.T) {
+	root := t.TempDir()
+	pan115 := &strmPan115Stub{pages: map[string]domain.Pan115FilePage{
+		"100": {Files: []domain.Pan115File{
+			{ID: "f1", PickCode: "pc-1", Name: "A.mkv"},
+			{ID: "f2", PickCode: "pc-2", Name: "B.mkv"},
+		}},
+	}}
+	values := map[string]string{
+		"STRM_PATHS":     strmTestMappings(t, []domain.StrmMapping{{Kind: domain.StrmKindPan115, ID: "100", Path: "/影片", LocalPath: "/movies"}}),
+		"STRM_PLAY_BASE": "http://bm.local",
+	}
+	service := newStrmTestService(t, root, pan115, nil, values)
+	existing := filepath.Join(root, "movies", "A.mkv.strm")
+	if err := os.MkdirAll(filepath.Dir(existing), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(existing, []byte("http://bm.local/files/play/115/legacy\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := service.Scan(context.Background(), "", domain.StrmGenerateIncremental)
+	if err != nil {
+		t.Fatalf("增量生成失败: %v", err)
+	}
+	if result.Deleted != 0 || result.Created != 1 || result.Failed != 0 || result.Mappings[0].Unchanged != 1 {
+		t.Fatalf("增量生成统计不符: %+v", result)
+	}
+	content, err := os.ReadFile(existing)
+	if err != nil || string(content) != "http://bm.local/files/play/115/legacy\n" {
+		t.Fatalf("增量生成不应改写本地已有文件: %q err=%v", string(content), err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "movies", "B.mkv.strm")); err != nil {
+		t.Fatalf("缺失的 strm 应被补齐: %v", err)
 	}
 }
 
@@ -323,7 +411,7 @@ func TestScanMissingPickCode(t *testing.T) {
 	if err != nil || len(files) != 2 || files[0].ID != "f1" || files[1].ID != "f2" || files[1].PickCode != "pc-2" {
 		t.Fatalf("扫描标识未保留: %+v err=%v", files, err)
 	}
-	result, err := service.Scan(context.Background(), "http://bm.local")
+	result, err := service.Scan(context.Background(), "http://bm.local", domain.StrmGenerateFull)
 	if err != nil || result.Files != 2 || result.Failed != 1 || result.Created != 1 || !strings.Contains(result.Mappings[0].Message, "pick_code") {
 		t.Fatalf("缺失提取码结果不符: %+v err=%v", result, err)
 	}
@@ -343,7 +431,7 @@ func TestScanUsesMappingFormats(t *testing.T) {
 		"STRM_PLAY_BASE": "http://bm.local",
 	}
 	service := newStrmTestService(t, root, pan115, nil, values)
-	result, err := service.Scan(context.Background(), "")
+	result, err := service.Scan(context.Background(), "", domain.StrmGenerateFull)
 	if err != nil || result.Files != 1 || result.Created != 1 {
 		t.Fatalf("格式过滤结果不符: %+v（err=%v）", result, err)
 	}
@@ -363,7 +451,7 @@ func TestScanReportsUnconfiguredMapping(t *testing.T) {
 		"STRM_PLAY_BASE": "http://bm.local",
 	}
 	service := newStrmTestService(t, root, nil, &strmCloudStub{configured: false}, values)
-	result, err := service.Scan(context.Background(), "")
+	result, err := service.Scan(context.Background(), "", domain.StrmGenerateFull)
 	if err != nil {
 		t.Fatalf("扫描不应因单条映射失败而中断: %v", err)
 	}
@@ -588,7 +676,7 @@ func TestScanSkipsExcludedDirectoriesAndSmallFiles(t *testing.T) {
 		"STRM_PLAY_BASE": "http://bm.local",
 	}
 	service := newStrmTestService(t, root, pan115, nil, values)
-	result, err := service.Scan(context.Background(), "")
+	result, err := service.Scan(context.Background(), "", domain.StrmGenerateFull)
 	if err != nil {
 		t.Fatalf("生成 strm 失败: %v", err)
 	}

@@ -733,8 +733,11 @@ describe("网盘设置", () => {
   it("115 扫描入库按钮使用已保存的扫描目录，展示汇总结果与失败目录原因", async () => {
     const user = userEvent.setup();
     vi.mocked(apiRequest).mockImplementation(async (path, options) => {
+      if (path === "/pan115/library/scan/task" || path === "/strm/scan/task") return null;
       if (path === "/pan115/library/scan" && options?.method === "POST") {
         return {
+          id: "scan-test", kind: "library", mode: "", state: "completed",
+          progress: { phase: "completed", processed: 15, total: 15, percent: 100, current: "" }, error: "", result: {
           directories: [
             { id: "10", path: "/电影", files: 12, matched: 11, created: 8, skipped: 1, message: "" },
             { id: "20", path: "/剧集", files: 3, matched: 0, created: 0, skipped: 0, message: "115 目录读取失败" },
@@ -743,6 +746,7 @@ describe("网盘设置", () => {
           matched: 11,
           created: 8,
           skipped: 1,
+          },
         };
       }
       if (path === "/pan115/account") return { linked: true, account: boundAccount };
@@ -760,7 +764,7 @@ describe("网盘设置", () => {
     await user.click(await screen.findByRole("tab", { name: "网盘" }));
     // 草稿来自已保存配置，按钮可直接点击。
     const scanButton = await screen.findByRole("button", { name: "扫描入库" });
-    expect(scanButton).toBeEnabled();
+    await waitFor(() => expect(scanButton).toBeEnabled());
     expect(screen.getByText("扫描使用已保存的扫描目录；修改后请先保存设置再扫描。")).toBeInTheDocument();
     await user.click(scanButton);
     expect(await screen.findByText(/共 15 个视频文件，识别 11 个番号，新增 8 部影片，跳过 1 个。/)).toBeInTheDocument();
@@ -868,7 +872,7 @@ describe("网盘设置", () => {
     expect(screen.getByLabelText("STRM文件播放地址")).toBeInTheDocument();
     // 生成按钮排在「生成后刷新 Emby 媒体库」之后，与页面自上而下的操作顺序一致。
     const embySwitch = screen.getByLabelText("生成后刷新 Emby 媒体库");
-    const generateButton = screen.getByRole("button", { name: "生成 strm" });
+    const generateButton = screen.getByRole("button", { name: "全量生成 strm" });
     expect(embySwitch.compareDocumentPosition(generateButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "选择网盘目录" }));
     await user.click(await screen.findByRole("button", { name: "电影" }));

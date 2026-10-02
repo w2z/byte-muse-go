@@ -16,6 +16,21 @@ const (
 	StrmExcludeModeContains = "contains"
 )
 
+// StrmGenerateMode 是一次 strm 生成的方式，决定本地已有文件如何处理。
+// 三种方式共用同一套映射、过滤与播放地址规则，只有「本地已有文件怎么处理」一处不同，
+// 因此不把它们拆成多条链路，避免过滤规则与播放地址格式各自漂移。
+type StrmGenerateMode string
+
+const (
+	// StrmGenerateFull 先清理映射本地目录下的 strm 文件再全量重建，用于收敛网盘已删除或改名的历史残留。
+	StrmGenerateFull StrmGenerateMode = "full"
+	// StrmGenerateIncremental 只补齐本地缺失的 strm 文件，本地已存在的文件一律跳过，不做内容比对。
+	StrmGenerateIncremental StrmGenerateMode = "incremental"
+	// StrmGenerateIdempotent 不清理本地文件，只在内容与当前配置不一致时改写；
+	// 该方式不对外暴露为接口参数，115 事件同步沿用它保持「播放地址变更可自动收敛」的历史语义。
+	StrmGenerateIdempotent StrmGenerateMode = "idempotent"
+)
+
 // StrmExcludeKeyword 是一条排除规则：Mode 决定 Value 的匹配方式，匹配一律不区分大小写。
 // Value 为空串的规则在保存时被丢弃，因此运行期不必再判空。
 type StrmExcludeKeyword struct {
@@ -72,7 +87,10 @@ type StrmScanMapping struct {
 	Path      string `json:"path"`
 	LocalPath string `json:"local_path"`
 	Files     int    `json:"files"`
+	// Deleted 是全量生成前清理掉的本地 strm 文件数；增量生成恒为 0。
+	Deleted   int    `json:"deleted"`
 	Created   int    `json:"created"`
+	// Unchanged 是未改写磁盘的 strm 文件数：全量为内容一致，增量为本地已存在而跳过。
 	Unchanged int    `json:"unchanged"`
 	Failed    int    `json:"failed"`
 	Message   string `json:"message"`
@@ -90,7 +108,11 @@ type StrmEmbyResult struct {
 type StrmScanResult struct {
 	Mappings []StrmScanMapping `json:"mappings"`
 	Files    int               `json:"files"`
-	Created  int               `json:"created"`
-	Failed   int               `json:"failed"`
-	Emby     StrmEmbyResult    `json:"emby"`
+	// Deleted 是本次全量生成清理的本地 strm 文件总数；增量生成为 0。
+	Deleted int `json:"deleted"`
+	Created int `json:"created"`
+	// Unchanged 是未改写磁盘的 strm 文件总数：全量为内容一致，增量为本地已存在而跳过。
+	Unchanged int            `json:"unchanged"`
+	Failed    int            `json:"failed"`
+	Emby      StrmEmbyResult `json:"emby"`
 }

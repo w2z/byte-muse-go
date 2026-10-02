@@ -14,6 +14,21 @@ type Migration struct {
 	Statements []string
 }
 
+// scanTasksMigration 新增任务台账，不改历史媒体与文件。所有字段非空且由服务显式赋值，无默认值。
+// id 为随机任务标识，kind 为 library/strm，state 为执行状态，snapshot 为完整 JSON 快照，
+// created_at 为 UTC RFC3339Nano；JSON 内空 result 表示尚无最终结果，空 error 表示没有错误。
+// 升级只建表和索引，回退程序时保留该表即可，不需要删除业务数据。
+func scanTasksMigration(dialect Dialect) Migration {
+	payload := "TEXT"
+	if dialect == DialectMySQL {
+		payload = "LONGTEXT"
+	}
+	return Migration{Version: 36, Name: "scan_tasks", Statements: []string{
+		fmt.Sprintf("CREATE TABLE scan_tasks (id VARCHAR(32) PRIMARY KEY, kind VARCHAR(16) NOT NULL CHECK (kind IN ('library','strm')), state VARCHAR(16) NOT NULL CHECK (state IN ('running','pausing','paused','canceling','canceled','completed','failed','interrupted')), snapshot %s NOT NULL, created_at VARCHAR(40) NOT NULL)", payload),
+		"CREATE INDEX idx_scan_tasks_kind_created ON scan_tasks(kind,created_at,id)",
+	}}
+}
+
 // MigrationPlan returns the authoritative dialect-specific migration list.
 func MigrationPlan(dialect Dialect) []Migration {
 	var plan []Migration
@@ -27,7 +42,7 @@ func MigrationPlan(dialect Dialect) []Migration {
 	default:
 		return nil
 	}
-	return append(plan, settingsMigration(dialect), activeSubscriptionMigration(dialect), defaultSettingsMigration(dialect), systemLogsMigration(dialect), logRetentionSettingMigration(dialect), cleanupCanceledSubscriptionsMigration(dialect), catalogQueryIndexesMigration(dialect), downloaderAndBypassSettingsMigration(dialect), collectionMigration(dialect), collectionQueueMigration(dialect), mediaTypeMigration(dialect), subscriptionDownloadMigration(dialect), downloadTransferMigration(dialect), ptSiteSettingsMigration(dialect), siteAuthSettingsMigration(dialect), tagSubscriptionMigration(dialect), bypassProxySettingMigration(dialect), actorSubscriptionMigration(dialect), translationModelSettingsMigration(dialect), notificationSettingsMigration(dialect), tagAliasMigration(dialect), pan115AccountMigration(dialect), pan115ScanPathsSettingMigration(dialect), strmSettingsMigration(dialect), downloadOriginMigration(dialect), dropUnusedJavdbHostSettingMigration(dialect), actorAliasesMigration(dialect), dropUnusedPhotoCacheSettingMigration(dialect), strmRootSettingMigration(dialect), subscriptionScanMigration(dialect), pan115CookieSettingMigration(dialect))
+	return append(plan, settingsMigration(dialect), activeSubscriptionMigration(dialect), defaultSettingsMigration(dialect), systemLogsMigration(dialect), logRetentionSettingMigration(dialect), cleanupCanceledSubscriptionsMigration(dialect), catalogQueryIndexesMigration(dialect), downloaderAndBypassSettingsMigration(dialect), collectionMigration(dialect), collectionQueueMigration(dialect), mediaTypeMigration(dialect), subscriptionDownloadMigration(dialect), downloadTransferMigration(dialect), ptSiteSettingsMigration(dialect), siteAuthSettingsMigration(dialect), tagSubscriptionMigration(dialect), bypassProxySettingMigration(dialect), actorSubscriptionMigration(dialect), translationModelSettingsMigration(dialect), notificationSettingsMigration(dialect), tagAliasMigration(dialect), pan115AccountMigration(dialect), pan115ScanPathsSettingMigration(dialect), strmSettingsMigration(dialect), downloadOriginMigration(dialect), dropUnusedJavdbHostSettingMigration(dialect), actorAliasesMigration(dialect), dropUnusedPhotoCacheSettingMigration(dialect), strmRootSettingMigration(dialect), subscriptionScanMigration(dialect), pan115CookieSettingMigration(dialect), scanTasksMigration(dialect))
 }
 
 // dropUnusedPhotoCacheSettingMigration 清理已废弃的 ENABLE_PHOTO_CACHE 配置行。
@@ -94,6 +109,7 @@ func subscriptionScanMigration(dialect Dialect) Migration {
 		"DELETE FROM download_tasks WHERE status = 'failed' AND (info_hash IS NULL OR info_hash = '')",
 	}}
 }
+
 // notificationSettingsMigration 为微信与 Telegram 各新增 6 个业务通知开关，两个渠道互不影响。
 // 5 个推送类通知是新增行为，默认关闭，避免升级后未经确认就向渠道推送；
 // 「Agent 对话」只是给已有渠道对话增加按渠道关闭的能力，默认开启以保持升级前后行为一致。

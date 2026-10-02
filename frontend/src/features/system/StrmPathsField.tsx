@@ -13,7 +13,7 @@ import { apiRequest } from "../../shared/api/client";
 import { DirectoryPicker, type DirectoryPickerCrumb } from "../../shared/ui/DirectoryPicker";
 import { useFeedbackMessage } from "../../shared/ui/FeedbackMessage";
 import { Pan115DirectoryPicker } from "./Pan115DirectoryPicker";
-import { ScanProgressDisplay, useScanProgress } from "./ScanProgress";
+import { ScanProgressDisplay, ScanTaskControls, useScanProgress } from "./ScanProgress";
 
 /** 网盘类型；取值与后端 domain.StrmKind* 一致，同时用作播放地址 /files/play/{kind}/ 的路径段。 */
 export type StrmKind = "115" | "cd2";
@@ -124,16 +124,25 @@ type StrmScanResult = {
     path: string;
     local_path: string;
     files: number;
+    /** 全量生成清理掉的本地 strm 文件数；增量为 0。 */
+    deleted: number;
     created: number;
     unchanged: number;
     failed: number;
     message: string;
   }[];
   files: number;
+  /** 本次全量生成清理的本地 strm 文件总数；增量为 0。 */
+  deleted: number;
   created: number;
+  /** 未改写磁盘的 strm 文件总数：全量为内容一致，增量为本地已存在而跳过。 */
+  unchanged: number;
   failed: number;
   emby: { attempted: boolean; refreshed: boolean; message: string };
 };
+
+/** strm 生成方式；取值与后端 domain.StrmGenerateMode 一致，决定生成接口的 incremental 参数。 */
+type StrmGenerateMode = "full" | "incremental";
 
 /** 映射是否已选齐网盘目录与本地目录；本地路径必须落在 /strm 根目录内，即以 / 开头。 */
 function isStrmMappingComplete(item: StrmMapping): boolean {
@@ -508,35 +517,46 @@ export function StrmPathsField({
  *
  * 与映射字段分开渲染，放在「STRM 生成」分组字段之后（即「生成后刷新 Emby 媒体库」下方），
  * 让「配置映射 → 配置播放地址与刷新开关 → 生成」的顺序与页面自上而下的阅读顺序一致。
- * 生成始终使用已保存的映射，草稿改动需先保存设置；映射未选齐或本地目录重复时禁用，避免生成无效结果。
+ * 全量与增量共用同一个生成接口：全量先清理映射本地目录下的 strm 再重建，增量只补齐本地缺失的文件；
+ * 两者都使用已保存的映射，映射未选齐或本地目录重复时禁用，避免生成无效结果。
  */
 export function StrmGenerateAction({ value }: { value: StrmMapping[] }) {
   const incomplete = countIncompleteMappings(value);
   const duplicateLocalPaths = countDuplicateLocalPaths(value);
-  const { scan, progress } = useScanProgress<StrmScanResult>("/strm/scan");
+  const { scan, progress, task, control, unavailable, queryError } = useScanProgress<StrmScanResult, StrmGenerateMode>((mode) => `/strm/scan?incremental=${mode === "incremental"}`);
   const failedMappings = scan.data?.mappings.filter((item) => item.message !== "") ?? [];
+  const disabled = scan.isPending || unavailable || value.length === 0 || incomplete > 0 || duplicateLocalPaths > 0;
+  const incremental = scan.variables === "incremental";
 
   return (
     <div className="settings-strm-generate">
       <div className="settings-strm-scan">
         <Button
           type="secondary"
-          loading={scan.isPending}
-          disabled={scan.isPending || incomplete > 0 || duplicateLocalPaths > 0}
-          onClick={() => scan.mutate()}
+          loading={scan.isPending && incremental}
+          disabled={disabled}
+          onClick={() => scan.mutate("incremental")}
         >
-          生成 strm
+          增量生成 strm
         </Button>
-        <span className="settings-field-description">
-          生成使用已保存的映射；修改后请先保存设置再生成。
-        </span>
+        <Button
+          type="secondary"
+          loading={scan.isPending && !incremental}
+          disabled={disabled}
+          onClick={() => scan.mutate("full")}
+        >
+          全量生成 strm
+        </Button>
+        <ScanTaskControls task={task} pending={control.isPending} onAction={control.mutate} error={control.error ?? queryError} />
       </div>
-      <ScanProgressDisplay label="生成" progress={progress} pending={scan.isPending} error={scan.isError} warning={failedMappings.length > 0 || (scan.data?.failed ?? 0) > 0 || Boolean(scan.data?.emby.message)} />
+      <ScanProgressDisplay state={task?.state} label="生成" progress={progress} />
       {scan.isError ? (
         <span className="settings-field-description">生成失败：{scan.error.message}</span>
       ) : scan.data ? (
         <span className="settings-field-description">
-          共 {scan.data.files} 个媒体文件，新增 {scan.data.created} 个 strm，失败 {scan.data.failed} 个。
+          {incremental
+            ? `共 ${scan.data.files} 个媒体文件，新增 ${scan.data.created} 个 strm，跳过本地已有 ${scan.data.unchanged} 个，失败 ${scan.data.failed} 个。`
+            : `共 ${scan.data.files} 个媒体文件，清理本地 strm ${scan.data.deleted} 个，新增 ${scan.data.created} 个，失败 ${scan.data.failed} 个。`}
           {failedMappings.map((item) => ` ${item.path}：${item.message}`).join("")}
           {scan.data.emby.refreshed
             ? " 已刷新 Emby 媒体库。"

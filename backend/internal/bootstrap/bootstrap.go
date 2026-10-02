@@ -375,6 +375,11 @@ func (c *Commands) Serve(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("create 115 library service: %w", err)
 	}
+	scanTasks, err := application.NewScanTasks(ctx, database.NewScanTaskRepository(store.SQLDB(), database.Dialect(c.config.DatabaseDriver)))
+	if err != nil {
+		return fmt.Errorf("create scan tasks: %w", err)
+	}
+	defer scanTasks.Close()
 	// 对话回复与业务通知共用同一个渠道解析器，不另建第二套发送逻辑。
 	channels := newChannelRegistry(settingsService)
 	notifier := application.NewNotificationService(settingsValues(settingsService), channels)
@@ -609,6 +614,7 @@ func (c *Commands) Serve(ctx context.Context) error {
 	// 封面缓存固定开启：目录是容器内 /data/cover（随 /data 一起挂载），代理沿用设置页的爬虫代理。
 	coverCache := covercache.New(c.config.CoverRoot, coverProxyReader(settingsService))
 	handler := httpapi.New(httpapi.Dependencies{
+		ScanTasks:             scanTasks,
 		Collection:            collectionService,
 		Auth:                  authService,
 		Catalog:               catalogService,
