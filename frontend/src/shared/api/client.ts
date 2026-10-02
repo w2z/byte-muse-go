@@ -4,6 +4,32 @@ import { ApiError, toApiError } from "./errors";
 export const API_BASE = "/api/v1";
 export const UNAUTHORIZED_EVENT = "bytemuse:unauthorized";
 
+/**
+ * 生成写操作的 Idempotency-Key。
+ * `crypto.randomUUID` 只在安全上下文（HTTPS 或 localhost）暴露，通过局域网 HTTP 访问时它是 undefined，
+ * 直接调用会让订阅等写操作在发请求前抛错；这里按 randomUUID -> getRandomValues -> 时间戳随机数依次回退，
+ * 使任何访问方式都能得到符合后端长度与唯一性要求的幂等键。
+ */
+export function newIdempotencyKey(): string {
+  const source = globalThis.crypto;
+  if (typeof source?.randomUUID === "function") {
+    return source.randomUUID();
+  }
+  const bytes = new Uint8Array(16);
+  if (typeof source?.getRandomValues === "function") {
+    source.getRandomValues(bytes);
+  } else {
+    for (let index = 0; index < bytes.length; index += 1) {
+      bytes[index] = Math.floor(Math.random() * 256);
+    }
+  }
+  // 按 RFC 4122 写入版本 4 与变体位，保证回退结果与 randomUUID 形态一致。
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
 const WORDPRESS_IMAGE_PROXY_HOSTS = new Set(["i0.wp.com", "i1.wp.com", "i3.wp.com", "i4.wp.com"]);
 
 /** 认证入口自身不参与“401 后自动续签重试”，否则登录失败会变成无限续签。 */

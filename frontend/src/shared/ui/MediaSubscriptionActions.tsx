@@ -1,7 +1,7 @@
 import { Button, InputNumber, Popconfirm, Radio, Switch } from "@arco-design/web-react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { apiRequest, isApiError } from "../api/client";
+import { apiRequest, isApiError, newIdempotencyKey } from "../api/client";
 import type { Media, Subscription, SubscriptionMode } from "../api/types";
 import { useFeedbackMessage } from "./FeedbackMessage";
 import { AppDialog } from "./AppDialog";
@@ -54,7 +54,7 @@ export function MediaSubscriptionActions({ media }: MediaSubscriptionActionsProp
       }
       return apiRequest<Subscription>("/subscriptions", {
         method: "POST",
-        headers: { "Idempotency-Key": crypto.randomUUID() },
+        headers: { "Idempotency-Key": newIdempotencyKey() },
         body: JSON.stringify({ media_id: media.id, mode, filter }),
       });
     },
