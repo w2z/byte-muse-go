@@ -28,11 +28,14 @@ const (
 	apiBase      = "https://proapi.115.com"
 )
 
-// 请求节流参数：相邻请求间隔 250ms（约 4 请求/秒）且并发不超过 2，
-// 避免触发 115 风控；单个响应体上限 4MiB。
+// 请求节流参数：相邻请求间隔 400ms（2.5 请求/秒）且严格串行，单个响应体上限 4MiB。
+//
+// 115 对开放接口的突发并发极其敏感：参考实现（MoviePilot、MeBox）实测 3 QPS 可长期稳定，
+// 提到 8 QPS 会被阿里云 WAF 拦截并返回 405 阻断页，随后整体吞吐反而更低。
+// 因此这里把速率压到 3 QPS 以下，并且不复用并发槽——宁可扫描慢一些，也不去试探风控边界。
 const (
-	requestGap       = 250 * time.Millisecond
-	maxInFlight      = 2
+	requestGap       = 400 * time.Millisecond
+	maxInFlight      = 1
 	requestTimeout   = 35 * time.Second
 	maxResponseBytes = 4 << 20
 )
@@ -43,16 +46,42 @@ const (
 const playRequestGap = time.Second
 
 // 限流退避参数。
-// maxRequestAttempts 是单个请求的最大尝试次数（含首次），与 MoviePilot 的 retry_limit=5 一致；
-// rateLimitBackoff 是命中 115 限流后的冷却时长，与 MoviePilot 的 retry_delay=70 秒一致，
-// 115 显式返回 Retry-After 时以响应头为准；
-// 网络错误与 5xx 按指数退避，且只重试可安全重放的 GET/HEAD。
+//
+// maxRequestAttempts 是普通错误（网络错误、5xx）的最大尝试次数（含首次）；
+// maxRateLimitAttempts 是限流错误的最大尝试次数，明显更大：
+// 115 的「访问上限」是整个账号共享的额度窗口，可能持续数十分钟，
+// 任务必须能等到窗口恢复，而不是在几分钟内耗尽重试次数后直接失败。
+//
+// rateLimitBackoff 是限流冷却的基数，按尝试次数翻倍并封顶 rateLimitMaxBackoff：
+// 短暂抖动后能快速恢复，额度真正用尽时也能退到足够长的等待。
+// 115 显式返回 Retry-After 时以响应头为准。
+//
+// 网络错误与 5xx 按 serverRetryBaseWait 指数退避，且只重试可安全重放的 GET/HEAD。
 const (
-	maxRequestAttempts  = 5
-	rateLimitBackoff    = 70 * time.Second
-	serverRetryBaseWait = 1 * time.Second
-	serverRetryMaxWait  = 30 * time.Second
+	maxRequestAttempts   = 5
+	maxRateLimitAttempts = 8
+	rateLimitBackoff     = 60 * time.Second
+	rateLimitMaxBackoff  = 30 * time.Minute
+	serverRetryBaseWait  = 1 * time.Second
+	serverRetryMaxWait   = 30 * time.Second
 )
+
+// 115 的限流业务错误码：406 表示账号访问额度/访问上限已用尽，770004 表示访问频率过高。
+// 115 并非所有限流场景都返回稳定错误码，因此错误码与 rateLimitMessages 的提示文本同时识别，
+// 任一命中即按限流处理，避免把限流当成普通业务失败而直接终止扫描任务。
+const (
+	accessLimitCode     = 406
+	requestFrequentCode = 770004
+)
+
+// rateLimitMessages 是 115 用文本表达的限流提示。
+var rateLimitMessages = []string{
+	"已达到当前访问上限",
+	"达到访问上限",
+	"访问频率过高",
+	"请求过于频繁",
+	"操作过于频繁",
+}
 
 // ErrUnauthorized 表示 115 拒绝了当前访问令牌，调用方刷新令牌后重试。
 var ErrUnauthorized = errors.New("115 访问令牌已失效")
@@ -262,37 +291,91 @@ func (c *Client) extendCooldown(wait time.Duration) {
 	}
 }
 
-// rateLimitMessage 是 115 用业务错误码表达的限流提示。
-// 115 未为该场景提供专用错误码，只能按消息文本识别，与 MoviePilot 的处理方式一致。
-const rateLimitMessage = "已达到当前访问上限"
+// cooldownReporterKey 承载可选的限流冷却观察者。
+type cooldownReporterKey struct{}
+
+// WithCooldownReporter 注册限流冷却观察者：每次进入或延长全局冷却时回调本次等待时长。
+// 回调在请求 goroutine 内同步执行，只用于把「正在等待 115 恢复」反馈到任务进度，
+// 不改变限流与重试语义；report 为 nil 时原样返回 ctx。
+func WithCooldownReporter(ctx context.Context, report func(time.Duration)) context.Context {
+	if report == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, cooldownReporterKey{}, report)
+}
+
+// reportCooldown 通知当前上下文的冷却观察者；未注册时不做任何事。
+func reportCooldown(ctx context.Context, wait time.Duration) {
+	if report, ok := ctx.Value(cooldownReporterKey{}).(func(time.Duration)); ok {
+		report(wait)
+	}
+}
+
+// isRateLimitError 判断错误是否表示 115 限流：HTTP 429、风控拦截的 405 阻断页，
+// 或限流业务错误码与提示文本。限流请求不会在 115 侧生效，因此可以安全重试且不受方法限制。
+func isRateLimitError(err error) bool {
+	var httpErr *HTTPError
+	if errors.As(err, &httpErr) {
+		return httpErr.StatusCode == http.StatusTooManyRequests || httpErr.StatusCode == http.StatusMethodNotAllowed
+	}
+	var apiErr *APIError
+	if errors.As(err, &apiErr) {
+		return isRateLimitCode(apiErr.Code) || matchesRateLimitMessage(apiErr.Message)
+	}
+	return false
+}
+
+// isRateLimitCode 判断 115 业务错误码是否属于限流。
+func isRateLimitCode(code int) bool {
+	return code == accessLimitCode || code == requestFrequentCode
+}
+
+// matchesRateLimitMessage 判断 115 的文本提示是否属于限流。
+// 115 未给所有限流场景提供稳定错误码，文本识别是错误码之外的兜底。
+func matchesRateLimitMessage(message string) bool {
+	for _, text := range rateLimitMessages {
+		if strings.Contains(message, text) {
+			return true
+		}
+	}
+	return false
+}
 
 // callValue 执行一次可能被 115 限流的调用，并在限流或临时故障时退避重试。
 // attempt 每次都必须重新发起完整请求，重试不复用上一次的响应；
 // 退避通过延长全局冷却窗口实现，因此等待对所有链路同时生效。
+// 限流错误享有远大于普通错误的尝试预算，使扫描任务能等到账号额度窗口恢复；
 // 尝试次数用尽后返回最后一次的错误，不把真实失败吞成空结果。
 // 上下文取消由 attempt 内部的配额等待负责，取消后立即返回 context 错误而不是继续重试。
-func callValue[T any](c *Client, method string, attempt func() (T, error)) (T, error) {
+func callValue[T any](c *Client, ctx context.Context, method string, attempt func() (T, error)) (T, error) {
 	var zero T
 	for index := 1; ; index++ {
 		value, err := attempt()
 		if err == nil {
 			return value, nil
 		}
-		if index >= maxRequestAttempts {
-			return zero, err
-		}
 		wait, retryable := c.retryDelay(method, err, index)
 		if !retryable {
 			return zero, err
 		}
+		limit := maxRequestAttempts
+		if isRateLimitError(err) {
+			limit = maxRateLimitAttempts
+		}
+		if index >= limit {
+			return zero, err
+		}
 		c.extendCooldown(wait)
+		reportCooldown(ctx, wait)
 	}
 }
 
 // retryDelay 判断错误是否值得重试并给出冷却时长。
-// 限流（HTTP 429 与业务提示「已达到当前访问上限」）对所有方法都重试，
-// 因为被 115 限流的请求不会在上游生效；网络错误与 5xx 只重试可安全重放的 GET/HEAD，
-// 避免离线任务提交等写操作被重复执行。
+//
+// 限流（HTTP 429、风控 405 阻断页、限流错误码与提示文本）对所有方法都重试，
+// 因为被 115 限流的请求不会在上游生效，重复提交不会产生副作用；
+// 冷却时长按尝试次数指数增长，与额度窗口的长度匹配。
+// 网络错误与 5xx 只重试可安全重放的 GET/HEAD，避免离线任务提交等写操作被重复执行。
 func (c *Client) retryDelay(method string, err error, attempt int) (time.Duration, bool) {
 	// 调用方主动取消不是 115 的故障：立即返回，既不重试也不延长全局冷却。
 	if errors.Is(err, context.Canceled) {
@@ -305,21 +388,40 @@ func (c *Client) retryDelay(method string, err error, attempt int) (time.Duratio
 			if httpErr.RetryAfter > 0 {
 				return httpErr.RetryAfter, true
 			}
-			return c.cooldown, true
+			return c.rateLimitWait(attempt), true
+		case httpErr.StatusCode == http.StatusMethodNotAllowed && isReplayable(method):
+			// 115 被风控拦截时返回 405 阻断页，它不是业务失败，等冷却后重试。
+			return c.rateLimitWait(attempt), true
 		case httpErr.StatusCode >= 500 && isReplayable(method):
 			return c.serverBackoff(attempt), true
 		}
 		return 0, false
 	}
+	var apiErr *APIError
+	if errors.As(err, &apiErr) && (isRateLimitCode(apiErr.Code) || matchesRateLimitMessage(apiErr.Message)) {
+		return c.rateLimitWait(attempt), true
+	}
 	var transportErr *TransportError
 	if errors.As(err, &transportErr) && isReplayable(method) {
 		return c.serverBackoff(attempt), true
 	}
-	var apiErr *APIError
-	if errors.As(err, &apiErr) && strings.Contains(apiErr.Message, rateLimitMessage) {
-		return c.cooldown, true
-	}
 	return 0, false
+}
+
+// rateLimitWait 给出限流冷却时长：以 cooldown 为基数按尝试次数翻倍并封顶，
+// 既能在短暂抖动后快速恢复，也能在额度真正用尽时退到足够长的等待。
+func (c *Client) rateLimitWait(attempt int) time.Duration {
+	if c.cooldown <= 0 {
+		return 0
+	}
+	if attempt < 1 {
+		attempt = 1
+	}
+	wait := c.cooldown << (attempt - 1)
+	if wait <= 0 || wait > rateLimitMaxBackoff {
+		return rateLimitMaxBackoff
+	}
+	return wait
 }
 
 // serverBackoff 给出网络错误与 5xx 的指数退避时长，按尝试次数翻倍并封顶。
@@ -483,7 +585,7 @@ type authEnvelope struct {
 
 // authRequest 发送一次授权请求并解析响应外壳；命中限流时统一退避重试。
 func authRequest[T any](ctx context.Context, c *Client, method, endpoint string, form url.Values) (T, error) {
-	return callValue(c, method, func() (T, error) {
+	return callValue(c, ctx, method, func() (T, error) {
 		return authRequestOnce[T](ctx, c, method, endpoint, form)
 	})
 }
@@ -528,7 +630,7 @@ func (c *Client) apiCall(ctx context.Context, method, endpoint, token string, fo
 // apiCallWithUserAgent 与 apiCall 相同，但可显式设置 User-Agent；userAgent 为 nil 表示不干预。
 // 命中限流或临时故障时在这里统一退避重试。
 func (c *Client) apiCallWithUserAgent(ctx context.Context, method, endpoint, token string, form url.Values, userAgent *string, action string) (json.RawMessage, error) {
-	return callValue(c, method, func() (json.RawMessage, error) {
+	return callValue(c, ctx, method, func() (json.RawMessage, error) {
 		return c.apiCallOnceWithUserAgent(ctx, method, endpoint, token, form, userAgent, action)
 	})
 }
@@ -564,7 +666,7 @@ func (c *Client) apiCallInto(ctx context.Context, method, endpoint, token string
 // apiBody 发送一次 proapi 请求，校验响应外壳后返回完整响应体；命中限流时统一退避重试。
 // 响应外壳的校验只有这一处实现，避免各调用方重复解析 state/code。
 func (c *Client) apiBody(ctx context.Context, method, endpoint, token string, form url.Values, userAgent *string, action string) ([]byte, error) {
-	return callValue(c, method, func() ([]byte, error) {
+	return callValue(c, ctx, method, func() ([]byte, error) {
 		return c.apiBodyOnce(ctx, method, endpoint, token, form, userAgent, action)
 	})
 }

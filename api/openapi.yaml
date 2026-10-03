@@ -2220,11 +2220,11 @@ components:
       description: 当前任务的动态文件处理进度；总数为已发现且符合过滤规则的媒体文件数，扫描时持续增加。仅 result 事件表示操作已返回结果，百分比 100 不代表全部成功。
       required: [phase, processed, total, percent, current]
       properties:
-        phase: {type: string, enum: [waiting, discovering, processing, finalizing, completed], description: '阶段：等待、发现文件、处理文件、汇总或刷新、完成；completed 后仍须等待 result 事件'}
+        phase: {type: string, enum: [waiting, discovering, processing, cooling, finalizing, completed], description: '阶段：等待、发现文件、处理文件、冷却（命中 115 限流后暂停发起网盘请求，任务仍在运行）、汇总或刷新、完成；completed 后仍须等待 result 事件'}
         processed: {type: integer, minimum: 0, description: '已处理文件数，包含成功、未变化、跳过及失败；目录读取失败时已发现但放弃的文件计入跳过处理'}
         total: {type: integer, minimum: 0, description: '本次扫描累计发现的符合规则文件数，初始为 0，随扫描动态增加；非预估总数'}
         percent: {type: integer, minimum: 0, maximum: 100, description: '向下取整的 processed / total × 100；总数增加时允许降低。total 为 0 时处理期间为 0，完成后为 100'}
-        current: {type: string, description: '当前扫描目录或映射的展示路径；等待或完成时为空串'}
+        current: {type: string, description: '当前扫描目录或映射的展示路径；冷却阶段为限流提示（含触发限流的路径与等待时长），等待或完成时为空串'}
     ScanProgressEvent:
       type: object
       required: [type, progress]

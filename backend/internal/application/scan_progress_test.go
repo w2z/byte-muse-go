@@ -2,7 +2,9 @@ package application
 
 import (
 	"context"
+	"strings"
 	"testing"
+	"time"
 
 	"bytemuse/backend/internal/domain"
 )
@@ -76,5 +78,40 @@ func TestScanProgressEmptyAndCancelled(t *testing.T) {
 		if last.Processed != 0 || last.Total != 0 || last.Percent != 100 || last.Phase != "completed" {
 			t.Fatalf("空目录进度: %+v", last)
 		}
+	}
+}
+
+// TestFormatCooldownRendersReadableChinese 验证冷却时长会转成用户可读的中文时长，
+// 避免任务进度里出现「等待 3600s」这类难以理解的原始数值。
+func TestFormatCooldownRendersReadableChinese(t *testing.T) {
+	cases := []struct {
+		wait time.Duration
+		want string
+	}{
+		{0, "片刻"},
+		{time.Millisecond, "1 秒"},
+		{45 * time.Second, "45 秒"},
+		{time.Minute, "1 分钟"},
+		{90 * time.Second, "2 分钟"},
+		{30 * time.Minute, "30 分钟"},
+		{time.Hour, "1 小时"},
+		{2*time.Hour + 30*time.Minute, "2 小时 30 分钟"},
+	}
+	for _, testCase := range cases {
+		if got := formatCooldown(testCase.wait); got != testCase.want {
+			t.Errorf("formatCooldown(%v) = %q，期望 %q", testCase.wait, got, testCase.want)
+		}
+	}
+}
+
+// TestPan115CooldownNoticeNamesTarget 验证冷却提示带上触发限流的映射路径，
+// 使用户能直接定位是哪条配置消耗了 115 配额；路径为空时回落到网盘名称。
+func TestPan115CooldownNoticeNamesTarget(t *testing.T) {
+	notice := pan115CooldownNotice("/影片/合集", 5*time.Minute)
+	if !strings.Contains(notice, "/影片/合集") || !strings.Contains(notice, "5 分钟") {
+		t.Fatalf("冷却提示 = %q，期望包含映射路径与等待时长", notice)
+	}
+	if fallback := pan115CooldownNotice("  ", time.Minute); !strings.HasPrefix(fallback, "115 网盘") {
+		t.Fatalf("空路径提示 = %q，期望以「115 网盘」开头", fallback)
 	}
 }

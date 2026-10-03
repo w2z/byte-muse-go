@@ -48,6 +48,9 @@ func LifeCookieUserID(cookie string) string {
 
 // LifeEvents 使用 Cookie 拉取生活事件，与 OpenAPI Bearer 授权严格分开。
 // 复用客户端限流、超时和响应边界，禁止重定向以防 Cookie 离开固定 115 入口。
+//
+// 事件轮询与文件列表、直链换取共用同一账号配额，因此命中限流时同样写入全局冷却并退避重试；
+// 否则后台轮询会在账号被限流期间持续消耗配额，使扫描任务永远等不到恢复。
 func (c *Client) LifeEvents(ctx context.Context, cookie string, offset, limit int) (LifePage, error) {
 	if LifeCookieUserID(cookie) == "" {
 		return LifePage{}, fmt.Errorf("115 事件 Cookie 需要有效的 UID、CID、SEID")
@@ -55,6 +58,13 @@ func (c *Client) LifeEvents(ctx context.Context, cookie string, offset, limit in
 	if offset < 0 || offset >= 10000 || limit < 1 || limit > 1000 {
 		return LifePage{}, fmt.Errorf("115 事件分页参数无效")
 	}
+	return callValue(c, ctx, http.MethodGet, func() (LifePage, error) {
+		return c.lifeEventsOnce(ctx, cookie, offset, limit)
+	})
+}
+
+// lifeEventsOnce 是 LifeEvents 的单次实现；重试与冷却由 LifeEvents 统一驱动。
+func (c *Client) lifeEventsOnce(ctx context.Context, cookie string, offset, limit int) (LifePage, error) {
 	release, err := c.admit(ctx)
 	if err != nil {
 		return LifePage{}, err

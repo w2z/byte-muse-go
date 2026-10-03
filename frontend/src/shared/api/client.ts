@@ -159,7 +159,8 @@ export async function apiRequest<T>(path: string, init?: RequestInit, onProgress
 
 /** 扫描请求的动态计数；total 随发现的媒体文件增加，percent 由服务端按当前总数计算。 */
 export type ScanProgress = {
-  phase: "waiting" | "discovering" | "processing" | "finalizing" | "completed";
+  /** cooling 表示命中 115 限流正在冷却：任务仍在运行，只是暂时不再发起网盘请求。 */
+  phase: "waiting" | "discovering" | "processing" | "cooling" | "finalizing" | "completed";
   processed: number;
   total: number;
   percent: number;

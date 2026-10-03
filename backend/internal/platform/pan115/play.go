@@ -114,7 +114,7 @@ func (c *Client) Info(ctx context.Context, accessToken, fileID string) (FileInfo
 // 直链换取走单独的 1 请求/秒配额（见 admitPlay），并与其他链路共享限流冷却，
 // 避免播放端批量探测占满全局配额后使目录扫描与 strm 生成无法推进。
 func (c *Client) DownloadURL(ctx context.Context, accessToken, pickCode, userAgent string) (string, error) {
-	return callValue(c, http.MethodPost, func() (string, error) {
+	return callValue(c, ctx, http.MethodPost, func() (string, error) {
 		if err := c.admitPlay(ctx); err != nil {
 			return "", err
 		}

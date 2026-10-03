@@ -3,6 +3,9 @@ package application
 import (
 	"bytemuse/backend/internal/domain"
 	"context"
+	"fmt"
+	"strings"
+	"time"
 )
 
 // ScanProgress 是当前任务的动态文件进度；Total 是已发现总数，扫描期间可增长。
@@ -49,4 +52,38 @@ func reportScanProgress(ctx context.Context, phase string, processed, total int,
 		p.Percent = 100
 	}
 	report(p)
+}
+
+// pan115CooldownNotice 描述一次 115 限流冷却，供任务进度展示。
+// 冷却期间不再产生新的网盘请求，任务仍在运行；恢复后由下一次进度回调自然覆盖。
+// path 是当前正在扫描的映射或目录，便于用户定位是哪条配置触发了限流。
+func pan115CooldownNotice(path string, wait time.Duration) string {
+	label := strings.TrimSpace(path)
+	if label == "" {
+		label = "115 网盘"
+	}
+	return fmt.Sprintf("%s：115 访问受限，等待 %s 后重试", label, formatCooldown(wait))
+}
+
+// formatCooldown 把冷却时长格式化成便于阅读的中文时长。
+func formatCooldown(wait time.Duration) string {
+	if wait <= 0 {
+		return "片刻"
+	}
+	if wait < time.Minute {
+		seconds := int(wait.Seconds() + 0.5)
+		if seconds < 1 {
+			seconds = 1
+		}
+		return fmt.Sprintf("%d 秒", seconds)
+	}
+	minutes := int(wait.Minutes() + 0.5)
+	if minutes < 60 {
+		return fmt.Sprintf("%d 分钟", minutes)
+	}
+	hours, rest := minutes/60, minutes%60
+	if rest == 0 {
+		return fmt.Sprintf("%d 小时", hours)
+	}
+	return fmt.Sprintf("%d 小时 %d 分钟", hours, rest)
 }

@@ -776,6 +776,7 @@ func TestListRetriesServerErrorOnGet(t *testing.T) {
 }
 
 // TestListStopsAfterAttemptsExhausted 验证重试次数用尽后返回真实的 115 错误，不静默返回空结果。
+// 限流错误的尝试预算远大于普通错误：115 的额度窗口可能持续数十分钟，任务必须能等到恢复。
 func TestListStopsAfterAttemptsExhausted(t *testing.T) {
 	var calls int
 	client := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
@@ -787,8 +788,92 @@ func TestListStopsAfterAttemptsExhausted(t *testing.T) {
 	if !errors.As(err, &apiErr) || !strings.Contains(apiErr.Message, "已达到当前访问上限") {
 		t.Fatalf("错误 = %v，期望携带 115 限流消息的 APIError", err)
 	}
+	if calls != maxRateLimitAttempts {
+		t.Fatalf("限流请求次数 = %d，期望 %d", calls, maxRateLimitAttempts)
+	}
+
+	calls = 0
+	client = newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusServiceUnavailable)
+	})
+	if _, err := client.List(context.Background(), "token", "0", 0, 100); err == nil {
+		t.Fatal("5xx 时应当报错")
+	}
 	if calls != maxRequestAttempts {
-		t.Fatalf("请求次数 = %d，期望 %d", calls, maxRequestAttempts)
+		t.Fatalf("普通错误请求次数 = %d，期望 %d", calls, maxRequestAttempts)
+	}
+}
+
+// TestRateLimitClassificationCoversCodesAndMessages 固定限流的识别边界：
+// 115 的限流既可能以错误码（406 访问上限、770004 频率过高）返回，也可能只有提示文本，
+// 两种形式都必须按限流处理，否则扫描任务会被当成普通业务失败而立即终止。
+func TestRateLimitClassificationCoversCodesAndMessages(t *testing.T) {
+	client := New(nil)
+	client.cooldown = time.Minute
+	rateLimited := []error{
+		&APIError{Code: accessLimitCode, Message: "访问上限"},
+		&APIError{Code: requestFrequentCode, Message: "访问频率过高"},
+		&APIError{Message: "已达到当前访问上限"},
+		&APIError{Message: "请求过于频繁，请稍后再试"},
+		&HTTPError{StatusCode: http.StatusTooManyRequests},
+		&HTTPError{StatusCode: http.StatusMethodNotAllowed},
+	}
+	for _, err := range rateLimited {
+		if !isRateLimitError(err) {
+			t.Errorf("%v 应识别为限流", err)
+		}
+		if wait, ok := client.retryDelay(http.MethodGet, err, 1); !ok || wait != time.Minute {
+			t.Errorf("%v 首次重试 = (%v, %v)，期望 (1m, true)", err, wait, ok)
+		}
+	}
+	if isRateLimitError(&APIError{Code: invalidFileIDCode, Message: "参数错误"}) {
+		t.Error("普通业务错误不应识别为限流")
+	}
+	// 405 是风控阻断页，只在可安全重放的读请求上重试；写请求不重复提交。
+	if _, ok := client.retryDelay(http.MethodPost, &HTTPError{StatusCode: http.StatusMethodNotAllowed}, 1); ok {
+		t.Error("写请求的 405 不应重试")
+	}
+}
+
+// TestRateLimitWaitEscalatesAndCaps 验证限流冷却按尝试次数翻倍并封顶，
+// 使短暂抖动快速恢复、额度真正用尽时退到足够长的等待。
+func TestRateLimitWaitEscalatesAndCaps(t *testing.T) {
+	client := New(nil)
+	client.cooldown = time.Minute
+	wants := []time.Duration{time.Minute, 2 * time.Minute, 4 * time.Minute, 8 * time.Minute, 16 * time.Minute, rateLimitMaxBackoff, rateLimitMaxBackoff}
+	for index, want := range wants {
+		if got := client.rateLimitWait(index + 1); got != want {
+			t.Fatalf("第 %d 次冷却 = %v，期望 %v", index+1, got, want)
+		}
+	}
+	client.cooldown = 0
+	if got := client.rateLimitWait(3); got != 0 {
+		t.Fatalf("关闭冷却时 = %v，期望 0", got)
+	}
+}
+
+// TestCooldownReporterReceivesWait 验证限流冷却会通知任务进度，
+// 使「等待 115 恢复」可以被展示，而不是表现为任务卡死。
+func TestCooldownReporterReceivesWait(t *testing.T) {
+	var calls int
+	client := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		if calls == 1 {
+			writeJSON(t, w, `{"state":false,"code":406,"message":"访问上限"}`)
+			return
+		}
+		writeJSON(t, w, `{"state":true,"code":0,"count":"0","data":[]}`)
+	})
+	// 用毫秒级冷却验证回调内容，避免测试真的等待。
+	client.cooldown = 5 * time.Millisecond
+	var waits []time.Duration
+	ctx := WithCooldownReporter(context.Background(), func(wait time.Duration) { waits = append(waits, wait) })
+	if _, err := client.List(ctx, "token", "0", 0, 100); err != nil {
+		t.Fatalf("限流后重试失败: %v", err)
+	}
+	if len(waits) != 1 || waits[0] != 5*time.Millisecond {
+		t.Fatalf("冷却回调 = %v，期望 [5ms]", waits)
 	}
 }
 

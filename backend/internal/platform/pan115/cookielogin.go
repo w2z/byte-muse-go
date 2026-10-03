@@ -183,7 +183,7 @@ func cookieStateOK(raw json.RawMessage) bool {
 // 扫码接口的响应外壳与 passport/proapi 不同（state 可能是布尔值），这里单独实现，
 // 避免把类型差异带进已有的令牌解析逻辑。
 func cookieRequest[T any](ctx context.Context, c *Client, method, endpoint string, form url.Values, action string) (T, error) {
-	return callValue(c, method, func() (T, error) {
+	return callValue(c, ctx, method, func() (T, error) {
 		return cookieRequestOnce[T](ctx, c, method, endpoint, form, action)
 	})
 }

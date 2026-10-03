@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"bytemuse/backend/internal/domain"
+	"bytemuse/backend/internal/platform/pan115"
 	"bytemuse/backend/internal/ports"
 )
 
@@ -68,6 +70,10 @@ func (s *Pan115LibraryService) Scan(ctx context.Context) (domain.Pan115LibrarySc
 		discoveryCtx := withScanDiscovery(ctx, func() {
 			total++
 			reportScanProgress(ctx, "discovering", processed, total, directory.Path)
+		})
+		// 115 限流时把冷却反馈到任务进度：冷却期间不再产生新请求，任务仍在运行。
+		discoveryCtx = pan115.WithCooldownReporter(discoveryCtx, func(wait time.Duration) {
+			reportScanProgress(ctx, "cooling", processed, total, pan115CooldownNotice(directory.Path, wait))
 		})
 		files, scanErr := walkPan115Files(discoveryCtx, s.pan115, directory.ID, strmFileFilter{formats: defaultStrmFormats})
 		if err := scanCheckpoint(ctx); err != nil {

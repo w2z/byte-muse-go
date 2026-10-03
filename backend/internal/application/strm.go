@@ -19,6 +19,7 @@ import (
 
 	"bytemuse/backend/internal/domain"
 	"bytemuse/backend/internal/platform/clouddrive"
+	"bytemuse/backend/internal/platform/pan115"
 )
 
 var (
@@ -314,6 +315,10 @@ func (s *StrmService) Scan(ctx context.Context, playBase string, mode domain.Str
 		discoveryCtx := withScanDiscovery(ctx, func() {
 			total++
 			reportScanProgress(ctx, "discovering", processed, total, mapping.Path)
+		})
+		// 115 限流时把冷却反馈到任务进度：冷却期间不再产生新请求，任务仍在运行。
+		discoveryCtx = pan115.WithCooldownReporter(discoveryCtx, func(wait time.Duration) {
+			reportScanProgress(ctx, "cooling", processed, total, pan115CooldownNotice(mapping.Path, wait))
 		})
 		files, scanErr := s.collectMappingFiles(discoveryCtx, mapping)
 		if err := scanCheckpoint(ctx); err != nil {
