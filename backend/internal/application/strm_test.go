@@ -239,6 +239,24 @@ func TestCreateDirectoryRejectsNestedName(t *testing.T) {
 	}
 }
 
+// TestStrmRootUnavailableReportsDeploymentProblem 验证 strm 根目录无法创建或读取时返回可诊断的错误，
+// 而不是让设置页只看到“服务内部错误”。
+func TestStrmRootUnavailableReportsDeploymentProblem(t *testing.T) {
+	ctx := context.Background()
+	// 用普通文件占据根目录路径：MkdirAll 必然失败，等价于容器内 /strm 没有挂载可写目录。
+	blocked := filepath.Join(t.TempDir(), "strm")
+	if err := os.WriteFile(blocked, []byte("blocked"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	service := newStrmTestService(t, blocked, nil, nil, nil)
+	if _, err := service.Directories(ctx, "/"); !errors.Is(err, ErrStrmRootUnavailable) {
+		t.Fatalf("根目录不可用时浏览应返回 ErrStrmRootUnavailable，实际 %v", err)
+	}
+	if _, err := service.CreateDirectory(ctx, "/", "movies"); !errors.Is(err, ErrStrmRootUnavailable) {
+		t.Fatalf("根目录不可用时创建目录应返回 ErrStrmRootUnavailable，实际 %v", err)
+	}
+}
+
 // TestScanWritesPlayableStrmFiles 验证 115 与 CloudDrive2 映射都能生成内容正确的 strm：
 // 全量清理旧内容后重建，增量保留本地文件只补齐缺失项，非媒体文件两种方式都不生成。
 func TestScanWritesPlayableStrmFiles(t *testing.T) {

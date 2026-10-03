@@ -70,6 +70,10 @@ foreach ($composeFile in $composeFiles) {
     if ($text -notmatch '(?m)^\s+-\s+/path/to/byte-muse/data:/data\s*$') {
         throw "$($composeFile.Name) 必须把宿主机数据目录挂载到 /data"
     }
+    # 缺少 /strm 时容器内目录浏览与 strm 生成只能在运行期失败，静态校验必须提前拦住。
+    if ($text -notmatch '(?m)^\s+-\s+/path/to/byte-muse/strm:/strm\s*$') {
+        throw "$($composeFile.Name) 必须把宿主机 strm 目录挂载到 /strm"
+    }
     # 镜像的 /app 存放服务二进制与前端产物，挂载覆盖后容器无法启动。
     if ($text -match '(?m)^\s+-\s+\S+:/app\s*$') {
         throw "$($composeFile.Name) 不得挂载覆盖 /app"
@@ -112,6 +116,17 @@ foreach ($composeFile in $composeFiles) {
         }
         if ($text -notmatch ('@tcp\(请替换为宿主机地址:' + $publishedPort.Groups['port'].Value + '\)')) {
             throw "$($composeFile.Name) 的 DATABASE_DSN 必须使用宿主机地址及 ports 左侧端口"
+        }
+    }
+}
+
+# 本地未跟踪的 *.local.yaml 允许保留真实内网地址，但挂载契约与模板一致：
+# 缺 /data 或 /strm 会让容器无法启动或只在运行期暴露，同样静态拦住。
+foreach ($localComposeFile in @(Get-ChildItem -LiteralPath $PSScriptRoot -Filter 'compose.*.local.yaml')) {
+    $localText = Get-Content -Raw -LiteralPath $localComposeFile.FullName
+    foreach ($mount in @('/data', '/strm')) {
+        if ($localText -notmatch ('(?m)^\s+-\s+\S+:' + [regex]::Escape($mount) + '\s*$')) {
+            throw "$($localComposeFile.Name) 必须把宿主机目录挂载到 $mount"
         }
     }
 }

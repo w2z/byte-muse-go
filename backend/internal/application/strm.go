@@ -26,6 +26,9 @@ var (
 	ErrStrmInvalidInput = errors.New("strm 请求参数无效")
 	// ErrStrmNotConfigured 表示 strm 映射或网盘集成尚未配置齐全。
 	ErrStrmNotConfigured = errors.New("strm 尚未配置")
+	// ErrStrmRootUnavailable 表示容器内 strm 根目录无法创建、读取或写入。
+	// 这是部署问题而不是请求参数问题：容器必须把可写目录挂载到 /strm，宿主机目录需允许 UID 65532 写入。
+	ErrStrmRootUnavailable = errors.New("strm 根目录不可用")
 )
 
 const (
@@ -176,14 +179,14 @@ func (s *StrmService) Directories(ctx context.Context, relative string) (domain.
 		return domain.StrmDirectoryPage{}, err
 	}
 	if err := os.MkdirAll(root, 0o755); err != nil {
-		return domain.StrmDirectoryPage{}, fmt.Errorf("创建 strm 根目录失败: %w", err)
+		return domain.StrmDirectoryPage{}, strmRootFailure("创建", root, err)
 	}
 	entries, err := os.ReadDir(absolute)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return domain.StrmDirectoryPage{}, fmt.Errorf("%w: strm 目录不存在", ErrStrmInvalidInput)
 		}
-		return domain.StrmDirectoryPage{}, fmt.Errorf("读取 strm 目录失败: %w", err)
+		return domain.StrmDirectoryPage{}, strmRootFailure("读取", absolute, err)
 	}
 	page := domain.StrmDirectoryPage{Path: normalized, Directories: make([]domain.StrmDirectory, 0, len(entries))}
 	for _, entry := range entries {
@@ -211,6 +214,10 @@ func (s *StrmService) CreateDirectory(ctx context.Context, parent, name string) 
 	if err != nil {
 		return domain.StrmDirectory{}, err
 	}
+	// 根目录缺失或不可写时先报明确的部署问题，而不是把错误说成“上级目录不存在”。
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		return domain.StrmDirectory{}, strmRootFailure("创建", root, err)
+	}
 	absoluteParent, normalized, err := resolveStrmPath(root, parent)
 	if err != nil {
 		return domain.StrmDirectory{}, err
@@ -226,7 +233,7 @@ func (s *StrmService) CreateDirectory(ctx context.Context, parent, name string) 
 		case errors.Is(err, fs.ErrNotExist):
 			return domain.StrmDirectory{}, fmt.Errorf("%w: 上级目录不存在", ErrStrmInvalidInput)
 		}
-		return domain.StrmDirectory{}, fmt.Errorf("创建目录失败: %w", err)
+		return domain.StrmDirectory{}, strmRootFailure("创建", target, err)
 	}
 	return domain.StrmDirectory{Name: trimmed, Path: joinStrmPath(normalized, trimmed)}, nil
 }
@@ -411,7 +418,9 @@ func (s *StrmService) scanMapping(ctx context.Context, root string, mapping doma
 		entry.Deleted, err = clearStrmContentContext(ctx, root, target)
 	}
 	if err == nil {
-		err = os.MkdirAll(target, 0o755)
+		if mkdirErr := os.MkdirAll(target, 0o755); mkdirErr != nil {
+			err = strmRootFailure("创建", target, mkdirErr)
+		}
 	}
 	if err != nil {
 		entry.Message = "准备本地 strm 目录失败：" + err.Error()
@@ -470,6 +479,7 @@ func (s *StrmService) scanMapping(ctx context.Context, root string, mapping doma
 		switch {
 		case err != nil:
 			entry.Failed++
+			entry.Message = "写入 strm 文件失败：" + err.Error()
 		case created:
 			entry.Created++
 		case !changed:
@@ -707,6 +717,13 @@ func normalizeStrmFormats(formats []string) []string {
 	return result
 }
 
+// strmRootFailure 包装 strm 根目录下的文件系统错误，附带动作与具体路径。
+// 这类错误的共同原因是容器内 /strm 没有挂载可写目录，HTTP 层据此返回可操作的部署提示，
+// 而不是把挂载或权限问题降级成“服务内部错误”。
+func strmRootFailure(action, target string, err error) error {
+	return fmt.Errorf("%w: %s %s 失败（%v）", ErrStrmRootUnavailable, action, target, err)
+}
+
 // resolveStrmPath 把浏览器传入的相对路径解析为 root 目录下的绝对路径。
 // 返回值是绝对路径与规范化后的相对路径（始终以 / 开头，根目录为 /）。
 // 只允许 root 以下的路径：绝对路径、上跳与越界都会被拒绝。
@@ -747,10 +764,10 @@ func writeStrmFile(target, content string) (created bool, changed bool, err erro
 		return false, false, nil
 	}
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-		return false, false, err
+		return false, false, strmRootFailure("创建", filepath.Dir(target), err)
 	}
 	if err := os.WriteFile(target, []byte(content), 0o644); err != nil {
-		return false, false, err
+		return false, false, strmRootFailure("写入", target, err)
 	}
 	return missing, true, nil
 }

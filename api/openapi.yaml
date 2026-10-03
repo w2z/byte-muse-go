@@ -1243,7 +1243,7 @@ paths:
             application/json:
               schema: {$ref: '#/components/schemas/Error'}
         '503':
-          description: strm 服务未装配
+          description: strm 服务未装配，或容器内 /strm 不可写（code=strm_root_unavailable，提示需挂载可写的 /strm）
           content:
             application/json:
               schema: {$ref: '#/components/schemas/Error'}
@@ -1283,7 +1283,7 @@ paths:
             application/json:
               schema: {$ref: '#/components/schemas/Error'}
         '503':
-          description: strm 服务未装配
+          description: strm 服务未装配，或容器内 /strm 不可写（code=strm_root_unavailable，提示需挂载可写的 /strm）
           content:
             application/json:
               schema: {$ref: '#/components/schemas/Error'}

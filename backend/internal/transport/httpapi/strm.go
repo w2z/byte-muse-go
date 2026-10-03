@@ -254,6 +254,14 @@ func writeStrmError(response http.ResponseWriter, err error) {
 		writeError(response, http.StatusConflict, "strm_not_configured", "CloudDrive2 尚未配置")
 	case errors.Is(err, clouddrive.ErrUnauthorized):
 		writeError(response, http.StatusBadGateway, "clouddrive_unauthorized", trimErrorPrefix(err, clouddrive.ErrUnauthorized))
+	// 容器内 /strm 不可写是部署问题：给出可直接执行的排查方向，不再退化成笼统的 500。
+	case errors.Is(err, application.ErrStrmRootUnavailable):
+		detail := trimErrorPrefix(err, application.ErrStrmRootUnavailable)
+		if detail == "" {
+			detail = "无法访问容器内 /strm"
+		}
+		writeError(response, http.StatusServiceUnavailable, "strm_root_unavailable",
+			"strm 目录不可用："+detail+"；请确认容器已把宿主机目录挂载到 /strm，且该目录允许容器内 UID 65532 写入")
 	default:
 		writeApplicationError(response, err)
 	}

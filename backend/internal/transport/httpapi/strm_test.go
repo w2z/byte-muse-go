@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"bytemuse/backend/internal/application"
@@ -87,6 +89,31 @@ func TestStrmDirectoryHandlerRejectsEscape(t *testing.T) {
 	}
 	if page.Path != "/" {
 		t.Fatalf("越界路径收敛结果不符: %+v", page)
+	}
+}
+
+// TestStrmRootUnavailableReturnsActionableError 验证容器内 /strm 不可写时返回可操作的部署提示，
+// 而不是退化成无法排查的 500 服务内部错误。
+func TestStrmRootUnavailableReturnsActionableError(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	writeStrmError(recorder, fmt.Errorf("%w: 创建 /strm 失败（permission denied）", application.ErrStrmRootUnavailable))
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("strm 根目录不可用应返回 503，实际 %d：%s", recorder.Code, recorder.Body.String())
+	}
+	var body struct {
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Code != "strm_root_unavailable" {
+		t.Fatalf("错误码不符: %+v", body)
+	}
+	for _, want := range []string{"/strm", "65532", "permission denied"} {
+		if !strings.Contains(body.Message, want) {
+			t.Fatalf("提示缺少 %q：%s", want, body.Message)
+		}
 	}
 }
 
