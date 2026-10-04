@@ -124,7 +124,7 @@ func getRank(ctx context.Context, deps Deps, raw string) (any, error) {
 	if deps.Queries == nil {
 		return "影片查询服务不可用", nil
 	}
-	page, err := deps.Queries.Rank(ctx, rankType, 1, mediaSearchLimit)
+	page, err := deps.Queries.Rank(ctx, rankType, 1, mediaSearchLimit, ports.MediaListQuery{})
 	if err != nil {
 		return nil, fmt.Errorf("查询榜单失败: %w", err)
 	}
@@ -152,7 +152,7 @@ func getReleaseToday(ctx context.Context, deps Deps) (any, error) {
 	if deps.Queries == nil {
 		return "影片查询服务不可用", nil
 	}
-	page, err := deps.Queries.ReleaseToday(ctx, 1, mediaSearchLimit)
+	page, err := deps.Queries.ReleaseToday(ctx, 1, mediaSearchLimit, ports.MediaListQuery{})
 	if err != nil {
 		return nil, fmt.Errorf("查询今日上新失败: %w", err)
 	}
@@ -167,7 +167,7 @@ func getRecommendations(ctx context.Context, deps Deps, limit int) (any, error) 
 	if deps.Queries == nil {
 		return "影片查询服务不可用", nil
 	}
-	page, err := deps.Queries.Recommend(ctx, 1, limit)
+	page, err := deps.Queries.Recommend(ctx, 1, limit, ports.MediaListQuery{SubscriptionStatus: "none"})
 	if err != nil {
 		return nil, fmt.Errorf("查询推荐失败: %w", err)
 	}

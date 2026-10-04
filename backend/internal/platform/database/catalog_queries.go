@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"bytemuse/backend/internal/domain"
+	"bytemuse/backend/internal/ports"
 )
 
 // LegacyRankImportResult summarizes rank types and ordered entries read from the legacy cache table.
@@ -140,14 +141,20 @@ func (r *CatalogQueryRepository) Search(ctx context.Context, query string, limit
 }
 
 // Rank returns only catalog rows resolved from one ordered rank cache snapshot.
-func (r *CatalogQueryRepository) Rank(ctx context.Context, rankType string, limit, offset int) (domain.MediaPage, error) {
+func (r *CatalogQueryRepository) Rank(ctx context.Context, rankType string, limit, offset int, filters ports.MediaListQuery) (domain.MediaPage, error) {
 	limit, offset = normalizePagination(limit, offset)
+	where, args := mediaListWhere(r.dialect, filters)
+	if where == "" {
+		where = " WHERE 1=1"
+	}
+	args = append(args, rankType)
+	where += " AND r.rank_type = " + placeholder(r.dialect, len(args))
 	var total int
-	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM rank_entries r JOIN media m ON UPPER(m.code) = UPPER(r.code) WHERE r.rank_type = %s", placeholder(r.dialect, 1))
-	if err := r.db.QueryRowContext(ctx, countQuery, rankType).Scan(&total); err != nil {
+	if err := r.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM rank_entries r JOIN media m ON UPPER(m.code)=UPPER(r.code)"+where, args...).Scan(&total); err != nil {
 		return domain.MediaPage{}, err
 	}
-	rows, err := r.db.QueryContext(ctx, fmt.Sprintf("SELECT %s FROM rank_entries r JOIN media m ON UPPER(m.code) = UPPER(r.code) %s WHERE r.rank_type = %s ORDER BY r.position ASC LIMIT %s OFFSET %s", mediaProjectionColumns("m"), mediaProjectionJoins(), placeholder(r.dialect, 1), placeholder(r.dialect, 2), placeholder(r.dialect, 3)), rankType, limit, offset)
+	args = append(args, limit, offset)
+	rows, err := r.db.QueryContext(ctx, fmt.Sprintf("SELECT %s FROM rank_entries r JOIN media m ON UPPER(m.code)=UPPER(r.code) %s%s ORDER BY r.position ASC LIMIT %s OFFSET %s", mediaProjectionColumns("m"), mediaProjectionJoins(), where, placeholder(r.dialect, len(args)-1), placeholder(r.dialect, len(args))), args...)
 	if err != nil {
 		return domain.MediaPage{}, err
 	}
@@ -160,14 +167,20 @@ func (r *CatalogQueryRepository) Rank(ctx context.Context, rankType string, limi
 }
 
 // ReleaseToday returns only rows whose persisted release date matches the requested calendar date.
-func (r *CatalogQueryRepository) ReleaseToday(ctx context.Context, releaseDate string, limit, offset int) (domain.MediaPage, error) {
+func (r *CatalogQueryRepository) ReleaseToday(ctx context.Context, releaseDate string, limit, offset int, filters ports.MediaListQuery) (domain.MediaPage, error) {
 	limit, offset = normalizePagination(limit, offset)
-	where := " WHERE m.release_date = " + placeholder(r.dialect, 1)
+	where, args := mediaListWhere(r.dialect, filters)
+	if where == "" {
+		where = " WHERE 1=1"
+	}
+	args = append(args, releaseDate)
+	where += " AND m.release_date = " + placeholder(r.dialect, len(args))
 	var total int
-	if err := r.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM media m"+where, releaseDate).Scan(&total); err != nil {
+	if err := r.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM media m"+where, args...).Scan(&total); err != nil {
 		return domain.MediaPage{}, err
 	}
-	rows, err := r.db.QueryContext(ctx, fmt.Sprintf("SELECT %s FROM media m %s%s ORDER BY m.code ASC LIMIT %s OFFSET %s", mediaProjectionColumns("m"), mediaProjectionJoins(), where, placeholder(r.dialect, 2), placeholder(r.dialect, 3)), releaseDate, limit, offset)
+	args = append(args, limit, offset)
+	rows, err := r.db.QueryContext(ctx, fmt.Sprintf("SELECT %s FROM media m %s%s ORDER BY m.code ASC LIMIT %s OFFSET %s", mediaProjectionColumns("m"), mediaProjectionJoins(), where, placeholder(r.dialect, len(args)-1), placeholder(r.dialect, len(args))), args...)
 	if err != nil {
 		return domain.MediaPage{}, err
 	}
@@ -190,8 +203,8 @@ type recommendationMetadata struct {
 }
 
 // Recommend derives a preference profile exclusively from persisted subscriptions/completions,
-// then ranks matching unsubscribed catalog rows in the requested release window.
-func (r *CatalogQueryRepository) Recommend(ctx context.Context, startDate, endDate string, limit, offset int) (domain.MediaPage, error) {
+// then ranks matching catalog rows using the shared subscription and type filters in the requested release window.
+func (r *CatalogQueryRepository) Recommend(ctx context.Context, startDate, endDate string, limit, offset int, filters ports.MediaListQuery) (domain.MediaPage, error) {
 	limit, offset = normalizePagination(limit, offset)
 	profile, err := r.recommendationProfile(ctx)
 	if err != nil {
@@ -200,7 +213,7 @@ func (r *CatalogQueryRepository) Recommend(ctx context.Context, startDate, endDa
 	if profile.empty() {
 		return domain.MediaPage{Items: []domain.Media{}}, nil
 	}
-	candidates, err := r.recommendationCandidates(ctx, startDate, endDate)
+	candidates, err := r.recommendationCandidates(ctx, startDate, endDate, filters)
 	if err != nil {
 		return domain.MediaPage{}, err
 	}
@@ -307,13 +320,14 @@ WHERE lm.legacy_status IN ('SUBSCRIBE', 'COMPLETE')
 	}, nil
 }
 
-func (r *CatalogQueryRepository) recommendationCandidates(ctx context.Context, startDate, endDate string) ([]recommendationMetadata, error) {
-	rows, err := r.db.QueryContext(ctx, fmt.Sprintf(`SELECT m.id, m.release_date, lm.genres, lm.casts, lm.series, lm.publisher
-FROM media m
-JOIN legacy_media_metadata lm ON lm.media_id = m.id
-WHERE lm.legacy_status = 'UN_SUBSCRIBE'
-  AND m.subscription_status <> 'active'
-  AND m.release_date BETWEEN %s AND %s`, placeholder(r.dialect, 1), placeholder(r.dialect, 2)), startDate, endDate)
+func (r *CatalogQueryRepository) recommendationCandidates(ctx context.Context, startDate, endDate string, filters ports.MediaListQuery) ([]recommendationMetadata, error) {
+	where, args := mediaListWhere(r.dialect, filters)
+	if where == "" {
+		where = " WHERE 1=1"
+	}
+	args = append(args, startDate, endDate)
+	where += fmt.Sprintf(" AND m.release_date BETWEEN %s AND %s", placeholder(r.dialect, len(args)-1), placeholder(r.dialect, len(args)))
+	rows, err := r.db.QueryContext(ctx, "SELECT m.id,m.release_date,lm.genres,lm.casts,lm.series,lm.publisher FROM media m JOIN legacy_media_metadata lm ON lm.media_id=m.id"+where, args...)
 	if err != nil {
 		return nil, err
 	}

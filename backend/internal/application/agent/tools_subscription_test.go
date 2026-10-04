@@ -31,18 +31,18 @@ func (r *fakeCatalogQueryRepository) Search(_ context.Context, query string, lim
 }
 
 // Rank 记录榜单周期，便于断言工具的取值收敛规则。
-func (r *fakeCatalogQueryRepository) Rank(_ context.Context, rankType string, limit, offset int) (domain.MediaPage, error) {
+func (r *fakeCatalogQueryRepository) Rank(_ context.Context, rankType string, limit, offset int, _ ports.MediaListQuery) (domain.MediaPage, error) {
 	r.lastRank = rankType
 	return domain.MediaPage{Items: pageSlice(r.media, limit, offset), Total: len(r.media)}, nil
 }
 
 // ReleaseToday 返回全部测试影片。
-func (r *fakeCatalogQueryRepository) ReleaseToday(_ context.Context, _ string, limit, offset int) (domain.MediaPage, error) {
+func (r *fakeCatalogQueryRepository) ReleaseToday(_ context.Context, _ string, limit, offset int, _ ports.MediaListQuery) (domain.MediaPage, error) {
 	return domain.MediaPage{Items: pageSlice(r.media, limit, offset), Total: len(r.media)}, nil
 }
 
 // Recommend 返回全部测试影片。
-func (r *fakeCatalogQueryRepository) Recommend(_ context.Context, _, _ string, limit, offset int) (domain.MediaPage, error) {
+func (r *fakeCatalogQueryRepository) Recommend(_ context.Context, _, _ string, limit, offset int, _ ports.MediaListQuery) (domain.MediaPage, error) {
 	return domain.MediaPage{Items: pageSlice(r.media, limit, offset), Total: len(r.media)}, nil
 }
 

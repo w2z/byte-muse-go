@@ -436,7 +436,7 @@ func listRank(service *application.CatalogQueryService) http.HandlerFunc {
 		if !ok {
 			return
 		}
-		result, err := service.Rank(request.Context(), request.URL.Query().Get("type"), page, pageSize)
+		result, err := service.Rank(request.Context(), request.URL.Query().Get("type"), page, pageSize, ports.MediaListQuery{SubscriptionStatus: request.URL.Query().Get("subscription"), VideoType: request.URL.Query().Get("video_type")})
 		if err != nil {
 			logging.Error(logging.CategoryCollection, "榜单查询失败", "rank_type", request.URL.Query().Get("type"))
 			writeApplicationError(response, err)
@@ -457,7 +457,7 @@ func listReleaseToday(service *application.CatalogQueryService) http.HandlerFunc
 		if !ok {
 			return
 		}
-		result, err := service.ReleaseToday(request.Context(), page, pageSize)
+		result, err := service.ReleaseToday(request.Context(), page, pageSize, ports.MediaListQuery{SubscriptionStatus: request.URL.Query().Get("subscription"), VideoType: request.URL.Query().Get("video_type")})
 		if err != nil {
 			writeApplicationError(response, err)
 			return
@@ -476,7 +476,7 @@ func listRecommendations(service *application.CatalogQueryService) http.HandlerF
 		if !ok {
 			return
 		}
-		result, err := service.Recommend(request.Context(), page, pageSize)
+		result, err := service.Recommend(request.Context(), page, pageSize, ports.MediaListQuery{SubscriptionStatus: request.URL.Query().Get("subscription"), VideoType: request.URL.Query().Get("video_type")})
 		if err != nil {
 			writeApplicationError(response, err)
 			return

@@ -1,4 +1,5 @@
-import { Grid } from "@arco-design/web-react";
+import { CatalogFilters, catalogFilterParams } from "../../shared/ui/CatalogFilters";
+import { Button, Grid } from "@arco-design/web-react";
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { apiRequest, type Page } from "../../shared/api/client";
@@ -74,21 +75,21 @@ const RANK_SOURCES: RankSource[] = [
  * - HTTP 层 backend/internal/transport/httpapi/handler.go 的 listRank 也只透传 type，没有枚举排行榜类型的接口，
  *   所以前端无法动态拉取选项，只能使用上述旧库中已确认存在的取值。
  *
- * 不做“未入库 / 已入库”状态筛选：对标站是在一次性取回全量榜单后于前端过滤 is_exist_server，而本页正文
- * 遵循服务端分页（后端 /ranks 支持 page / page_size），只对当前页做前端过滤会给出错误的筛选结果和数量，
- * 因此宁可不放这个控件，也不放一个会骗人的假控件。
+ * 订阅状态和类型在服务端过滤后分页；筛选后的序号不表示原榜单名次。
  */
 export function RankPage() {
   const [source, setSource] = useState(RANK_SOURCES[0].value);
   const [period, setPeriod] = useState(RANK_SOURCES[0].defaultPeriod);
+  const [subscription, setSubscription] = useState("");
+  const [videoType, setVideoType] = useState("");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
 
   const currentSource = RANK_SOURCES.find((item) => item.value === source) ?? RANK_SOURCES[0];
 
   const query = useQuery({
-    queryKey: ["ranks", period, page, pageSize],
-    queryFn: () => apiRequest<Page<Media>>(`/ranks?type=${period}&page=${page}&page_size=${pageSize}`),
+    queryKey: ["ranks", period, page, pageSize, subscription, videoType],
+    queryFn: () => apiRequest<Page<Media>>(`/ranks?type=${period}&page=${page}&page_size=${pageSize}${catalogFilterParams(subscription, videoType)}`),
   });
   const items = query.data?.items ?? [];
   const total = query.data?.total ?? 0;
@@ -122,7 +123,7 @@ export function RankPage() {
     <section>
       <PageHeader title="榜单" />
       <div className="page-toolbar">
-        <div className="rank-filter-bar">
+        <div className="rank-filter-bar filter-toolbar" role="search">
           <Grid.Row gutter={[12, 12]} justify="start" align="center">
             <Grid.Col xs={24} sm={12} md={8} xl={4}>
               <div className="filter-field"><span className="filter-label">榜单来源</span><div className="rank-filter" role="group" aria-label="榜单来源">
@@ -154,6 +155,8 @@ export function RankPage() {
               </div>
               </div>
             </Grid.Col>
+          <CatalogFilters subscription={subscription} videoType={videoType} onSubscriptionChange={(value) => { setSubscription(value); setPage(1); }} onVideoTypeChange={(value) => { setVideoType(value); setPage(1); }} />
+          <Grid.Col xs={24} sm={12} md={8} xl={4}><div className="filter-actions"><Button type="primary" onClick={() => { if (page === 1) void query.refetch(); else setPage(1); }}>搜索</Button><Button onClick={() => { if (!subscription && !videoType && page === 1) void query.refetch(); setSubscription(""); setVideoType(""); setPage(1); }}>重置</Button></div></Grid.Col>
           </Grid.Row>
         </div>
       </div>
@@ -167,7 +170,7 @@ export function RankPage() {
         onPageChange={setPage}
         onPageSizeChange={changePageSize}
         columns="wide"
-        renderMeta={(_media, index) => <div className="code-card-meta">第 {rankOf(index)} 名</div>}
+        renderMeta={(_media, index) => <div className="code-card-meta">{subscription || videoType ? "筛选结果第 " : "第 "}{rankOf(index)}{subscription || videoType ? " 项" : " 名"}</div>}
       />
     </section>
   );

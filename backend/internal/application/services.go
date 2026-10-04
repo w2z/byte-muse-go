@@ -50,9 +50,8 @@ func NewCatalogServiceWithTranslation(repository ports.MediaRepository, translat
 
 // List returns one validated page while preserving the repository's total count.
 func (s *CatalogService) List(ctx context.Context, page, pageSize int, query ports.MediaListQuery) (Page[domain.Media], error) {
-	query.VideoType = strings.TrimSpace(query.VideoType)
-	if query.VideoType != "" && query.VideoType != "unknown" && !domain.ValidVideoType(query.VideoType) {
-		return Page[domain.Media]{}, ErrInvalidVideoType
+	if err := validateMediaFilters(&query); err != nil {
+		return Page[domain.Media]{}, err
 	}
 	if err := validatePagination(page, pageSize); err != nil {
 		return Page[domain.Media]{}, err
@@ -415,4 +414,13 @@ func nonNil[T any](items []T) []T {
 		return []T{}
 	}
 	return items
+}
+
+// validateMediaFilters 统一所有影片视图的类型校验，unknown 表示未分类。
+func validateMediaFilters(query *ports.MediaListQuery) error {
+	query.VideoType = strings.TrimSpace(query.VideoType)
+	if query.VideoType != "" && query.VideoType != "unknown" && !domain.ValidVideoType(query.VideoType) {
+		return ErrInvalidVideoType
+	}
+	return nil
 }

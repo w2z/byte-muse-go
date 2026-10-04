@@ -6,9 +6,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 // TestMediaTypeFilter 验证真实存储、HTTP 参数、分页总数、组合筛选及未知类型拒绝。
@@ -74,5 +76,75 @@ func TestMediaTypeFilter(t *testing.T) {
 	}
 	if _, err = store.SQLDB().Exec(`UPDATE media SET video_type='invalid' WHERE id='0'`); err == nil {
 		t.Fatal("database accepted invalid type")
+	}
+}
+
+// TestCatalogViewFilters 验证三个入口在服务端组合筛选、分页及统计，推荐允许选择已订阅影片。
+func TestCatalogViewFilters(t *testing.T) {
+	ctx := context.Background()
+	store, err := database.Open(ctx, database.Config{Dialect: database.DialectSQLite, SQLitePath: filepath.Join(t.TempDir(), "views.db")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err = store.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for i, typ := range []any{"censored", "censored", "uncensored", nil} {
+		id := fmt.Sprint(i)
+		status := "none"
+		if i < 2 {
+			status = "active"
+		}
+		if _, err = store.SQLDB().Exec(`INSERT INTO media(id,code,title,video_type,subscription_status,library_status,release_date,created_at,updated_at) VALUES(?,?,?,?,?,'unknown',?,'2026-10-04T00:00:00Z','2026-10-04T00:00:00Z')`, id, "TEST-"+id, "测试", typ, status, time.Now().Format("2006-01-02")); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = store.SQLDB().Exec(`INSERT INTO legacy_media_metadata(media_id,code,genres,legacy_status,legacy_mode) VALUES(?,?,'共同标签',?,'strict')`, id, "TEST-"+id, map[bool]string{true: "SUBSCRIBE", false: "UN_SUBSCRIBE"}[i < 2]); err != nil {
+			t.Fatal(err)
+		}
+		if i < 2 {
+			if _, err = store.SQLDB().Exec(`INSERT INTO subscriptions(id,media_id,status,mode,filter_json,idempotency_key,idempotency_hash,created_at,updated_at,version) VALUES(?,?,'active','strict','{}',?,?,'2026-10-04T00:00:00Z','2026-10-04T00:00:00Z',1)`, id, id, id, id); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if _, err = store.SQLDB().Exec(`INSERT INTO rank_entries(rank_type,position,code) VALUES('daily',?,?)`, i+1, "TEST-"+id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	service := application.NewCatalogQueryService(database.NewCatalogQueryRepository(store.SQLDB(), database.DialectSQLite))
+	for name, handler := range map[string]http.HandlerFunc{"rank": listRank(service), "release": listReleaseToday(service), "recommend": listRecommendations(service)} {
+		for _, tc := range []struct {
+			query               string
+			total, size, status int
+		}{
+			{"subscription=active&video_type=censored&page_size=1&page=2", 2, 1, 200},
+			{"subscription=none&video_type=unknown", 1, 1, 200},
+			{"subscription=active&video_type=uncensored", 0, 0, 200},
+			{"", 4, 4, 200}, {"video_type=invalid", 0, 0, 400},
+		} {
+			t.Run(name+tc.query, func(t *testing.T) {
+				response := httptest.NewRecorder()
+				handler(response, httptest.NewRequest("GET", "/?type=daily&"+tc.query, nil))
+				if response.Code != tc.status {
+					t.Fatalf("status=%d body=%s", response.Code, response.Body)
+				}
+				if tc.status != 200 {
+					return
+				}
+				var result struct {
+					Total int
+					Items []struct {
+						VideoType    *string `json:"video_type"`
+						Subscription string  `json:"subscription_status"`
+					}
+				}
+				if err = json.Unmarshal(response.Body.Bytes(), &result); err != nil {
+					t.Fatal(err)
+				}
+				if result.Total != tc.total || len(result.Items) != tc.size {
+					t.Fatalf("result=%s", response.Body)
+				}
+			})
+		}
 	}
 }

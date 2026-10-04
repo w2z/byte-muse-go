@@ -1,3 +1,5 @@
+import { Button, Grid } from "@arco-design/web-react";
+import { CatalogFilters, catalogFilterParams } from "../../shared/ui/CatalogFilters";
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { apiRequest, type Page } from "../../shared/api/client";
@@ -14,12 +16,14 @@ import { PageHeader } from "../../shared/ui/PageHeader";
  * 数据取自 GET /codes/recommend，分页由服务端裁决，这里只按页请求并展示总数。
  */
 export function RecommendPage() {
+  const [subscription, setSubscription] = useState("");
+  const [videoType, setVideoType] = useState("");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
   const query = useQuery({
-    queryKey: ["recommend", page, pageSize],
+    queryKey: ["recommend", page, pageSize, subscription, videoType],
     queryFn: () =>
-      apiRequest<Page<Media>>(`/codes/recommend?page=${page}&page_size=${pageSize}`),
+      apiRequest<Page<Media>>(`/codes/recommend?page=${page}&page_size=${pageSize}${catalogFilterParams(subscription, videoType)}`),
   });
   const items = query.data?.items ?? [];
   const total = query.data?.total ?? 0;
@@ -33,6 +37,10 @@ export function RecommendPage() {
   return (
     <section>
       <PageHeader title="推荐" />
+      <div className="filter-toolbar" role="search"><Grid.Row gutter={[12, 12]} justify="start" align="center">
+          <CatalogFilters subscription={subscription} videoType={videoType} onSubscriptionChange={(value) => { setSubscription(value); setPage(1); }} onVideoTypeChange={(value) => { setVideoType(value); setPage(1); }} />
+          <Grid.Col xs={24} sm={12} md={8} xl={4}><div className="filter-actions"><Button type="primary" onClick={() => { if (page === 1) void query.refetch(); else setPage(1); }}>搜索</Button><Button onClick={() => { if (!subscription && !videoType && page === 1) void query.refetch(); setSubscription(""); setVideoType(""); setPage(1); }}>重置</Button></div></Grid.Col>
+      </Grid.Row></div>
       <MediaCardGrid
         items={items}
         query={query}

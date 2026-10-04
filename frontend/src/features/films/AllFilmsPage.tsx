@@ -1,3 +1,4 @@
+import { CatalogFilters, videoTypeOptions } from "../../shared/ui/CatalogFilters";
 import { Button, Input, Select, Tag, Grid } from "@arco-design/web-react";
 import { IconSearch } from "@arco-design/web-react/icon";
 import { useQuery } from "@tanstack/react-query";
@@ -8,9 +9,6 @@ import { DEFAULT_PAGE_SIZE } from "../../shared/ui/ListPagination";
 import { MediaCardGrid } from "../../shared/ui/MediaCardGrid";
 import { PageHeader } from "../../shared/ui/PageHeader";
 
-const subscriptionOptions: { label: string; value: string }[] = [
-  { label: "全部订阅", value: "" }, { label: "已订阅", value: "active" }, { label: "未订阅", value: "none" },
-];
 const downloadOptions: { label: string; value: string }[] = [
   { label: "全部下载状态", value: "" }, { label: "排队", value: "queued" }, { label: "搜索中", value: "searching" }, { label: "已提交", value: "submitted" }, { label: "下载中", value: "downloading" }, { label: "已完成", value: "completed" }, { label: "失败", value: "failed" }, { label: "未知", value: "unknown" },
 ];
@@ -18,12 +16,6 @@ const libraryOptions: { label: string; value: string }[] = [
   { label: "全部媒体库状态", value: "" }, { label: "已入库", value: "present" }, { label: "未入库", value: "absent" }, { label: "未知", value: "unknown" },
 ];
 
-/** 类型由服务端字段筛选；未分类对应数据库 NULL。 */
-const videoTypeOptions = [
-  { label: "全部类型", value: "" }, { label: "有码", value: "censored" },
-  { label: "无码", value: "uncensored" }, { label: "无码破解", value: "uncensored_cracked" },
-  { label: "流出", value: "leaked" }, { label: "未分类", value: "unknown" },
-];
 
 /** 数据库中的完整影片目录，筛选条件由服务端分页查询。 */
 export function AllFilmsPage() {
@@ -78,13 +70,7 @@ export function AllFilmsPage() {
           <Grid.Col xs={24} sm={12} md={8} xl={4}>
             <div className="filter-labeled"><span className="filter-label">关键词</span><Input value={draft} onChange={setDraft} allowClear aria-label="搜索影片" placeholder="名称或番号" suffix={<IconSearch />} /></div>
           </Grid.Col>
-          <Grid.Col xs={24} sm={12} md={8} xl={4}>
-            <div className="filter-labeled"><span className="filter-label">订阅状态</span><Select aria-label="订阅状态筛选" value={subscription} onChange={(value) => changeFilter(setSubscription, value)} options={subscriptionOptions} />
-            </div>
-          </Grid.Col>
-          <Grid.Col xs={24} sm={12} md={8} xl={4}>
-            <div className="filter-labeled"><span className="filter-label">影片类型</span><Select aria-label="影片类型筛选" value={videoType} onChange={(value) => changeFilter(setVideoType, value)} options={videoTypeOptions} /></div>
-          </Grid.Col>
+          <CatalogFilters subscription={subscription} videoType={videoType} onSubscriptionChange={(value) => changeFilter(setSubscription, value)} onVideoTypeChange={(value) => changeFilter(setVideoType, value)} />
           <Grid.Col xs={24} sm={12} md={8} xl={4}>
             <div className="filter-labeled"><span className="filter-label">下载状态</span><Select aria-label="下载状态筛选" value={download} onChange={(value) => changeFilter(setDownload, value)} options={downloadOptions} /></div>
           </Grid.Col>

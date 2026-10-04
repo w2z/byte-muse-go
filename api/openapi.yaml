@@ -174,6 +174,14 @@ paths:
             type: string
             enum: [daily, weekly, monthly]
             default: monthly
+        - name: subscription
+          in: query
+          description: 与所有影片一致；空值或省略为全部订阅，active 已订阅，none 无活动订阅（含已取消）。分页和总数均在筛选后计算。
+          schema: {type: string, enum: ["", active, none]}
+        - name: video_type
+          in: query
+          description: 与所有影片一致；空值或省略为全部类型，unknown 匹配未分类（数据库 NULL），其余值对应影片类型。
+          schema: {type: string, enum: ["", censored, uncensored, uncensored_cracked, leaked, unknown]}
       responses:
         '200':
           description: 按数据库中榜单快照顺序返回媒体分页数据
@@ -189,6 +197,14 @@ paths:
       parameters:
         - $ref: '#/components/parameters/Page'
         - $ref: '#/components/parameters/PageSize'
+        - name: subscription
+          in: query
+          description: 与所有影片一致；空值或省略为全部订阅，active 已订阅，none 无活动订阅（含已取消）。分页和总数均在筛选后计算。
+          schema: {type: string, enum: ["", active, none]}
+        - name: video_type
+          in: query
+          description: 与所有影片一致；空值或省略为全部类型，unknown 匹配未分类（数据库 NULL），其余值对应影片类型。
+          schema: {type: string, enum: ["", censored, uncensored, uncensored_cracked, leaked, unknown]}
       responses:
         '200':
           description: 仅返回发布日期等于服务当前本地日期的数据库媒体分页数据
@@ -200,10 +216,18 @@ paths:
     get:
       operationId: listRecommendations
       summary: 查询推荐
-      description: 使用已订阅、已完成或已入库媒体建立偏好画像，对发行日期处于前后一个月窗口内的未订阅媒体打分：标签 ×1、演员 ×5（仅候选影片演员数不超过 3 时计入）、系列 ×2、厂牌 ×2，每个维度取出现次数最多的前 10 个值参与加权；仅返回得分大于 0 的结果，按得分、发行日期降序、内部 ID 升序排列。没有偏好数据时返回空列表，不注入 Mock 或演示数据。
+      description: 使用已订阅、已完成或已入库媒体建立偏好画像，对发行日期处于前后一个月窗口内符合订阅状态和类型筛选的媒体打分：标签 ×1、演员 ×5（仅候选影片演员数不超过 3 时计入）、系列 ×2、厂牌 ×2，每个维度取出现次数最多的前 10 个值参与加权；仅返回得分大于 0 的结果，按得分、发行日期降序、内部 ID 升序排列。没有偏好数据时返回空列表，不注入 Mock 或演示数据。
       parameters:
         - $ref: '#/components/parameters/Page'
         - $ref: '#/components/parameters/PageSize'
+        - name: subscription
+          in: query
+          description: 与所有影片一致；空值或省略为全部订阅，active 已订阅，none 无活动订阅（含已取消）。分页和总数均在筛选后计算。
+          schema: {type: string, enum: ["", active, none]}
+        - name: video_type
+          in: query
+          description: 与所有影片一致；空值或省略为全部类型，unknown 匹配未分类（数据库 NULL），其余值对应影片类型。
+          schema: {type: string, enum: ["", censored, uncensored, uncensored_cracked, leaked, unknown]}
       responses:
         '200':
           description: 根据数据库中的订阅、完成记录及媒体元数据计算的推荐分页数据；没有偏好数据时返回空列表
