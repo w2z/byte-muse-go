@@ -13,8 +13,8 @@ import { PageHeader } from "../../shared/ui/PageHeader";
 import { PageState } from "../../shared/ui/PageState";
 import { useFeedbackMessage } from "../../shared/ui/FeedbackMessage";
 
-/** 下载任务状态到公共标签色板的映射：完成是正常态，失败告警，其余（提交/下载中）都是进行中。 */
-function statusTone(status: DownloadTask["status"]): string {
+/** 下载器状态与内部阶段共用标签色板：完成为正常态，失败告警，其余为中性态。 */
+function statusTone(status: string): string {
   if (status === "completed") return "active";
   if (status === "failed") return "warn";
   return "idle";
@@ -26,6 +26,13 @@ const transferLabels: Record<string, string> = {
 
 const actionLabels: Record<DownloadAction, string> = { pause: "暂停", stop: "停止", resume: "继续", retry: "重试", delete: "删除任务", delete_files: "删除任务+文件" };
 const statusLabels: Record<DownloadTask["status"], string> = { queued: "排队中", searching: "搜索中", submitted: "已提交", downloading: "下载中", completed: "已完成", failed: "失败", unknown: "待核实" };
+
+/** 优先展示服务端同步的下载器状态；尚无回查结果时保留内部阶段，不推断下载是否完成。 */
+function DownloadStatus({ task }: { task: DownloadTask }) {
+  const status = task.transfer_status || task.status;
+  const label = task.transfer_status ? (transferLabels[status] ?? status) : statusLabels[task.status];
+  return <Tag className={`state-tag ${statusTone(status)}`}>{label}</Tag>;
+}
 
 /** 操作只消费后端能力，删除模式明确确认；同一行请求期间禁用全部按钮。 */
 function DownloadActions({ task, onChanged }: { task: DownloadTask; onChanged: (deleted?: boolean) => void }) {
@@ -188,8 +195,7 @@ export function DownloadListPage() {
                 : <span className="code-cell">{value || "—"}</span> },
               { title: "资源站", dataIndex: "source_site", render: (value: string | null) => value || "—" },
               { title: "下载器", dataIndex: "downloader", render: (value: string | null) => value || "—" },
-              { title: "状态", dataIndex: "status", render: (value: DownloadTask["status"]) => <Tag className={`state-tag ${statusTone(value)}`}>{statusLabels[value] ?? value}</Tag> },
-              { title: "传输状态", dataIndex: "transfer_status", render: (value: string | null) => value ? (transferLabels[value] ?? value) : "—" },
+              { title: "下载状态", key: "download_status", render: (_: unknown, task: DownloadTask) => <DownloadStatus task={task} /> },
               { title: "加入时间", dataIndex: "added_at", render: (value: string | null) => value ? dayjs(value).format("YYYY-MM-DD HH:mm") : "—" },
               { title: "完成时间", dataIndex: "completed_at", render: (value: string | null) => value ? dayjs(value).format("YYYY-MM-DD HH:mm") : "—" },
               {

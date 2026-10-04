@@ -126,11 +126,20 @@ test("重置清空草稿和已应用条件并查询全部任务", async () => {
   expect(control.textContent).toContain("全部状态");
 });
 
-test("传输状态以中文显示", async () => {
-  responseItems = [{ id: "d1", media_id: "m1", status: "submitted", transfer_status: "paused" }];
+test.each([["paused", "暂停"], ["stopped", "停止"], ["downloading", "下载中"], ["completed", "下载完成"], ["failed", "下载失败"]])("下载状态以下载器的 %s 为准，不显示内部已提交阶段", async (transferStatus, label) => {
+  responseItems = [{ id: "d1", media_id: "m1", status: "submitted", transfer_status: transferStatus }];
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(<QueryClientProvider client={client}><DownloadListPage /></QueryClientProvider>);
-  expect(await screen.findByRole("cell", { name: "暂停" })).not.toBeNull();
+  expect(await screen.findByRole("cell", { name: label })).not.toBeNull();
+  expect(screen.queryByRole("cell", { name: "已提交" })).toBeNull();
+  expect(screen.queryByText("传输状态", { exact: true })).toBeNull();
+});
+
+test("尚无下载器状态时保留搜索阶段", async () => {
+  responseItems = [{ id: "d1", media_id: "m1", status: "searching", transfer_status: null }];
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(<QueryClientProvider client={client}><DownloadListPage /></QueryClientProvider>);
+  expect(await screen.findByRole("cell", { name: "搜索中" })).not.toBeNull();
 });
 
 test("影片显示番号而不是内部媒体ID，并展示失败操作", async () => {
