@@ -74,14 +74,14 @@ export function ScanTaskControls({ task, pending, onAction, error }: {
  * 扫描与生成共用的进度展示：只在任务进行中显示进度条，结束后的结论由调用方的结果或失败文案表达。
  * 服务重启导致的中断不是进度而是状态提示，单独保留一句可操作说明。
  */
-export function ScanProgressDisplay({ progress, label, state }: {
-  progress?: ScanProgress; label: string; state?: ScanTask<unknown>["state"];
+export function ScanProgressDisplay({ progress, label, state, processingText = "处理中" }: {
+  progress?: ScanProgress; label: string; state?: ScanTask<unknown>["state"]; processingText?: string;
 }) {
   if (state === "interrupted") return <span className="settings-field-description">服务重启，任务已中断，请重新启动</span>;
   if (!progress || !isScanTaskActive(state)) return null;
   const phase = state === "paused" ? "已暂停" : state === "pausing" ? "正在暂停" : state === "canceling" ? "正在取消"
     : progress.phase === "waiting" ? "等待处理" : progress.phase === "discovering" ? "扫描中，总数持续更新"
-      : progress.phase === "cooling" ? "115 访问受限，等待恢复" : progress.phase === "finalizing" || progress.phase === "completed" ? "正在汇总结果" : "处理中";
+      : progress.phase === "cooling" ? "115 访问受限，等待恢复" : progress.phase === "finalizing" || progress.phase === "completed" ? "正在汇总结果" : processingText;
   return (
     <div className="settings-scan-progress" aria-label={`${label}处理进度`}>
       <span role="status">{phase}</span>

@@ -75,7 +75,12 @@ func (s *Pan115LibraryService) Scan(ctx context.Context) (domain.Pan115LibrarySc
 		discoveryCtx = pan115.WithCooldownReporter(discoveryCtx, func(wait time.Duration) {
 			reportScanProgress(ctx, "cooling", processed, total, pan115CooldownNotice(directory.Path, wait))
 		})
-		files, scanErr := walkPan115Files(discoveryCtx, s.pan115, directory.ID, strmFileFilter{formats: defaultStrmFormats})
+		// 扫描入库仍沿用先收集后入库：整目录文件集是识别影片的输入，缺一个文件就会漏片。
+		var files []strmSourceFile
+		scanErr := walkPan115Files(discoveryCtx, s.pan115, directory.ID, strmFileFilter{formats: defaultStrmFormats}, func(file strmSourceFile) error {
+			files = append(files, file)
+			return nil
+		})
 		if err := scanCheckpoint(ctx); err != nil {
 			return result, err
 		}

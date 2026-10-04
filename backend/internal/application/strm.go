@@ -311,24 +311,29 @@ func (s *StrmService) Scan(ctx context.Context, playBase string, mode domain.Str
 		if err := scanCheckpoint(ctx); err != nil {
 			return result, err
 		}
-		reportScanProgress(ctx, "discovering", processed, total, mapping.Path)
-		discoveryCtx := withScanDiscovery(ctx, func() {
-			total++
-			reportScanProgress(ctx, "discovering", processed, total, mapping.Path)
-		})
-		// 115 限流时把冷却反馈到任务进度：冷却期间不再产生新请求，任务仍在运行。
-		discoveryCtx = pan115.WithCooldownReporter(discoveryCtx, func(wait time.Duration) {
-			reportScanProgress(ctx, "cooling", processed, total, pan115CooldownNotice(mapping.Path, wait))
-		})
-		files, scanErr := s.collectMappingFiles(discoveryCtx, mapping)
-		if err := scanCheckpoint(ctx); err != nil {
-			return result, err
+		// 边扫描边写：先确认网盘来源可用（不发起请求），再清理本地目录，
+		// 然后在遍历过程中逐个写入，使限流或中断只影响尚未扫描到的部分。
+		walk, walkErr := s.mappingWalk(ctx, mapping)
+		if walkErr != nil {
+			result.Mappings = append(result.Mappings, strmMappingFailure(mapping, walkErr))
+			continue
 		}
 		reportScanProgress(ctx, "processing", processed, total, mapping.Path)
-		entry := s.scanMapping(ctx, root, mapping, base, files, scanErr, mode, func() {
+		walkCtx := withScanDiscovery(ctx, func() {
+			total++
+			reportScanProgress(ctx, "processing", processed, total, mapping.Path)
+		})
+		// 115 限流时把冷却反馈到任务进度：冷却期间不再产生新请求，任务仍在运行。
+		walkCtx = pan115.WithCooldownReporter(walkCtx, func(wait time.Duration) {
+			reportScanProgress(ctx, "cooling", processed, total, pan115CooldownNotice(mapping.Path, wait))
+		})
+		entry := s.scanMapping(walkCtx, root, mapping, base, mode, walk, func() {
 			processed++
 			reportScanProgress(ctx, "processing", processed, total, mapping.Path)
 		})
+		if err := scanCheckpoint(ctx); err != nil {
+			return result, err
+		}
 		result.Mappings = append(result.Mappings, entry)
 		result.Files += entry.Files
 		result.Deleted += entry.Deleted
@@ -387,37 +392,49 @@ func (s *StrmService) PlayURL(ctx context.Context, kind, fileID, userAgent strin
 	}
 }
 
-// collectMappingFiles 统计一条映射的媒体文件，沿用相同过滤规则；目录失败时不处理不完整清单。
-func (s *StrmService) collectMappingFiles(ctx context.Context, mapping domain.StrmMapping) ([]strmSourceFile, error) {
+// strmFileVisit 接收一个符合过滤条件的媒体文件；返回错误表示调用方要求停止遍历。
+type strmFileVisit func(strmSourceFile) error
+
+// strmWalk 是一条映射的网盘遍历入口：对每个符合过滤条件的媒体文件调用 visit。
+// 生成 strm 与 115 事件同步共用它，使过滤、分页与中断规则只有一处实现。
+type strmWalk func(ctx context.Context, visit strmFileVisit) error
+
+// mappingWalk 校验一条映射的网盘来源并返回遍历入口。
+// 校验发生在清理本地目录之前：来源不可用时只报告原因，不清空本地已有的 strm 文件。
+func (s *StrmService) mappingWalk(ctx context.Context, mapping domain.StrmMapping) (strmWalk, error) {
 	filter := newStrmFileFilter(mapping)
 	switch mapping.Kind {
 	case domain.StrmKindPan115:
 		if s.pan115 == nil {
 			return nil, errors.New("115 网盘服务尚未就绪")
 		}
-		return walkPan115Files(ctx, s.pan115, mapping.ID, filter)
+		api := s.pan115
+		return func(walkCtx context.Context, visit strmFileVisit) error {
+			return walkPan115Files(walkCtx, api, mapping.ID, filter, visit)
+		}, nil
 	case domain.StrmKindCloudDrive2:
 		if s.cloud == nil || !s.cloud.Configured(ctx) {
 			return nil, errors.New("CloudDrive2 尚未配置")
 		}
-		return s.walkCloudDrive(ctx, mapping.ID, filter)
+		return func(walkCtx context.Context, visit strmFileVisit) error {
+			return s.walkCloudDrive(walkCtx, mapping.ID, filter, visit)
+		}, nil
 	default:
 		return nil, fmt.Errorf("不支持的网盘类型 %q", mapping.Kind)
 	}
 }
 
-// scanMapping 处理已经统计的文件清单；成功、跳过和失败均计入已处理数。
+// strmMappingFailure 构造一条尚未开始遍历就失败的映射结果：只带原因，不涉及本地文件。
+func strmMappingFailure(mapping domain.StrmMapping, err error) domain.StrmScanMapping {
+	return domain.StrmScanMapping{Kind: mapping.Kind, Path: mapping.Path, LocalPath: mapping.LocalPath, Message: err.Error()}
+}
+
+// scanMapping 把一条映射的网盘文件写入本地 strm 目录，遍历到符合过滤条件的文件就立即写入。
 // 全量先清理映射本地目录下的 strm 内容，增量跳过本地已存在的文件，内容比对方式只在内容变化时改写，
-// 三种方式共用同一套过滤、播放地址与失败计数规则。
-func (s *StrmService) scanMapping(ctx context.Context, root string, mapping domain.StrmMapping, base string, files []strmSourceFile, err error, mode domain.StrmGenerateMode, advance func()) domain.StrmScanMapping {
+// 三种方式共用同一套过滤、播放地址与失败计数规则；成功、跳过和失败均计入已处理数。
+// 遍历中断（限流、网络失败或取消）只影响尚未扫描到的文件，已写入的 strm 保留，中断原因写入 message。
+func (s *StrmService) scanMapping(ctx context.Context, root string, mapping domain.StrmMapping, base string, mode domain.StrmGenerateMode, walk strmWalk, advance func()) domain.StrmScanMapping {
 	entry := domain.StrmScanMapping{Kind: mapping.Kind, Path: mapping.Path, LocalPath: mapping.LocalPath}
-	if err != nil {
-		entry.Message = err.Error()
-		for range files {
-			advance()
-		}
-		return entry
-	}
 	target, _, err := resolveStrmPath(root, mapping.LocalPath)
 	if err == nil && mode == domain.StrmGenerateFull {
 		entry.Deleted, err = clearStrmContentContext(ctx, root, target)
@@ -429,32 +446,23 @@ func (s *StrmService) scanMapping(ctx context.Context, root string, mapping doma
 	}
 	if err != nil {
 		entry.Message = "准备本地 strm 目录失败：" + err.Error()
-		// 暂停/取消不会把尚未尝试的媒体项记为已处理失败。
-		if ctx.Err() != nil {
-			return entry
-		}
-		entry.Files, entry.Failed = len(files), len(files)
-		for range files {
-			advance()
-		}
 		return entry
 	}
-	for _, file := range files {
+	walkErr := walk(ctx, func(file strmSourceFile) error {
 		if err := scanCheckpoint(ctx); err != nil {
-			entry.Message = err.Error()
-			return entry
+			return err
 		}
 		entry.Files++
 		if strings.ContainsAny(file.Name, `/\`) {
 			entry.Failed++
 			advance()
-			continue
+			return nil
 		}
 		absolute := filepath.Join(target, filepath.FromSlash(file.Directory), file.Name+".strm")
 		if !withinStrmRoot(root, absolute) {
 			entry.Failed++
 			advance()
-			continue
+			return nil
 		}
 		identifier := file.ID
 		if mapping.Kind == domain.StrmKindPan115 {
@@ -463,7 +471,7 @@ func (s *StrmService) scanMapping(ctx context.Context, root string, mapping doma
 				entry.Failed++
 				entry.Message = "115 文件缺少 pick_code，无法生成播放链接"
 				advance()
-				continue
+				return nil
 			}
 		}
 		if mode == domain.StrmGenerateIncremental {
@@ -472,25 +480,34 @@ func (s *StrmService) scanMapping(ctx context.Context, root string, mapping doma
 				entry.Failed++
 				entry.Message = "读取本地 strm 文件失败：" + statErr.Error()
 				advance()
-				continue
+				return nil
 			}
 			if exists {
 				entry.Unchanged++
 				advance()
-				continue
+				return nil
 			}
 		}
-		created, changed, err := writeStrmFile(absolute, strmPlayURL(base, mapping.Kind, identifier)+"\n")
+		created, changed, writeErr := writeStrmFile(absolute, strmPlayURL(base, mapping.Kind, identifier)+"\n")
 		switch {
-		case err != nil:
+		case writeErr != nil:
 			entry.Failed++
-			entry.Message = "写入 strm 文件失败：" + err.Error()
+			entry.Message = "写入 strm 文件失败：" + writeErr.Error()
 		case created:
 			entry.Created++
 		case !changed:
 			entry.Unchanged++
 		}
 		advance()
+		return nil
+	})
+	if walkErr != nil {
+		// 中断原因放在最前：它解释了本次结果为何不完整，单文件提示保留在后。
+		if entry.Message == "" {
+			entry.Message = walkErr.Error()
+		} else {
+			entry.Message = walkErr.Error() + "；" + entry.Message
+		}
 	}
 	return entry
 }
@@ -500,11 +517,10 @@ type pan115FileAPI interface {
 	Files(ctx context.Context, directoryID string, offset, limit int) (domain.Pan115FilePage, error)
 }
 
-// walkPan115Files 递归收集 115 媒体文件；保留 ID 供扫描入库，pick_code 供生成播放链接。
-// 每页固定读取 pan115FilePageLimit 条并按 HasMore 翻页，返回的 Directory 是相对扫描根目录的路径。
+// walkPan115Files 递归遍历 115 媒体文件；保留 ID 供扫描入库，pick_code 供生成播放链接。
+// 每页固定读取 pan115FilePageLimit 条并按 HasMore 翻页，传给 visit 的 Directory 是相对扫描根目录的路径。
 // 生成 strm 与扫描入库共用这一份递归实现，避免两条链路的分页与格式过滤规则漂移。
-func walkPan115Files(ctx context.Context, api pan115FileAPI, rootID string, filter strmFileFilter) ([]strmSourceFile, error) {
-	var collected []strmSourceFile
+func walkPan115Files(ctx context.Context, api pan115FileAPI, rootID string, filter strmFileFilter, visit strmFileVisit) error {
 	var walk func(directoryID, relative string) error
 	walk = func(directoryID, relative string) error {
 		for offset := 0; ; {
@@ -531,8 +547,11 @@ func walkPan115Files(ctx context.Context, api pan115FileAPI, rootID string, filt
 				if !filter.acceptFile(file.Name, file.Size) {
 					continue
 				}
-				collected = append(collected, strmSourceFile{ID: file.ID, PickCode: file.PickCode, Name: file.Name, Directory: relative})
+				// 先记发现再交给调用方处理，保证进度里总数不少于已处理数。
 				reportScanDiscovery(ctx)
+				if err := visit(strmSourceFile{ID: file.ID, PickCode: file.PickCode, Name: file.Name, Directory: relative}); err != nil {
+					return err
+				}
 			}
 			if !page.HasMore || len(page.Files) == 0 {
 				return nil
@@ -540,14 +559,12 @@ func walkPan115Files(ctx context.Context, api pan115FileAPI, rootID string, filt
 			offset += len(page.Files)
 		}
 	}
-	err := walk(strings.TrimSpace(rootID), "")
-	return collected, err
+	return walk(strings.TrimSpace(rootID), "")
 }
 
-// walkCloudDrive 递归收集 CloudDrive2 目录下的媒体文件。
+// walkCloudDrive 递归遍历 CloudDrive2 目录下的媒体文件。
 // CD2 的条目 ID 不保证可直接播放，这里统一用绝对路径作为播放标识。
-func (s *StrmService) walkCloudDrive(ctx context.Context, rootPath string, filter strmFileFilter) ([]strmSourceFile, error) {
-	var collected []strmSourceFile
+func (s *StrmService) walkCloudDrive(ctx context.Context, rootPath string, filter strmFileFilter, visit strmFileVisit) error {
 	var walk func(directory, relative string) error
 	walk = func(directory, relative string) error {
 		if err := scanCheckpoint(ctx); err != nil {
@@ -577,13 +594,14 @@ func (s *StrmService) walkCloudDrive(ctx context.Context, rootPath string, filte
 			if !filter.acceptFile(item.Name, item.Size) {
 				continue
 			}
-			collected = append(collected, strmSourceFile{ID: full, Name: item.Name, Directory: relative})
 			reportScanDiscovery(ctx)
+			if err := visit(strmSourceFile{ID: full, Name: item.Name, Directory: relative}); err != nil {
+				return err
+			}
 		}
 		return nil
 	}
-	err := walk(strings.TrimSpace(rootPath), "")
-	return collected, err
+	return walk(strings.TrimSpace(rootPath), "")
 }
 
 // refreshEmby 按设置触发一次 Emby 媒体库刷新；未开启或未配置时不做任何外部请求。

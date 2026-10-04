@@ -425,7 +425,11 @@ func TestScanMissingPickCode(t *testing.T) {
 		"STRM_PATHS": strmTestMappings(t, []domain.StrmMapping{{Kind: "115", ID: "100", Path: "/影片", LocalPath: "/movies"}}),
 	}
 	service := newStrmTestService(t, root, pan115, nil, values)
-	files, err := walkPan115Files(context.Background(), pan115, "100", strmFileFilter{formats: defaultStrmFormats})
+	var files []strmSourceFile
+	err := walkPan115Files(context.Background(), pan115, "100", strmFileFilter{formats: defaultStrmFormats}, func(file strmSourceFile) error {
+		files = append(files, file)
+		return nil
+	})
 	if err != nil || len(files) != 2 || files[0].ID != "f1" || files[1].ID != "f2" || files[1].PickCode != "pc-2" {
 		t.Fatalf("扫描标识未保留: %+v err=%v", files, err)
 	}
@@ -726,10 +730,14 @@ func TestWalkCloudDriveAppliesFilter(t *testing.T) {
 		},
 	}}
 	service := newStrmTestService(t, t.TempDir(), nil, cloud, map[string]string{})
-	files, err := service.walkCloudDrive(context.Background(), "/115/影片", strmFileFilter{
+	var files []strmSourceFile
+	err := service.walkCloudDrive(context.Background(), "/115/影片", strmFileFilter{
 		formats:   []string{"mkv"},
 		minSizeMB: 100,
 		exclude:   []domain.StrmExcludeKeyword{{Mode: domain.StrmExcludeModePrefix, Value: "trailer"}},
+	}, func(file strmSourceFile) error {
+		files = append(files, file)
+		return nil
 	})
 	if err != nil {
 		t.Fatalf("遍历 CloudDrive2 目录失败: %v", err)
