@@ -32,12 +32,8 @@ func TestScanProgressCountsFiles(t *testing.T) {
 			halfway := false
 			dynamic := false
 			for _, p := range updates {
-				// 扫描入库先发现后处理：发现阶段 2/4 即 50%。
-				if kind == "library" && p.Phase == "discovering" && p.Processed == 2 && p.Total == 4 && p.Percent == 50 {
-					dynamic = true
-				}
-				// strm 边扫描边写：处理中总数随发现增长到 4、已处理 3 时进度 75%。
-				if kind == "strm" && p.Phase == "processing" && p.Processed == 3 && p.Total == 4 && p.Percent == 75 {
+				// 扫描入库与 strm 生成都是边扫描边处理：处理中总数随发现增长到 4、已处理 3 时进度 75%。
+				if p.Phase == "processing" && p.Processed == 3 && p.Total == 4 && p.Percent == 75 {
 					dynamic = true
 				}
 				if p.Phase == "processing" && p.Processed == 1 && p.Total == 2 && p.Percent == 50 {

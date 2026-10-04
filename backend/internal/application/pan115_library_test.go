@@ -158,8 +158,19 @@ func TestPan115LibraryScanRecursesWithPageLimit(t *testing.T) {
 	if got, want := result.Created, 1157; got != want {
 		t.Fatalf("新建影片数 %d，期望 %d", got, want)
 	}
-	if len(writer.batches) != 1 {
-		t.Fatalf("扫描目录只有一个，应只登记一批，实际 %d", len(writer.batches))
+	// 边扫描边入库：1157 部影片按 libraryMarkBatchSize 分批提交，而不是遍历结束后一次写入。
+	if got, want := len(writer.batches), (1157+libraryMarkBatchSize-1)/libraryMarkBatchSize; got != want {
+		t.Fatalf("登记批次数 %d，期望 %d", got, want)
+	}
+	registered := 0
+	for _, batch := range writer.batches {
+		if len(batch) > libraryMarkBatchSize {
+			t.Fatalf("单批 %d 条超过上限 %d", len(batch), libraryMarkBatchSize)
+		}
+		registered += len(batch)
+	}
+	if registered != 1157 {
+		t.Fatalf("登记影片数 %d，期望 1157", registered)
 	}
 	if got := writer.batches[0][0]; got.Code != "SSIS-00001" || got.Title != "SSIS-00001" {
 		t.Fatalf("登记项不符：%+v", got)

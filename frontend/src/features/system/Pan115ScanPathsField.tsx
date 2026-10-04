@@ -124,7 +124,7 @@ export function Pan115LibraryScanAction({ value }: { value: Pan115ScanPath[] }) 
           扫描使用已保存的扫描目录；修改后请先保存设置再扫描。
         </span>
       </div>
-      <ScanProgressDisplay state={task?.state} label="扫描" progress={progress} />
+      <ScanProgressDisplay state={task?.state} label="扫描" processingText="扫描中，边扫描边入库" progress={progress} />
       {scan.isError ? (
         <span className="settings-field-description">扫描失败：{scan.error.message}</span>
       ) : scan.data ? (

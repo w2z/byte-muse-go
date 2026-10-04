@@ -16,6 +16,10 @@ import (
 // ErrPan115ScanNotConfigured 表示设置页尚未配置任何 115 扫描目录。
 var ErrPan115ScanNotConfigured = errors.New("尚未配置 115 扫描目录")
 
+// libraryMarkBatchSize 是扫描入库一次写入媒体库的最大影片数。
+// 边扫描边入库按批提交：中断最多丢失最后不足一批的识别结果，而不是整个目录。
+const libraryMarkBatchSize = 100
+
 // Pan115LibraryService 把 PAN115_SCAN_PATHS 里的 115 目录递归扫描后登记到媒体库。
 //
 // 它只依赖 115 目录读取与媒体库登记两个端口：扫描不触发采集、订阅或下载，
@@ -66,26 +70,20 @@ func (s *Pan115LibraryService) Scan(ctx context.Context) (domain.Pan115LibrarySc
 		if err := scanCheckpoint(ctx); err != nil {
 			return result, err
 		}
-		reportScanProgress(ctx, "discovering", processed, total, directory.Path)
-		discoveryCtx := withScanDiscovery(ctx, func() {
+		reportScanProgress(ctx, "processing", processed, total, directory.Path)
+		scanCtx := withScanDiscovery(ctx, func() {
 			total++
-			reportScanProgress(ctx, "discovering", processed, total, directory.Path)
+			reportScanProgress(ctx, "processing", processed, total, directory.Path)
 		})
 		// 115 限流时把冷却反馈到任务进度：冷却期间不再产生新请求，任务仍在运行。
-		discoveryCtx = pan115.WithCooldownReporter(discoveryCtx, func(wait time.Duration) {
+		scanCtx = pan115.WithCooldownReporter(scanCtx, func(wait time.Duration) {
 			reportScanProgress(ctx, "cooling", processed, total, pan115CooldownNotice(directory.Path, wait))
 		})
-		// 扫描入库仍沿用先收集后入库：整目录文件集是识别影片的输入，缺一个文件就会漏片。
-		var files []strmSourceFile
-		scanErr := walkPan115Files(discoveryCtx, s.pan115, directory.ID, strmFileFilter{formats: defaultStrmFormats}, func(file strmSourceFile) error {
-			files = append(files, file)
-			return nil
-		})
-		if err := scanCheckpoint(ctx); err != nil {
-			return result, err
-		}
-		reportScanProgress(ctx, "processing", processed, total, directory.Path)
-		entry := s.scanDirectory(ctx, directory, files, scanErr, func() {
+		// 边扫描边入库：遍历到符合格式的文件就立即识别并分批登记，
+		// 限流或取消只影响尚未扫描到的部分，已入库结果保留。
+		entry := s.scanDirectory(scanCtx, directory, func(walkCtx context.Context, visit strmFileVisit) error {
+			return walkPan115Files(walkCtx, s.pan115, directory.ID, strmFileFilter{formats: defaultStrmFormats}, visit)
+		}, func() {
 			processed++
 			reportScanProgress(ctx, "processing", processed, total, directory.Path)
 		})
@@ -102,58 +100,61 @@ func (s *Pan115LibraryService) Scan(ctx context.Context) (domain.Pan115LibrarySc
 	return result, nil
 }
 
-// scanDirectory 递归扫描一个 115 目录并把识别出的影片登记入库。
+// scanDirectory 边遍历一个 115 目录边把识别出的影片登记入库。
 // 同番号在一个目录里只登记一次：分卷、多格式文件属于同一部影片，媒体库按番号唯一。
-func (s *Pan115LibraryService) scanDirectory(ctx context.Context, directory pan115ScanPath, files []strmSourceFile, err error, advance func()) domain.Pan115LibraryDirectoryResult {
+// 每累计 libraryMarkBatchSize 部影片提交一次；遍历失败保留已提交结果，原因写入 Message。
+func (s *Pan115LibraryService) scanDirectory(ctx context.Context, directory pan115ScanPath, walk strmWalk, advance func()) domain.Pan115LibraryDirectoryResult {
 	entry := domain.Pan115LibraryDirectoryResult{ID: directory.ID, Path: directory.Path}
-	if err != nil {
-		entry.Message = err.Error()
-		for range files {
-			advance()
+	seen := make(map[string]bool)
+	pending := make([]ports.LibraryMediaItem, 0, libraryMarkBatchSize)
+	flush := func() error {
+		if len(pending) == 0 {
+			return nil
 		}
-		return entry
+		created, err := s.library.MarkLibraryPresent(ctx, pending)
+		if err != nil {
+			return fmt.Errorf("写入媒体库失败：%w", err)
+		}
+		entry.Created += created
+		pending = pending[:0]
+		return nil
 	}
-	entry.Files = len(files)
-	items := make([]ports.LibraryMediaItem, 0, len(files))
-	seen := make(map[string]bool, len(files))
-	for _, file := range files {
+	walkErr := walk(ctx, func(file strmSourceFile) error {
 		if err := scanCheckpoint(ctx); err != nil {
-			entry.Message = err.Error()
-			return entry
+			return err
 		}
+		entry.Files++
 		code := domain.ExtractCode(file.Name)
 		if code == "" {
 			entry.Skipped++
 			advance()
-			continue
+			return nil
 		}
 		if seen[code] {
 			advance()
-			continue
+			return nil
 		}
 		seen[code] = true
 		// 标题兜底用去掉扩展名的文件名；真正的标题由采集链路补齐，这里不覆盖已有值。
 		title := strings.TrimSpace(strings.TrimSuffix(file.Name, filepath.Ext(file.Name)))
-		items = append(items, ports.LibraryMediaItem{
+		pending = append(pending, ports.LibraryMediaItem{
 			Code:      code,
 			Title:     title,
 			VideoType: domain.ClassifyVideoType(code, title, nil),
 		})
+		entry.Matched++
 		advance()
-	}
-	entry.Matched = len(items)
-	if entry.Matched == 0 {
+		if len(pending) >= libraryMarkBatchSize {
+			return flush()
+		}
+		return nil
+	})
+	if walkErr != nil {
+		entry.Message = walkErr.Error()
 		return entry
 	}
-	if err := scanCheckpoint(ctx); err != nil {
+	if err := flush(); err != nil {
 		entry.Message = err.Error()
-		return entry
 	}
-	created, err := s.library.MarkLibraryPresent(ctx, items)
-	if err != nil {
-		entry.Message = "写入媒体库失败：" + err.Error()
-		return entry
-	}
-	entry.Created = created
 	return entry
 }
