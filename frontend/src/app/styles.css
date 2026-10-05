@@ -132,7 +132,6 @@ body button.arco-btn[class]:focus-visible { box-shadow: none; }
 /* 顶栏版本标签：容器固定占位，版本请求返回前后右侧按钮位置不变。
    标签只做展示：不设置可选中（checkable），文字也不参与选中，避免被当成可勾选的筛选标签。 */
 .header-version { display: inline-flex; align-items: center; justify-content: flex-end; min-width: 82px; }
-.header-version-link { display: inline-flex; color: inherit; text-decoration: none; }
 .header-version-tag { margin: 0; font-variant-numeric: tabular-nums; user-select: none; }
 /* 版本角标：Badge 默认 inline-block，改 inline-flex 避免基线间隙影响标签垂直居中。 */
 .header-version-badge { display: inline-flex; }
