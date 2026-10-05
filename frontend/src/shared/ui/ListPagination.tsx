@@ -34,6 +34,7 @@ type ListPaginationProps = {
  * 服务端分页是权威：总数和当前页都来自接口返回，总页数由 total / pageSize 换算，不缓存跨页数据。
  * 总数、页码、每页条数统一交给 Arco Pagination 渲染（showTotal + 默认分页按钮 + sizeCanChange），
  * 列表页只负责把 pageSize 写进请求参数，不各自拼装分页 UI。
+ * 页长下拉挂载到 body，避免 Arco 默认挂在分页条内而被表格卡片的滚动与裁切容器截断。
  */
 export function ListPagination({ page, total, pageSize = DEFAULT_PAGE_SIZE, onChange, onPageSizeChange, plain = false, pageSizeOptions = PAGE_SIZE_OPTIONS }: ListPaginationProps) {
   return (
@@ -45,6 +46,7 @@ export function ListPagination({ page, total, pageSize = DEFAULT_PAGE_SIZE, onCh
         showTotal={(value) => `共 ${value} 条`}
         sizeCanChange
         sizeOptions={pageSizeOptions}
+        selectProps={{ getPopupContainer: () => document.body }}
         onChange={(nextPage, nextPageSize) => {
           // 改每页条数时 Arco 会额外派发一次 onChange(1, 新条数)，这里把两类变化拆开处理，
           // 让每个回调只表达一件事，避免重复触发同一批数据的两次请求。
