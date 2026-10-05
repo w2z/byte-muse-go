@@ -1,4 +1,4 @@
-import { Button, Input, Radio, Select, Switch, Tabs } from "@arco-design/web-react";
+import { Button, Input, InputTag, Radio, Select, Switch, Tabs } from "@arco-design/web-react";
 import { IconCheck, IconClose, IconLaunch, IconSave, IconUndo } from "@arco-design/web-react/icon";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Fragment, useEffect, useState, type ReactNode } from "react";
@@ -176,6 +176,15 @@ const scanPathsKey = "PAN115_SCAN_PATHS";
 const strmPathsKey = "STRM_PATHS";
 const strmPlayBaseKey = "STRM_PLAY_BASE";
 const strmEmbyRefreshKey = "STRM_EMBY_REFRESH";
+const strmDownloadEnableKey = "STRM_DOWNLOAD_ENABLE";
+const strmDownloadExtensionsKey = "STRM_DOWNLOAD_EXTENSIONS";
+const defaultDownloadExtensions = '["srt","ssa","ass","nfo","jpg","png"]';
+
+/** 后缀草稿保持为 JSON 字符串，空串沿用后端默认，显式 [] 保留为空列表。 */
+function downloadExtensionTags(raw: string): string[] {
+  try { return JSON.parse(raw || defaultDownloadExtensions) as string[]; }
+  catch { return []; }
+}
 
 /** 分组、顺序与字段命名对齐对标站的 /config。 */
 const groups: SettingGroup[] = [
@@ -492,6 +501,17 @@ const groups: SettingGroup[] = [
         key: strmPathsKey,
         label: "网盘strm映射",
         kind: "strm-paths",
+      },
+      {
+        key: strmDownloadEnableKey,
+        label: "下载媒体",
+        kind: "bool",
+      },
+      {
+        key: strmDownloadExtensionsKey,
+        label: "下载媒体",
+        kind: "text",
+        description: "生成 STRM 时下载这些后缀的文件，保留原文件名和目录结构，同时下载 5 个文件。增量生成跳过已有文件，全量生成重新下载。",
       },
       {
         key: strmPlayBaseKey,
@@ -1095,7 +1115,7 @@ export function SettingsPage() {
           ? values[field.key]
           : field.key === "LOG_RETENTION_DAYS"
             ? "30"
-            : "";
+            : field.key === strmDownloadExtensionsKey ? defaultDownloadExtensions : "";
         next[field.key] = field.kind === "bool" ? raw === "true" : raw;
         if (field.siteAuth) {
           const auth = field.siteAuth;
@@ -1175,6 +1195,7 @@ export function SettingsPage() {
       .find((item) => item.key === key);
     if (field?.kind === "bool") return "false";
     if (key === "LOG_RETENTION_DAYS") return "30";
+    if (key === strmDownloadExtensionsKey) return defaultDownloadExtensions;
     if (field && isStructuredField(field.kind)) return "";
     return "";
   };
@@ -1245,6 +1266,25 @@ export function SettingsPage() {
   };
 
   const renderField = (field: SettingField, group: SettingGroup) => {
+    if (field.key === strmDownloadEnableKey) return null;
+    if (field.key === strmDownloadExtensionsKey) {
+      return (
+        <div className="settings-field" key={field.key}>
+          <label className="settings-field-label" htmlFor="strm-download-enable">下载媒体</label>
+          <div className="settings-download-media">
+            <Switch id="strm-download-enable" aria-label="下载媒体"
+              checked={draft[strmDownloadEnableKey] === true}
+              onChange={(checked) => setValue(strmDownloadEnableKey, checked)} />
+            <InputTag aria-label="下载媒体后缀" disabled={draft[strmDownloadEnableKey] !== true}
+              value={downloadExtensionTags(String(draft[field.key] ?? ""))}
+              placeholder="输入后缀并按回车" allowClear saveOnBlur tokenSeparators={[",", "，", " "]}
+              validate={(value) => /^\.?[a-zA-Z0-9]{1,16}$/.test(String(value).trim()) && String(value).replace(/^\./, "").toLowerCase() !== "strm"}
+              onChange={(values) => setValue(field.key, JSON.stringify([...new Set(values.map((value) => String(value).trim().replace(/^\./, "").toLowerCase()))]))} />
+          </div>
+          <span className="settings-field-description">{field.description}</span>
+        </div>
+      );
+    }
     // BYPASS_ENGINE 与 BYPASS_URL 合并为“左侧选择、右侧地址”的单一控件。
     if (field.key === "BYPASS_ENGINE") return null;
     if (field.siteAuth) {

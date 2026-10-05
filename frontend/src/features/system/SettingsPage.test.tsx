@@ -31,6 +31,34 @@ function renderSettings() {
 }
 
 describe("设置页字段布局", () => {
+  it("下载媒体默认关闭，编辑后缀并保存后关闭仍保留标签", async () => {
+    const user = userEvent.setup();
+    let values: Record<string, string> = {};
+    vi.mocked(apiRequest).mockImplementation(async (_path, options) => {
+      if (options?.method === "PUT") values = { ...values, ...JSON.parse(String(options.body)).values };
+      return { database_driver: "sqlite", values: { ...values }, configured: {} };
+    });
+    renderSettings();
+    await user.click(await screen.findByRole("tab", { name: "网盘" }));
+    await user.click(screen.getByRole("tab", { name: "STRM 生成" }));
+    const toggle = screen.getByRole("switch", { name: "下载媒体" });
+    expect(toggle).not.toBeChecked();
+    expect(within(screen.getByLabelText("下载媒体后缀")).getByRole("textbox")).toBeDisabled();
+    expect(toggle.compareDocumentPosition(screen.getByLabelText("STRM文件播放地址")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    for (const suffix of ["srt", "ssa", "ass", "nfo", "jpg", "png"]) expect(screen.getByText(suffix, { exact: true })).toBeInTheDocument();
+    await user.click(toggle);
+    const tagInput = within(screen.getByLabelText("下载媒体后缀")).getByRole("textbox");
+    await user.type(tagInput, ".JPEG");
+    fireEvent.keyDown(tagInput, { key: "Enter", code: "Enter", keyCode: 13 });
+    expect(await screen.findByText("jpeg", { exact: true })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "保存设置" }));
+    await waitFor(() => expect(values.STRM_DOWNLOAD_ENABLE).toBe("true"));
+    expect(JSON.parse(values.STRM_DOWNLOAD_EXTENSIONS)).toEqual(["srt", "ssa", "ass", "nfo", "jpg", "png", "jpeg"]);
+    await user.click(screen.getByRole("switch", { name: "下载媒体" }));
+    await user.click(screen.getByRole("button", { name: "保存设置" }));
+    await waitFor(() => expect(values.STRM_DOWNLOAD_ENABLE).toBe("false"));
+    expect(JSON.parse(values.STRM_DOWNLOAD_EXTENSIONS)).toContain("jpeg");
+  });
   it("点击布尔选项文字可反复切换草稿，重置恢复原值", async () => {
     const user = userEvent.setup();
     renderSettings();

@@ -68,9 +68,11 @@ var rankTypes = []string{"daily", "weekly", "monthly"}
 // 以及生成后是否自动刷新 Emby 媒体库；本地根目录固定为 /strm。
 // 前端字段定义与此处共用同一组键名。
 const (
-	strmPathsSettingKey       = "STRM_PATHS"
-	strmPlayBaseSettingKey    = "STRM_PLAY_BASE"
-	strmEmbyRefreshSettingKey = "STRM_EMBY_REFRESH"
+	strmDownloadEnableSettingKey     = "STRM_DOWNLOAD_ENABLE"
+	strmDownloadExtensionsSettingKey = "STRM_DOWNLOAD_EXTENSIONS"
+	strmPathsSettingKey              = "STRM_PATHS"
+	strmPlayBaseSettingKey           = "STRM_PLAY_BASE"
+	strmEmbyRefreshSettingKey        = "STRM_EMBY_REFRESH"
 )
 
 // pan115ScanPathsSettingKey 是 115 扫描入库目录设置键；元素形如 {"id":"目录 ID","path":"展示用路径"}。
@@ -183,9 +185,11 @@ var writableSettings = map[string]settingSpec{
 	pan115ScanPathsSettingKey: {kind: settingJSONArray},
 
 	// strm：网盘目录与本地 strm 目录的映射，以及 strm 内容使用的对外基址。
-	strmPathsSettingKey:       {kind: settingJSONArray},
-	strmPlayBaseSettingKey:    {kind: settingText},
-	strmEmbyRefreshSettingKey: {kind: settingBool},
+	strmPathsSettingKey:              {kind: settingJSONArray},
+	strmDownloadEnableSettingKey:     {kind: settingBool},
+	strmDownloadExtensionsSettingKey: {kind: settingText},
+	strmPlayBaseSettingKey:           {kind: settingText},
+	strmEmbyRefreshSettingKey:        {kind: settingBool},
 
 	// 过滤
 	"DEFAULT_FILTER": {kind: settingJSON},
@@ -332,6 +336,14 @@ func (s *SettingsService) Update(ctx context.Context, values map[string]string) 
 				return domain.SystemSettings{}, err
 			}
 			value = encrypted
+		}
+		if key == strmDownloadExtensionsSettingKey {
+			extensions, err := parseStrmDownloadExtensions(value)
+			if err != nil {
+				return domain.SystemSettings{}, fmt.Errorf("%w: %s %s", ErrInvalidSetting, key, err)
+			}
+			encoded, _ := json.Marshal(extensions)
+			value = string(encoded)
 		}
 		items = append(items, ports.StoredSetting{Key: key, Value: value, IsSecret: spec.secret})
 	}

@@ -139,6 +139,10 @@ type StrmScanResult = {
   unchanged: number;
   failed: number;
   emby: { attempted: boolean; refreshed: boolean; message: string };
+  /** 独立统计真实文件下载；旧任务快照缺失时按零展示。 */
+  downloaded?: number;
+  download_skipped?: number;
+  download_failed?: number;
 };
 
 /** strm 生成方式；取值与后端 domain.StrmGenerateMode 一致，决定生成接口的 incremental 参数。 */
@@ -558,6 +562,8 @@ export function StrmGenerateAction({ value }: { value: StrmMapping[] }) {
             ? `共 ${scan.data.files} 个媒体文件，新增 ${scan.data.created} 个 strm，跳过本地已有 ${scan.data.unchanged} 个，失败 ${scan.data.failed} 个。`
             : `共 ${scan.data.files} 个媒体文件，清理本地 strm ${scan.data.deleted} 个，新增 ${scan.data.created} 个，失败 ${scan.data.failed} 个。`}
           {failedMappings.map((item) => ` ${item.path}：${item.message}`).join("")}
+          {(scan.data.downloaded || scan.data.download_skipped || scan.data.download_failed)
+            ? ` 媒体下载成功 ${scan.data.downloaded ?? 0} 个，跳过 ${scan.data.download_skipped ?? 0} 个，失败 ${scan.data.download_failed ?? 0} 个。` : ""}
           {scan.data.emby.refreshed
             ? " 已刷新 Emby 媒体库。"
             : scan.data.emby.message

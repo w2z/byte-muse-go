@@ -577,6 +577,10 @@ button.code-card-still-cell:hover img { opacity: .85; }
 }
 .settings-filter-row > .arco-switch { flex: 0 0 auto; margin: 0; }
 .settings-input-with-unit { display: block; }
+/* 下载开关位于标签框之前，标签框可收缩和换行，避免窄屏溢出。 */
+.settings-download-media { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.settings-download-media > [role="switch"] { flex: none; }
+.settings-download-media > :last-child { flex: 1; min-width: 0; }
 .settings-option-radio { display: flex; flex-direction: column; gap: 8px; }
 .settings-option-radio .arco-radio-group { display: flex; flex-wrap: wrap; gap: 8px var(--settings-radio-gap, 20px); }
 .settings-main-site-options { --settings-radio-gap: 8px; }

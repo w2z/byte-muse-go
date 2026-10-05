@@ -75,9 +75,10 @@ type strmSourceFile struct {
 // 生成 strm 用映射里的完整条件；扫描入库只关心格式，因此用同一份实现传入不同条件，
 // 避免「什么算视频」与「跳过哪些名称」在两条链路上各写一套判定。
 type strmFileFilter struct {
-	formats   []string
-	minSizeMB int
-	exclude   []domain.StrmExcludeKeyword
+	formats         []string
+	minSizeMB       int
+	exclude         []domain.StrmExcludeKeyword
+	downloadFormats []string
 }
 
 // newStrmFileFilter 由一条映射构造过滤器；formats 与 exclude 已由 parseStrmMappings 规范化。
@@ -122,7 +123,13 @@ func (f strmFileFilter) skipName(name string) bool {
 // acceptFile 判断一个文件是否应生成 strm：格式匹配、未命中排除关键字、体积不小于下限。
 // sizeBytes 为 0 表示网盘未返回体积，此时不按体积过滤，避免把整个目录误判成小文件而全部跳过。
 func (f strmFileFilter) acceptFile(name string, sizeBytes int64) bool {
-	if !isStrmMedia(name, f.formats) || f.skipName(name) {
+	if f.skipName(name) {
+		return false
+	}
+	if isStrmMedia(name, f.downloadFormats) {
+		return true
+	}
+	if !isStrmMedia(name, f.formats) {
 		return false
 	}
 	if f.minSizeMB <= 0 || sizeBytes <= 0 {
@@ -297,6 +304,10 @@ func (s *StrmService) Scan(ctx context.Context, playBase string, mode domain.Str
 	if len(mappings) == 0 {
 		return domain.StrmScanResult{}, fmt.Errorf("%w: 尚未配置网盘映射", ErrStrmNotConfigured)
 	}
+	downloadFormats, err := strmDownloadFormats(values)
+	if err != nil {
+		return domain.StrmScanResult{}, fmt.Errorf("%w: %s", ErrInvalidSetting, err)
+	}
 	root := s.root
 	base := strings.TrimRight(strings.TrimSpace(values[strmPlayBaseSettingKey]), "/")
 	if base == "" {
@@ -313,7 +324,7 @@ func (s *StrmService) Scan(ctx context.Context, playBase string, mode domain.Str
 		}
 		// 边扫描边写：先确认网盘来源可用（不发起请求），再清理本地目录，
 		// 然后在遍历过程中逐个写入，使限流或中断只影响尚未扫描到的部分。
-		walk, walkErr := s.mappingWalk(ctx, mapping)
+		walk, walkErr := s.mappingWalk(ctx, mapping, downloadFormats)
 		if walkErr != nil {
 			result.Mappings = append(result.Mappings, strmMappingFailure(mapping, walkErr))
 			continue
@@ -330,7 +341,7 @@ func (s *StrmService) Scan(ctx context.Context, playBase string, mode domain.Str
 		entry := s.scanMapping(walkCtx, root, mapping, base, mode, walk, func() {
 			processed++
 			reportScanProgress(ctx, "processing", processed, total, mapping.Path)
-		})
+		}, downloadFormats)
 		if err := scanCheckpoint(ctx); err != nil {
 			return result, err
 		}
@@ -340,6 +351,9 @@ func (s *StrmService) Scan(ctx context.Context, playBase string, mode domain.Str
 		result.Created += entry.Created
 		result.Unchanged += entry.Unchanged
 		result.Failed += entry.Failed
+		result.Downloaded += entry.Downloaded
+		result.DownloadSkipped += entry.DownloadSkipped
+		result.DownloadFailed += entry.DownloadFailed
 	}
 	reportScanProgress(ctx, "finalizing", processed, total, "")
 	if err := scanCheckpoint(ctx); err != nil {
@@ -401,8 +415,9 @@ type strmWalk func(ctx context.Context, visit strmFileVisit) error
 
 // mappingWalk 校验一条映射的网盘来源并返回遍历入口。
 // 校验发生在清理本地目录之前：来源不可用时只报告原因，不清空本地已有的 strm 文件。
-func (s *StrmService) mappingWalk(ctx context.Context, mapping domain.StrmMapping) (strmWalk, error) {
+func (s *StrmService) mappingWalk(ctx context.Context, mapping domain.StrmMapping, downloadFormats []string) (strmWalk, error) {
 	filter := newStrmFileFilter(mapping)
+	filter.downloadFormats = downloadFormats
 	switch mapping.Kind {
 	case domain.StrmKindPan115:
 		if s.pan115 == nil {
@@ -433,7 +448,7 @@ func strmMappingFailure(mapping domain.StrmMapping, err error) domain.StrmScanMa
 // 全量先清理映射本地目录下的 strm 内容，增量跳过本地已存在的文件，内容比对方式只在内容变化时改写，
 // 三种方式共用同一套过滤、播放地址与失败计数规则；成功、跳过和失败均计入已处理数。
 // 遍历中断（限流、网络失败或取消）只影响尚未扫描到的文件，已写入的 strm 保留，中断原因写入 message。
-func (s *StrmService) scanMapping(ctx context.Context, root string, mapping domain.StrmMapping, base string, mode domain.StrmGenerateMode, walk strmWalk, advance func()) domain.StrmScanMapping {
+func (s *StrmService) scanMapping(ctx context.Context, root string, mapping domain.StrmMapping, base string, mode domain.StrmGenerateMode, walk strmWalk, advance func(), downloadFormats []string) domain.StrmScanMapping {
 	entry := domain.StrmScanMapping{Kind: mapping.Kind, Path: mapping.Path, LocalPath: mapping.LocalPath}
 	target, _, err := resolveStrmPath(root, mapping.LocalPath)
 	if err == nil && mode == domain.StrmGenerateFull {
@@ -448,9 +463,27 @@ func (s *StrmService) scanMapping(ctx context.Context, root string, mapping doma
 		entry.Message = "准备本地 strm 目录失败：" + err.Error()
 		return entry
 	}
+	var downloads *strmDownloadPool
+	if len(downloadFormats) > 0 {
+		downloads = s.newDownloadPool(ctx, root, target, mapping.Kind, mode, func(outcome strmDownloadOutcome) {
+			switch {
+			case outcome.err != nil:
+				entry.DownloadFailed++
+				entry.Message = "下载媒体失败：" + outcome.err.Error()
+			case outcome.skipped:
+				entry.DownloadSkipped++
+			default:
+				entry.Downloaded++
+			}
+			advance()
+		})
+	}
 	walkErr := walk(ctx, func(file strmSourceFile) error {
 		if err := scanCheckpoint(ctx); err != nil {
 			return err
+		}
+		if downloads != nil && isStrmMedia(file.Name, downloadFormats) {
+			return downloads.enqueue(ctx, file)
 		}
 		entry.Files++
 		if strings.ContainsAny(file.Name, `/\`) {
@@ -501,6 +534,9 @@ func (s *StrmService) scanMapping(ctx context.Context, root string, mapping doma
 		advance()
 		return nil
 	})
+	if downloads != nil {
+		downloads.finish()
+	}
 	if walkErr != nil {
 		// 中断原因放在最前：它解释了本次结果为何不完整，单文件提示保留在后。
 		if entry.Message == "" {

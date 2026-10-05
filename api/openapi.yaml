@@ -698,7 +698,7 @@ paths:
     put:
       operationId: updateSystemSettings
       summary: 保存系统设置
-      description: 原子保存当前分组；密钥与 Cookie 分别加密保存，切换类型不清除隐藏凭据。AGENT_SYSTEM_PROMPT 和 TRANSLATION_PROMPT 各允许最多 61440 个 UTF-8 字节，其他值最多 8192 字节；按去除首尾空白前的输入计算，超限返回 400 invalid_setting，message 包含字段名、字节上限和当前字节数，整批不写入且不截断。本地 strm 根目录固定为 /strm，不接受 STRM_ROOT 配置；STRM_PATHS 中每项的 min_size_mb 不能为负数，exclude 的 mode 必须是 equals / prefix / suffix / contains，value 保存时去除首尾空白、转为小写并去重，空 value 规则被丢弃；PAN115_COOKIE 为空字符串时同一批请求强制把 PAN115_EVENT_ENABLE 保存为 false。
+      description: STRM_DOWNLOAD_ENABLE 控制生成时的媒体下载；STRM_DOWNLOAD_EXTENSIONS 是后缀 JSON 字符串数组，保存时规范化并去重，非法值整批拒绝。原子保存当前分组；密钥与 Cookie 分别加密保存，切换类型不清除隐藏凭据。AGENT_SYSTEM_PROMPT 和 TRANSLATION_PROMPT 各允许最多 61440 个 UTF-8 字节，其他值最多 8192 字节；按去除首尾空白前的输入计算，超限返回 400 invalid_setting，message 包含字段名、字节上限和当前字节数，整批不写入且不截断。本地 strm 根目录固定为 /strm，不接受 STRM_ROOT 配置；STRM_PATHS 中每项的 min_size_mb 不能为负数，exclude 的 mode 必须是 equals / prefix / suffix / contains，value 保存时去除首尾空白、转为小写并去重，空 value 规则被丢弃；PAN115_COOKIE 为空字符串时同一批请求强制把 PAN115_EVENT_ENABLE 保存为 false。
       parameters:
         - {in: cookie, name: bytemuse_session, required: true, schema: {type: string}, description: 登录签发的管理员会话 Cookie，不在示例中填写真实值}
       requestBody:
@@ -1355,7 +1355,7 @@ paths:
     post:
       operationId: scanStrm
       summary: 全量或增量生成 strm 文件
-      description: 按设置项 STRM_PATHS 把网盘目录镜像成本地 strm 文件，写入固定 /strm 根目录，每条映射仅处理其 formats 中的文件扩展名，文件内容为 {基址}/files/play/{网盘类型}/{文件标识}，115 的文件标识为扫描返回的 pick_code，CloudDrive2 为文件路径；缺失 pick_code 的文件计为生成失败，重新生成会改写旧版 file_id 链接。生成过程边扫描边写入：遍历到符合过滤条件的文件立即写入对应 strm，不等待整条映射扫描完成；遍历中途因限流、网络失败或取消而中断时，只影响尚未扫描到的文件，已写入的 strm 保留，中断原因同样通过 message 返回。递归扫描时按该映射的 exclude 规则跳过文件与文件夹：equals 要求完整名称相等、prefix 前缀、suffix 后缀、contains 包含，一律不区分大小写；命中文件夹时整棵子树都不生成。同时跳过体积小于 min_size_mb 的视频，网盘未返回体积的文件不受体积限制。incremental 为 false 或不传时执行全量生成：先清理每条映射本地目录下的 .strm 文件，再按当前网盘内容重建，用于收敛网盘已删除或改名文件留下的历史残留；incremental 为 true 时执行增量生成：只补齐本地缺失的 strm 文件，本地已存在的文件一律跳过、不做内容比对，用于日常补齐新增文件。全量只删除本功能生成的 .strm 文件，映射目录内用户放置的其他文件保留，清理后变为空的子目录一并移除，映射根目录本身始终保留。基址取 STRM_PLAY_BASE，为空时使用本次请求的来源地址；STRM_EMBY_REFRESH 为 true 且已配置 Emby 地址与密钥时额外刷新媒体库。单条映射失败不影响其他映射，失败原因通过 message 返回。
+      description: STRM_DOWNLOAD_ENABLE 为 true 时，在同一次遍历中下载 STRM_DOWNLOAD_EXTENSIONS 指定后缀的原文件；默认 srt、ssa、ass、nfo、jpg、png，最多并发 5 个，沿用网盘限流；关闭直接跳过。下载保留原名和相对目录，复用排除规则，不受视频最小体积限制；重合后缀优先下载原文件。增量与事件同步跳过已有文件，全量原子替换，失败保留旧文件并清理临时文件。下载成功、跳过、失败分别由 downloaded、download_skipped、download_failed 返回，files/created/failed 仅统计 STRM，进度总数包含两类文件，所有下载结束后才刷新 Emby。按设置项 STRM_PATHS 把网盘目录镜像成本地 strm 文件，写入固定 /strm 根目录，每条映射仅处理其 formats 中的文件扩展名，文件内容为 {基址}/files/play/{网盘类型}/{文件标识}，115 的文件标识为扫描返回的 pick_code，CloudDrive2 为文件路径；缺失 pick_code 的文件计为生成失败，重新生成会改写旧版 file_id 链接。生成过程边扫描边写入：遍历到符合过滤条件的文件立即写入对应 strm，不等待整条映射扫描完成；遍历中途因限流、网络失败或取消而中断时，只影响尚未扫描到的文件，已写入的 strm 保留，中断原因同样通过 message 返回。递归扫描时按该映射的 exclude 规则跳过文件与文件夹：equals 要求完整名称相等、prefix 前缀、suffix 后缀、contains 包含，一律不区分大小写；命中文件夹时整棵子树都不生成。同时跳过体积小于 min_size_mb 的视频，网盘未返回体积的文件不受体积限制。incremental 为 false 或不传时执行全量生成：先清理每条映射本地目录下的 .strm 文件，再按当前网盘内容重建，用于收敛网盘已删除或改名文件留下的历史残留；incremental 为 true 时执行增量生成：只补齐本地缺失的 strm 文件，本地已存在的文件一律跳过、不做内容比对，用于日常补齐新增文件。全量只删除本功能生成的 .strm 文件，映射目录内用户放置的其他文件保留，清理后变为空的子目录一并移除，映射根目录本身始终保留。基址取 STRM_PLAY_BASE，为空时使用本次请求的来源地址；STRM_EMBY_REFRESH 为 true 且已配置 Emby 地址与密钥时额外刷新媒体库。单条映射失败不影响其他映射，失败原因通过 message 返回。
       parameters:
         - {$ref: '#/components/parameters/ScanProgressAccept'}
         - {in: header, name: Prefer, required: false, schema: {type: string, enum: [respond-async]}, description: '传 respond-async 返回 202 持久化任务；页面断开不取消任务，同类活动任务返回 409，扫描与生成独立。'}
@@ -2145,6 +2145,8 @@ components:
             （分 时 日 月 周，如 0 20 * * * 表示每天 20:00），空值表示不注册该定时任务；非法表达式保存时返回 400 invalid_setting；保存后立即重排，无需重启后端。
           properties:
             PTT_AUTH_TYPE: {type: string, deprecated: true, enum: [key, cookie, ''], description: '历史兼容字段，不参与运行；PTTime 固定使用 PTT_COOKIE'}
+            STRM_DOWNLOAD_ENABLE: {type: string, enum: ['true', 'false', ''], default: 'false', description: '下载媒体开关；true 时生成 STRM 同时下载指定后缀文件，false 或空值跳过；不清空后缀配置。最多同时下载 5 个文件，沿用网盘客户端限流。'}
+            STRM_DOWNLOAD_EXTENSIONS: {type: string, default: '["srt","ssa","ass","nfo","jpg","png"]', example: '["srt","ssa","ass","nfo","jpg","png"]', description: '文件后缀 JSON 字符串数组。空字符串使用默认值，[] 表示不下载；每项去首尾空格、去一个前导点、转小写并去重，只允许 1 到 16 位字母或数字，禁止 strm。匹配不区分大小写；复用映射排除规则，不受视频最小体积限制；与视频格式重合时下载原文件优先，不生成对应 STRM。保留原名和相对目录，增量及事件同步跳过已有文件，全量重新下载并原子替换，失败保留旧文件。'}
             PAN115_EVENT_ENABLE: {type: string, enum: ['true', 'false', ''], default: 'false', description: '115 生活事件监听；Cookie 为空时强制关闭并保存 false（包括部分更新），空值或 false 关闭，保存后下一轮生效。每 30 秒轮询，失败后 60 秒重试；需同账号 OpenAPI 绑定、事件 Cookie、115 STRM 映射和 STRM_PLAY_BASE。首次启用建立当前事件基线，不回放历史；后续按持久化游标续接。批次合并后仅扫描所选 115 映射，遵循各映射格式、min_size_mb 和排除文件/夹规则生成或更新 STRM，失败不前移游标，不自动删除旧文件。'}
             PAN115_COOKIE: {type: string, description: '115 Cookie，含 UID、CID、SEID，禁止换行；用于 115 生活事件，需与 OpenAPI 绑定为同一账号并在 115 开启生活事件记录。可手动填写，也可用 POST /pan115/cookie/login/sessions 扫码获取。加密存储，空字符串清除并同时强制关闭 PAN115_EVENT_ENABLE；不可用于 OpenAPI Bearer 认证。管理员设置接口沿用现有敏感字段回显约定。'}
             RANK_SCHEDULE_TIME: {type: string, default: '0 20 * * *', example: '0 20 * * *', description: '榜单订阅定时任务，标准 5 段 cron（分 时 日 月 周）；空值表示不注册该任务，非法表达式保存时返回 400 invalid_setting；保存后立即重排，无需重启后端'}
@@ -2197,6 +2199,8 @@ components:
             BYPASS_ENGINE 的 cloudflare_bypass_for_scraping 在页面显示为 ByPass，协议值不变。BYPASS_USE_PROXY 默认 false；关闭增强时同一事务强制关闭代理开关，再次启用增强不会自动开启代理。Scrapling HTTP 协议尚未接入。
             RANK_SCHEDULE_TIME、ACTOR_SCHEDULE_TIME、TAG_SCHEDULE_TIME、DOWNLOAD_SCHEDULE_TIME 只接受标准 5 段 cron（分 时 日 月 周），空字符串表示不注册该定时任务，非法表达式返回 400 invalid_setting；保存后立即重排，无需重启后端。
           properties:
+            STRM_DOWNLOAD_ENABLE: {type: string, enum: ['true', 'false', ''], default: 'false', description: '下载媒体开关；true 时生成 STRM 同时下载指定后缀文件，false 或空值跳过；不清空后缀配置。最多同时下载 5 个文件，沿用网盘客户端限流。'}
+            STRM_DOWNLOAD_EXTENSIONS: {type: string, default: '["srt","ssa","ass","nfo","jpg","png"]', example: '["srt","ssa","ass","nfo","jpg","png"]', description: '文件后缀 JSON 字符串数组。空字符串使用默认值，[] 表示不下载；每项去首尾空格、去一个前导点、转小写并去重，只允许 1 到 16 位字母或数字，禁止 strm。匹配不区分大小写；复用映射排除规则，不受视频最小体积限制；与视频格式重合时下载原文件优先，不生成对应 STRM。保留原名和相对目录，增量及事件同步跳过已有文件，全量重新下载并原子替换，失败保留旧文件。'}
             RANK_SCHEDULE_TIME: {type: string, example: '0 20 * * *', description: '榜单订阅定时任务，标准 5 段 cron（分 时 日 月 周）；空字符串清除即不注册该任务；非法表达式返回 400 invalid_setting；保存后立即重排，无需重启后端'}
             PAN115_EVENT_ENABLE: {type: string, enum: ['true', 'false', ''], description: '115 事件监听开关，默认关闭；Cookie 为空时强制保存为 false，包括仅清空 Cookie 的部分更新；保存后下一轮（正常 30 秒、失败 60 秒）生效。首次建立当前事件基线，重启续接成功游标，按全部 115 映射生成或更新 STRM，不删除旧文件。'}
             PAN115_COOKIE: {type: string, description: '115 Cookie，需包含有效 UID、CID、SEID 且不含换行；与 OpenAPI 绑定须为同一账号，加密保存，空字符串清除并强制关闭 PAN115_EVENT_ENABLE；需在 115 开启生活事件记录。可手动填写或用 POST /pan115/cookie/login/sessions 扫码获取。'}
@@ -2501,7 +2505,7 @@ components:
         directories: {type: array, items: {$ref: '#/components/schemas/StrmDirectory'}, description: '当前目录的直接子目录；无子目录为空数组'}
     StrmScanMapping:
       type: object
-      required: [kind, path, local_path, files, deleted, created, unchanged, failed, message]
+      required: [kind, path, local_path, files, deleted, created, unchanged, failed, message, downloaded, download_skipped, download_failed]
       description: 单条映射的生成结果；message 为空串表示该映射没有可报告的问题
       properties:
         kind: {type: string, enum: ['115', 'cd2'], description: '网盘类型；115 为 115 网盘，cd2 为 CloudDrive2'}
@@ -2513,6 +2517,9 @@ components:
         unchanged: {type: integer, minimum: 0, description: '未改写磁盘的 strm 文件数：全量生成为清理重建后内容一致的场景，增量生成为本地文件已存在而跳过'}
         failed: {type: integer, minimum: 0, description: 写入失败的 strm 文件数}
         message: {type: string, description: 该映射的错误说明；正常时为空串}
+        downloaded: {type: integer, minimum: 0, description: 本条映射媒体下载成功数；与 STRM 计数独立，关闭时为零}
+        download_skipped: {type: integer, minimum: 0, description: 本条映射媒体因本地已有而跳过的数量；关闭时为零}
+        download_failed: {type: integer, minimum: 0, description: 本条映射媒体下载失败数；原因见 message，关闭时为零}
     StrmEmbyResult:
       type: object
       required: [attempted, refreshed, message]
@@ -2523,7 +2530,7 @@ components:
         message: {type: string, description: 跳过或失败的原因；成功且无说明时为空串}
     StrmScanResult:
       type: object
-      required: [mappings, files, deleted, created, unchanged, failed, emby]
+      required: [mappings, files, deleted, created, unchanged, failed, emby, downloaded, download_skipped, download_failed]
       description: 一次 strm 生成的总结果
       properties:
         mappings: {type: array, items: {$ref: '#/components/schemas/StrmScanMapping'}, description: '各条映射的生成结果，顺序与 STRM_PATHS 一致'}
@@ -2533,5 +2540,8 @@ components:
         unchanged: {type: integer, minimum: 0, description: '未改写磁盘的 strm 文件总数：全量为内容一致，增量为本地已存在而跳过'}
         failed: {type: integer, minimum: 0, description: 写入失败的 strm 文件总数}
         emby: {$ref: '#/components/schemas/StrmEmbyResult'}
+        downloaded: {type: integer, minimum: 0, description: 所有映射媒体下载成功数；不计入 files 和 created，关闭时为零}
+        download_skipped: {type: integer, minimum: 0, description: 所有映射媒体因本地已有而跳过的数量；关闭时为零}
+        download_failed: {type: integer, minimum: 0, description: 所有映射媒体下载失败数；不计入 failed，关闭时为零}
 security:
   - sessionCookie: []

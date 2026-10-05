@@ -225,22 +225,29 @@ func (s *StrmService) scanPan115EventMappings(ctx context.Context, mappings []do
 	s.scanMu.Lock()
 	defer s.scanMu.Unlock()
 	result := domain.StrmScanResult{}
+	downloadFormats, err := strmDownloadFormats(values)
+	if err != nil {
+		return result, err
+	}
 	for _, mapping := range mappings {
 		if err := ctx.Err(); err != nil {
 			return result, err
 		}
 		// 边扫描边写：来源不可用时只报告原因，不清理本地已有的 strm 文件。
-		walk, walkErr := s.mappingWalk(ctx, mapping)
+		walk, walkErr := s.mappingWalk(ctx, mapping, downloadFormats)
 		if walkErr != nil {
 			return result, fmt.Errorf("115 事件 STRM 映射 %s 失败：%s", mapping.LocalPath, walkErr.Error())
 		}
 		// 事件同步沿用历史语义：本地内容与当前配置一致时不写盘，播放地址变更仍会收敛。
-		entry := s.scanMapping(ctx, s.root, mapping, base, domain.StrmGenerateIdempotent, walk, func() {})
-		if entry.Message != "" || entry.Failed > 0 {
+		entry := s.scanMapping(ctx, s.root, mapping, base, domain.StrmGenerateIdempotent, walk, func() {}, downloadFormats)
+		if entry.Message != "" || entry.Failed > 0 || entry.DownloadFailed > 0 {
 			return result, fmt.Errorf("115 事件 STRM 映射 %s 失败：%s（失败文件 %d）", mapping.LocalPath, entry.Message, entry.Failed)
 		}
 		result.Files += entry.Files
 		result.Created += entry.Created
+		result.Downloaded += entry.Downloaded
+		result.DownloadSkipped += entry.DownloadSkipped
+		result.DownloadFailed += entry.DownloadFailed
 	}
 	result.Emby = s.refreshEmby(ctx, values)
 	if result.Emby.Attempted && !result.Emby.Refreshed {

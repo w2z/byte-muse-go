@@ -2,11 +2,57 @@ package database
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
+
+// TestStrmDownloadMigration 验证空库和旧库升级都登记默认值，重复执行不覆盖用户选择。
+func TestStrmDownloadMigration(t *testing.T) {
+	for _, upgrade := range []bool{false, true} {
+		t.Run(fmt.Sprint(upgrade), func(t *testing.T) {
+			ctx := context.Background()
+			store, err := Open(ctx, Config{Dialect: DialectSQLite, SQLitePath: filepath.Join(t.TempDir(), "download.db")})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer store.Close()
+			if upgrade {
+				if err := ensureMigrationTable(ctx, store.SQLDB(), DialectSQLite); err != nil {
+					t.Fatal(err)
+				}
+				for _, m := range MigrationPlan(DialectSQLite) {
+					if m.Version < 37 {
+						if err := applyMigration(ctx, store.SQLDB(), DialectSQLite, m); err != nil {
+							t.Fatal(err)
+						}
+					}
+				}
+			}
+			if err := store.Migrate(ctx); err != nil {
+				t.Fatal(err)
+			}
+			for key, want := range map[string]string{"STRM_DOWNLOAD_ENABLE": "false", "STRM_DOWNLOAD_EXTENSIONS": `["srt","ssa","ass","nfo","jpg","png"]`} {
+				var value string
+				if err := store.SQLDB().QueryRowContext(ctx, "SELECT setting_value FROM app_settings WHERE setting_key = ?", key).Scan(&value); err != nil || value != want {
+					t.Fatalf("%s=%q, %v", key, value, err)
+				}
+			}
+			if _, err := store.SQLDB().ExecContext(ctx, "UPDATE app_settings SET setting_value = 'true' WHERE setting_key = 'STRM_DOWNLOAD_ENABLE'"); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.Migrate(ctx); err != nil {
+				t.Fatal(err)
+			}
+			var value string
+			if err := store.SQLDB().QueryRowContext(ctx, "SELECT setting_value FROM app_settings WHERE setting_key = 'STRM_DOWNLOAD_ENABLE'").Scan(&value); err != nil || value != "true" {
+				t.Fatalf("迁移覆盖用户设置: %q %v", value, err)
+			}
+		})
+	}
+}
 
 // TestMigrationPlanVersionsAreUniqueAndOrdered 约束每个方言的迁移版本号唯一且严格递增。
 // 迁移执行器按版本号判断是否已应用，重复版本号会被静默跳过并导致结构缺失，

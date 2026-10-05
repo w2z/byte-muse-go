@@ -83,13 +83,17 @@ type StrmDirectoryPage struct {
 
 // StrmScanMapping 是单条映射的生成结果；Message 为空表示该映射没有可报告的问题。
 type StrmScanMapping struct {
-	Kind      string `json:"kind"`
-	Path      string `json:"path"`
-	LocalPath string `json:"local_path"`
-	Files     int    `json:"files"`
+	// Downloaded、DownloadSkipped、DownloadFailed 独立统计媒体下载结果，不计入 STRM 文件数。
+	Downloaded      int    `json:"downloaded"`
+	DownloadSkipped int    `json:"download_skipped"`
+	DownloadFailed  int    `json:"download_failed"`
+	Kind            string `json:"kind"`
+	Path            string `json:"path"`
+	LocalPath       string `json:"local_path"`
+	Files           int    `json:"files"`
 	// Deleted 是全量生成前清理掉的本地 strm 文件数；增量生成恒为 0。
-	Deleted   int    `json:"deleted"`
-	Created   int    `json:"created"`
+	Deleted int `json:"deleted"`
+	Created int `json:"created"`
 	// Unchanged 是未改写磁盘的 strm 文件数：全量为内容一致，增量为本地已存在而跳过。
 	Unchanged int    `json:"unchanged"`
 	Failed    int    `json:"failed"`
@@ -106,8 +110,12 @@ type StrmEmbyResult struct {
 
 // StrmScanResult 是一次 strm 生成的总结果。
 type StrmScanResult struct {
-	Mappings []StrmScanMapping `json:"mappings"`
-	Files    int               `json:"files"`
+	// 媒体下载的独立汇总；关闭下载时均为零。
+	Downloaded      int               `json:"downloaded"`
+	DownloadSkipped int               `json:"download_skipped"`
+	DownloadFailed  int               `json:"download_failed"`
+	Mappings        []StrmScanMapping `json:"mappings"`
+	Files           int               `json:"files"`
 	// Deleted 是本次全量生成清理的本地 strm 文件总数；增量生成为 0。
 	Deleted int `json:"deleted"`
 	Created int `json:"created"`
