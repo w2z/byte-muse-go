@@ -10,7 +10,9 @@ COPY frontend/ ./
 # 前端构建前检查规范入口及链接，文档仅进入构建阶段。
 COPY AGENTS.md /src/AGENTS.md
 COPY docs/ /src/docs/
-RUN npm run build
+# 与运行阶段使用同一构建参数，让页面首次渲染即可显示当前发布版本。
+ARG BYTEMUSE_VERSION=dev
+RUN BYTEMUSE_VERSION=$BYTEMUSE_VERSION npm run build
 
 FROM --platform=$BUILDPLATFORM golang:1.27-alpine AS backend-build
 # 构建阶段安装时区数据，最终镜像只复制运行必需的 zoneinfo。

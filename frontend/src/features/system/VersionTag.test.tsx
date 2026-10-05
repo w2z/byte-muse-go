@@ -1,17 +1,20 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, expect, it, vi } from "vitest";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { apiRequest } from "../../shared/api/client";
 import type { SystemVersion } from "../../shared/api/types";
 import { VersionTag } from "./VersionTag";
 
 vi.mock("../../shared/api/client", () => ({ apiRequest: vi.fn() }));
 
+beforeEach(() => vi.stubEnv("VITE_APP_VERSION", "0.1.21"));
+
 afterEach(() => {
   cleanup();
   vi.mocked(apiRequest).mockReset();
+  vi.unstubAllEnvs();
 });
 
 /** 渲染独立查询客户端下的版本标签，避免用例间缓存串扰。 */
@@ -46,7 +49,7 @@ it("发现新版本时使用 orangered 并链接发布仓库", async () => {
   const { container } = renderTag();
 
   expect(await screen.findByText("v0.1.21")).toBeInTheDocument();
-  expect(container.querySelector(".arco-tag")?.className).toContain("arco-tag-orangered");
+  await waitFor(() => expect(container.querySelector(".arco-tag")?.className).toContain("arco-tag-orangered"));
   expect(container.querySelector(".header-version-link")).toHaveAttribute("href", "https://github.com/w2z/byte-muse-go");
   expect(container.querySelector(".arco-badge-dot")).not.toBeNull();
 });
@@ -56,14 +59,36 @@ it("检查更新失败时仍显示当前版本，并保留占位容器", async (
   const { container } = renderTag();
 
   expect(await screen.findByText("v0.1.21")).toBeInTheDocument();
+  fireEvent.mouseEnter(container.querySelector(".header-version-badge")!);
+  expect(await screen.findByText(/检查更新失败/)).toBeInTheDocument();
   expect(container.querySelector(".header-version")).not.toBeNull();
 });
 
-it("接口失败时不渲染标签，容器仍占位", async () => {
+it("接口失败时仍显示本地版本，且不误报已是最新", async () => {
   vi.mocked(apiRequest).mockRejectedValue(new Error("请求失败"));
   const { container } = renderTag();
 
-  await expect(apiRequest).toHaveBeenCalledWith("/system/version");
+  expect(screen.getByText("v0.1.21")).toBeInTheDocument();
+  fireEvent.mouseEnter(container.querySelector(".header-version-badge")!);
+  expect(await screen.findByText(/检查更新失败/)).toBeInTheDocument();
   expect(container.querySelector(".header-version")).not.toBeNull();
-  expect(container.querySelector(".arco-tag")).toBeNull();
+  expect(container.querySelector(".arco-badge-dot")).toBeNull();
+  expect(screen.queryByText(/已是最新版本/)).toBeNull();
+});
+
+it("更新请求未返回时立即显示本地版本，返回后再显示更新角标", async () => {
+  let resolve!: (value: SystemVersion) => void;
+  vi.mocked(apiRequest).mockReturnValue(new Promise<SystemVersion>((done) => { resolve = done; }));
+  const { container } = renderTag();
+
+  expect(screen.getByText("v0.1.21")).toBeInTheDocument();
+  expect(container.querySelector(".arco-badge-dot")).toBeNull();
+  fireEvent.mouseEnter(container.querySelector(".header-version-badge")!);
+  expect(await screen.findByText(/正在检查更新/)).toBeInTheDocument();
+  expect(screen.queryByText(/已是最新版本/)).toBeNull();
+
+  await act(async () => resolve({ ...base, latest: "0.1.22", has_update: true, release_url: "https://github.com/w2z/byte-muse-go" }));
+  await waitFor(() => expect(container.querySelector(".arco-badge-dot")).not.toBeNull());
+  expect(screen.getByText("v0.1.21")).toBeInTheDocument();
+  expect(container.querySelector(".header-version-link")).toHaveAttribute("href", "https://github.com/w2z/byte-muse-go");
 });

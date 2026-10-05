@@ -15,40 +15,38 @@ const VERSION_STALE_TIME = 60 * 60 * 1000;
  * 有更新时在标签右上角显示 Arco Badge 小红点，并换成 orangered 底色、可点击跳转发布仓库。
  * 默认态不传 Tag 的 color：Arco 对非预设色值会走自定义色分支（白字 + 内联背景），
  * 传 "default" 反而会让标签文字不可见。
- * 容器始终占位，版本请求返回前后顶栏宽度不变，右侧按钮不会跳动。
+ * 首次渲染直接显示构建时注入的本地版本；异步检查只补充运行版本和更新状态，失败不隐藏标签。
  */
 export function VersionTag() {
-  const { data } = useQuery({
+  const { data, isError } = useQuery({
     queryKey: ["system", "version"],
     queryFn: () => apiRequest<SystemVersion>("/system/version"),
     staleTime: VERSION_STALE_TIME,
   });
-  const version = data?.current ?? "";
+  const version = data?.current || import.meta.env.VITE_APP_VERSION;
   const latest = data?.latest ?? "";
   const releaseURL = data?.release_url ?? "";
   const hasUpdate = Boolean(data?.has_update);
-  const checkError = data?.check_error ?? "";
+  const checkError = data?.check_error || (isError ? "暂时无法检查更新" : "");
   const tip = hasUpdate
     ? `发现新版本 v${latest}，点击查看发布仓库`
-    : version
-      ? `当前版本 v${version}` + (checkError ? `（检查更新失败：${checkError}）` : "，已是最新版本")
-      : "";
-  const tag = version ? (
+    : `当前版本 v${version}` + (checkError
+      ? `（检查更新失败：${checkError}）`
+      : data ? "，已是最新版本" : "，正在检查更新");
+  const tag = (
     <Tag className="header-version-tag" color={hasUpdate ? "orangered" : undefined} icon={<IconGithub />}>{`v${version}`}</Tag>
-  ) : null;
-  const label = tag && hasUpdate && releaseURL ? (
+  );
+  const label = hasUpdate && releaseURL ? (
     <a className="header-version-link" href={releaseURL} target="_blank" rel="noreferrer" aria-label={tip}>{tag}</a>
   ) : (
     <span>{tag}</span>
   );
   return (
     <span className="header-version">
-      {tag ? (
-        <Tooltip content={tip}>
-          {/* Arco 的 dot 只在 count 为正数时渲染，这里用 1 占位；无更新时传 0，角标与数字都不出现。 */}
-          <Badge className="header-version-badge" dot count={hasUpdate ? 1 : 0}>{label}</Badge>
-        </Tooltip>
-      ) : null}
+      <Tooltip content={tip}>
+        {/* Arco 的 dot 只在 count 为正数时渲染，这里用 1 占位；无更新时传 0，角标与数字都不出现。 */}
+        <Badge className="header-version-badge" dot count={hasUpdate ? 1 : 0}>{label}</Badge>
+      </Tooltip>
     </span>
   );
 }
