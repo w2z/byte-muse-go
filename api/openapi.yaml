@@ -1396,6 +1396,39 @@ paths:
           content:
             application/json:
               schema: {$ref: '#/components/schemas/Error'}
+  /strm/emby/media-info/task:
+    get:
+      summary: 查询 STRM 媒体信息刷新任务
+      description: 返回当前异步媒体信息预热任务；任务仅处理 Emby 中缺少媒体流或时长的 STRM 影片。
+      parameters:
+        - {in: cookie, name: bytemuse_session, required: true, schema: {type: string}, description: 登录签发的管理员会话 Cookie}
+      responses:
+        '200':
+          description: 当前任务，没有任务时为 null
+          content:
+            application/json:
+              schema: {type: object, nullable: true}
+        '401': {description: 未登录}
+  /strm/emby/media-info/refresh:
+    post:
+      summary: 立即刷新 STRM 媒体库信息
+      description: 将一次媒体信息预热请求加入串行异步队列；运行中重复请求会合并为下一轮。
+      parameters:
+        - {in: cookie, name: bytemuse_session, required: true, schema: {type: string}, description: 登录签发的管理员会话 Cookie}
+      responses:
+        '202':
+          description: 已加入队列
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [task, queued]
+                properties:
+                  queued: {type: boolean}
+                  task: {type: object}
+        '400': {description: Emby 配置缺失或刷新失败}
+        '401': {description: 未登录}
+        '503': {description: 服务未装配}
   /files/play/{kind}/{fileId}:
     servers:
       - url: /

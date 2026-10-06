@@ -72,6 +72,13 @@ type SettingGroup = {
 type SettingCategory = { code: string; title: string; groupCodes: string[] };
 type SettingsUpdate = { values: Record<string, string> };
 const TabPane = Tabs.TabPane;
+type EmbyMediaTask = { id: string; state: string; processed: number; total: number; success: number; skipped: number; failed: number; error?: string };
+function EmbyMediaInfoAction() {
+  const client = useQueryClient();
+  const query = useQuery({ queryKey: ["emby-media-task"], queryFn: () => apiRequest<EmbyMediaTask | null>("/strm/emby/media-info/task"), refetchInterval: 1000 });
+  const refresh = useMutation({ mutationFn: () => apiRequest<{ task: EmbyMediaTask }>("/strm/emby/media-info/refresh", { method: "POST", headers: { Prefer: "respond-async" } }), onSuccess: (result) => client.setQueryData(["emby-media-task"], result.task) });
+  return <div className="settings-strm-generate"><Button type="secondary" loading={refresh.isPending} disabled={refresh.isPending || query.data?.state === "running" || query.data?.state === "queued"} onClick={() => refresh.mutate()}>立即刷新strm 媒体库信息</Button>{query.data?.state === "running" ? <span className="settings-field-description">正在刷新：{query.data.processed}/{query.data.total}，成功 {query.data.success}，失败 {query.data.failed}</span> : null}{query.data?.state === "failed" ? <span role="alert" className="settings-field-description">刷新失败：{query.data.error || "未知错误"}</span> : null}</div>;
+}
 // 每个 Unicode 码点最多 4 个 UTF-8 字节，确保输入不超过后端 60 KiB 容量。
 const PROMPT_MAX_CHARS = 15360;
 
@@ -176,6 +183,9 @@ const scanPathsKey = "PAN115_SCAN_PATHS";
 const strmPathsKey = "STRM_PATHS";
 const strmPlayBaseKey = "STRM_PLAY_BASE";
 const strmEmbyRefreshKey = "STRM_EMBY_REFRESH";
+const strmEmbyMediaEnableKey = "STRM_EMBY_MEDIA_ENABLE";
+const strmEmbyMediaIntervalKey = "STRM_EMBY_MEDIA_INTERVAL_MINUTES";
+const strmEmbyMediaAfterRefreshKey = "STRM_EMBY_MEDIA_AFTER_REFRESH";
 const strmDownloadEnableKey = "STRM_DOWNLOAD_ENABLE";
 const strmDownloadExtensionsKey = "STRM_DOWNLOAD_EXTENSIONS";
 const defaultDownloadExtensions = '["srt","ssa","ass","nfo","jpg","png"]';
@@ -532,6 +542,9 @@ const groups: SettingGroup[] = [
         kind: "bool",
         description: "开启后每次生成 strm 都会请求一次 Emby 媒体库刷新；需要先配置 Emby 地址与密钥。",
       },
+      { key: strmEmbyMediaEnableKey, label: "定时获取媒体信息", kind: "bool", description: "按设定间隔扫描 Emby 中缺少媒体信息的 STRM 视频并异步刷新。" },
+      { key: strmEmbyMediaIntervalKey, label: "媒体信息刷新间隔", kind: "text", unit: "分钟", placeholder: "60" },
+      { key: strmEmbyMediaAfterRefreshKey, label: "刷新媒体库后立即刷新视频信息", kind: "bool", description: "只有开启生成后刷新 Emby 媒体库时可用；媒体库刷新请求受理后加入异步预热队列。" },
     ],
   },
   {
@@ -1285,6 +1298,7 @@ export function SettingsPage() {
         </div>
       );
     }
+    if (field.key === strmEmbyMediaIntervalKey) return null;
     // BYPASS_ENGINE 与 BYPASS_URL 合并为“左侧选择、右侧地址”的单一控件。
     if (field.key === "BYPASS_ENGINE") return null;
     if (field.siteAuth) {
@@ -1463,17 +1477,22 @@ export function SettingsPage() {
               aria-label={field.label}
               checked={draft[field.key] === true}
               disabled={(field.key === "BYPASS_USE_PROXY" && !draft.BYPASS_ENGINE) ||
-                (field.key === "PAN115_EVENT_ENABLE" && !String(draft.PAN115_COOKIE ?? "").trim())}
-              onChange={(checked: boolean) => setValue(field.key, checked)}
+                (field.key === "PAN115_EVENT_ENABLE" && !String(draft.PAN115_COOKIE ?? "").trim()) ||
+                (field.key === strmEmbyMediaAfterRefreshKey && draft[strmEmbyRefreshKey] !== true)}
+              onChange={(checked: boolean) => { setValue(field.key, checked); if (field.key === strmEmbyRefreshKey && !checked) setValue(strmEmbyMediaAfterRefreshKey, false); }}
             />
             {/* 文字位于开关右侧，原生 label 关联保留点击切换和禁用行为。 */}
             <label className="settings-field-label" htmlFor={filterId(field.key)}>{field.label}</label>
+            {field.key === strmEmbyMediaEnableKey ? (
+              <div className="settings-input-with-unit settings-emby-media-interval">
+                <Input id={strmEmbyMediaIntervalKey} type="number" min={1} max={10080} value={String(draft[strmEmbyMediaIntervalKey] ?? "60")} disabled={draft[strmEmbyMediaEnableKey] !== true} onChange={(value) => setValue(strmEmbyMediaIntervalKey, value)} addAfter="分钟" aria-label="媒体信息刷新间隔" />
+              </div>
+            ) : null}
           </div>
           {field.description ? <span className="settings-field-description">{field.description}</span> : null}
         </div>
       );
     }
-
     if (field.kind === "enum") {
       // 选项自带空值时（如「不订阅」「不使用」），空值本身就是已选项，不能按未选择提示。
       const enumOptions = field.options ?? [];
@@ -1719,6 +1738,7 @@ export function SettingsPage() {
                   <Pan115LoginPanel onCookie={(cookie) => setValue("PAN115_COOKIE", cookie)} />
                 ) : null}
                 {renderFieldSequence(activeFields)}
+                {activeGroup.strmGenerate ? <div className="settings-field settings-field-wide"><EmbyMediaInfoAction /></div> : null}
                 {activeGroup.strmGenerate ? (
                   <div className="settings-field settings-field-wide">
                     <StrmGenerateAction value={strmPaths} />

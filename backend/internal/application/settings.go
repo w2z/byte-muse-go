@@ -73,6 +73,9 @@ const (
 	strmPathsSettingKey              = "STRM_PATHS"
 	strmPlayBaseSettingKey           = "STRM_PLAY_BASE"
 	strmEmbyRefreshSettingKey        = "STRM_EMBY_REFRESH"
+	strmEmbyMediaEnableSettingKey    = "STRM_EMBY_MEDIA_ENABLE"
+	strmEmbyMediaIntervalSettingKey  = "STRM_EMBY_MEDIA_INTERVAL_MINUTES"
+	strmEmbyMediaAfterRefreshKey     = "STRM_EMBY_MEDIA_AFTER_REFRESH"
 )
 
 // pan115ScanPathsSettingKey 是 115 扫描入库目录设置键；元素形如 {"id":"目录 ID","path":"展示用路径"}。
@@ -190,6 +193,9 @@ var writableSettings = map[string]settingSpec{
 	strmDownloadExtensionsSettingKey: {kind: settingText},
 	strmPlayBaseSettingKey:           {kind: settingText},
 	strmEmbyRefreshSettingKey:        {kind: settingBool},
+	strmEmbyMediaEnableSettingKey:    {kind: settingBool},
+	strmEmbyMediaIntervalSettingKey:  {kind: settingInt},
+	strmEmbyMediaAfterRefreshKey:     {kind: settingBool},
 
 	// 过滤
 	"DEFAULT_FILTER": {kind: settingJSON},
@@ -397,6 +403,31 @@ func (s *SettingsService) Update(ctx context.Context, values map[string]string) 
 			}
 		}
 	}
+	// Emby 媒体信息刷新依赖“生成后刷新媒体库”；部分保存也必须保持该不变式。
+	_, changesEmbyRefresh := values[strmEmbyRefreshSettingKey]
+	_, changesAfterRefresh := values[strmEmbyMediaAfterRefreshKey]
+	if changesEmbyRefresh || changesAfterRefresh {
+		refresh, supplied := values[strmEmbyRefreshSettingKey]
+		if !supplied {
+			current, err := s.Get(ctx)
+			if err != nil {
+				return domain.SystemSettings{}, err
+			}
+			refresh = current.Values[strmEmbyRefreshSettingKey]
+		}
+		if strings.TrimSpace(refresh) != "true" {
+			found := false
+			for i := range items {
+				if items[i].Key == strmEmbyMediaAfterRefreshKey {
+					items[i].Value = "false"
+					found = true
+				}
+			}
+			if !found {
+				items = append(items, ports.StoredSetting{Key: strmEmbyMediaAfterRefreshKey, Value: "false"})
+			}
+		}
+	}
 	if len(items) > 0 {
 		if err := s.repository.Upsert(ctx, items); err != nil {
 			return domain.SystemSettings{}, fmt.Errorf("save settings: %w", err)
@@ -478,6 +509,9 @@ func validateSettingValue(key string, spec settingSpec, value string) error {
 		}
 		if key == "PTT_UID" && (number == 0 || strings.Trim(value, "0123456789") != "") {
 			return invalid("需要是正整数用户 ID")
+		}
+		if key == strmEmbyMediaIntervalSettingKey && (number < 1 || number > 10080) {
+			return invalid("需要是 1 到 10080 分钟")
 		}
 	case settingJSON:
 		var object map[string]any

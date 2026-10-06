@@ -144,11 +144,12 @@ type StrmService struct {
 	// scanMu 串行化手动与事件生成，防止并发写入同一映射。
 	scanMu sync.Mutex
 	// root 是生产环境固定的 /strm；测试可在同包内替换为临时目录隔离文件。
-	root     string
-	pan115   strmPan115API
-	cloud    strmCloudDriveAPI
-	settings func(context.Context) (map[string]string, error)
-	http     *http.Client
+	root             string
+	pan115           strmPan115API
+	cloud            strmCloudDriveAPI
+	settings         func(context.Context) (map[string]string, error)
+	http             *http.Client
+	embyMediaEnqueue func(context.Context)
 }
 
 // NewStrmService 组装固定使用 /strm 根目录的 strm 服务。
@@ -168,6 +169,11 @@ func NewStrmService(pan115 strmPan115API, cloud strmCloudDriveAPI, settings func
 		settings: settings,
 		http:     &http.Client{Timeout: strmRequestTimeout},
 	}, nil
+}
+
+// SetEmbyMediaEnqueue 注入媒体信息预热队列；生成流程只负责提交，不等待探测完成。
+func (s *StrmService) SetEmbyMediaEnqueue(enqueue func(context.Context)) {
+	s.embyMediaEnqueue = enqueue
 }
 
 // Root 返回固定的本地 strm 根目录，不读取数据库设置。
@@ -663,6 +669,14 @@ func (s *StrmService) refreshEmby(ctx context.Context, values map[string]string)
 	_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 4096))
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		return domain.StrmEmbyResult{Attempted: true, Message: fmt.Sprintf("Emby 返回状态码 %d", response.StatusCode)}
+	}
+	if strings.TrimSpace(values[strmEmbyMediaAfterRefreshKey]) == "true" && s.embyMediaEnqueue != nil {
+		go func() {
+			timer := time.NewTimer(15 * time.Second)
+			defer timer.Stop()
+			<-timer.C
+			s.embyMediaEnqueue(context.Background())
+		}()
 	}
 	return domain.StrmEmbyResult{Attempted: true, Refreshed: true}
 }

@@ -369,6 +369,12 @@ func (c *Commands) Serve(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("create strm service: %w", err)
 	}
+	embyMediaService := application.NewEmbyMediaService(settingsValues(settingsService))
+	strmService.SetEmbyMediaEnqueue(func(enqueueCtx context.Context) { _, _, _ = embyMediaService.Enqueue(enqueueCtx) })
+	embyMediaCtx, cancelEmbyMedia := context.WithCancel(ctx)
+	embyMediaDone := make(chan struct{})
+	go func() { defer close(embyMediaDone); embyMediaService.Run(embyMediaCtx) }()
+	defer func() { cancelEmbyMedia(); <-embyMediaDone }()
 	// 115 扫描入库服务：把设置页的扫描目录递归扫描后登记到媒体库。
 	// 与生成 strm 共用同一套 115 递归与失败隔离规则，媒体库登记只写 library_status。
 	pan115LibraryService, err := application.NewPan115LibraryService(pan115Service, store.MediaLibrary(), settingsValues(settingsService))
@@ -637,6 +643,7 @@ func (c *Commands) Serve(ctx context.Context) error {
 		WeChatCallback:  newWeChatCallback(settingsService),
 		ChannelMessages: dispatcher,
 		Strm:            strmService,
+		EmbyMedia:       embyMediaService,
 		Covers:          coverCache,
 		StaticDir:       c.config.WebStaticDir,
 	})

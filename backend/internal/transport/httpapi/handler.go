@@ -56,7 +56,8 @@ type Dependencies struct {
 	// ChannelMessages 处理渠道入站消息；轮询与回调共用同一实现。
 	ChannelMessages ports.ChannelMessageHandler
 	// Strm 提供网盘目录的 strm 生成、本地 strm 目录浏览与播放地址解析。
-	Strm *application.StrmService
+	Strm      *application.StrmService
+	EmbyMedia *application.EmbyMediaService
 	// Covers 是影片封面的本地缓存，页面图片统一从这里取，源站不可用时回退原地址。
 	Covers    *covercache.Cache
 	StaticDir string
@@ -136,6 +137,8 @@ func New(dependencies Dependencies) http.Handler {
 		router.Post("/strm/scan", scanStrm(dependencies.Strm, dependencies.ScanTasks))
 		router.Get("/strm/scan/task", scanTaskEndpoint(dependencies.ScanTasks, "strm", false))
 		router.Post("/strm/scan/tasks/{id}/control", scanTaskEndpoint(dependencies.ScanTasks, "strm", true))
+		router.Post("/strm/emby/media-info/refresh", refreshStrmMediaInfo(dependencies.EmbyMedia))
+		router.Get("/strm/emby/media-info/task", strmMediaInfoTask(dependencies.EmbyMedia))
 		router.Get("/message", wechatVerify(dependencies))
 		router.Post("/message", wechatReceive(dependencies))
 	})
@@ -159,6 +162,30 @@ func New(dependencies Dependencies) http.Handler {
 		}
 		spa.ServeHTTP(response, request)
 	})
+}
+
+func refreshStrmMediaInfo(service *application.EmbyMediaService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if service == nil {
+			writeError(w, http.StatusServiceUnavailable, "service_unavailable", "Emby 媒体信息服务未就绪")
+			return
+		}
+		task, created, err := service.Enqueue(r.Context())
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "emby_media_refresh_failed", err.Error())
+			return
+		}
+		writeJSON(w, http.StatusAccepted, map[string]any{"task": task, "queued": created})
+	}
+}
+func strmMediaInfoTask(service *application.EmbyMediaService) http.HandlerFunc {
+	return func(w http.ResponseWriter, _ *http.Request) {
+		if service == nil {
+			writeJSON(w, http.StatusOK, nil)
+			return
+		}
+		writeJSON(w, http.StatusOK, service.Snapshot())
+	}
 }
 
 // enqueueSubscriptionDownload schedules a single active subscription without bypassing the durable worker.

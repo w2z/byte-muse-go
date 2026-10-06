@@ -24,6 +24,26 @@ func strmDownloadSettingsMigration(dialect Dialect) Migration {
 	return Migration{Version: 37, Name: "strm_download_settings", Statements: statements}
 }
 
+// strmEmbyMediaSettingsMigration 登记 Emby 媒体信息预热设置，默认关闭、间隔 60 分钟。
+func strmEmbyMediaSettingsMigration(dialect Dialect) Migration {
+	seeds := []struct{ key, value string }{
+		{"STRM_EMBY_MEDIA_ENABLE", "false"},
+		{"STRM_EMBY_MEDIA_INTERVAL_MINUTES", "60"},
+		{"STRM_EMBY_MEDIA_AFTER_REFRESH", "false"},
+	}
+	statements := make([]string, 0, len(seeds))
+	for _, seed := range seeds {
+		statement := fmt.Sprintf("INSERT INTO app_settings (setting_key, setting_value, is_secret, updated_at) VALUES (%s, %s, FALSE, %s)", sqlLiteral(seed.key), sqlLiteral(seed.value), currentTimestampExpression(dialect))
+		if dialect == DialectMySQL {
+			statement = strings.Replace(statement, "INSERT INTO", "INSERT IGNORE INTO", 1)
+		} else {
+			statement += " ON CONFLICT (setting_key) DO NOTHING"
+		}
+		statements = append(statements, statement)
+	}
+	return Migration{Version: 38, Name: "strm_emby_media_settings", Statements: statements}
+}
+
 // strmSettingsMigration 登记 strm 相关设置：网盘映射、strm 内容使用的对外基址与 Emby 自动刷新开关。
 // 默认值分别是空映射、空基址与关闭，升级后的行为与升级前完全一致；
 // 只新增键值，不改表结构、不覆盖已有配置；重复执行安全。
