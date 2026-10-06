@@ -34,6 +34,8 @@ type EmbyMediaService struct {
 	pending  bool
 }
 
+const embyMediaPageSize = 200
+
 func NewEmbyMediaService(settings func(context.Context) (map[string]string, error)) *EmbyMediaService {
 	return &EmbyMediaService{settings: settings, http: &http.Client{Timeout: 2 * time.Minute}}
 }
@@ -161,51 +163,30 @@ func (s *EmbyMediaService) list(ctx context.Context, base, key string) ([]embyIt
 	return out, err
 }
 
-// streamItems 单次读取 Emby 的完整 Items 数组，并在解出每个 STRM 后立即回调。
-// Limit=0 避免分页；回调由任务负责更新动态总数和处理进度。
+// streamItems 按 StartIndex 自动读取 Emby 的全部媒体页，并在解出每个 STRM 后立即回调。
+// 不依赖固定总上限；回调由任务负责更新动态总数和处理进度。
 func (s *EmbyMediaService) streamItems(ctx context.Context, base, key string, onItem func(embyItem)) error {
-	// Emby 将 Limit=0 解释为返回 0 条，不能用它表示“不限制”。
-	// 使用一次足够大的上限读取完整媒体集，避免分页导致任务只看到第一页。
-	u := base + "/emby/Items?Recursive=true&IncludeItemTypes=Movie,Episode&Fields=Path,MediaSources&Limit=10000&api_key=" + url.QueryEscape(key)
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
-	res, err := s.http.Do(req)
-	if err != nil {
-		return fmt.Errorf("获取 Emby 媒体列表失败: %w", err)
-	}
-	defer res.Body.Close()
-	if res.StatusCode/100 != 2 {
-		return fmt.Errorf("Emby 媒体列表返回状态码 %d", res.StatusCode)
-	}
-	decoder := json.NewDecoder(res.Body)
-	root, err := decoder.Token()
-	if err != nil || root != json.Delim('{') {
-		return fmt.Errorf("解析 Emby 媒体列表失败")
-	}
-	for decoder.More() {
-		token, err := decoder.Token()
+	for start := 0; ; start += embyMediaPageSize {
+		u := base + "/emby/Items?Recursive=true&IncludeItemTypes=Movie,Episode&Fields=Path,MediaSources&Limit=" + fmt.Sprint(embyMediaPageSize) + "&StartIndex=" + fmt.Sprint(start) + "&api_key=" + url.QueryEscape(key)
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+		res, err := s.http.Do(req)
+		if err != nil {
+			return fmt.Errorf("获取 Emby 媒体列表失败: %w", err)
+		}
+		if res.StatusCode/100 != 2 {
+			res.Body.Close()
+			return fmt.Errorf("Emby 媒体列表返回状态码 %d", res.StatusCode)
+		}
+		var body struct {
+			Items            []embyItem `json:"Items"`
+			TotalRecordCount int        `json:"TotalRecordCount"`
+		}
+		err = json.NewDecoder(res.Body).Decode(&body)
+		res.Body.Close()
 		if err != nil {
 			return fmt.Errorf("解析 Emby 媒体列表失败")
 		}
-		keyToken, ok := token.(string)
-		if !ok {
-			continue
-		}
-		if keyToken != "Items" {
-			var ignored json.RawMessage
-			if err := decoder.Decode(&ignored); err != nil {
-				return fmt.Errorf("解析 Emby 媒体列表失败")
-			}
-			continue
-		}
-		start, err := decoder.Token()
-		if err != nil || start != json.Delim('[') {
-			return fmt.Errorf("解析 Emby 媒体列表失败")
-		}
-		for decoder.More() {
-			var it embyItem
-			if err := decoder.Decode(&it); err != nil {
-				return fmt.Errorf("解析 Emby 媒体列表失败")
-			}
+		for _, it := range body.Items {
 			itemPath := it.Path
 			if itemPath == "" && len(it.MediaSources) > 0 {
 				itemPath = it.MediaSources[0].Path
@@ -222,11 +203,10 @@ func (s *EmbyMediaService) streamItems(ctx context.Context, base, key string, on
 			it.NeedsRefresh = missing
 			onItem(it)
 		}
-		if _, err := decoder.Token(); err != nil {
-			return fmt.Errorf("解析 Emby 媒体列表失败")
+		if len(body.Items) == 0 || (body.TotalRecordCount > 0 && start+len(body.Items) >= body.TotalRecordCount) || (body.TotalRecordCount == 0 && len(body.Items) < embyMediaPageSize) {
+			return nil
 		}
 	}
-	return nil
 }
 func (s *EmbyMediaService) probe(ctx context.Context, base, key, id string) error {
 	u := base + "/emby/Items/" + url.PathEscape(id) + "/PlaybackInfo?api_key=" + url.QueryEscape(key)

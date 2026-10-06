@@ -16,7 +16,7 @@ func TestEmbyMediaListOnlyQueuesMissingStrm(t *testing.T) {
 	var playback int
 	transport := embyRoundTripper(func(r *http.Request) (*http.Response, error) {
 		if r.URL.Path == "/emby/Items" {
-			if r.URL.Query().Get("Limit") != "10000" {
+			if r.URL.Query().Get("Limit") != "200" || r.URL.Query().Get("StartIndex") != "0" {
 				t.Fatalf("unexpected Limit=%q", r.URL.Query().Get("Limit"))
 			}
 			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"Items":[{"Id":"ok","Path":"/x/ok.strm","MediaSources":[{"RunTimeTicks":100,"MediaStreams":[{}]}]},{"Id":"missing","Path":"/x/missing.strm","MediaSources":[]},{"Id":"movie","Path":"/x/movie.mkv","MediaSources":[]}] ,"TotalRecordCount":3}`))}, nil
@@ -37,6 +37,27 @@ func TestEmbyMediaListOnlyQueuesMissingStrm(t *testing.T) {
 	}
 	if err := s.probe(context.Background(), "http://emby.test", "secret", items[1].ID); err != nil || playback != 1 {
 		t.Fatalf("probe err=%v calls=%d", err, playback)
+	}
+}
+
+func TestEmbyMediaListPaginatesBeyondOnePage(t *testing.T) {
+	requests := 0
+	transport := embyRoundTripper(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Path != "/emby/Items" {
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{}`))}, nil
+		}
+		requests++
+		start := r.URL.Query().Get("StartIndex")
+		if start == "0" {
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"Items":[{"Id":"first","Path":"/first.strm"}],"TotalRecordCount":201}`))}, nil
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"Items":[{"Id":"second","Path":"/second.strm"}],"TotalRecordCount":201}`))}, nil
+	})
+	s := NewEmbyMediaService(nil)
+	s.http.Transport = transport
+	items, err := s.list(context.Background(), "http://emby.test", "secret")
+	if err != nil || len(items) != 2 || requests != 2 {
+		t.Fatalf("items=%d requests=%d err=%v", len(items), requests, err)
 	}
 }
 
