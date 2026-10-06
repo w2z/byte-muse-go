@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"bytemuse/backend/internal/domain"
+	"bytemuse/backend/internal/logging"
 	"bytemuse/backend/internal/platform/pan115"
 	"bytemuse/backend/internal/ports"
 )
@@ -50,6 +51,7 @@ func NewPan115LibraryService(pan115 pan115FileAPI, library ports.MediaLibraryWri
 // 视频格式沿用生成 strm 的同一份默认格式表，避免两条链路对「什么算视频」判断不一致。
 // 单个目录失败只记录在该目录的 Message 里，不影响其他目录，与生成 strm 的失败隔离方式一致。
 func (s *Pan115LibraryService) Scan(ctx context.Context) (domain.Pan115LibraryScanResult, error) {
+	logging.Info(logging.CategoryLibraryScan, "扫描媒体库开始")
 	values, err := s.settings(ctx)
 	if err != nil {
 		return domain.Pan115LibraryScanResult{}, fmt.Errorf("读取扫描目录配置失败: %w", err)
@@ -94,9 +96,11 @@ func (s *Pan115LibraryService) Scan(ctx context.Context) (domain.Pan115LibrarySc
 		result.Skipped += entry.Skipped
 	}
 	if err := scanCheckpoint(ctx); err != nil {
+		logging.Error(logging.CategoryLibraryScan, "扫描媒体库已取消", "error", err.Error())
 		return result, err
 	}
 	reportScanProgress(ctx, "completed", processed, total, "")
+	logging.Info(logging.CategoryLibraryScan, "扫描媒体库完成", "files", result.Files, "matched", result.Matched, "created", result.Created, "skipped", result.Skipped)
 	return result, nil
 }
 

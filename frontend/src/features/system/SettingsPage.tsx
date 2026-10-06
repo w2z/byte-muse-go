@@ -72,14 +72,18 @@ type SettingGroup = {
 type SettingCategory = { code: string; title: string; groupCodes: string[] };
 type SettingsUpdate = { values: Record<string, string> };
 const TabPane = Tabs.TabPane;
-type EmbyMediaTask = { id: string; state: string; processed: number; total: number; success: number; skipped: number; failed: number; error?: string };
+type EmbyMediaTask = { id: string; state: "queued" | "running" | "pausing" | "paused" | "canceling" | "canceled" | "completed" | "failed"; phase?: "scanning" | "refreshing"; processed: number; total: number; success: number; skipped: number; failed: number; error?: string };
 function EmbyMediaInfoAction() {
   const client = useQueryClient();
   const query = useQuery({ queryKey: ["emby-media-task"], queryFn: () => apiRequest<EmbyMediaTask | null>("/strm/emby/media-info/task"), refetchInterval: 1000 });
-  const refresh = useMutation({ mutationFn: () => apiRequest<{ task: EmbyMediaTask }>("/strm/emby/media-info/refresh", { method: "POST", headers: { Prefer: "respond-async" } }), onSuccess: (result) => client.setQueryData(["emby-media-task"], result.task) });
   const task = query.data;
-  const active = task?.state === "queued" || task?.state === "running";
-  const percent = task && task.total > 0
+  const refresh = useMutation({ mutationFn: () => apiRequest<{ task: EmbyMediaTask }>("/strm/emby/media-info/refresh", { method: "POST", headers: { Prefer: "respond-async" } }), onSuccess: (result) => client.setQueryData(["emby-media-task"], result.task) });
+  const control = useMutation({ mutationFn: (action: "pause" | "resume" | "cancel") => {
+    if (!task) throw new Error("任务尚未加载");
+    return apiRequest<EmbyMediaTask>(`/strm/emby/media-info/tasks/${task.id}/control`, { method: "POST", body: JSON.stringify({ action }) });
+  }, onSuccess: (next) => client.setQueryData(["emby-media-task"], next) });
+  const active = task?.state === "queued" || task?.state === "running" || task?.state === "pausing" || task?.state === "paused" || task?.state === "canceling";
+  const percent = task?.phase === "scanning" ? 0 : task && task.total > 0
     ? Math.min(100, Math.round((task.processed / task.total) * 100))
     : task?.state === "completed" ? 100 : 0;
   return (
@@ -87,11 +91,15 @@ function EmbyMediaInfoAction() {
       <Button type="secondary" loading={refresh.isPending} disabled={refresh.isPending || active} onClick={() => refresh.mutate()}>
         立即刷新strm 媒体库信息
       </Button>
+      {active ? <span className="settings-strm-generate-actions">
+        <Button disabled={control.isPending || task?.state === "pausing" || task?.state === "canceling"} onClick={() => control.mutate(task?.state === "paused" ? "resume" : "pause")}>{task?.state === "paused" ? "继续" : "暂停"}</Button>
+        <Button status="danger" disabled={control.isPending || task?.state === "canceling"} onClick={() => control.mutate("cancel")}>停止</Button>
+      </span> : null}
       {active ? (
         <div className="settings-scan-progress" aria-label="STRM 媒体信息预热进度">
           <Progress percent={percent} animation={task?.state === "running"} formatText={(value) => `${value}% - ${task?.processed ?? 0}/${task?.total ?? 0}`} />
           <span className="settings-field-description">
-            {task?.state === "queued" ? "等待处理" : "正在刷新"}：成功 {task?.success ?? 0}，跳过 {task?.skipped ?? 0}，失败 {task?.failed ?? 0}
+            {task?.state === "queued" ? "等待处理" : task?.state === "pausing" ? "正在暂停" : task?.state === "paused" ? "已暂停" : task?.state === "canceling" ? "正在停止" : task?.phase === "scanning" ? "正在扫描媒体库，统计数量中" : "正在刷新媒体信息"}：成功 {task?.success ?? 0}，跳过 {task?.skipped ?? 0}，失败 {task?.failed ?? 0}
           </span>
         </div>
       ) : null}
@@ -101,6 +109,8 @@ function EmbyMediaInfoAction() {
         </span>
       ) : null}
       {task?.state === "failed" ? <span role="alert" className="settings-field-description">刷新失败：{task.error || "未知错误"}</span> : null}
+      {task?.state === "canceled" ? <span className="settings-field-description">刷新已停止：已处理 {task.processed}/{task.total}。</span> : null}
+      {control.isError ? <span role="alert" className="settings-field-description">任务控制失败，请刷新后重试。</span> : null}
     </div>
   );
 }

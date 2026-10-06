@@ -5,7 +5,9 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 type embyRoundTripper func(*http.Request) (*http.Response, error)
@@ -31,13 +33,97 @@ func TestEmbyMediaListOnlyQueuesMissingStrm(t *testing.T) {
 		return map[string]string{"EMBY_URL": "http://emby.test", "EMBY_API_KEY": "secret"}, nil
 	})
 	s.http.Transport = transport
-	items, err := s.list(context.Background(), "http://emby.test", "secret")
+	items, err := s.list(context.Background(), "", "http://emby.test", "secret")
 	if err != nil || len(items) != 2 || items[1].ID != "missing" || items[1].NeedsRefresh != true {
 		t.Fatalf("list=%+v err=%v", items, err)
 	}
 	if err := s.probe(context.Background(), "http://emby.test", "secret", items[1].ID); err != nil || playback != 1 {
 		t.Fatalf("probe err=%v calls=%d", err, playback)
 	}
+}
+
+// 两个探测请求阻塞时暂停不能提前确认，停止必须取消在途请求且不重放合并任务。
+func TestEmbyMediaPauseWaitsForInflightAndCancelClearsPending(t *testing.T) {
+	entered := make(chan struct{}, 4)
+	release := make(chan struct{})
+	var calls atomic.Int32
+	s := NewEmbyMediaService(func(context.Context) (map[string]string, error) {
+		return map[string]string{"EMBY_URL": "http://emby.test", "EMBY_API_KEY": "secret"}, nil
+	})
+	s.http.Transport = embyRoundTripper(func(r *http.Request) (*http.Response, error) {
+		if r.Method == http.MethodGet {
+			return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"Items":[{"Id":"1","Path":"/1.strm"},{"Id":"2","Path":"/2.strm"},{"Id":"3","Path":"/3.strm"},{"Id":"4","Path":"/4.strm"}],"TotalRecordCount":4}`))}, nil
+		}
+		calls.Add(1)
+		entered <- struct{}{}
+		select {
+		case <-release:
+			return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{}`))}, nil
+		case <-r.Context().Done():
+			return nil, r.Context().Err()
+		}
+	})
+	task, _, _ := s.Enqueue(context.Background())
+	t.Cleanup(func() { _, _ = s.Control(task.ID, "cancel") })
+	for i := 0; i < 2; i++ {
+		select {
+		case <-entered:
+		case <-time.After(time.Second):
+			t.Fatal("workers did not start")
+		}
+	}
+	if _, err := s.Control(task.ID, "pause"); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(30 * time.Millisecond)
+	if got := s.Snapshot(); got.State != "pausing" {
+		t.Fatalf("confirmed pause with requests inflight: %+v", got)
+	}
+	release <- struct{}{}
+	release <- struct{}{}
+	waitEmbyState(t, s, "paused")
+	if calls.Load() != 2 {
+		t.Fatal("dispatched during pause")
+	}
+	if _, created, err := s.Enqueue(context.Background()); err != nil || created {
+		t.Fatal("paused task replaced")
+	}
+	if _, err := s.Control(task.ID, "resume"); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		select {
+		case <-entered:
+		case <-time.After(time.Second):
+			t.Fatal("workers did not resume")
+		}
+	}
+	if _, err := s.Control(task.ID, "cancel"); err != nil {
+		t.Fatal(err)
+	}
+	got := waitEmbyState(t, s, "canceled")
+	if got.Processed != 2 || got.Failed != 0 {
+		t.Fatalf("cancellation counted as failure: %+v", got)
+	}
+	s.mu.Lock()
+	pending := s.pending
+	s.mu.Unlock()
+	if pending {
+		t.Fatal("cancel kept pending rerun")
+	}
+}
+
+func waitEmbyState(t *testing.T, s *EmbyMediaService, state string) *EmbyMediaTask {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if got := s.Snapshot(); got != nil && got.State == state {
+			return got
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("wanted %s, got %+v", state, s.Snapshot())
+	return nil
 }
 
 func TestEmbyMediaListPaginatesBeyondOnePage(t *testing.T) {
@@ -55,7 +141,7 @@ func TestEmbyMediaListPaginatesBeyondOnePage(t *testing.T) {
 	})
 	s := NewEmbyMediaService(nil)
 	s.http.Transport = transport
-	items, err := s.list(context.Background(), "http://emby.test", "secret")
+	items, err := s.list(context.Background(), "", "http://emby.test", "secret")
 	if err != nil || len(items) != 2 || requests != 2 {
 		t.Fatalf("items=%d requests=%d err=%v", len(items), requests, err)
 	}
@@ -81,5 +167,21 @@ func TestEmbyMediaSettingsDependency(t *testing.T) {
 	}
 	if _, err := s.Update(context.Background(), map[string]string{"STRM_EMBY_MEDIA_INTERVAL_MINUTES": "60"}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestEmbyMediaControlTransitions(t *testing.T) {
+	s := NewEmbyMediaService(nil)
+	s.task = &EmbyMediaTask{ID: "task-1", State: "running"}
+	s.wake = make(chan struct{})
+	if task, err := s.Control("task-1", "pause"); err != nil || task.State != "pausing" {
+		t.Fatalf("pause state=%+v err=%v", task, err)
+	}
+	s.task.State = "paused"
+	if task, err := s.Control("task-1", "resume"); err != nil || task.State != "running" {
+		t.Fatalf("resume state=%+v err=%v", task, err)
+	}
+	if task, err := s.Control("task-1", "cancel"); err != nil || task.State != "canceling" {
+		t.Fatalf("cancel state=%+v err=%v", task, err)
 	}
 }

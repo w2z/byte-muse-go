@@ -1412,7 +1412,7 @@ paths:
   /strm/emby/media-info/refresh:
     post:
       summary: 立即刷新 STRM 媒体库信息
-      description: 将一次媒体信息预热请求加入串行异步队列；运行中重复请求会合并为下一轮。
+      description: 将一次媒体信息预热请求加入异步队列；任务先快速扫描全部 Emby 媒体，再以两个并发 worker 刷新缺失信息，运行中重复请求会合并为下一轮。
       parameters:
         - {in: cookie, name: bytemuse_session, required: true, schema: {type: string}, description: 登录签发的管理员会话 Cookie}
       responses:
@@ -1428,6 +1428,32 @@ paths:
                   task: {type: object}
         '400': {description: Emby 配置缺失或刷新失败}
         '401': {description: 未登录}
+        '503': {description: 服务未装配}
+  /strm/emby/media-info/tasks/{id}/control:
+    post:
+      summary: 控制 STRM 媒体信息刷新任务
+      description: 对当前任务执行暂停、继续或停止；停止后任务状态为 canceled。
+      parameters:
+        - {in: path, name: id, required: true, schema: {type: string}, description: 媒体信息刷新任务 ID}
+        - {in: cookie, name: bytemuse_session, required: true, schema: {type: string}, description: 登录签发的管理员会话 Cookie}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action]
+              properties:
+                action: {type: string, enum: [pause, resume, cancel], description: 控制动作}
+      responses:
+        '200':
+          description: 控制后的任务快照
+          content:
+            application/json:
+              schema: {type: object}
+        '400': {description: action 缺失或取值非法}
+        '401': {description: 未登录}
+        '409': {description: 任务不存在、已结束或状态已变化}
         '503': {description: 服务未装配}
   /files/play/{kind}/{fileId}:
     servers:
@@ -2100,6 +2126,7 @@ components:
           enum: [debug, info, warning, error]
         category:
           type: string
+          enum: [采集同步, 订阅查询, 下载, 媒体库, 扫描媒体库, 生成 STRM, 刷新 STRM 视频信息, 通知, 系统, Agent, 其他]
         message:
           type: string
         attrs:

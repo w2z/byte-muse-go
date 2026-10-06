@@ -2,6 +2,7 @@ package application
 
 import (
 	"bytemuse/backend/internal/domain"
+	"bytemuse/backend/internal/logging"
 	"bytemuse/backend/internal/ports"
 	"context"
 	"crypto/rand"
@@ -90,6 +91,7 @@ func (s *ScanTasks) Start(ctx context.Context, kind, mode string, run func(conte
 	}
 	s.active[kind] = e
 	initial := e.task
+	logging.Info(scanTaskCategory(kind), scanTaskName(kind)+" 任务已开始", "task_id", e.task.ID, "mode", mode)
 	workerCtx = context.WithValue(workerCtx, scanCheckpointKey{}, func() error { return s.checkpoint(workerCtx, e) })
 	workerCtx = WithScanProgress(workerCtx, func(p ScanProgress) {
 		s.mu.Lock()
@@ -125,9 +127,38 @@ func (s *ScanTasks) Start(ctx context.Context, kind, mode string, run func(conte
 			e.task.Result, _ = json.Marshal(result)
 		}
 		_ = s.save(e)
+		attrs := []any{"task_id", e.task.ID, "mode", mode, "state", e.task.State, "processed", e.task.Progress.Processed, "total", e.task.Progress.Total}
+		if e.task.Error != "" {
+			attrs = append(attrs, "error", e.task.Error)
+		}
+		if e.task.State == "completed" {
+			logging.Info(scanTaskCategory(kind), scanTaskName(kind)+" 任务已完成", attrs...)
+		} else {
+			logging.Error(scanTaskCategory(kind), scanTaskName(kind)+" 任务未完成", attrs...)
+		}
 		delete(s.active, kind)
 	}()
 	return &initial, nil
+}
+
+func scanTaskName(kind string) string {
+	if kind == "library" {
+		return "扫描媒体库"
+	}
+	if kind == "strm" {
+		return "生成 STRM"
+	}
+	return "媒体任务"
+}
+
+func scanTaskCategory(kind string) logging.Category {
+	if kind == "library" {
+		return logging.CategoryLibraryScan
+	}
+	if kind == "strm" {
+		return logging.CategoryStrmGenerate
+	}
+	return logging.CategoryMedia
 }
 
 // Latest 每次读取数据库中的最新快照，页面刷新后仍得到相同任务标识与进度。

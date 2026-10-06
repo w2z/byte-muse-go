@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"bytemuse/backend/internal/domain"
+	"bytemuse/backend/internal/logging"
 	"bytemuse/backend/internal/platform/clouddrive"
 	"bytemuse/backend/internal/platform/pan115"
 )
@@ -283,6 +284,7 @@ func (s *StrmService) CloudDriveDirectories(ctx context.Context, directory strin
 // mode 决定本地已有文件的处理方式：全量先清理映射本地目录下的 strm 内容再重建，
 // 增量保留本地文件、只补齐缺失项；两种方式共用同一套映射、过滤与写入规则。
 func (s *StrmService) Scan(ctx context.Context, playBase string, mode domain.StrmGenerateMode) (domain.StrmScanResult, error) {
+	logging.Info(logging.CategoryStrmGenerate, "生成 STRM 开始扫描", "mode", string(mode))
 	reportScanProgress(ctx, "waiting", 0, 0, "")
 	// 等待事件生成释放互斥时仍响应任务暂停和取消。
 	for !s.scanMu.TryLock() {
@@ -363,6 +365,7 @@ func (s *StrmService) Scan(ctx context.Context, playBase string, mode domain.Str
 	}
 	reportScanProgress(ctx, "finalizing", processed, total, "")
 	if err := scanCheckpoint(ctx); err != nil {
+		logging.Error(logging.CategoryStrmGenerate, "生成 STRM 已取消", "mode", string(mode), "error", err.Error())
 		return result, err
 	}
 	result.Emby = s.refreshEmby(ctx, values)
@@ -370,6 +373,7 @@ func (s *StrmService) Scan(ctx context.Context, playBase string, mode domain.Str
 		return result, err
 	}
 	reportScanProgress(ctx, "completed", processed, total, "")
+	logging.Info(logging.CategoryStrmGenerate, "生成 STRM 完成", "mode", string(mode), "files", result.Files, "created", result.Created, "failed", result.Failed, "download_failed", result.DownloadFailed)
 	return result, nil
 }
 

@@ -14,7 +14,7 @@ import { PageHeader } from "../../shared/ui/PageHeader";
 import { PageState } from "../../shared/ui/PageState";
 import "./LogsPage.css";
 
-const CATEGORIES = ["采集同步", "订阅查询", "下载", "媒体库", "通知", "系统", "Agent", "其他"] as const;
+const CATEGORIES = ["采集同步", "订阅查询", "下载", "媒体库", "扫描媒体库", "生成 STRM", "刷新 STRM 视频信息", "通知", "系统", "Agent", "其他"] as const;
 const LOG_PAGE_SIZE_OPTIONS = [100, 200, 300, 400, 500];
 const DEFAULT_LOG_PAGE_SIZE = LOG_PAGE_SIZE_OPTIONS[0];
 type Category = (typeof CATEGORIES)[number];

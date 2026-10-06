@@ -18,6 +18,9 @@ const (
 	CategorySubscription Category = "订阅查询"
 	CategoryDownload     Category = "下载"
 	CategoryMedia        Category = "媒体库"
+	CategoryLibraryScan  Category = "扫描媒体库"
+	CategoryStrmGenerate Category = "生成 STRM"
+	CategoryStrmMedia    Category = "刷新 STRM 视频信息"
 	CategoryNotification Category = "通知"
 	CategorySystem       Category = "系统"
 	CategoryAgent        Category = "Agent"
@@ -30,7 +33,7 @@ const MaxPageSize = 500
 // Valid reports whether category belongs to the public log category vocabulary.
 func (c Category) Valid() bool {
 	switch c {
-	case CategoryCollection, CategorySubscription, CategoryDownload, CategoryMedia, CategoryNotification, CategorySystem, CategoryAgent, CategoryOther:
+	case CategoryCollection, CategorySubscription, CategoryDownload, CategoryMedia, CategoryLibraryScan, CategoryStrmGenerate, CategoryStrmMedia, CategoryNotification, CategorySystem, CategoryAgent, CategoryOther:
 		return true
 	default:
 		return false

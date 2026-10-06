@@ -139,6 +139,7 @@ func New(dependencies Dependencies) http.Handler {
 		router.Post("/strm/scan/tasks/{id}/control", scanTaskEndpoint(dependencies.ScanTasks, "strm", true))
 		router.Post("/strm/emby/media-info/refresh", refreshStrmMediaInfo(dependencies.EmbyMedia))
 		router.Get("/strm/emby/media-info/task", strmMediaInfoTask(dependencies.EmbyMedia))
+		router.Post("/strm/emby/media-info/tasks/{id}/control", controlStrmMediaInfo(dependencies.EmbyMedia))
 		router.Get("/message", wechatVerify(dependencies))
 		router.Post("/message", wechatReceive(dependencies))
 	})
@@ -185,6 +186,32 @@ func strmMediaInfoTask(service *application.EmbyMediaService) http.HandlerFunc {
 			return
 		}
 		writeJSON(w, http.StatusOK, service.Snapshot())
+	}
+}
+
+func controlStrmMediaInfo(service *application.EmbyMediaService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if service == nil {
+			writeError(w, http.StatusServiceUnavailable, "service_unavailable", "Emby 媒体信息服务未就绪")
+			return
+		}
+		var body struct {
+			Action string `json:"action"`
+		}
+		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024)).Decode(&body) != nil || (body.Action != "pause" && body.Action != "resume" && body.Action != "cancel") {
+			writeError(w, http.StatusBadRequest, "invalid_request", "action 必须为 pause、resume 或 cancel")
+			return
+		}
+		task, err := service.Control(chi.URLParam(r, "id"), body.Action)
+		if errors.Is(err, application.ErrScanTaskConflict) {
+			writeError(w, http.StatusConflict, "task_conflict", err.Error())
+			return
+		}
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "task_error", err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, task)
 	}
 }
 

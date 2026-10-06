@@ -12,6 +12,13 @@ const ATTRIBUTE_LABELS: Record<string, string> = {
   task: "任务",
   error: "原因",
   retry: "重试次数",
+  task_id: "任务 ID",
+  processed: "已处理",
+  total: "总数",
+  success: "成功",
+  skipped: "跳过",
+  failed: "失败",
+  workers: "并发数",
 };
 
 /** 查询类日志携带的番号列表：压缩为「（A、B）」附在数量之后，空列表不占位。 */
