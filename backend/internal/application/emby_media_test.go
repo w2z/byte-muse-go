@@ -16,6 +16,9 @@ func TestEmbyMediaListOnlyQueuesMissingStrm(t *testing.T) {
 	var playback int
 	transport := embyRoundTripper(func(r *http.Request) (*http.Response, error) {
 		if r.URL.Path == "/emby/Items" {
+			if r.URL.Query().Get("Limit") != "10000" {
+				t.Fatalf("unexpected Limit=%q", r.URL.Query().Get("Limit"))
+			}
 			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"Items":[{"Id":"ok","Path":"/x/ok.strm","MediaSources":[{"RunTimeTicks":100,"MediaStreams":[{}]}]},{"Id":"missing","Path":"/x/missing.strm","MediaSources":[]},{"Id":"movie","Path":"/x/movie.mkv","MediaSources":[]}] ,"TotalRecordCount":3}`))}, nil
 		}
 		if r.URL.Path == "/emby/Items/missing/PlaybackInfo" {

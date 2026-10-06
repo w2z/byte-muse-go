@@ -149,6 +149,7 @@ type embyItem struct {
 	Path         string `json:"Path"`
 	NeedsRefresh bool
 	MediaSources []struct {
+		Path         string            `json:"Path"`
 		MediaStreams []json.RawMessage `json:"MediaStreams"`
 		RunTimeTicks int64             `json:"RunTimeTicks"`
 	} `json:"MediaSources"`
@@ -163,9 +164,9 @@ func (s *EmbyMediaService) list(ctx context.Context, base, key string) ([]embyIt
 // streamItems 单次读取 Emby 的完整 Items 数组，并在解出每个 STRM 后立即回调。
 // Limit=0 避免分页；回调由任务负责更新动态总数和处理进度。
 func (s *EmbyMediaService) streamItems(ctx context.Context, base, key string, onItem func(embyItem)) error {
-	// Emby 的 Limit=0 表示不限制返回数量；这里一次读取完整 STRM 媒体集，
-	// 避免分页导致任务只看到第一页。任务处理循环仍按发现项实时递增 Total。
-	u := base + "/emby/Items?Recursive=true&IncludeItemTypes=Movie,Episode&Fields=Path,MediaSources&Limit=0&api_key=" + url.QueryEscape(key)
+	// Emby 将 Limit=0 解释为返回 0 条，不能用它表示“不限制”。
+	// 使用一次足够大的上限读取完整媒体集，避免分页导致任务只看到第一页。
+	u := base + "/emby/Items?Recursive=true&IncludeItemTypes=Movie,Episode&Fields=Path,MediaSources&Limit=10000&api_key=" + url.QueryEscape(key)
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	res, err := s.http.Do(req)
 	if err != nil {
@@ -205,7 +206,11 @@ func (s *EmbyMediaService) streamItems(ctx context.Context, base, key string, on
 			if err := decoder.Decode(&it); err != nil {
 				return fmt.Errorf("解析 Emby 媒体列表失败")
 			}
-			if strings.ToLower(filepath.Ext(it.Path)) != ".strm" || it.ID == "" {
+			itemPath := it.Path
+			if itemPath == "" && len(it.MediaSources) > 0 {
+				itemPath = it.MediaSources[0].Path
+			}
+			if strings.ToLower(filepath.Ext(itemPath)) != ".strm" || it.ID == "" {
 				continue
 			}
 			missing := len(it.MediaSources) == 0
