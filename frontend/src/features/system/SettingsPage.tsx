@@ -1,4 +1,4 @@
-import { Button, Input, InputTag, Radio, Select, Switch, Tabs } from "@arco-design/web-react";
+import { Button, Input, InputTag, Progress, Radio, Select, Switch, Tabs } from "@arco-design/web-react";
 import { IconCheck, IconClose, IconLaunch, IconSave, IconUndo } from "@arco-design/web-react/icon";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Fragment, useEffect, useState, type ReactNode } from "react";
@@ -77,7 +77,32 @@ function EmbyMediaInfoAction() {
   const client = useQueryClient();
   const query = useQuery({ queryKey: ["emby-media-task"], queryFn: () => apiRequest<EmbyMediaTask | null>("/strm/emby/media-info/task"), refetchInterval: 1000 });
   const refresh = useMutation({ mutationFn: () => apiRequest<{ task: EmbyMediaTask }>("/strm/emby/media-info/refresh", { method: "POST", headers: { Prefer: "respond-async" } }), onSuccess: (result) => client.setQueryData(["emby-media-task"], result.task) });
-  return <div className="settings-strm-generate"><Button type="secondary" loading={refresh.isPending} disabled={refresh.isPending || query.data?.state === "running" || query.data?.state === "queued"} onClick={() => refresh.mutate()}>立即刷新strm 媒体库信息</Button>{query.data?.state === "running" ? <span className="settings-field-description">正在刷新：{query.data.processed}/{query.data.total}，成功 {query.data.success}，失败 {query.data.failed}</span> : null}{query.data?.state === "failed" ? <span role="alert" className="settings-field-description">刷新失败：{query.data.error || "未知错误"}</span> : null}</div>;
+  const task = query.data;
+  const active = task?.state === "queued" || task?.state === "running";
+  const percent = task && task.total > 0
+    ? Math.min(100, Math.round((task.processed / task.total) * 100))
+    : task?.state === "completed" ? 100 : 0;
+  return (
+    <div className="settings-strm-generate">
+      <Button type="secondary" loading={refresh.isPending} disabled={refresh.isPending || active} onClick={() => refresh.mutate()}>
+        立即刷新strm 媒体库信息
+      </Button>
+      {active ? (
+        <div className="settings-scan-progress" aria-label="STRM 媒体信息预热进度">
+          <Progress percent={percent} animation={task?.state === "running"} formatText={(value) => `${value}% - ${task?.processed ?? 0}/${task?.total ?? 0}`} />
+          <span className="settings-field-description">
+            {task?.state === "queued" ? "等待处理" : "正在刷新"}：成功 {task?.success ?? 0}，跳过 {task?.skipped ?? 0}，失败 {task?.failed ?? 0}
+          </span>
+        </div>
+      ) : null}
+      {task?.state === "completed" ? (
+        <span className="settings-field-description">
+          预热完成：共 {task.total} 个，成功 {task.success}，跳过 {task.skipped}，失败 {task.failed}。
+        </span>
+      ) : null}
+      {task?.state === "failed" ? <span role="alert" className="settings-field-description">刷新失败：{task.error || "未知错误"}</span> : null}
+    </div>
+  );
 }
 // 每个 Unicode 码点最多 4 个 UTF-8 字节，确保输入不超过后端 60 KiB 容量。
 const PROMPT_MAX_CHARS = 15360;
