@@ -29,10 +29,10 @@ func TestEmbyMediaListOnlyQueuesMissingStrm(t *testing.T) {
 	})
 	s.http.Transport = transport
 	items, err := s.list(context.Background(), "http://emby.test", "secret")
-	if err != nil || len(items) != 1 || items[0].ID != "missing" {
+	if err != nil || len(items) != 2 || items[1].ID != "missing" || items[1].NeedsRefresh != true {
 		t.Fatalf("list=%+v err=%v", items, err)
 	}
-	if err := s.probe(context.Background(), "http://emby.test", "secret", items[0].ID); err != nil || playback != 1 {
+	if err := s.probe(context.Background(), "http://emby.test", "secret", items[1].ID); err != nil || playback != 1 {
 		t.Fatalf("probe err=%v calls=%d", err, playback)
 	}
 }
