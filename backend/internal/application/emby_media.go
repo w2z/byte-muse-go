@@ -29,7 +29,7 @@ type EmbyMediaTask struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
-// EmbyMediaService 先快速扫描 STRM 媒体，再用两个并发 worker 刷新缺失信息；重复触发合并为下一轮。
+// EmbyMediaService 先快速扫描 STRM 媒体，再以默认并发数刷新缺失信息；重复触发合并为下一轮。
 type EmbyMediaService struct {
 	settings func(context.Context) (map[string]string, error)
 	http     *http.Client
@@ -41,6 +41,9 @@ type EmbyMediaService struct {
 }
 
 const embyMediaPageSize = 200
+
+// embyMediaWorkers 限制同时进行的 Emby 媒体探测数；115 请求仍遵守网盘客户端的独立限速。
+const embyMediaWorkers = 10
 
 func NewEmbyMediaService(settings func(context.Context) (map[string]string, error)) *EmbyMediaService {
 	return &EmbyMediaService{settings: settings, http: &http.Client{Timeout: 2 * time.Minute}}
@@ -120,10 +123,10 @@ func (s *EmbyMediaService) run(ctx context.Context, id string) {
 	s.task.Phase = "refreshing"
 	s.task.UpdatedAt = time.Now().UTC()
 	s.mu.Unlock()
-	logging.Info(logging.CategoryStrmMedia, "刷新 STRM 视频信息开始异步刷新", "task_id", id, "total", len(items), "workers", 2)
+	logging.Info(logging.CategoryStrmMedia, "刷新 STRM 视频信息开始异步刷新", "task_id", id, "total", len(items), "workers", embyMediaWorkers)
 	work := make(chan embyItem)
 	var workers sync.WaitGroup
-	for i := 0; i < 2; i++ {
+	for i := 0; i < embyMediaWorkers; i++ {
 		workers.Add(1)
 		go func() {
 			defer workers.Done()

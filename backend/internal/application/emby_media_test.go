@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -42,9 +43,10 @@ func TestEmbyMediaListOnlyQueuesMissingStrm(t *testing.T) {
 	}
 }
 
-// 两个探测请求阻塞时暂停不能提前确认，停止必须取消在途请求且不重放合并任务。
+// 默认十个探测请求阻塞时暂停不能提前确认，停止必须取消在途请求且不重放合并任务。
 func TestEmbyMediaPauseWaitsForInflightAndCancelClearsPending(t *testing.T) {
-	entered := make(chan struct{}, 4)
+	const concurrency = 10
+	entered := make(chan struct{}, concurrency*2)
 	release := make(chan struct{})
 	var calls atomic.Int32
 	s := NewEmbyMediaService(func(context.Context) (map[string]string, error) {
@@ -52,7 +54,11 @@ func TestEmbyMediaPauseWaitsForInflightAndCancelClearsPending(t *testing.T) {
 	})
 	s.http.Transport = embyRoundTripper(func(r *http.Request) (*http.Response, error) {
 		if r.Method == http.MethodGet {
-			return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"Items":[{"Id":"1","Path":"/1.strm"},{"Id":"2","Path":"/2.strm"},{"Id":"3","Path":"/3.strm"},{"Id":"4","Path":"/4.strm"}],"TotalRecordCount":4}`))}, nil
+			items := make([]string, concurrency*2)
+			for i := range items {
+				items[i] = fmt.Sprintf(`{"Id":"%d","Path":"/%d.strm"}`, i, i)
+			}
+			return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(fmt.Sprintf(`{"Items":[%s],"TotalRecordCount":%d}`, strings.Join(items, ","), len(items))))}, nil
 		}
 		calls.Add(1)
 		entered <- struct{}{}
@@ -65,7 +71,7 @@ func TestEmbyMediaPauseWaitsForInflightAndCancelClearsPending(t *testing.T) {
 	})
 	task, _, _ := s.Enqueue(context.Background())
 	t.Cleanup(func() { _, _ = s.Control(task.ID, "cancel") })
-	for i := 0; i < 2; i++ {
+	for i := 0; i < concurrency; i++ {
 		select {
 		case <-entered:
 		case <-time.After(time.Second):
@@ -79,10 +85,11 @@ func TestEmbyMediaPauseWaitsForInflightAndCancelClearsPending(t *testing.T) {
 	if got := s.Snapshot(); got.State != "pausing" {
 		t.Fatalf("confirmed pause with requests inflight: %+v", got)
 	}
-	release <- struct{}{}
-	release <- struct{}{}
+	for i := 0; i < concurrency; i++ {
+		release <- struct{}{}
+	}
 	waitEmbyState(t, s, "paused")
-	if calls.Load() != 2 {
+	if calls.Load() != concurrency {
 		t.Fatal("dispatched during pause")
 	}
 	if _, created, err := s.Enqueue(context.Background()); err != nil || created {
@@ -91,7 +98,7 @@ func TestEmbyMediaPauseWaitsForInflightAndCancelClearsPending(t *testing.T) {
 	if _, err := s.Control(task.ID, "resume"); err != nil {
 		t.Fatal(err)
 	}
-	for i := 0; i < 2; i++ {
+	for i := 0; i < concurrency; i++ {
 		select {
 		case <-entered:
 		case <-time.After(time.Second):
@@ -102,7 +109,7 @@ func TestEmbyMediaPauseWaitsForInflightAndCancelClearsPending(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := waitEmbyState(t, s, "canceled")
-	if got.Processed != 2 || got.Failed != 0 {
+	if got.Processed != concurrency || got.Failed != 0 {
 		t.Fatalf("cancellation counted as failure: %+v", got)
 	}
 	s.mu.Lock()
