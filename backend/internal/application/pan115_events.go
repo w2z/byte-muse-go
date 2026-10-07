@@ -74,11 +74,11 @@ func (s *Pan115EventService) Run(ctx context.Context) {
 		if err != nil && ctx.Err() == nil {
 			delay = time.Minute
 			if err.Error() != lastError {
-				logging.Default.Error(logging.CategoryMedia, "115 事件监听失败", "error", err.Error())
+				logging.Default.Error(logging.CategoryPan115Event, "115 事件监听失败", "error", err.Error())
 				lastError = err.Error()
 			}
 		} else if err == nil && lastError != "" {
-			logging.Default.Info(logging.CategoryMedia, "115 事件监听已恢复")
+			logging.Default.Info(logging.CategoryPan115Event, "115 事件监听已恢复")
 			lastError = ""
 		}
 		timer := time.NewTimer(delay)
@@ -198,14 +198,14 @@ func (s *Pan115EventService) Poll(ctx context.Context) error {
 	// 超过 Web 最近一万条窗口时执行完整映射扫描以补偿遗漏；成功后才能前移。
 	if !reached {
 		dirty = true
-		logging.Default.Error(logging.CategoryMedia, "115 事件超出历史窗口，执行映射补偿扫描")
+		logging.Default.Error(logging.CategoryPan115Event, "115 事件超出历史窗口，执行映射补偿扫描")
 	}
 	if dirty {
 		result, err := s.strm.scanPan115EventMappings(ctx, active, base, values)
 		if err != nil {
 			return err
 		}
-		logging.Default.Info(logging.CategoryMedia, "115 事件已同步 STRM", "files", result.Files, "created", result.Created)
+		logging.Default.Info(logging.CategoryPan115Event, "115 事件已同步 STRM", "files", result.Files, "created", result.Created)
 	}
 	if err := ctx.Err(); err != nil {
 		return err

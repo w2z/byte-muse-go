@@ -593,7 +593,8 @@ paths:
           in: query
           schema:
             type: string
-            description: 日志业务分类
+            description: 日志业务分类；省略或空串表示全部。115 事件用于监听失败、恢复、补偿扫描及同步结果；历史记录保留原分类。
+            enum: [采集同步, 订阅查询, 下载, 媒体库, 115 事件, 扫描媒体库, 生成 STRM, 刷新 STRM 视频信息, 通知, 系统, Agent, 其他]
         - name: keyword
           in: query
           schema:
@@ -644,7 +645,8 @@ paths:
           in: query
           schema:
             type: string
-            description: 日志业务分类
+            description: 日志业务分类；省略或空串表示全部。115 事件用于监听失败、恢复、补偿扫描及同步结果；历史记录保留原分类。
+            enum: [采集同步, 订阅查询, 下载, 媒体库, 115 事件, 扫描媒体库, 生成 STRM, 刷新 STRM 视频信息, 通知, 系统, Agent, 其他]
         - name: keyword
           in: query
           schema:
@@ -2126,7 +2128,8 @@ components:
           enum: [debug, info, warning, error]
         category:
           type: string
-          enum: [采集同步, 订阅查询, 下载, 媒体库, 扫描媒体库, 生成 STRM, 刷新 STRM 视频信息, 通知, 系统, Agent, 其他]
+          description: 日志业务分类；115 事件包含生活事件监听失败、恢复、补偿扫描与同步结果，历史记录保留原分类。
+          enum: [采集同步, 订阅查询, 下载, 媒体库, 115 事件, 扫描媒体库, 生成 STRM, 刷新 STRM 视频信息, 通知, 系统, Agent, 其他]
         message:
           type: string
         attrs:

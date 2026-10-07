@@ -18,6 +18,8 @@ const (
 	CategorySubscription Category = "订阅查询"
 	CategoryDownload     Category = "下载"
 	CategoryMedia        Category = "媒体库"
+	// CategoryPan115Event 标识 115 生活事件监听及其触发的 STRM 同步日志。
+	CategoryPan115Event  Category = "115 事件"
 	CategoryLibraryScan  Category = "扫描媒体库"
 	CategoryStrmGenerate Category = "生成 STRM"
 	CategoryStrmMedia    Category = "刷新 STRM 视频信息"
@@ -33,7 +35,7 @@ const MaxPageSize = 500
 // Valid reports whether category belongs to the public log category vocabulary.
 func (c Category) Valid() bool {
 	switch c {
-	case CategoryCollection, CategorySubscription, CategoryDownload, CategoryMedia, CategoryLibraryScan, CategoryStrmGenerate, CategoryStrmMedia, CategoryNotification, CategorySystem, CategoryAgent, CategoryOther:
+	case CategoryCollection, CategorySubscription, CategoryDownload, CategoryMedia, CategoryPan115Event, CategoryLibraryScan, CategoryStrmGenerate, CategoryStrmMedia, CategoryNotification, CategorySystem, CategoryAgent, CategoryOther:
 		return true
 	default:
 		return false
