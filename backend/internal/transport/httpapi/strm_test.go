@@ -110,7 +110,7 @@ func TestStrmRootUnavailableReturnsActionableError(t *testing.T) {
 	if body.Code != "strm_root_unavailable" {
 		t.Fatalf("错误码不符: %+v", body)
 	}
-	for _, want := range []string{"/strm", "65532", "permission denied"} {
+	for _, want := range []string{"/strm", "只读", "permission denied"} {
 		if !strings.Contains(body.Message, want) {
 			t.Fatalf("提示缺少 %q：%s", want, body.Message)
 		}

@@ -29,7 +29,7 @@ var (
 	// ErrStrmNotConfigured 表示 strm 映射或网盘集成尚未配置齐全。
 	ErrStrmNotConfigured = errors.New("strm 尚未配置")
 	// ErrStrmRootUnavailable 表示容器内 strm 根目录无法创建、读取或写入。
-	// 这是部署问题而不是请求参数问题：容器必须把可写目录挂载到 /strm，宿主机目录需允许 UID 65532 写入。
+	// 这是部署问题而不是请求参数问题：容器必须把可写目录挂载到 /strm，且该挂载不能是只读。
 	ErrStrmRootUnavailable = errors.New("strm 根目录不可用")
 )
 

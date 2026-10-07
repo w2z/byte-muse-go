@@ -74,7 +74,7 @@ docker run -d --name byte-muse-go \
 
 </details>
 
-`/path/to/byte-muse/data` 与 `/path/to/byte-muse/strm` 需要允许容器内 UID 65532 写入；只挂载 `/data` 与 `/strm`，不要覆盖镜像里的 `/app`。以上命令都只启动应用容器，需要抓取增强服务时使用下面的 Compose 配置。
+容器直接以 root 运行，`/path/to/byte-muse/data` 与 `/path/to/byte-muse/strm` 无需 chown，只要不是只读挂载即可；只挂载 `/data` 与 `/strm`，不要覆盖镜像里的 `/app`。以上命令都只启动应用容器，需要抓取增强服务时使用下面的 Compose 配置。
 
 影片封面默认持久化到 `/data/cover`，文件名是番号（例如 `sons-1223.png`），随 `/data` 一起保留，不需要额外挂载；缓存目录不可写或源站不可用时页面自动回退到源站地址。缓存目录可用 `COVER_ROOT` 覆盖，默认值 `/data/cover`。
 设置页的「外网访问地址」已配置时，页面封面与企业微信封面推送都改用 `{外网访问地址}/api/v1/covers/{番号}` 取图，第三方与页面拿到同一张缓存图；留空时页面用跟随自身来源的相对地址，企业微信直接拉取图床原图。当该前缀为 https://i0.wp.com/、https://i1.wp.com/、https://i3.wp.com/ 或 https://i4.wp.com/ 时，页面与企业微信封面直接使用代理域名加原图主机、路径和查询参数，例如 https://i0.wp.com/c0.jdbstatic.com/covers/p9/P98NVa.jpg，不拼接 /api/v1/covers。
@@ -117,7 +117,7 @@ services:
       SESSION_SECRET: 请替换SESSION_SECRET(32位)
     volumes:
       # 只挂载 /data 与 /strm：镜像的 /app 存放服务二进制与前端产物，挂载覆盖后容器无法启动。
-      # 宿主机目录需允许容器内 UID 65532 写入：chown -R 65532:65532 /path/to/byte-muse/data /path/to/byte-muse/strm
+      # 容器直接以 root 运行，宿主机目录无需 chown，只要不是只读挂载即可。
       # 影片封面缓存在 /data/cover，随 /data 一起持久化，不需要额外挂载。
       - /path/to/byte-muse/data:/data
       - /path/to/byte-muse/strm:/strm
@@ -174,7 +174,7 @@ services:
       SESSION_SECRET: 请替换SESSION_SECRET(32位)
     volumes:
       # 只挂载 /data 与 /strm：镜像的 /app 存放服务二进制与前端产物，挂载覆盖后容器无法启动。
-      # 宿主机目录需允许容器内 UID 65532 写入：chown -R 65532:65532 /path/to/byte-muse/data /path/to/byte-muse/strm
+      # 容器直接以 root 运行，宿主机目录无需 chown，只要不是只读挂载即可。
       # 影片封面缓存在 /data/cover，随 /data 一起持久化，不需要额外挂载。
       - /path/to/byte-muse/data:/data
       - /path/to/byte-muse/strm:/strm
@@ -253,7 +253,7 @@ services:
       SESSION_SECRET: 请替换SESSION_SECRET(32位)
     volumes:
       # 只挂载 /data 与 /strm：镜像的 /app 存放服务二进制与前端产物，挂载覆盖后容器无法启动。
-      # 宿主机目录需允许容器内 UID 65532 写入：chown -R 65532:65532 /path/to/byte-muse/data /path/to/byte-muse/strm
+      # 容器直接以 root 运行，宿主机目录无需 chown，只要不是只读挂载即可。
       # 影片封面缓存在 /data/cover，随 /data 一起持久化，不需要额外挂载。
       - /path/to/byte-muse/data:/data
       - /path/to/byte-muse/strm:/strm

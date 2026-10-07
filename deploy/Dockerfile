@@ -27,18 +27,21 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
     CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags="-s -w" -o /out/bytemuse ./cmd/bytemuse && \
     mkdir -p /out/data
 
-FROM gcr.io/distroless/static-debian12:nonroot
+# 运行时直接以 root 运行：绑定宿主机目录时无需再对齐 UID/GID，部署参数最少，
+# 与 moviepilot、Emby 等常见镜像行为一致。代价是容器内进程拥有 root 权限，
+# 因此只挂载业务需要的目录，不要挂载宿主机敏感路径。
+FROM gcr.io/distroless/static-debian12:latest
 # 版本由构建流程注入，供运行信息与 Agent 版本问答使用。
 ARG BYTEMUSE_VERSION=dev
 LABEL org.opencontainers.image.title="ByteMuse" \
       org.opencontainers.image.description="ByteMuse 单容器服务：Web、REST API 与后台调度" \
       org.opencontainers.image.version="$BYTEMUSE_VERSION"
 WORKDIR /app
-COPY --from=backend-build --chown=nonroot:nonroot /out/bytemuse /app/bytemuse
-COPY --from=backend-build --chown=nonroot:nonroot /out/data /data
+COPY --from=backend-build /out/bytemuse /app/bytemuse
+COPY --from=backend-build /out/data /data
 # 时区数据供定时任务使用：cron 按进程本地时间解释表达式，缺少 zoneinfo 会静默退回 UTC。
-COPY --from=backend-build --chown=nonroot:nonroot /usr/share/zoneinfo /usr/share/zoneinfo
-COPY --from=frontend-build --chown=nonroot:nonroot /src/frontend/dist /app/web
+COPY --from=backend-build /usr/share/zoneinfo /usr/share/zoneinfo
+COPY --from=frontend-build /src/frontend/dist /app/web
 # TZ 必须与使用方所在时区一致：设置页默认排期为 20:00/21:00/21:30/22:00 本地时间。
 ENV TZ=Asia/Shanghai \
     HTTP_ADDR=:3750 \
@@ -48,7 +51,6 @@ ENV TZ=Asia/Shanghai \
     BYTEMUSE_VERSION=$BYTEMUSE_VERSION
 EXPOSE 3750
 VOLUME ["/data"]
-USER nonroot:nonroot
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 CMD ["/app/bytemuse", "doctor"]
 ENTRYPOINT ["/app/bytemuse"]
 CMD ["supervise"]

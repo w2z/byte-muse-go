@@ -4,8 +4,9 @@ $dockerfile = Get-Content -Raw (Join-Path $PSScriptRoot "Dockerfile")
 if (($dockerfile | Select-String -Pattern '(?m)^FROM ' -AllMatches).Matches.Count -lt 3) {
     throw "Dockerfile 必须使用前端、后端和运行时多阶段构建"
 }
-if ($dockerfile -notmatch 'FROM gcr.io/distroless/static-debian12:nonroot') {
-    throw "最终镜像必须使用非 root 的 distroless 运行时"
+# 运行时直接以 root 运行：绑定宿主机目录时无需对齐 UID/GID，部署参数最少。
+if ($dockerfile -notmatch 'FROM gcr\.io/distroless/static-debian12:latest') {
+    throw "最终镜像必须使用以 root 运行的 distroless 运行时"
 }
 $runtime = $dockerfile.Substring($dockerfile.LastIndexOf('FROM gcr.io/distroless'))
 if ($runtime -match 'COPY (frontend|backend)/') {
@@ -31,11 +32,13 @@ if ($runtime -notmatch 'ARG BYTEMUSE_VERSION' -or $runtime -notmatch 'BYTEMUSE_V
 if ($runtime -notmatch '_pragma=foreign_keys\(1\)' -or $runtime -notmatch '_pragma=journal_mode\(WAL\)') {
     throw "镜像默认 DATABASE_DSN 必须保留 SQLite 外键与 WAL 参数"
 }
-if ($runtime -notmatch '(?m)^USER nonroot:nonroot') {
-    throw "最终镜像必须以非 root 用户运行"
+# 以 root 运行时不得再声明 USER，否则容器会退回镜像内的非 root 身份。
+if ($runtime -match '(?m)^USER ') {
+    throw "最终镜像不得声明 USER，必须直接以 root 运行"
 }
-if ($runtime -notmatch 'CMD \["serve"\]') {
-    throw "容器默认命令必须是 serve，HTTP 与定时任务才在同一进程内运行"
+# 默认命令必须是 supervise：它负责在线升级时原子替换二进制，并在子进程内运行 serve。
+if ($runtime -notmatch 'CMD \["supervise"\]') {
+    throw "容器默认命令必须是 supervise，在线升级与 serve 才能在同一容器内协同"
 }
 # 只校验仓库模板：本地未跟踪的 *.local.yaml 允许保留真实内网地址。
 $composeFiles = @(Get-ChildItem -LiteralPath $PSScriptRoot -Filter 'compose.*.yaml' | Where-Object { $_.Name -notlike '*.local.yaml' })

@@ -16,7 +16,7 @@
 - 定时任务：调度器在 `serve` 进程内运行，Cron 表达式按容器本地时间解释，设置页默认排期为 20:00、21:00、21:30、22:00。镜像固定 `TZ=Asia/Shanghai` 并自带时区数据；时区与使用方不一致时排期会整体偏移，日志清理（`0 0 * * *`）同样受影响。
 - 镜像来源：Compose 直接写明 `image: ghcr.io/w2z/byte-muse-go:latest`，`docker compose up -d` 拉取已发布镜像；本地构建用 `docker build -f deploy/Dockerfile -t bytemuse-go:local .`，不由 Compose 构建。
 - 运行版本：镜像通过构建参数 `BYTEMUSE_VERSION` 同时注入前端静态资源和后端运行环境，未注入时为 `dev`。顶栏首次渲染直接显示本地版本，随后异步检查更新；检查中或失败时版本标签仍保持可见。本地 Vite 未提供该参数时读取根目录 `version.json`。
-- 数据目录：只挂载 `/data` 与 `/strm`；镜像里的 `/app` 存放服务二进制与前端产物，挂载覆盖后容器无法启动。容器以非 root 用户 `nonroot`（UID/GID 65532）运行，绑定宿主机目录前需保证该 UID 可写，例如 `chown -R 65532:65532 /path/to/byte-muse/data /path/to/byte-muse/strm`。
+- 数据目录：只挂载 `/data` 与 `/strm`；镜像里的 `/app` 存放服务二进制与前端产物，挂载覆盖后容器无法启动。容器直接以 root 运行，绑定宿主机目录时无需 `chown` 或对齐 UID/GID，只要目录不是只读挂载即可；因此只挂载业务需要的目录，不要挂载宿主机敏感路径。
 - 内置数据库：`postgres_byte_muse_go`（容器内 UID 70）与 `mysql_byte_muse_go`（容器内 UID 999）分别需要 `pgdata`（`/var/lib/postgresql/data`）和 `mysqldata`（`/var/lib/mysql`）可写；应用用 `depends_on: condition: service_healthy` 等数据库健康后再启动，避免迁移连不上反复重启。
 - 仓库内不留内网信息：三个 Compose 文件里的代理地址与宿主机路径都是占位符，真实拓扑放在部署机的本地未跟踪文件 `deploy/compose.<方言>.local.yaml`（已在 `.gitignore` 中忽略），避免公开仓库泄露内网地址。
 - 健康检查：镜像内置 `HEALTHCHECK` 调用 `/app/bytemuse doctor`，Compose 不重复定义；数据库不可用时容器状态为 `unhealthy`。

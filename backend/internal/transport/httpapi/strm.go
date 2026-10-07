@@ -261,7 +261,7 @@ func writeStrmError(response http.ResponseWriter, err error) {
 			detail = "无法访问容器内 /strm"
 		}
 		writeError(response, http.StatusServiceUnavailable, "strm_root_unavailable",
-			"strm 目录不可用："+detail+"；请确认容器已把宿主机目录挂载到 /strm，且该目录允许容器内 UID 65532 写入")
+			"strm 目录不可用："+detail+"；请确认容器已把宿主机目录挂载到 /strm，且该挂载不是只读")
 	default:
 		writeApplicationError(response, err)
 	}
