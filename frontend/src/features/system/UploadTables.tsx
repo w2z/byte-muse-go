@@ -1,5 +1,5 @@
-import { Progress, Table, Tabs, Tag } from "@arco-design/web-react";
-import { useQuery } from "@tanstack/react-query";
+import { Button, Message, Progress, Space, Table, Tabs, Tag } from "@arco-design/web-react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { apiRequest } from "../../shared/api/client";
 import { ListPagination } from "../../shared/ui/ListPagination";
@@ -27,6 +27,16 @@ type FileRow = {
   error: string;
 };
 const states: Record<string, string> = {
+  paused: "已暂停",
+  uploaded: "等待替换",
+  backing_up: "保留旧文件",
+  committing: "正在替换",
+  restoring: "恢复旧文件",
+  cleanup: "已上传，待清理",
+  discarding: "清理临时文件",
+  discarded: "源文件已变化",
+  attention: "需处理",
+  blocked: "等待账号或权限恢复",
   stopped: "已停止",
   waiting: "等待文件稳定",
   transferring: "传送至 CD2",
@@ -48,6 +58,16 @@ const progress = (value: number) => (
 
 /** 目录与文件分别展示，文件使用服务端分页；后台进度每两秒刷新。 */
 export function UploadTables() {
+  const client = useQueryClient();
+  const status = useQuery({queryKey:["cloud-upload-status"],queryFn:()=>apiRequest<{actions?:Record<string,boolean>}>("/cloud-upload/status"),refetchInterval:2000});
+  const control = useMutation({
+    mutationFn:(action:string)=>apiRequest("/cloud-upload/control",{method:"POST",body:JSON.stringify({action})}),
+    onSuccess:async()=>{await Promise.all([client.invalidateQueries({queryKey:["cloud-upload-status"]}),client.invalidateQueries({queryKey:["upload-directory-progress"]}),client.invalidateQueries({queryKey:["upload-file-progress"]})]);},
+    onError:(error:Error)=>{Message.error(error.message);void client.invalidateQueries({queryKey:["cloud-upload-status"]});},
+  });
+  const actions = <Space wrap className="settings-upload-actions" aria-label="上传任务操作">{[
+    ["pause","暂停"],["stop","停止"],["clear_completed","清除已完成"],["resume","继续"],["delete_all","删除所有任务"],
+  ].map(([action,label])=><Button key={action} htmlType="button" status={action==="delete_all"?"danger":undefined} disabled={status.isError || !status.data?.actions?.[action] || control.isPending} loading={control.isPending && control.variables===action} onClick={()=>control.mutate(action)}>{label}</Button>)}</Space>;
   const [tab, setTab] = useState("directories");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(15);
@@ -79,6 +99,7 @@ export function UploadTables() {
         onChange={setTab}
         animation={false}
         aria-label="上传任务列表"
+        renderTabHeader={(props, DefaultTabHeader)=><div className="settings-upload-header"><DefaultTabHeader {...props}/>{actions}</div>}
       >
         <Tabs.TabPane key="directories" title="目录列表">
           {directories.error ? (

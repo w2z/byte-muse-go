@@ -2,9 +2,41 @@ package httpapi
 
 import (
 	"bytemuse/backend/internal/application"
+	"errors"
 	"net/http"
 	"strconv"
 )
+
+// uploadControl applies authenticated queue commands; availability is enforced by the service.
+func uploadControl(service *application.UploadService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if service == nil {
+			writeError(w, 503, "service_unavailable", "网盘上传服务尚未就绪")
+			return
+		}
+		var body struct {
+			Action string `json:"action"`
+		}
+		if decodeJSON(w, r, &body) != nil {
+			return
+		}
+		switch body.Action {
+		case "pause", "stop", "clear_completed", "resume", "delete_all":
+		default:
+			writeError(w, 400, "invalid_request", "无效的上传任务操作")
+			return
+		}
+		if err := service.Control(r.Context(), body.Action); err != nil {
+			code := 500
+			if errors.Is(err, application.ErrUploadControl) {
+				code = 409
+			}
+			writeError(w, code, "upload_control_failed", err.Error())
+			return
+		}
+		writeJSON(w, 200, service.Status())
+	}
+}
 
 // listUploadDirectories browses server-local directories behind the authenticated settings API.
 func listUploadDirectories(w http.ResponseWriter, r *http.Request) {

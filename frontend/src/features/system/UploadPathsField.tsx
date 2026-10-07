@@ -48,13 +48,13 @@ export function UploadMonitorStatus() {
   return (
     <div className="settings-field-description" role="status">
       <div>
-        {status.state === "failed" ? "监控启动失败" : status.enabled
+        {status.state === "paused" ? "任务已暂停" : status.state === "stopped" ? "当前批次已停止" : status.state === "failed" ? "监控启动失败" : status.enabled
           ? status.state === "uploading"
             ? "正在上传"
             : "正在监控"
           : "监控已关闭"}{" "}
         · 已处理 {status.processed}/{status.total}（{percent}%），上传{" "}
-        {status.uploaded}，跳过 {status.skipped}，失败尝试 {status.failed}
+        {status.uploaded}，跳过 {status.skipped}，异常任务 {status.failed}
       </div>
       {status.current ? <div>当前文件：{status.current}</div> : null}
       {status.error ? <div>最近错误：{status.error}</div> : null}

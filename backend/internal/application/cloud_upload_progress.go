@@ -9,6 +9,8 @@ import (
 
 // UploadFileProgress describes a discovered file version; speed is a recent byte delta, never a fabricated estimate.
 type UploadFileProgress struct {
+	Retries       int     `json:"retries"`
+	NextRetry     string  `json:"next_retry"`
 	Key           string  `json:"key"`
 	DirectoryKey  string  `json:"directory_key"`
 	Path          string  `json:"path"`
@@ -94,14 +96,14 @@ func (s *UploadService) Directories() []UploadDirectoryProgress {
 			row.Size += file.Size
 			row.Speed += file.Speed
 			processedBytes += min(file.Size, file.UploadedBytes)
-			if file.State == "completed" {
+			if file.State == "completed" || file.State == "cleanup" {
 				row.Uploaded++
 				processed++
 			} else if file.State == "skipped" {
 				row.Skipped++
 				processed++
 				processedBytes += file.Size
-			} else if file.State == "failed" {
+			} else if file.Error != "" {
 				row.Failed++
 			}
 		}

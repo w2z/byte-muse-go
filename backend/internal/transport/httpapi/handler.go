@@ -140,6 +140,7 @@ func New(dependencies Dependencies) http.Handler {
 		router.Get("/strm/directories", listStrmDirectories(dependencies.Strm))
 		router.Get("/cloud-upload/directories", listUploadDirectories)
 		router.Get("/cloud-upload/status", uploadStatus(dependencies.Upload))
+		router.Post("/cloud-upload/control", uploadControl(dependencies.Upload))
 		router.Get("/cloud-upload/directories/progress", uploadDirectoriesProgress(dependencies.Upload))
 		router.Get("/cloud-upload/files", uploadFilesProgress(dependencies.Upload))
 		router.Post("/strm/directories", createStrmDirectory(dependencies.Strm))

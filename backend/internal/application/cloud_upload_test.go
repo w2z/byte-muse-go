@@ -18,10 +18,18 @@ import (
 
 type uploadMemoryStore map[string]domain.UploadRecord
 
+func (s uploadMemoryStore) List(context.Context) ([]domain.UploadRecord, error) {
+	result := []domain.UploadRecord{}
+	for _, r := range s {
+		result = append(result, r)
+	}
+	return result, nil
+}
+
 func (s uploadMemoryStore) PendingCommits(context.Context) ([]domain.UploadRecord, error) {
 	result := []domain.UploadRecord{}
 	for _, r := range s {
-		if r.State == "uploaded" || r.State == "committing" {
+		if !uploadTerminal(r.State) && r.State != "control" {
 			result = append(result, r)
 		}
 	}
@@ -143,12 +151,16 @@ type uploadMemoryRemote struct {
 	files              map[string][]byte
 	failUpload         bool
 	loseRenameResponse bool
+	failDelete         bool
+	uploads            int
+	afterUpload        func()
+	loseDeleteResponse bool
 }
 
 func (r *uploadMemoryRemote) List(context.Context, string) ([]uploadEntry, error) {
 	var out []uploadEntry
 	for name, body := range r.files {
-		out = append(out, uploadEntry{ID: name, Name: name, Size: int64(len(body)), SHA1: fmt.Sprintf("%x", sha1.Sum(body))})
+		out = append(out, uploadEntry{ID: fmt.Sprintf("%x", sha1.Sum(body)), Name: name, Size: int64(len(body)), SHA1: fmt.Sprintf("%x", sha1.Sum(body))})
 	}
 	return out, nil
 }
@@ -156,11 +168,15 @@ func (r *uploadMemoryRemote) Mkdir(context.Context, string, string) (string, err
 	return "", errors.New("unexpected mkdir")
 }
 func (r *uploadMemoryRemote) Upload(_ context.Context, _, name string, f *os.File, size int64) error {
+	r.uploads++
 	if r.failUpload {
 		return errors.New("transfer failed")
 	}
 	body, err := io.ReadAll(io.NewSectionReader(f, 0, size))
 	r.files[name] = body
+	if r.afterUpload != nil {
+		r.afterUpload()
+	}
 	return err
 }
 func (r *uploadMemoryRemote) Rename(_ context.Context, _ string, e uploadEntry, name string) error {
@@ -173,7 +189,14 @@ func (r *uploadMemoryRemote) Rename(_ context.Context, _ string, e uploadEntry, 
 	return nil
 }
 func (r *uploadMemoryRemote) Delete(_ context.Context, _ string, e uploadEntry) error {
+	if r.failDelete {
+		return errors.New("delete unavailable")
+	}
 	delete(r.files, e.Name)
+	if r.loseDeleteResponse {
+		r.loseDeleteResponse = false
+		return errors.New("delete response lost")
+	}
 	return nil
 }
 

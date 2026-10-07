@@ -674,6 +674,8 @@ button.code-card-still-cell:hover img { opacity: .85; }
 .settings-upload-mapping > :first-child, .settings-upload-mapping > :nth-child(3) { flex: 1 1 240px; min-width: 0; }
 .settings-upload-mapping > :nth-child(2) { flex: 0 0 150px; }
 .settings-upload-tables { min-width: 0; }
+.settings-upload-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.settings-upload-actions { max-width: 100%; }
 .settings-strm-path-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; margin: 0; padding: 0; list-style: none; }
 .settings-strm-path-row { display: flex; min-width: 0; align-items: center; gap: 8px; container-type: inline-size; }
 .settings-strm-path-card { display: flex; min-width: 0; flex: 1 1 auto; flex-direction: column; gap: 8px; padding: 10px 12px; background: var(--panel-deep); border: 1px solid var(--line-soft); border-radius: var(--content-radius); }

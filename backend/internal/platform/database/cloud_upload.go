@@ -72,9 +72,17 @@ func (r *UploadRepository) Save(ctx context.Context, record domain.UploadRecord)
 	return err
 }
 
-// PendingCommits returns interrupted replacements independently of the local directory snapshot.
+// PendingCommits returns unfinished transfers and recovery work independently of the source snapshot.
 func (r *UploadRepository) PendingCommits(ctx context.Context) ([]domain.UploadRecord, error) {
-	rows, err := r.db.QueryContext(ctx, "SELECT snapshot FROM cloud_upload_records WHERE state IN ('uploaded','committing')")
+	return r.readRecords(ctx, "SELECT snapshot FROM cloud_upload_records WHERE state NOT IN ('completed','skipped','stopped','discarded','control')")
+}
+
+// List restores all task records, including hidden deduplication receipts and queue control.
+func (r *UploadRepository) List(ctx context.Context) ([]domain.UploadRecord, error) {
+	return r.readRecords(ctx, "SELECT snapshot FROM cloud_upload_records ORDER BY record_key")
+}
+func (r *UploadRepository) readRecords(ctx context.Context, query string) ([]domain.UploadRecord, error) {
+	rows, err := r.db.QueryContext(ctx, query)
 	if err != nil {
 		return nil, err
 	}
@@ -89,9 +97,7 @@ func (r *UploadRepository) PendingCommits(ctx context.Context) ([]domain.UploadR
 		if err = json.Unmarshal([]byte(raw), &record); err != nil {
 			return nil, err
 		}
-		if record.State == "uploaded" || record.State == "committing" {
-			result = append(result, record)
-		}
+		result = append(result, record)
 	}
 	return result, rows.Err()
 }

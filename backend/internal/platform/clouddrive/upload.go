@@ -102,10 +102,9 @@ func (c *Client) Upload(ctx context.Context, parent, name string, f *os.File, si
 			defer cancel()
 			w := &protoWriter{}
 			w.number(1, handle)
-			if c.fileOperation(cleanup, "CloseFile", w.buf) == nil {
-				// This is the caller's private staging path, never the final destination.
-				_ = c.Delete(cleanup, path.Join(parent, name))
-			}
+			_ = c.fileOperation(cleanup, "CloseFile", w.buf)
+			_ = c.ControlUpload(cleanup, path.Join(parent, name), "pause")
+			// The application owns durable cleanup; never discard its recovery evidence here.
 		}
 	}()
 	buffer := make([]byte, 1024*1024)
@@ -146,16 +145,20 @@ func (c *Client) Upload(ctx context.Context, parent, name string, f *os.File, si
 }
 
 // WaitUpload checks provider transfer state; cached directory presence is not sufficient evidence.
-func (c *Client) WaitUpload(ctx context.Context, target string) error {
+func (c *Client) WaitUpload(ctx context.Context, target string) (resultErr error) {
 	ctx, cancel := context.WithTimeout(ctx, 24*time.Hour)
 	defer cancel()
+	defer func() {
+		if ctx.Err() != nil {
+			cleanup, stop := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+			defer stop()
+			resultErr = errors.Join(resultErr, c.ControlUpload(cleanup, target, "pause"))
+		}
+	}()
 	timer := time.NewTicker(2 * time.Second)
 	defer timer.Stop()
 	for {
-		w := &protoWriter{}
-		w.boolean(1, true)
-		w.str(4, path.Base(target))
-		raw, err := c.rpcOne(ctx, "GetUploadFileList", w.buf)
+		raw, err := c.uploadTaskPage(ctx, target)
 		if err != nil {
 			return err
 		}
@@ -167,6 +170,11 @@ func (c *Client) WaitUpload(ctx context.Context, target string) error {
 			return err
 		}
 		if found {
+			if state == 4 {
+				if err = c.ControlUpload(ctx, target, "resume"); err != nil {
+					return err
+				}
+			}
 			if state == 5 {
 				return nil
 			}
@@ -192,6 +200,114 @@ func (c *Client) WaitUpload(ctx context.Context, target string) error {
 		case <-timer.C:
 		}
 	}
+}
+
+// uploadTaskPage searches all filtered pages; getAll is unsupported by current CD2 servers.
+func (c *Client) uploadTaskPage(ctx context.Context, target string) ([]byte, error) {
+	for page := uint64(0); page < 10000; page++ {
+		w := &protoWriter{}
+		w.number(2, 100)
+		w.number(3, page)
+		w.str(4, path.Base(target))
+		raw, err := c.rpcOne(ctx, "GetUploadFileList", w.buf)
+		if err != nil {
+			return nil, err
+		}
+		_, found, err := uploadState(raw, target)
+		if err != nil || found {
+			return raw, err
+		}
+		count := 0
+		reader := &protoReader{data: raw}
+		for !reader.done() {
+			field, wire, e := reader.key()
+			if e != nil {
+				return nil, e
+			}
+			if field == 2 && wire == 2 {
+				count++
+			}
+			if e = reader.skip(wire); e != nil {
+				return nil, e
+			}
+		}
+		if count < 100 {
+			return raw, nil
+		}
+	}
+	return nil, fmt.Errorf("CD2 上传任务分页超出上限")
+}
+
+// ControlUpload changes only the task bound to this private staging path, never global CD2 transfers.
+func (c *Client) ControlUpload(ctx context.Context, target, action string) error {
+	raw, err := c.uploadTaskPage(ctx, target)
+	if err != nil {
+		return err
+	}
+	key := uploadTaskKey(raw, target)
+	if key == "" {
+		return nil
+	}
+	method := ""
+	switch action {
+	case "pause":
+		method = "PauseUploadFiles"
+	case "resume":
+		method = "ResumeUploadFiles"
+	case "cancel":
+		method = "CancelUploadFiles"
+	default:
+		return fmt.Errorf("无效的 CD2 任务操作")
+	}
+	w := &protoWriter{}
+	w.str(1, key)
+	_, err = c.rpcOne(ctx, method, w.buf)
+	return err
+}
+
+func uploadTaskKey(raw []byte, target string) string {
+	reader := &protoReader{data: raw}
+	for !reader.done() {
+		f, w, e := reader.key()
+		if e != nil {
+			return ""
+		}
+		if f != 2 || w != 2 {
+			if reader.skip(w) != nil {
+				return ""
+			}
+			continue
+		}
+		row, e := reader.bytes()
+		if e != nil {
+			return ""
+		}
+		r := &protoReader{data: row}
+		key, name := "", ""
+		for !r.done() {
+			f, w, e = r.key()
+			if e != nil {
+				return ""
+			}
+			if (f == 1 || f == 2) && w == 2 {
+				v, e := r.bytes()
+				if e != nil {
+					return ""
+				}
+				if f == 1 {
+					key = string(v)
+				} else {
+					name = string(v)
+				}
+			} else if r.skip(w) != nil {
+				return ""
+			}
+		}
+		if name == target {
+			return key
+		}
+	}
+	return ""
 }
 
 // uploadBytes reads only the selected cloud transfer's size and transferred byte fields.

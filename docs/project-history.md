@@ -489,6 +489,10 @@ ByteMuse 是自托管的 PT 订阅与媒体库编排工具。旧版能力包括�
 
 ### 2026-10-07 网盘上传台账
 
+- 上传恢复与队列控制扩展沿用迁移 39 的 JSON 快照，不新增表列、不回填历史媒体。新增阶段 backing_up/cleanup/restoring/discarding；快照记录远端身份、重试时间、队列意图和隐藏标志，旧记录缺失字段按零值读取，无法确认身份的旧备份保留并显示需处理。
+- 暂停状态跨重启保留；停止结束当前批次，后续新版本可入队；清除和删除只隐藏记录并保留去重凭据。已验证最终文件后清理失败保持 100% 并仅重试清理。115 未完成分片仍需重传，不声明分片断点续传。
+- 独立 SQLite 测试覆盖真实仓储、暂停重建服务、停止与删除去重；故障替身覆盖同名预留、源版本变化、替换及删除响应丢失、备份身份变化和恢复旧名称。真实网盘传输与生产容器重启未验证。
+
 - 新增迁移 39：cloud_upload_records，record_key 为 SHA256 主键（VARCHAR(64)，非空、无默认值），state 为提交阶段（VARCHAR(16)，非空、无默认值，索引检索未完成替换）；snapshot 为上传阶段 JSON（TEXT；MySQL LONGTEXT，非空、无默认值）；由上传服务 Get/Save/PendingCommits 实际使用。
 - app_settings 新增 CLOUD_UPLOAD_PATHS=[]、CLOUD_UPLOAD_ENABLE=false、CLOUD_UPLOAD_CONFLICT=skip，原配置不覆盖。未操作原始 lady.db 或生产数据库。
 - SQLite 独立测试覆盖空库初始化、38 升级到 39、重复迁移与台账保留；MySQL/PostgreSQL 尚未实库验证。表仅追加，回退保留台账并关闭监控。

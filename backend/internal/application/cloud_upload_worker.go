@@ -3,14 +3,15 @@ package application
 import (
 	"bytemuse/backend/internal/domain"
 	"bytemuse/backend/internal/platform/clouddrive"
+	"bytemuse/backend/internal/platform/pan115"
 	"context"
 	"crypto/sha1"
 	"crypto/sha256"
 	"errors"
 	"fmt"
-	"github.com/fsnotify/fsnotify"
+
 	"io"
-	"io/fs"
+
 	"os"
 	"path"
 	"path/filepath"
@@ -24,19 +25,21 @@ type UploadStore interface {
 	Get(context.Context, string) (*domain.UploadRecord, error)
 	Save(context.Context, domain.UploadRecord) error
 	PendingCommits(context.Context) ([]domain.UploadRecord, error)
+	List(context.Context) ([]domain.UploadRecord, error)
 }
 
 // UploadStatus exposes discovery and execution separately; total may grow during monitoring.
 type UploadStatus struct {
-	Enabled   bool   `json:"enabled"`
-	State     string `json:"state"`
-	Total     int    `json:"total"`
-	Processed int    `json:"processed"`
-	Uploaded  int    `json:"uploaded"`
-	Skipped   int    `json:"skipped"`
-	Failed    int    `json:"failed"`
-	Current   string `json:"current"`
-	Error     string `json:"error"`
+	Enabled   bool            `json:"enabled"`
+	State     string          `json:"state"`
+	Total     int             `json:"total"`
+	Processed int             `json:"processed"`
+	Uploaded  int             `json:"uploaded"`
+	Skipped   int             `json:"skipped"`
+	Failed    int             `json:"failed"`
+	Current   string          `json:"current"`
+	Error     string          `json:"error"`
+	Actions   map[string]bool `json:"actions"`
 }
 
 // UploadService owns one cancellable watcher/worker and serializes remote writes for all mappings.
@@ -48,6 +51,9 @@ type UploadService struct {
 	status   UploadStatus
 	files    map[string]UploadFileProgress
 	mappings []UploadMapping
+	commands chan uploadCommand
+	ready    bool
+	mode     string
 }
 
 // NewUploadService reuses existing provider accounts; it never enables monitoring implicitly.
@@ -56,292 +62,17 @@ func NewUploadService(settings func(context.Context) (map[string]string, error),
 }
 
 // Status returns a consistent snapshot for the settings page.
-func (s *UploadService) Status() UploadStatus         { s.mu.RLock(); defer s.mu.RUnlock(); return s.status }
+func (s *UploadService) Status() UploadStatus {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	status := s.status
+	if file, ok := s.files[status.Current]; ok {
+		status.Current = file.Path
+	}
+	status.Actions = s.uploadActionsLocked()
+	return status
+}
 func (s *UploadService) update(f func(*UploadStatus)) { s.mu.Lock(); defer s.mu.Unlock(); f(&s.status) }
-
-// Run reconciles saved configuration every second. Changing mappings or disabling cancels the active run.
-func (s *UploadService) Run(ctx context.Context) {
-	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
-	var cancel context.CancelFunc
-	var done chan struct{}
-	signature := ""
-	stop := func() {
-		if cancel != nil {
-			cancel()
-			<-done
-			cancel = nil
-		}
-	}
-	defer stop()
-	for {
-		values, err := s.settings(ctx)
-		if err == nil {
-			next := values["CLOUD_UPLOAD_ENABLE"] + "\x00" + values["CLOUD_UPLOAD_PATHS"] + "\x00" + values["CLOUD_UPLOAD_CONFLICT"]
-			if next != signature {
-				stop()
-				signature = next
-				mappings, e := parseUploadMappings(values["CLOUD_UPLOAD_PATHS"])
-				enabled := values["CLOUD_UPLOAD_ENABLE"] == "true"
-				policy := values["CLOUD_UPLOAD_CONFLICT"]
-				if policy == "" {
-					policy = "skip"
-				}
-				if enabled && e == nil && len(mappings) == 0 {
-					e = fmt.Errorf("请先添加上传目录映射")
-				}
-				s.update(func(st *UploadStatus) {
-					if enabled {
-						s.files = map[string]UploadFileProgress{}
-						*st = UploadStatus{}
-					} else {
-						for key, file := range s.files {
-							if file.State != "completed" && file.State != "skipped" && file.State != "failed" {
-								file.State, file.Speed = "stopped", 0
-								s.files[key] = file
-							}
-						}
-					}
-					s.mappings = append([]UploadMapping(nil), mappings...)
-					st.Enabled, st.State, st.Current = enabled, "disabled", ""
-					if e != nil {
-						st.Error = e.Error()
-						st.State = "failed"
-					}
-				})
-				if enabled && e == nil && len(mappings) > 0 {
-					worker, stopWorker := context.WithCancel(ctx)
-					cancel = stopWorker
-					done = make(chan struct{})
-					go func() { defer close(done); defer stopWorker(); s.monitor(worker, mappings, policy) }()
-				}
-			}
-		} else {
-			s.update(func(st *UploadStatus) { st.Error = err.Error() })
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		}
-	}
-}
-
-// monitor combines native notifications with a periodic reconciliation for NAS mounts and missed events.
-// Discovery continues independently of slow uploads; stable snapshots are processed by one worker.
-func (s *UploadService) monitor(ctx context.Context, mappings []UploadMapping, policy string) {
-	watch, err := fsnotify.NewWatcher()
-	if err != nil {
-		s.update(func(st *UploadStatus) { st.State = "failed"; st.Error = err.Error() })
-		return
-	}
-	defer watch.Close()
-	wake := make(chan struct{}, 1)
-	notify := func() {
-		select {
-		case wake <- struct{}{}:
-		default:
-		}
-	}
-	eventDone := make(chan struct{})
-	go func() {
-		defer close(eventDone)
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case _, ok := <-watch.Events:
-				if !ok {
-					return
-				}
-				notify()
-			case e, ok := <-watch.Errors:
-				if !ok {
-					return
-				}
-				s.update(func(st *UploadStatus) { st.Error = e.Error() })
-				notify()
-			}
-		}
-	}()
-	defer func() { watch.Close(); <-eventDone }()
-	knownDirs := map[string]bool{}
-	addWatches := func() {
-		for _, m := range mappings {
-			_ = filepath.WalkDir(m.LocalPath, func(p string, e fs.DirEntry, err error) error {
-				if ctx.Err() != nil {
-					return ctx.Err()
-				}
-				if err != nil {
-					return err
-				}
-				if e.IsDir() && !knownDirs[p] {
-					if err = watch.Add(p); err == nil {
-						knownDirs[p] = true
-					}
-				}
-				return nil
-			})
-		}
-	}
-	addWatches()
-	ticker := time.NewTicker(2 * time.Second)
-	defer ticker.Stop()
-	type candidate struct {
-		mapping UploadMapping
-		file    uploadLocalFile
-		since   time.Time
-		policy  string
-	}
-	observed := map[string]candidate{}
-	finished := map[string]bool{}
-	retry := map[string]time.Time{}
-	type result struct {
-		key, state string
-		err        error
-	}
-	results := make(chan result, 1)
-	busy := ""
-	workerDone := make(chan struct{}, 1)
-	workerDone <- struct{}{}
-	defer func() { <-workerDone }()
-	dirty := true
-	nextReconcile := time.Time{}
-	for {
-		now := time.Now()
-		candidates := []candidate{}
-		if dirty || !now.Before(nextReconcile) {
-			dirty = false
-			nextReconcile = now.Add(30 * time.Second)
-			addWatches()
-			seen := map[string]bool{}
-			committingSources := map[string]bool{}
-			// Commit recovery must survive source edits/deletions after the old target was backed up.
-			commits, commitErr := s.store.PendingCommits(ctx)
-			if commitErr != nil {
-				s.update(func(st *UploadStatus) { st.Error = commitErr.Error() })
-			}
-			for _, record := range commits {
-				for _, m := range mappings {
-					if record.Kind != m.Kind || record.Root != m.ID || record.LocalRoot != m.LocalPath {
-						continue
-					}
-					seen[record.Key] = true
-					committingSources[record.Source] = true
-					if _, exists := observed[record.Key]; !exists {
-						f := uploadLocalFile{Absolute: record.Source, Relative: record.Relative, Size: record.Size, Modified: record.Modified}
-						observed[record.Key] = candidate{m, f, now.Add(-time.Minute), record.Policy}
-						s.mu.Lock()
-						if s.files == nil {
-							s.files = map[string]UploadFileProgress{}
-						}
-						s.files[record.Key] = UploadFileProgress{Key: record.Key, DirectoryKey: uploadDirectoryKey(m), Path: f.Absolute, Size: f.Size, State: "verifying"}
-						s.mu.Unlock()
-					}
-				}
-			}
-			for _, m := range mappings {
-				files, e := uploadSnapshot(ctx, m)
-				if e != nil {
-					s.update(func(st *UploadStatus) { st.Error = e.Error() })
-					continue
-				}
-				for _, f := range files {
-					if committingSources[f.Absolute] {
-						continue
-					}
-					key := uploadKey(m, f, policy)
-					seen[key] = true
-					c, ok := observed[key]
-					if !ok {
-						c = candidate{m, f, now, policy}
-						observed[key] = c
-						s.mu.Lock()
-						if s.files == nil {
-							s.files = map[string]UploadFileProgress{}
-						}
-						s.files[key] = UploadFileProgress{Key: key, DirectoryKey: uploadDirectoryKey(m), Path: f.Absolute, Size: f.Size, State: "waiting"}
-						s.mu.Unlock()
-					}
-				}
-			}
-			for key := range observed {
-				if !seen[key] && key != busy {
-					delete(observed, key)
-					delete(finished, key)
-					delete(retry, key)
-					s.mu.Lock()
-					delete(s.files, key)
-					s.mu.Unlock()
-				}
-			}
-		}
-		for key, c := range observed {
-			if !finished[key] {
-				candidates = append(candidates, c)
-			}
-		}
-		s.update(func(st *UploadStatus) {
-			st.Total = len(observed)
-			st.Processed = len(finished)
-			st.Uploaded, st.Skipped = 0, 0
-			for key := range finished {
-				if s.files[key].State == "skipped" {
-					st.Skipped++
-				} else {
-					st.Uploaded++
-				}
-			}
-			st.Enabled = true
-			if busy == "" {
-				st.State = "watching"
-			}
-		})
-		if busy == "" {
-			for _, c := range candidates {
-				key := uploadKey(c.mapping, c.file, c.policy)
-				if now.Sub(c.since) < 5*time.Second || now.Before(retry[key]) {
-					continue
-				}
-				busy = key
-				<-workerDone
-				s.update(func(st *UploadStatus) { st.State = "uploading"; st.Current = c.file.Relative })
-				go func(c candidate, key string) {
-					defer func() { workerDone <- struct{}{} }()
-					progressCtx := domain.WithUploadProgress(ctx, func(done, total int64, phase string) { s.reportBytes(key, done, total, phase) })
-					state, e := s.process(progressCtx, c.mapping, c.file, c.policy)
-					results <- result{key, state, e}
-				}(c, key)
-				break
-			}
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case r := <-results:
-			s.finishFile(r.key, r.state, r.err)
-			busy = ""
-			if r.err != nil {
-				retry[r.key] = time.Now().Add(time.Minute)
-				s.update(func(st *UploadStatus) { st.Failed++; st.Error = r.err.Error(); st.Current = "" })
-			} else {
-				finished[r.key] = true
-				s.update(func(st *UploadStatus) {
-					if r.state == "skipped" {
-						st.Skipped++
-					} else {
-						st.Uploaded++
-					}
-					st.Current = ""
-					st.Error = ""
-				})
-			}
-		case <-wake:
-			dirty = true
-		case <-ticker.C:
-		}
-	}
-}
 
 // uploadKey binds an attempt to its source version, destination and conflict policy.
 func uploadKey(m UploadMapping, f uploadLocalFile, policy string) string {
@@ -390,17 +121,53 @@ func uploadParent(ctx context.Context, remote uploadRemote, root, relative strin
 }
 
 // process persists its chosen names before any upload and reconciles each commit stage after uncertain failures.
-func (s *UploadService) process(ctx context.Context, m UploadMapping, f uploadLocalFile, policy string) (string, error) {
+func (s *UploadService) process(ctx context.Context, m UploadMapping, f uploadLocalFile, policy string) (state string, resultErr error) {
 	key := uploadKey(m, f, policy)
 	record, err := s.store.Get(ctx, key)
 	if err != nil {
 		return "", err
 	}
-	if record != nil && (record.State == "completed" || record.State == "skipped") {
+	defer func() {
+		if record == nil {
+			return
+		}
+		state = record.State
+		if record.Intent == "delete" && uploadTerminal(record.State) {
+			record.Hidden = true
+		}
+		record.Error = ""
+		record.ErrorKind = ""
+		record.NextRetry = ""
+		if resultErr != nil && !errors.Is(resultErr, context.Canceled) {
+			record.Error = resultErr.Error()
+			record.Retries++
+			record.ErrorKind = "transient"
+			if errors.Is(resultErr, errUploadAttention) || errors.Is(resultErr, clouddrive.ErrUploadFailed) {
+				record.ErrorKind = "attention"
+			}
+			var httpErr *pan115.HTTPError
+			var apiErr *pan115.APIError
+			if errors.Is(resultErr, ErrPan115NotLinked) || pan115.Unauthorized(resultErr) || errors.Is(resultErr, clouddrive.ErrUnauthorized) || errors.Is(resultErr, clouddrive.ErrNotConfigured) || (errors.As(resultErr, &httpErr) && (httpErr.StatusCode == 401 || httpErr.StatusCode == 403)) || (errors.As(resultErr, &apiErr) && apiErr.Code == 770004) {
+				record.ErrorKind = "blocked"
+			}
+			record.NextRetry = time.Now().Add(min(15*time.Minute, 5*time.Second*time.Duration(1<<min(record.Retries-1, 8)))).UTC().Format(time.RFC3339Nano)
+			if record.ErrorKind == "blocked" {
+				record.NextRetry = time.Now().Add(15 * time.Minute).UTC().Format(time.RFC3339Nano)
+			}
+		}
+		persist, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		resultErr = errors.Join(resultErr, s.store.Save(persist, *record))
+	}()
+	if record != nil && uploadTerminal(record.State) {
 		return record.State, nil
 	}
-	if (record == nil || record.State == "pending") && !uploadUnchanged(f) {
+	if record == nil && !uploadUnchanged(f) {
 		return "", fmt.Errorf("文件仍在变化: %s", f.Relative)
+	}
+	if record != nil && record.Parent == "" && !uploadUnchanged(f) {
+		record.State = "discarded"
+		return record.State, nil
 	}
 	remote, err := s.provider(ctx, m.Kind)
 	if err != nil {
@@ -413,7 +180,7 @@ func (s *UploadService) process(ctx context.Context, m UploadMapping, f uploadLo
 		record.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 		return s.store.Save(ctx, *record)
 	}
-	if record == nil {
+	if record == nil || record.Parent == "" {
 		parent, e := uploadParent(ctx, remote, m.ID, f.Relative)
 		if e != nil {
 			return "", e
@@ -432,20 +199,29 @@ func (s *UploadService) process(ctx context.Context, m UploadMapping, f uploadLo
 			record.State = "skipped"
 			return record.State, save()
 		}
-		if exists && policy == "keep_both" {
-			ext := path.Ext(name)
-			base := strings.TrimSuffix(name, ext)
-			for n := 1; ; n++ {
-				candidate := fmt.Sprintf("%s (%d)%s", base, n, ext)
-				if _, found := findUploadEntry(entries, candidate); !found {
-					record.Target = candidate
-					break
-				}
+		if policy == "keep_both" {
+			if e = s.selectUploadName(ctx, record, entries); e != nil {
+				return "", e
 			}
 		}
 		if e = save(); e != nil {
 			return "", e
 		}
+	}
+	if record.RemotePath == "" {
+		record.RemotePath = m.Path
+	}
+	if record.State == "pending" && !uploadUnchanged(f) {
+		record.State = "discarding"
+		if err = save(); err != nil {
+			return "", err
+		}
+	}
+	if record.State == "discarding" {
+		return s.discardUpload(ctx, remote, record, save)
+	}
+	if record.State == "completed" || record.State == "skipped" || record.State == "stopped" || record.State == "discarded" {
+		return record.State, nil
 	}
 	if record.State == "pending" {
 		// Anchor file access to the selected root so replacing a parent with a symlink cannot escape it.
@@ -496,13 +272,18 @@ func (s *UploadService) process(ctx context.Context, m UploadMapping, f uploadLo
 		}
 		existing, exists := findUploadEntry(entries, record.Stage)
 		if exists {
+			if record.StageID != "" && m.Kind == "115" && existing.ID != record.StageID {
+				return "", errUploadAttention
+			}
+			if record.StageID == "" {
+				record.StageID = existing.ID
+				record.StageSHA1, record.StageSize = existing.SHA1, existing.Size
+				if e = save(); e != nil {
+					return "", e
+				}
+			}
 			if cd, ok := remote.(uploadCDRemote); ok && existing.Size == f.Size {
 				if e = cd.c.WaitUpload(ctx, path.Join(record.Parent, record.Stage)); e != nil {
-					if errors.Is(e, clouddrive.ErrUploadFailed) {
-						if cleanupErr := remote.Delete(ctx, record.Parent, existing); cleanupErr != nil {
-							return "", errors.Join(e, cleanupErr)
-						}
-					}
 					return "", e
 				}
 			}
@@ -519,7 +300,26 @@ func (s *UploadService) process(ctx context.Context, m UploadMapping, f uploadLo
 			}
 			if existing.Size != f.Size || (existing.SHA1 != "" && !strings.EqualFold(existing.SHA1, record.SHA1)) {
 				// Only this persisted attempt's private staging object may be replaced.
+				if cd, ok := remote.(uploadCDRemote); ok {
+					if e = cd.c.ControlUpload(ctx, path.Join(record.Parent, record.Stage), "cancel"); e != nil {
+						return "", e
+					}
+					if existing.SHA1 == "" {
+						return "", fmt.Errorf("%w：CD2 临时文件缺少内容校验值", errUploadAttention)
+					}
+				}
 				if e = remote.Delete(ctx, record.Parent, existing); e != nil {
+					return "", e
+				}
+				check, checkErr := remote.List(ctx, record.Parent)
+				if checkErr != nil {
+					return "", checkErr
+				}
+				if _, present := findUploadEntry(check, record.Stage); present {
+					return "", fmt.Errorf("临时文件删除尚未确认")
+				}
+				record.StageID = ""
+				if e = save(); e != nil {
 					return "", e
 				}
 				exists = false
@@ -528,88 +328,44 @@ func (s *UploadService) process(ctx context.Context, m UploadMapping, f uploadLo
 		if !exists {
 			e = remote.Upload(ctx, record.Parent, record.Stage, file, f.Size)
 			if e != nil {
+				// Capture an uncertain upload's private object before cancellation returns to the queue.
+				inspect, stop := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+				if objects, listErr := remote.List(inspect, record.Parent); listErr == nil {
+					if owned, found := findUploadEntry(objects, record.Stage); found && !owned.Directory {
+						record.StageID, record.StageSHA1, record.StageSize = owned.ID, owned.SHA1, owned.Size
+					}
+				}
+				stop()
 				return "", e
 			}
-		}
-		if !uploadUnchanged(f) {
-			return "", fmt.Errorf("上传期间源文件变化: %s", f.Relative)
 		}
 		entries, e = remote.List(ctx, record.Parent)
 		if e != nil {
 			return "", e
 		}
 		stage, ok := findUploadEntry(entries, record.Stage)
+		if ok && !stage.Directory {
+			record.StageID = stage.ID
+			record.StageSHA1, record.StageSize = stage.SHA1, stage.Size
+		}
+		if !uploadUnchanged(f) {
+			record.State = "discarding"
+			if e = save(); e != nil {
+				return "", e
+			}
+			return s.discardUpload(ctx, remote, record, save)
+		}
 		if !ok || stage.Directory || stage.Size != f.Size || (stage.SHA1 != "" && !strings.EqualFold(stage.SHA1, record.SHA1)) {
 			return "", fmt.Errorf("上传后网盘文件回查未通过")
 		}
+		if m.Kind == "cd2" && stage.SHA1 == "" {
+			return "", fmt.Errorf("%w：CD2 尚未提供内容校验值", errUploadAttention)
+		}
 		record.State = "uploaded"
+		record.StageID = stage.ID
 		if e = save(); e != nil {
 			return "", e
 		}
 	}
-	// Re-read on every phase: a timeout may have applied the remote rename already.
-	entries, err := remote.List(ctx, record.Parent)
-	if err != nil {
-		return "", err
-	}
-	stage, hasStage := findUploadEntry(entries, record.Stage)
-	target, hasTarget := findUploadEntry(entries, record.Target)
-	_, hasBackup := findUploadEntry(entries, record.Backup)
-	if record.State == "uploaded" {
-		if !hasStage {
-			return "", fmt.Errorf("已上传临时文件丢失")
-		}
-		if hasTarget {
-			if policy != "overwrite" {
-				return "", fmt.Errorf("上传期间目标出现同名文件，请重新选择策略")
-			}
-			if target.Directory {
-				return "", fmt.Errorf("拒绝覆盖目录")
-			}
-			if hasBackup {
-				return "", fmt.Errorf("备份与目标同时存在，停止覆盖")
-			}
-			if err = remote.Rename(ctx, record.Parent, target, record.Backup); err != nil {
-				return "", err
-			}
-		}
-		record.State = "committing"
-		if err = save(); err != nil {
-			return "", err
-		}
-	}
-	if record.State == "committing" {
-		entries, err = remote.List(ctx, record.Parent)
-		if err != nil {
-			return "", err
-		}
-		stage, hasStage = findUploadEntry(entries, record.Stage)
-		target, hasTarget = findUploadEntry(entries, record.Target)
-		if hasStage {
-			if hasTarget {
-				return "", fmt.Errorf("目标并发变更，保留上传文件及备份")
-			}
-			if err = remote.Rename(ctx, record.Parent, stage, record.Target); err != nil {
-				return "", err
-			}
-			entries, err = remote.List(ctx, record.Parent)
-			if err != nil {
-				return "", err
-			}
-			target, hasTarget = findUploadEntry(entries, record.Target)
-		}
-		if !hasTarget || target.Directory || target.Size != record.Size || (target.SHA1 != "" && !strings.EqualFold(target.SHA1, record.SHA1)) {
-			return "", fmt.Errorf("最终文件回查未通过，保留备份")
-		}
-		if backup, ok := findUploadEntry(entries, record.Backup); ok {
-			if err = remote.Delete(ctx, record.Parent, backup); err != nil {
-				return "", err
-			}
-		}
-		record.State = "completed"
-		if err = save(); err != nil {
-			return "", err
-		}
-	}
-	return record.State, nil
+	return s.commitUpload(ctx, remote, record, save)
 }
