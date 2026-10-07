@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -10,6 +11,72 @@ import (
 	"testing"
 	"time"
 )
+
+// TestEmbyMediaLogsIdentifyEachVideo 验证并发处理的每个结果均能定位到番号或文件名。
+func TestEmbyMediaLogsIdentifyEachVideo(t *testing.T) {
+	s := NewEmbyMediaService(func(context.Context) (map[string]string, error) {
+		return map[string]string{"EMBY_URL": "http://emby.test", "EMBY_API_KEY": "test-api-key"}, nil
+	})
+	s.task = &EmbyMediaTask{ID: "log-task", State: "queued"}
+	s.http.Transport = embyRoundTripper(func(r *http.Request) (*http.Response, error) {
+		status, body := http.StatusOK, `{}`
+		if r.Method == http.MethodGet {
+			body = `{"Items":[
+			{"Id":"success","Path":"/private/ABC-001/SSIS-001-C.strm"},
+			{"Id":"failed","Path":"C:\\private\\SSIS-002.strm"},
+			{"Id":"skipped","MediaSources":[{"Path":"/private/SSIS-003.strm","RunTimeTicks":100,"MediaStreams":[{}]}]},
+			{"Id":"unknown","Path":"/private/自制影片.strm"}
+			],"TotalRecordCount":4}`
+		} else if strings.Contains(r.URL.Path, "/failed/") {
+			status = http.StatusBadGateway
+		} else if strings.Contains(r.URL.Path, "/skipped/") {
+			t.Error("complete media should not be probed")
+		}
+		return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(body))}, nil
+	})
+	buffer, restore := captureLogs()
+	defer restore()
+	s.run(context.Background(), "log-task") // 等待全部 worker 退出后才读取缓冲及恢复日志器。
+	if got := s.Snapshot(); got.Processed != 4 || got.Success != 2 || got.Skipped != 1 || got.Failed != 1 {
+		t.Fatalf("unexpected result: %+v", got)
+	}
+	found := map[string]map[string]any{}
+	for _, line := range strings.Split(strings.TrimSpace(buffer.String()), "\n") {
+		var record map[string]any
+		if err := json.Unmarshal([]byte(line), &record); err != nil {
+			t.Fatal(err)
+		}
+		if record["filename"] != nil {
+			if record["task_id"] != "log-task" || record["category"] != "刷新 STRM 视频信息" {
+				t.Fatalf("missing correlation: %+v", record)
+			}
+			found[fmt.Sprint(record["filename"], "/", record["msg"])] = record
+		}
+	}
+	for _, want := range []struct{ filename, code, message, level string }{
+		{"SSIS-001-C.strm", "SSIS-001", "开始刷新 STRM 视频信息", "INFO"},
+		{"SSIS-001-C.strm", "SSIS-001", "STRM 视频信息刷新请求完成", "INFO"},
+		{"SSIS-002.strm", "SSIS-002", "STRM 视频信息刷新失败", "ERROR"},
+		{"SSIS-003.strm", "SSIS-003", "跳过 STRM 视频信息刷新", "INFO"},
+		{"自制影片.strm", "", "STRM 视频信息刷新请求完成", "INFO"},
+	} {
+		record := found[want.filename+"/"+want.message]
+		if record == nil || record["level"] != want.level || (want.code != "" && record["code"] != want.code) || (want.code == "" && record["code"] != nil) {
+			t.Errorf("missing video log %+v; got %+v", want, record)
+		}
+	}
+	if record := found["SSIS-002.strm/STRM 视频信息刷新失败"]; record["error"] != "Emby 刷新媒体信息返回状态码 502" {
+		t.Errorf("missing failure reason: %+v", record)
+	}
+	if record := found["SSIS-003.strm/跳过 STRM 视频信息刷新"]; record["reason"] != "已有媒体流和时长信息" {
+		t.Errorf("missing skip reason: %+v", record)
+	}
+	for _, forbidden := range []string{"test-api-key", "private", "ABC-001"} {
+		if strings.Contains(buffer.String(), forbidden) {
+			t.Errorf("logs contain directory or credentials: %s", forbidden)
+		}
+	}
+}
 
 type embyRoundTripper func(*http.Request) (*http.Response, error)
 

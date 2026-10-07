@@ -1,6 +1,7 @@
 const ATTRIBUTE_LABELS: Record<string, string> = {
   actor: "演员",
   code: "番号",
+  filename: "文件名",
   created: "新建",
   channel: "渠道",
   event: "事件",

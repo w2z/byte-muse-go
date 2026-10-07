@@ -7,11 +7,13 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"path"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
+	"bytemuse/backend/internal/domain"
 	"bytemuse/backend/internal/logging"
 )
 
@@ -134,17 +136,23 @@ func (s *EmbyMediaService) run(ctx context.Context, id string) {
 				if checkpointErr := s.checkpoint(ctx, id); checkpointErr != nil {
 					return
 				}
+				attrs := item.logAttrs(id)
 				if !item.NeedsRefresh {
 					s.updateTask(func(task *EmbyMediaTask) { task.Skipped++; task.Processed++ })
+					logging.Info(logging.CategoryStrmMedia, "跳过 STRM 视频信息刷新", append(attrs, "reason", "已有媒体流和时长信息")...)
 					continue
 				}
+				logging.Info(logging.CategoryStrmMedia, "开始刷新 STRM 视频信息", attrs...)
 				if probeErr := s.probe(ctx, base, key, item.ID); probeErr != nil {
 					if ctx.Err() != nil {
+						logging.Info(logging.CategoryStrmMedia, "STRM 视频信息刷新已取消", attrs...)
 						return
 					}
 					s.updateTask(func(task *EmbyMediaTask) { task.Failed++; task.Error = probeErr.Error(); task.Processed++ })
+					logging.Error(logging.CategoryStrmMedia, "STRM 视频信息刷新失败", append(attrs, "error", probeErr.Error())...)
 				} else {
 					s.updateTask(func(task *EmbyMediaTask) { task.Success++; task.Processed++ })
+					logging.Info(logging.CategoryStrmMedia, "STRM 视频信息刷新请求完成", attrs...)
 				}
 			}
 		}()
@@ -316,6 +324,17 @@ type embyItem struct {
 	} `json:"MediaSources"`
 }
 
+// logAttrs 用文件名识别单个视频，复用番号规则；兼容 Emby 返回的 Windows/Linux 路径，
+// 不记录完整目录或 STRM 播放地址，无法识别番号时保留文件名而不编造番号。
+func (item embyItem) logAttrs(taskID string) []any {
+	filename := path.Base(strings.ReplaceAll(item.Path, "\\", "/"))
+	attrs := make([]any, 0, 8)
+	if code := domain.ExtractCode(filename); code != "" {
+		attrs = append(attrs, "code", code)
+	}
+	return append(attrs, "filename", filename, "task_id", taskID)
+}
+
 func (s *EmbyMediaService) list(ctx context.Context, id, base, key string) ([]embyItem, error) {
 	out := make([]embyItem, 0)
 	err := s.streamItems(ctx, id, base, key, func(item embyItem) { out = append(out, item) })
@@ -363,6 +382,7 @@ func (s *EmbyMediaService) streamItems(ctx context.Context, id, base, key string
 				}
 			}
 			it.NeedsRefresh = missing
+			it.Path = itemPath
 			onItem(it)
 		}
 		if len(body.Items) == 0 || (body.TotalRecordCount > 0 && start+len(body.Items) >= body.TotalRecordCount) || (body.TotalRecordCount == 0 && len(body.Items) < embyMediaPageSize) {

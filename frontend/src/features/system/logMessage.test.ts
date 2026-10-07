@@ -23,6 +23,15 @@ describe("日志单行文案", () => {
     expect(formatLogMessage("影片详情查询完成", { code: "JUR-868" })).toBe("影片详情查询完成，番号：JUR-868");
   });
 
+  it("STRM 单片刷新日志显示番号，并保留无法识别番号时的文件名", () => {
+    expect(formatLogMessage("STRM 视频信息刷新请求完成", { code: "SSIS-001", filename: "SSIS-001-C.strm", task_id: "emby-test" })).toBe(
+      "STRM 视频信息刷新请求完成，番号：SSIS-001，文件名：SSIS-001-C.strm，任务 ID：emby-test",
+    );
+    expect(formatLogMessage("STRM 视频信息刷新失败", { filename: "自制影片.strm", error: "连接超时" })).toBe(
+      "STRM 视频信息刷新失败，文件名：自制影片.strm，原因：连接超时",
+    );
+  });
+
   it("订阅日志用番号标识对象，不出现订阅编号", () => {
     expect(formatLogMessage("订阅已取消", { code: "JUR-868" })).toBe("订阅已取消，番号：JUR-868");
     expect(formatLogMessage("订阅已编辑", { code: "JUR-868" })).toBe("订阅已编辑，番号：JUR-868");
