@@ -31,6 +31,29 @@ function renderSettings() {
 }
 
 describe("设置页字段布局", () => {
+  it("网盘上传保存三种同名策略并独立展示目录与文件表格", async () => {
+    const user=userEvent.setup();let values:Record<string,string>={CLOUD_UPLOAD_PATHS:"[]",CLOUD_UPLOAD_ENABLE:"false",CLOUD_UPLOAD_CONFLICT:"skip"};
+    vi.mocked(apiRequest).mockImplementation(async (path, options) => {
+      if(path==="/cloud-upload/status")return {enabled:false,state:"disabled",total:0,processed:0,uploaded:0,skipped:0,failed:0,current:"",error:""};
+      if(path.startsWith("/cloud-upload/"))return {items:[],total:0};
+      if(options?.method==="PUT")values={...values,...JSON.parse(String(options.body)).values};
+      return {database_driver:"sqlite",values:{...values},configured:{}};
+    });
+    renderSettings();await user.click(await screen.findByRole("tab",{name:"网盘"}));await user.click(screen.getByRole("tab",{name:"网盘上传"}));
+    expect(screen.getByRole("radio",{name:"跳过"})).toBeChecked();
+    await user.click(screen.getByRole("radio",{name:"保留两者"}));await user.click(screen.getByRole("button",{name:"保存设置"}));await waitFor(()=>expect(values.CLOUD_UPLOAD_CONFLICT).toBe("keep_both"));
+    expect(screen.getByRole("columnheader",{name:"已上传/总个数"})).toBeInTheDocument();
+    const tables = screen.getByLabelText("上传任务列表");
+    const toggle = screen.getByRole("switch", { name: "开启目录监控" });
+    const divider = tables.closest(".settings-group-section")?.querySelector(".arco-divider");
+    expect(divider).toBeTruthy();
+    expect(toggle.compareDocumentPosition(divider!)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(divider!.compareDocumentPosition(tables)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(tables.compareDocumentPosition(screen.getByRole("button", { name: "保存设置" }))).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    await user.click(screen.getByRole("tab",{name:"文件列表"}));
+    expect(screen.getByRole("columnheader",{name:"文件路径"})).toBeInTheDocument();
+    expect(screen.queryByRole("columnheader",{name:"已上传/总个数"})).not.toBeInTheDocument();
+  });
   it("下载媒体默认关闭，编辑后缀并保存后关闭仍保留标签", async () => {
     const user = userEvent.setup();
     let values: Record<string, string> = {};

@@ -122,6 +122,7 @@ func (r *protoReader) skip(wire int) error {
 
 // cloudDriveFile 是 clouddrive.CloudDriveFile 中本服务用到的字段。
 type cloudDriveFile struct {
+	SHA1         string
 	ID           string
 	Name         string
 	FullPathName string
@@ -153,6 +154,35 @@ func decodeCloudDriveFile(data []byte) (cloudDriveFile, error) {
 			return cloudDriveFile{}, err
 		}
 		switch {
+		case field == 70 && wire == 2:
+			raw, err := reader.bytes()
+			if err != nil {
+				return cloudDriveFile{}, err
+			}
+			hashReader := &protoReader{data: raw}
+			var kind uint64
+			var hash string
+			for !hashReader.done() {
+				f, w, e := hashReader.key()
+				if e != nil {
+					return cloudDriveFile{}, e
+				}
+				if f == 1 && w == 0 {
+					kind, e = hashReader.varint()
+				} else if f == 2 && w == 2 {
+					var value []byte
+					value, e = hashReader.bytes()
+					hash = string(value)
+				} else {
+					e = hashReader.skip(w)
+				}
+				if e != nil {
+					return cloudDriveFile{}, e
+				}
+			}
+			if kind == 2 {
+				file.SHA1 = hash
+			}
 		case field == 1 && wire == 2:
 			value, err := reader.bytes()
 			if err != nil {

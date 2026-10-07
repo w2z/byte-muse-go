@@ -42,6 +42,7 @@ var (
 
 // Entry 是 CloudDrive2 的一个目录条目。
 type Entry struct {
+	SHA1      string
 	ID        string
 	Name      string
 	FullPath  string
@@ -192,6 +193,7 @@ func (c *Client) ListSubFiles(ctx context.Context, path string) ([]Entry, error)
 			}
 			for _, file := range files {
 				collected = append(collected, Entry{
+					SHA1:      file.SHA1,
 					ID:        file.ID,
 					Name:      file.Name,
 					FullPath:  file.FullPathName,

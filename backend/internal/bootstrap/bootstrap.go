@@ -361,6 +361,11 @@ func (c *Commands) Serve(ctx context.Context) error {
 		return fmt.Errorf("create 115 service: %w", err)
 	}
 	defer pan115Service.Close()
+	uploadService := application.NewUploadService(settingsValues(settingsService), database.NewUploadRepository(store.SQLDB(), database.Dialect(c.config.DatabaseDriver)), pan115Service, application.NewCloudDriveSettings(settingsValues(settingsService)))
+	uploadCtx, cancelUpload := context.WithCancel(ctx)
+	uploadDone := make(chan struct{})
+	go func() { defer close(uploadDone); uploadService.Run(uploadCtx) }()
+	defer func() { cancelUpload(); <-uploadDone }()
 	// strm 服务：把 115 与 CloudDrive2 的网盘目录镜像成本地 strm 文件，并解析播放地址。
 	// CloudDrive2 连接参数来自设置，因此传入按设置懒构造的适配器，改配置后无需重启进程。
 	// 本地目录浏览与生成统一使用系统固定的 /strm 根目录。
@@ -643,6 +648,7 @@ func (c *Commands) Serve(ctx context.Context) error {
 		WeChatCallback:  newWeChatCallback(settingsService),
 		ChannelMessages: dispatcher,
 		Strm:            strmService,
+		Upload:          uploadService,
 		EmbyMedia:       embyMediaService,
 		Covers:          coverCache,
 		StaticDir:       c.config.WebStaticDir,

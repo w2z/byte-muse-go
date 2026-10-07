@@ -92,7 +92,10 @@ type settingSpec struct {
 // writableSettings 是可写配置项的唯一权威清单，key 与旧版 template.env、对标站 /config 完全一致。
 // 顺序按对标站设置页的分组排列，便于逐组核对。
 var writableSettings = map[string]settingSpec{
-	"PAN115_EVENT_ENABLE": {kind: settingBool},
+	"CLOUD_UPLOAD_PATHS":    {kind: settingJSONArray},
+	"CLOUD_UPLOAD_ENABLE":   {kind: settingBool},
+	"CLOUD_UPLOAD_CONFLICT": {kind: settingEnum, allowed: []string{"skip", "overwrite", "keep_both"}},
+	"PAN115_EVENT_ENABLE":   {kind: settingBool},
 	// 站点
 	"MTEAM_API_KEY":      {secret: true, kind: settingText},
 	"PTT_COOKIE":         {secret: true, kind: settingText},
@@ -519,6 +522,12 @@ func validateSettingValue(key string, spec settingSpec, value string) error {
 			return invalid("需要是 JSON 对象")
 		}
 	case settingJSONArray:
+		if key == "CLOUD_UPLOAD_PATHS" {
+			if _, err := parseUploadMappings(value); err != nil {
+				return invalid(err.Error())
+			}
+			return nil
+		}
 		if !strings.HasPrefix(value, "[") {
 			return invalid("需要是 JSON 数组")
 		}

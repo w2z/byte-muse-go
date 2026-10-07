@@ -17,6 +17,7 @@ type Directory struct {
 
 // File 是 115 目录里的一个条目。
 type File struct {
+	SHA1        string
 	ID          string
 	ParentID    string
 	Name        string
@@ -35,6 +36,7 @@ type FilePage struct {
 
 // fileEntryWire 是 115 文件列表里的一条记录。
 type fileEntryWire struct {
+	SHA1     string      `json:"sha1"`
 	ID       string      `json:"fid"`
 	ParentID string      `json:"pid"`
 	Name     string      `json:"fn"`
@@ -113,6 +115,7 @@ func buildFilePage(entries []fileEntryWire, path []Directory, total, offset, lim
 			return FilePage{}, fmt.Errorf("解码 115 文件大小失败: %w", err)
 		}
 		page.Files[index] = File{
+			SHA1:        item.SHA1,
 			ID:          item.ID,
 			ParentID:    item.ParentID,
 			Name:        item.Name,

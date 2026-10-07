@@ -582,7 +582,7 @@ export function StrmGenerateAction({ value }: { value: StrmMapping[] }) {
  * {path, directories}，只有根目录语义与是否允许新建目录不同。
  * creatable 只在本地 strm 目录开启：网盘目录的新建不在本页能力范围内。
  */
-function StrmDirectoryPicker({
+export function StrmDirectoryPicker({
   endpoint,
   queryKeyPrefix,
   crumbs: buildCrumbs,

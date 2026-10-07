@@ -486,3 +486,9 @@ ByteMuse 是自托管的 PT 订阅与媒体库编排工具。旧版能力包括�
 - application.ScanTasks 是手动扫描/生成任务状态的权威实现，两类任务独立互斥。暂停在安全处理点确认，继续保留当前调用栈；取消不回滚已完成业务结果。单实例服务重启将活动任务标为 interrupted，不自动重放全量生成。
 - 已验证 SQLite 空库初始化、版本 35 升级、重复迁移、重开数据库保留任务、请求断开不取消执行、两类任务隔离与暂停/继续/取消。历史媒体不回填、不重算；此前未保存的任务进度无法恢复。PostgreSQL/MySQL 迁移声明已覆盖，尚未实库验证。
 - 运行库副本已从 35 升到 36，媒体数升级前后均为 47294，原运行库未迁移、运行进程未重启。隔离组件浏览器检查覆盖暂停/继续/取消、动态分母及 390/576/768/1280/1920px，无横向溢出，未验证真实网盘端到端流程。Apifox 外部写入被自动审批拒绝，待明确授权后同步及回读。
+
+### 2026-10-07 网盘上传台账
+
+- 新增迁移 39：cloud_upload_records，record_key 为 SHA256 主键（VARCHAR(64)，非空、无默认值），state 为提交阶段（VARCHAR(16)，非空、无默认值，索引检索未完成替换）；snapshot 为上传阶段 JSON（TEXT；MySQL LONGTEXT，非空、无默认值）；由上传服务 Get/Save/PendingCommits 实际使用。
+- app_settings 新增 CLOUD_UPLOAD_PATHS=[]、CLOUD_UPLOAD_ENABLE=false、CLOUD_UPLOAD_CONFLICT=skip，原配置不覆盖。未操作原始 lady.db 或生产数据库。
+- SQLite 独立测试覆盖空库初始化、38 升级到 39、重复迁移与台账保留；MySQL/PostgreSQL 尚未实库验证。表仅追加，回退保留台账并关闭监控。

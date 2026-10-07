@@ -1,4 +1,4 @@
-import { Button, Input, InputTag, Progress, Radio, Select, Switch, Tabs } from "@arco-design/web-react";
+import { Button, Divider, Input, InputTag, Progress, Radio, Select, Switch, Tabs } from "@arco-design/web-react";
 import { IconCheck, IconClose, IconLaunch, IconSave, IconUndo } from "@arco-design/web-react/icon";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Fragment, useEffect, useState, type ReactNode } from "react";
@@ -8,6 +8,8 @@ import { ContentCard } from "../../shared/ui/ContentCard";
 import { PageState } from "../../shared/ui/PageState";
 import { useFeedbackMessage } from "../../shared/ui/FeedbackMessage";
 import { Pan115LoginPanel } from "./Pan115LoginPanel";
+import { UploadPathsField, UploadMonitorStatus, type UploadMapping } from "./UploadPathsField";
+import { UploadTables } from "./UploadTables";
 import { Pan115LibraryScanAction, Pan115ScanPathsField, type Pan115ScanPath } from "./Pan115ScanPathsField";
 import {
   DEFAULT_STRM_FORMATS,
@@ -18,7 +20,7 @@ import {
   type StrmMapping,
 } from "./StrmPathsField";
 
-type FieldKind = "text" | "textarea" | "bool" | "int" | "enum" | "json" | "sort" | "paths" | "strm-paths";
+type FieldKind = "text" | "textarea" | "bool" | "int" | "enum" | "json" | "sort" | "paths" | "strm-paths" | "upload-paths";
 type SettingOption = {
   value: string;
   label: string;
@@ -538,6 +540,15 @@ const groups: SettingGroup[] = [
     ],
   },
   {
+    code: "cloud-upload",
+    title: "网盘上传",
+    fields: [
+      { key: "CLOUD_UPLOAD_PATHS", label: "目录选择", kind: "upload-paths" },
+      { key: "CLOUD_UPLOAD_CONFLICT", label: "同名文件处理", kind: "enum", options: [{ value: "skip", label: "跳过" }, { value: "overwrite", label: "覆盖" }, { value: "keep_both", label: "保留两者" }] },
+      { key: "CLOUD_UPLOAD_ENABLE", label: "开启目录监控", kind: "bool", description: "保存后生效。关闭页面不影响后台监控；关闭开关将停止新上传。" },
+    ],
+  },
+  {
     code: "strm",
     title: "STRM 生成",
     strmGenerate: true,
@@ -880,7 +891,7 @@ const categories: SettingCategory[] = [
   {
     code: "netdisk",
     title: "网盘",
-    groupCodes: ["pan115", "clouddrive2", "strm"],
+    groupCodes: ["pan115", "clouddrive2", "strm", "cloud-upload"],
   },
 ];
 
@@ -890,7 +901,7 @@ function filterId(name: string) {
 
 /** 由独立状态而非通用草稿承载的字段类型：这些字段不写入 draft，也不参与草稿比较。 */
 function isStructuredField(kind: FieldKind): boolean {
-  return kind === "json" || kind === "sort" || kind === "paths" || kind === "strm-paths";
+  return kind === "json" || kind === "sort" || kind === "paths" || kind === "strm-paths" || kind === "upload-paths";
 }
 
 /** 分组的全部字段：包含页签内字段，保证草稿初始化、变更判断与保存始终覆盖整组。 */
@@ -1130,6 +1141,7 @@ export function SettingsPage() {
   const [sortOrder, setSortOrder] = useState<string[]>([]);
   const [scanPaths, setScanPaths] = useState<Pan115ScanPath[]>([]);
   const [strmPaths, setStrmPaths] = useState<StrmMapping[]>([]);
+  const [uploadPaths, setUploadPaths] = useState<UploadMapping[]>([]);
   const [savedSnapshot, setSavedSnapshot] = useState<SettingsUpdate>({
     values: {},
   });
@@ -1163,7 +1175,7 @@ export function SettingsPage() {
           ? values[field.key]
           : field.key === "LOG_RETENTION_DAYS"
             ? "30"
-            : field.key === strmDownloadExtensionsKey ? defaultDownloadExtensions : "";
+            : field.key === strmDownloadExtensionsKey ? defaultDownloadExtensions : field.key === "CLOUD_UPLOAD_CONFLICT" ? "skip" : "";
         next[field.key] = field.kind === "bool" ? raw === "true" : raw;
         if (field.siteAuth) {
           const auth = field.siteAuth;
@@ -1181,6 +1193,7 @@ export function SettingsPage() {
     setSortOrder(parseSortOrder(values.DEFAULT_SORT));
     setScanPaths(parseScanPaths(values[scanPathsKey]));
     setStrmPaths(parseStrmPaths(values[strmPathsKey]));
+    try { const parsed: unknown = JSON.parse(values.CLOUD_UPLOAD_PATHS || "[]"); setUploadPaths(Array.isArray(parsed) ? parsed as UploadMapping[] : []); } catch { setUploadPaths([]); }
   };
 
   useEffect(() => {
@@ -1252,6 +1265,7 @@ export function SettingsPage() {
     const payload: Record<string, string> = {};
     for (const group of [activeGroup]) {
       for (const field of groupFields(group)) {
+        if (field.kind === "upload-paths") { payload[field.key] = JSON.stringify(uploadPaths); continue; }
         if (field.kind === "json") {
           payload[field.key] = serializeFilterDraft(filter, filterUnknown);
           continue;
@@ -1396,6 +1410,8 @@ export function SettingsPage() {
         </div>
       );
     }
+    if (field.kind === "upload-paths") return <div className="settings-field settings-field-wide" key={field.key}><span className="settings-field-label">{field.label}</span><UploadPathsField value={uploadPaths} onChange={setUploadPaths}/></div>;
+    if (field.key === "CLOUD_UPLOAD_CONFLICT") return <div className="settings-field settings-field-wide" key={field.key}><span className="settings-field-label">{field.label}</span><Radio.Group aria-label={field.label} value={draft[field.key] || "skip"} onChange={(value)=>setValue(field.key,value)} options={field.options}/></div>;
     if (field.kind === "json") {
       return (
         <div className="settings-field settings-field-wide" key={field.key}>
@@ -1773,6 +1789,7 @@ export function SettingsPage() {
                   <Pan115LoginPanel onCookie={(cookie) => setValue("PAN115_COOKIE", cookie)} />
                 ) : null}
                 {renderFieldSequence(activeFields)}
+                {activeGroup.code === "cloud-upload" ? <div className="settings-field settings-field-wide"><UploadMonitorStatus /></div> : null}
                 {activeGroup.strmGenerate ? <div className="settings-field settings-field-wide"><EmbyMediaInfoAction /></div> : null}
                 {activeGroup.strmGenerate ? (
                   <div className="settings-field settings-field-wide">
@@ -1799,6 +1816,12 @@ export function SettingsPage() {
                 ) : null}
               </div>
               {activeGroup.note ? <p className="settings-group-note">{activeGroup.note}</p> : null}
+              {activeGroup.code === "cloud-upload" ? (
+                <>
+                  <Divider />
+                  <UploadTables />
+                </>
+              ) : null}
             </section>
           </div>
         </ContentCard>

@@ -56,7 +56,9 @@ type Dependencies struct {
 	// ChannelMessages 处理渠道入站消息；轮询与回调共用同一实现。
 	ChannelMessages ports.ChannelMessageHandler
 	// Strm 提供网盘目录的 strm 生成、本地 strm 目录浏览与播放地址解析。
-	Strm      *application.StrmService
+	Strm *application.StrmService
+	// Upload monitors selected server directories and uploads using the saved conflict policy.
+	Upload    *application.UploadService
 	EmbyMedia *application.EmbyMediaService
 	// Covers 是影片封面的本地缓存，页面图片统一从这里取，源站不可用时回退原地址。
 	Covers    *covercache.Cache
@@ -132,6 +134,10 @@ func New(dependencies Dependencies) http.Handler {
 		router.Post("/pan115/offline/tasks", addPan115OfflineTask(dependencies.Pan115))
 		router.Delete("/pan115/offline/tasks/{hash}", removePan115OfflineTask(dependencies.Pan115))
 		router.Get("/strm/directories", listStrmDirectories(dependencies.Strm))
+		router.Get("/cloud-upload/directories", listUploadDirectories)
+		router.Get("/cloud-upload/status", uploadStatus(dependencies.Upload))
+		router.Get("/cloud-upload/directories/progress", uploadDirectoriesProgress(dependencies.Upload))
+		router.Get("/cloud-upload/files", uploadFilesProgress(dependencies.Upload))
 		router.Post("/strm/directories", createStrmDirectory(dependencies.Strm))
 		router.Get("/strm/clouddrive/directories", listStrmCloudDriveDirectories(dependencies.Strm))
 		router.Post("/strm/scan", scanStrm(dependencies.Strm, dependencies.ScanTasks))
