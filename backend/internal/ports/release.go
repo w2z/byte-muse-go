@@ -1,6 +1,10 @@
 package ports
 
-import "context"
+import (
+	"context"
+	"strconv"
+	"strings"
+)
 
 // ReleaseInfo 是发布仓库 version.json 的权威字段子集。
 // 只保留检查更新与展示需要的字段；版本回写提交产生的镜像、摘要、标签等元数据不进入业务层。
@@ -11,7 +15,7 @@ type ReleaseInfo struct {
 	Commit string
 	// BuiltAt 是构建时间，沿用 version.json 中的 UTC RFC 3339 文本。
 	BuiltAt string
-	// Source 是发布仓库地址，用于在前端跳转查看发布记录。
+	// Source 是发布仓库地址，仅作为发布来源元数据。
 	Source string
 }
 
@@ -19,4 +23,63 @@ type ReleaseInfo struct {
 // 实现负责超时、限流和响应校验；错误信息必须已脱敏，不得包含凭据或上游正文。
 type ReleaseSource interface {
 	Latest(context.Context) (ReleaseInfo, error)
+}
+
+// UpgradeStatus 描述容器内升级任务；success 仅在新服务健康检查通过后写入。
+type UpgradeStatus struct {
+	Enabled bool   `json:"enabled"`
+	Phase   string `json:"phase"`
+	Target  string `json:"target"`
+	Error   string `json:"error"`
+}
+
+// UpgradeInstaller 下载校验并暂存完整升级包；提交后由常驻启动器切换服务。
+type UpgradeInstaller interface {
+	Stage(context.Context, string) error
+	Status() UpgradeStatus
+}
+
+// CompareVersions 按点分数字段比较版本，返回 -1/0/1。
+// 任一侧包含非数字字段（如 dev 或自定义标识）时返回 0：无法判定升级方向时不提示更新。
+func CompareVersions(current, latest string) int {
+	left, okLeft := versionSegments(current)
+	right, okRight := versionSegments(latest)
+	if !okLeft || !okRight {
+		return 0
+	}
+	for index := 0; index < len(left) || index < len(right); index++ {
+		leftValue, rightValue := 0, 0
+		if index < len(left) {
+			leftValue = left[index]
+		}
+		if index < len(right) {
+			rightValue = right[index]
+		}
+		if leftValue != rightValue {
+			if leftValue < rightValue {
+				return -1
+			}
+			return 1
+		}
+	}
+	return 0
+}
+
+// versionSegments 解析点分数字版本；允许前缀 v，出现空段或非数字段即视为不可比较。
+func versionSegments(value string) ([]int, bool) {
+	value = strings.TrimSpace(value)
+	value = strings.TrimPrefix(value, "v")
+	if value == "" {
+		return nil, false
+	}
+	parts := strings.Split(value, ".")
+	segments := make([]int, 0, len(parts))
+	for _, part := range parts {
+		number, err := strconv.Atoi(part)
+		if err != nil || number < 0 {
+			return nil, false
+		}
+		segments = append(segments, number)
+	}
+	return segments, true
 }

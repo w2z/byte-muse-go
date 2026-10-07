@@ -784,8 +784,14 @@ paths:
       summary: 读取当前版本与发布仓库版本
       description: 返回当前运行版本与发布仓库 version.json 记录的版本，供顶栏版本标签显示与升级提示。当前版本来自 BYTEMUSE_VERSION，未注入时为 dev。服务端按 1 小时缓存成功结果、1 分钟缓存失败结果，避免耗尽 GitHub 未认证额度。远端检查失败不影响本接口：仍返回 200，失败原因放在 check_error。版本按点分数字段比较，dev 或非数字版本不判定升级。
       parameters:
+        - {in: query, name: refresh, required: false, schema: {type: boolean, default: false}, description: 为 true 时绕过成功及失败缓存，立即向发布仓库检查更新；后台自动检查省略此参数}
         - {in: cookie, name: bytemuse_session, required: true, schema: {type: string}, description: 登录签发的管理员会话 Cookie，不在示例中填写真实值}
       responses:
+        '400':
+          description: refresh 不是有效布尔值
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
         '200':
           description: 当前版本与远端版本的比较结果；check_error 非空表示本次远端检查失败，此时 latest 与 release_url 为空串、has_update 为 false
           content:
@@ -804,6 +810,68 @@ paths:
             application/json:
               schema: {$ref: '#/components/schemas/Error'}
               example: {code: service_unavailable, message: 版本检查未就绪}
+  /system/upgrade:
+    get:
+      operationId: getSystemUpgrade
+      summary: 读取容器内升级状态
+      description: 查询下载、服务切换及新服务就绪状态。仅支持通过 supervise 启动的 Linux 容器；开发环境 enabled 为 false。升级状态不包含任何凭据或下载地址。
+      parameters:
+        - {in: cookie, name: bytemuse_session, required: true, schema: {type: string}, description: 管理员登录会话}
+      responses:
+        '200':
+          description: 当前升级状态
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SystemUpgrade'}
+              example: {enabled: true, phase: idle, target: '', error: ''}
+        '401':
+          description: 未登录或会话失效
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+    post:
+      operationId: startSystemUpgrade
+      summary: 异步升级容器内服务
+      description: 下载固定发布仓库中与当前架构匹配的完整前后端运行包，通过 SHA256、版本和启动协议校验后请求常驻启动器重启内部服务，保留同一容器。重复提交返回 409。下载失败保持旧服务运行；新服务启动后按现有迁移流程升级数据库，因此启动失败不自动降级。
+      parameters:
+        - {in: cookie, name: bytemuse_session, required: true, schema: {type: string}, description: 管理员登录会话}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [target]
+              properties:
+                target: {type: string, description: 检查更新返回的最新目标版本，必须高于当前运行版本，不接受自定义下载地址, example: 0.1.100}
+      responses:
+        '202':
+          description: 已受理后台任务；不代表升级成功，需轮询 GET /system/upgrade
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SystemUpgrade'}
+              example: {enabled: true, phase: downloading, target: 0.1.100, error: ''}
+        '400':
+          description: 请求格式或目标版本无效
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '401':
+          description: 未登录或会话失效
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '409':
+          description: 已有升级任务正在执行，请继续轮询原任务
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '503':
+          description: 当前环境不支持容器内升级，需先更新一次镜像
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
   /pan115/login/sessions:
     post:
       operationId: startPan115Login
@@ -2171,6 +2239,14 @@ components:
         release_url: {type: string, description: '发布仓库地址，取自 version.json 的 source；检查失败时为空串'}
         checked_at: {type: string, format: date-time, description: 本次结论的产生时间，UTC RFC 3339}
         check_error: {type: string, description: '远端检查的脱敏中文失败原因；已确认可用时为空串'}
+    SystemUpgrade:
+      type: object
+      required: [enabled, phase, target, error]
+      properties:
+        enabled: {type: boolean, description: 是否通过支持升级的 Linux 容器启动器运行}
+        phase: {type: string, enum: [idle, downloading, restarting, success, failed], description: 'idle 尚无任务；downloading 下载及校验；restarting 切换服务；success 新服务就绪；failed 失败，详见 error'}
+        target: {type: string, description: 本次任务的目标版本，尚无任务时为空串}
+        error: {type: string, description: 脱敏中文失败原因，未失败时为空串}
     SystemSettings:
       type: object
       required: [database_driver, values, configured]

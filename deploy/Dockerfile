@@ -51,4 +51,4 @@ VOLUME ["/data"]
 USER nonroot:nonroot
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 CMD ["/app/bytemuse", "doctor"]
 ENTRYPOINT ["/app/bytemuse"]
-CMD ["serve"]
+CMD ["supervise"]

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -625,6 +626,11 @@ func (c *Commands) Serve(ctx context.Context) error {
 	defer func() { cancelEvents(); <-eventsDone }()
 	// 封面缓存固定开启：目录是容器内 /data/cover（随 /data 一起挂载），代理沿用设置页的爬虫代理。
 	coverCache := covercache.New(c.config.CoverRoot, coverProxyReader(settingsService))
+	versions := application.NewVersionService(c.config.Version, release.NewGitHubSource(c.config.ReleaseRepo, nil))
+	var installer ports.UpgradeInstaller
+	if os.Getenv("BYTEMUSE_SUPERVISED") == "1" && os.Getenv("BYTEMUSE_UPGRADE_ROOT") != "" {
+		installer = &release.PackageInstaller{Root: os.Getenv("BYTEMUSE_UPGRADE_ROOT"), Repo: c.config.ReleaseRepo}
+	}
 	handler := httpapi.New(httpapi.Dependencies{
 		ScanTasks:             scanTasks,
 		Collection:            collectionService,
@@ -639,7 +645,8 @@ func (c *Commands) Serve(ctx context.Context) error {
 		Dashboard:             dashboardService,
 		Settings:              settingsService,
 		// 版本检查复用运行版本与发布仓库记录，顶栏标签与 Agent 运行环境提示取同一来源。
-		Version:         application.NewVersionService(c.config.Version, release.NewGitHubSource(c.config.ReleaseRepo, nil)),
+		Version:         versions,
+		Upgrade:         application.NewUpgradeService(ctx, versions, installer),
 		Pan115:          pan115Service,
 		Pan115Library:   pan115LibraryService,
 		Scheduler:       manager,

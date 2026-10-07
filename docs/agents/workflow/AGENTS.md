@@ -126,7 +126,7 @@ Docker 发布使用多阶段构建或等效的“构建环境与运行环境分�
 
 - 主仓库推送后由 GitHub Actions 自动触发镜像构建，构建最新提交对应版本；镜像标签必须可追溯到具体提交，不以 latest 作为唯一可追溯版本。
 - 版本记录由 `deploy/version.ps1` 在代码提交后生成，规则为 `0.1.<提交计数>`，计数排除只修改 `version.json` 的提交；版本号唯一、单调递增、可重复构建，如需调整规则必须先与用户确认。
-- 版本记录由提交流程写入，构建流程只读取和校验，不回写仓库：workflow 不需要 `contents: write`，推送也不会被回写提交顶成非快进。
+- 版本记录由提交流程写入，构建流程只读取和校验，不回写源码或版本记录；`contents: write` 仅用于发布容器内升级所需的 Release 运行包，不能用于回写提交。
 - 代码提交后必须存在对应的版本记录提交：由 `.githooks/post-commit` 自动生成，也可在推送前手工执行 `deploy/version.ps1`；每个克隆执行一次 `git config core.hooksPath .githooks` 启用钩子。
 - 只有本次提交包含构建输入改动时才写入版本记录；文档、规范、Compose 等提交不更新版本号，因此发布版本号之间可能不连续，不得为补齐编号手工改写 `version.json`。
 - 构建触发使用 workflow 的 `paths` 白名单，只列出会改变镜像内容的构建输入：`backend/**`、`frontend/**`、`deploy/Dockerfile`、`.dockerignore`；新增构建输入必须同步更新白名单与 `deploy/version.ps1` 中的同名单。

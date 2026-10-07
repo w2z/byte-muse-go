@@ -10,6 +10,7 @@ import (
 	"bytemuse/backend/internal/bootstrap"
 	"bytemuse/backend/internal/cli"
 	"bytemuse/backend/internal/config"
+	"bytemuse/backend/internal/platform/release"
 )
 
 func main() {
@@ -20,6 +21,17 @@ func main() {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	if len(os.Args) == 2 && os.Args[1] == "supervise" {
+		executable, err := os.Executable()
+		if err == nil {
+			err = release.Supervise(ctx, "/data/upgrades", executable, cfg.WebStaticDir, cfg.Version, cfg.HTTPAddress, cfg.ShutdownTimeout, os.Stderr)
+		}
+		if err != nil {
+			_, _ = os.Stderr.WriteString(err.Error() + "\n")
+			os.Exit(1)
+		}
+		return
+	}
 	commands := bootstrap.NewCommands(cfg)
 	code := cli.Run(ctx, os.Args[1:], os.Stdout, cli.Commands{
 		ActorSync: commands.ActorSync,

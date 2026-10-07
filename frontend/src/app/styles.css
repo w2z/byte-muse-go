@@ -129,14 +129,26 @@ body button.arco-btn[class]:focus-visible { box-shadow: none; }
 .app-header { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; height: 64px; padding: 0 28px; background: var(--panel); border-bottom: 1px solid var(--line); }
 .header-actions { display: flex; align-items: center; gap: 8px; }
 .icon-button { color: var(--ink-2) !important; font-size: 16px !important; }
-/* 顶栏版本标签：容器固定占位，版本请求返回前后右侧按钮位置不变。
-   标签只做展示：不设置可选中（checkable），文字也不参与选中，避免被当成可勾选的筛选标签。 */
+/* 顶栏版本固定占位，按钮支持键盘操作；标签不设置可选中属性。 */
 .header-version { display: inline-flex; align-items: center; justify-content: flex-end; min-width: 82px; }
+.header-version-trigger { display: inline-flex; border: 0; padding: 0; background: transparent; color: inherit; cursor: pointer; border-radius: 4px; }
+.header-version-trigger:focus-visible { outline: 2px solid var(--mint); outline-offset: 4px; }
 .header-version-tag { margin: 0; font-variant-numeric: tabular-nums; user-select: none; }
 /* 版本角标：Badge 默认 inline-block，改 inline-flex 避免基线间隙影响标签垂直居中。 */
 .header-version-badge { display: inline-flex; }
 /* Arco 角标默认用 --color-bg-2 描边，改为顶栏底色，明暗主题下都不会出现灰色光圈。 */
 .header-version-badge .arco-badge-dot { box-shadow: 0 0 0 2px var(--panel); }
+/* 独立语义容器保留 Arco 弹窗的焦点锁定、遮罩和关闭行为。 */
+.version-dialog { position: relative; overflow: hidden; padding: 36px; border-radius: 12px; text-align: left; background: linear-gradient(140deg, var(--accent-soft), var(--panel) 75%); }
+.version-dialog h2 { position: relative; margin: 0 0 28px; font-size: 26px; font-weight: 600; color: var(--ink); }
+.version-dialog-decoration { position: absolute; right: 55px; top: 52px; font-size: 108px; color: var(--mint); opacity: .09; transform: rotate(-15deg); }
+.version-dialog-content { position: relative; display: flex; flex-direction: column; justify-content: center; min-height: 230px; padding: 28px; border: 1px solid var(--panel); border-radius: 10px; background: color-mix(in srgb, var(--panel) 55%, transparent); overflow-wrap: anywhere; }
+.version-dialog-content p { margin: 10px 0 0; line-height: 1.8; }
+.version-dialog-label, .version-dialog-note { color: var(--muted); font-size: 13px; }
+.version-dialog-number { margin-top: 4px; font-size: 32px; font-variant-numeric: tabular-nums; color: var(--ink); }
+.version-dialog-error { color: var(--danger); }
+.version-dialog-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 16px; margin-top: 28px; }
+@media (max-width: 575px) { .version-dialog { padding: 28px 20px; } .version-dialog h2 { font-size: 22px; } .version-dialog-content { padding: 20px; } }
 .logout-button { min-width: 88px; }
 .mobile-brand { display: none; }
 

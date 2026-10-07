@@ -1,7 +1,7 @@
 name: build-image
 
 # 主仓库推送后自动构建镜像。版本记录 version.json 由 deploy/version.ps1 在提交代码时写入，
-# 构建流程只读取和校验，不回写仓库，因此不需要 contents 写权限。
+# 构建流程只读取和校验版本；contents 写权限仅用于发布运行升级包到 Release。
 # 触发条件只列出会改变镜像内容的构建输入：文档、规范、README.md、version.json、接口契约
 # 以及部署脚本、本地开发脚本的改动都不触发构建，避免纯文档提交占用构建资源。
 on:
@@ -20,7 +20,8 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: read
+  # 只发布运行升级包到 Release，不回写源码或 version.json。
+  contents: write
   packages: write
 
 jobs:
@@ -77,3 +78,32 @@ jobs:
             ghcr.io/${{ github.repository }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: 导出完整升级包
+        env:
+          RELEASE_VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/upgrades"
+          for arch in amd64 arm64; do
+            docker buildx build --platform "linux/$arch" --build-arg "BYTEMUSE_VERSION=$RELEASE_VERSION" --file deploy/Dockerfile --output "type=local,dest=$RUNNER_TEMP/runtime-$arch" .
+            runtime="$RUNNER_TEMP/package-$arch"
+            mkdir -p "$runtime"
+            cp -R "$RUNNER_TEMP/runtime-$arch/app/bytemuse" "$RUNNER_TEMP/runtime-$arch/app/web" "$runtime/"
+            jq -n --arg version "$RELEASE_VERSION" '{version: $version, protocol: 1}' > "$runtime/version.json"
+            package="$RUNNER_TEMP/upgrades/bytemuse-linux-$arch.tar.gz"
+            tar -czf "$package" -C "$runtime" bytemuse web version.json
+            sha256sum "$package" | cut -d ' ' -f 1 > "$package.sha256"
+          done
+
+      - name: 发布容器内升级包
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          tag="v$RELEASE_VERSION"
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            gh release create "$tag" --target "$GITHUB_SHA" --title "ByteMuse $RELEASE_VERSION" --notes "容器内升级运行包，包含同版本的后端程序与前端资源。" --draft
+          fi
+          gh release upload "$tag" "$RUNNER_TEMP/upgrades/"* --clobber
+          gh release edit "$tag" --draft=false

@@ -40,8 +40,8 @@ func TestCompareVersions(t *testing.T) {
 		{"", "0.1.21", 0},
 		{"0.1.21-beta", "0.1.22", 0},
 	} {
-		if got := compareVersions(testCase.current, testCase.latest); got != testCase.want {
-			t.Fatalf("compareVersions(%q, %q)=%d, want %d", testCase.current, testCase.latest, got, testCase.want)
+		if got := ports.CompareVersions(testCase.current, testCase.latest); got != testCase.want {
+			t.Fatalf("ports.CompareVersions(%q, %q)=%d, want %d", testCase.current, testCase.latest, got, testCase.want)
 		}
 	}
 }

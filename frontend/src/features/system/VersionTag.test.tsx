@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { apiRequest } from "../../shared/api/client";
 import type { SystemVersion } from "../../shared/api/types";
@@ -28,6 +28,34 @@ function renderTag() {
 }
 
 const base: SystemVersion = { current: "0.1.21", latest: "0.1.21", has_update: false, release_url: "", checked_at: "2026-09-29T12:00:00Z", check_error: "" };
+
+it("点击版本打开弹窗，异步检查后切换升级操作，暂不升级关闭弹窗", async () => {
+  let resolve!: (value: SystemVersion) => void;
+  vi.mocked(apiRequest).mockImplementation((path) => path === "/system/upgrade" ? Promise.resolve({ enabled:true, phase:"idle", target:"", error:"" }) : path.includes("refresh") ? new Promise<SystemVersion>((done) => { resolve = done; }) : Promise.resolve(base));
+  renderTag();
+  fireEvent.click(screen.getByRole("button", { name: "v0.1.21" }));
+  expect(await screen.findByText("当前已是最新版本")).toBeInTheDocument();
+  const check = screen.getByRole("button", { name: "立即检查更新" });
+  fireEvent.click(check);
+  await waitFor(() => expect(check).toHaveClass("arco-btn-loading"));
+  expect(apiRequest).toHaveBeenLastCalledWith("/system/version?refresh=true");
+  await act(async () => resolve({ ...base, latest: "0.1.22", has_update: true }));
+  expect(await screen.findByRole("button", { name: "立即升级" })).toBeInTheDocument();
+  expect(screen.getByText("升级至 0.1.22")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "暂不升级" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+});
+
+it("手动检查失败显示原因并允许重试，不显示已是最新", async () => {
+  vi.mocked(apiRequest).mockImplementation((path) => Promise.resolve(path === "/system/upgrade" ? { enabled:true, phase:"idle", target:"", error:"" } : path.includes("refresh") ? { ...base, latest: "", check_error: "检查更新超时" } : base));
+  renderTag();
+  fireEvent.click(screen.getByRole("button", { name: "v0.1.21" }));
+  await screen.findByText("当前已是最新版本");
+  fireEvent.click(screen.getByRole("button", { name: "立即检查更新" }));
+  expect(await screen.findByText("检查更新超时")).toBeInTheDocument();
+  expect(screen.queryByText("当前已是最新版本")).toBeNull();
+  expect(screen.getByRole("button", { name: "立即检查更新" })).not.toBeDisabled();
+});
 
 it("显示带 v 前缀的当前版本，无更新时保持默认背景", async () => {
   vi.mocked(apiRequest).mockResolvedValue(base);

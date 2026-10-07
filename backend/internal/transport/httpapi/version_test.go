@@ -22,6 +22,74 @@ type fakeReleaseSource struct {
 
 func (s fakeReleaseSource) Latest(context.Context) (ports.ReleaseInfo, error) { return s.info, s.err }
 
+// TestSystemVersionRefresh 验证手动检查绕过缓存，失败可重试，非法参数不会触发检查。
+func TestSystemVersionRefresh(t *testing.T) {
+	source := &fakeReleaseSource{info: ports.ReleaseInfo{Version: "0.1.21"}}
+	handler := systemVersion(application.NewVersionService("0.1.21", source))
+	check := func(query string, code int, latest string) {
+		t.Helper()
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest("GET", "/system/version"+query, nil))
+		if response.Code != code {
+			t.Fatalf("status=%d body=%s", response.Code, response.Body)
+		}
+		if code != 200 {
+			return
+		}
+		var result application.VersionStatus
+		if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
+			t.Fatal(err)
+		}
+		if result.Latest != latest {
+			t.Fatalf("latest=%q want=%q", result.Latest, latest)
+		}
+	}
+	check("", 200, "0.1.21")
+	source.info.Version = "0.1.22"
+	check("", 200, "0.1.21")
+	check("?refresh=true", 200, "0.1.22")
+	check("?refresh=invalid", 400, "")
+	source.err = errors.New("检查更新超时")
+	check("?refresh=true", 200, "")
+	source.err = nil
+	source.info.Version = "0.1.23"
+	check("?refresh=true", 200, "0.1.23")
+	check("", 200, "0.1.23")
+}
+
+// TestSystemUpgradeHTTP 验证升级接口鉴权、请求格式及无启动器环境不会误报受理成功。
+func TestSystemUpgradeHTTP(t *testing.T) {
+	authService, err := auth.New(auth.Config{Username: "test-admin", Password: "test-password", Secret: strings.Repeat("x", 32)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := New(Dependencies{Auth: authService})
+	for _, method := range []string{"GET", "POST"} {
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(method, "/api/v1/system/upgrade", nil))
+		if response.Code != 401 {
+			t.Fatalf("method=%s status=%d", method, response.Code)
+		}
+	}
+	for _, tc := range []struct {
+		body, contentType string
+		status            int
+	}{
+		{`{"target":"0.1.22"}`, "application/json", 503},
+		{`{"target":"0.1.22"}`, "text/plain", 400},
+		{`{"target":"0.1.22"} {}`, "application/json", 400},
+		{`{"target":"0.1.22","url":"https://example.com/evil"}`, "application/json", 400},
+	} {
+		request := httptest.NewRequest("POST", "/system/upgrade", strings.NewReader(tc.body))
+		request.Header.Set("Content-Type", tc.contentType)
+		response := httptest.NewRecorder()
+		systemUpgrade(nil).ServeHTTP(response, request)
+		if response.Code != tc.status {
+			t.Fatalf("body=%s status=%d", tc.body, response.Code)
+		}
+	}
+}
+
 // TestSystemVersionHTTP 验证鉴权、可更新提示、失败降级和未装配发布源时的 503。
 func TestSystemVersionHTTP(t *testing.T) {
 	authService, err := auth.New(auth.Config{Username: "test-admin", Password: "test-password", Secret: strings.Repeat("x", 32)})

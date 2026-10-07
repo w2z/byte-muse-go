@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	// versionFilePath 是构建流程回写的版本记录路径，固定位于仓库根目录。
+	// versionFilePath 是提交钩子维护的版本记录路径，固定位于仓库根目录。
 	versionFilePath = "version.json"
 	// defaultEndpoint 是 GitHub 原始文件服务基址：直接返回文件正文，不占用 API 额度。
 	defaultEndpoint = "https://raw.githubusercontent.com"

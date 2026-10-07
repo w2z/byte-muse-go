@@ -45,6 +45,8 @@ type Dependencies struct {
 	Settings              *application.SettingsService
 	// Version 提供当前运行版本与发布仓库版本的比较结果，供顶栏版本标签使用。
 	Version *application.VersionService
+	// Upgrade 管理单个后台升级任务，只有启动器运行环境支持实际安装。
+	Upgrade *application.UpgradeService
 	Pan115  *application.Pan115Service
 	// Pan115Library 把设置页的 115 扫描目录递归扫描后登记到媒体库。
 	Pan115Library *application.Pan115LibraryService
@@ -118,6 +120,8 @@ func New(dependencies Dependencies) http.Handler {
 		router.Put("/system/settings", updateSystemSettings(dependencies.Settings))
 		router.Post("/system/settings/openai/test", testOpenAI)
 		router.Get("/system/version", systemVersion(dependencies.Version))
+		router.Get("/system/upgrade", systemUpgradeStatus(dependencies.Upgrade))
+		router.Post("/system/upgrade", systemUpgrade(dependencies.Upgrade))
 		router.Post("/pan115/login/sessions", startPan115Login(dependencies.Pan115))
 		router.Get("/pan115/login/sessions/{sessionId}", pan115LoginStatus(dependencies.Pan115))
 		router.Delete("/pan115/login/sessions/{sessionId}", cancelPan115Login(dependencies.Pan115))

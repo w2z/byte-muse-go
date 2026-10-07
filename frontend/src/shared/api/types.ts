@@ -145,12 +145,20 @@ export type SystemVersion = {
   latest: string;
   /** latest 高于 current 时为 true，前端据此提示升级。 */
   has_update: boolean;
-  /** 发布仓库地址，用于跳转查看发布记录；检查失败时为空串。 */
+  /** 发布来源元数据；检查失败时为空串，不作为界面跳转入口。 */
   release_url: string;
   /** 本次结论的产生时间，UTC RFC 3339。 */
   checked_at: string;
   /** 远端检查的失败原因；已确认可用时为空串。 */
   check_error: string;
+};
+
+/** 容器内升级状态；success 仅表示新服务已通过就绪检查。 */
+export type SystemUpgrade = {
+  enabled: boolean;
+  phase: "idle" | "downloading" | "restarting" | "success" | "failed";
+  target: string;
+  error: string;
 };
 
 export type Actor = {

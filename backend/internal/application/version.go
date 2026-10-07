@@ -3,7 +3,6 @@ package application
 import (
 	"context"
 	"errors"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -68,26 +67,36 @@ func (s *VersionService) Current() string {
 // Status 返回当前版本与远端版本的比较结果。
 // 只有发布源未装配才返回错误；远端失败写入 CheckError，保证页面始终能显示当前版本。
 func (s *VersionService) Status(ctx context.Context) (VersionStatus, error) {
+	return s.status(ctx, false)
+}
+
+// Refresh 主动重新查询发布源并更新共享缓存，供用户手动检查使用。
+func (s *VersionService) Refresh(ctx context.Context) (VersionStatus, error) {
+	return s.status(ctx, true)
+}
+
+// status 集中处理自动检查与手动检查的版本比较和错误语义。
+func (s *VersionService) status(ctx context.Context, refresh bool) (VersionStatus, error) {
 	if s == nil || s.source == nil {
 		return VersionStatus{}, ErrVersionUnavailable
 	}
 	status := VersionStatus{Current: s.Current(), CheckedAt: s.now().UTC().Format(time.RFC3339)}
-	info, err := s.latest(ctx)
+	info, err := s.latest(ctx, refresh)
 	if err != nil {
 		status.CheckError = err.Error()
 		return status, nil
 	}
 	status.Latest = info.Version
 	status.ReleaseURL = info.Source
-	status.HasUpdate = compareVersions(status.Current, info.Version) < 0
+	status.HasUpdate = ports.CompareVersions(status.Current, info.Version) < 0
 	return status, nil
 }
 
-// latest 读取远端版本，命中缓存时直接返回；成功与失败使用不同缓存时长。
-func (s *VersionService) latest(ctx context.Context) (ports.ReleaseInfo, error) {
+// latest 串行读取远端版本；自动检查复用缓存，手动检查绕过成功与失败缓存。
+func (s *VersionService) latest(ctx context.Context, refresh bool) (ports.ReleaseInfo, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !s.cachedAt.IsZero() {
+	if !refresh && !s.cachedAt.IsZero() {
 		ttl := releaseCacheTTL
 		if s.cachedErr != nil {
 			ttl = releaseFailureTTL
@@ -99,49 +108,4 @@ func (s *VersionService) latest(ctx context.Context) (ports.ReleaseInfo, error) 
 	info, err := s.source.Latest(ctx)
 	s.cached, s.cachedErr, s.cachedAt = info, err, s.now()
 	return info, err
-}
-
-// compareVersions 按点分数字段比较版本，返回 -1/0/1。
-// 任一侧包含非数字字段（如 dev 或自定义标识）时返回 0：无法判定升级方向时不提示更新。
-func compareVersions(current, latest string) int {
-	left, okLeft := versionSegments(current)
-	right, okRight := versionSegments(latest)
-	if !okLeft || !okRight {
-		return 0
-	}
-	for index := 0; index < len(left) || index < len(right); index++ {
-		leftValue, rightValue := 0, 0
-		if index < len(left) {
-			leftValue = left[index]
-		}
-		if index < len(right) {
-			rightValue = right[index]
-		}
-		if leftValue != rightValue {
-			if leftValue < rightValue {
-				return -1
-			}
-			return 1
-		}
-	}
-	return 0
-}
-
-// versionSegments 解析点分数字版本；允许前缀 v，出现空段或非数字段即视为不可比较。
-func versionSegments(value string) ([]int, bool) {
-	value = strings.TrimSpace(value)
-	value = strings.TrimPrefix(value, "v")
-	if value == "" {
-		return nil, false
-	}
-	parts := strings.Split(value, ".")
-	segments := make([]int, 0, len(parts))
-	for _, part := range parts {
-		number, err := strconv.Atoi(part)
-		if err != nil || number < 0 {
-			return nil, false
-		}
-		segments = append(segments, number)
-	}
-	return segments, true
 }
