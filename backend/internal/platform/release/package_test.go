@@ -18,6 +18,59 @@ import (
 	"testing"
 )
 
+// TestPackageFallback 校验直连损坏包会删除后通过代理完整重下，成功与未配置时不多发请求。
+func TestPackageFallback(t *testing.T) {
+	for _, mode := range []string{"direct", "proxy", "unconfigured", "cancel"} {
+		t.Run(mode, func(t *testing.T) {
+			body := "verified release package"
+			checksum := fmt.Sprintf("%x", sha256.Sum256([]byte(body)))
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			var calls []string
+			client := func(route string) *http.Client {
+				return &http.Client{Transport: packageTransport(func(r *http.Request) (*http.Response, error) {
+					kind, payload := "package", body
+					if strings.HasSuffix(r.URL.Path, ".sha256") {
+						kind, payload = "checksum", checksum
+					}
+					calls = append(calls, route+":"+kind)
+					if route == "direct" && kind == "package" && mode != "direct" {
+						payload = "corrupt"
+					}
+					if mode == "cancel" {
+						cancel()
+						return nil, context.Canceled
+					}
+					return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(payload)), Header: make(http.Header)}, nil
+				})}
+			}
+			installer := &PackageInstaller{Client: client("direct"), ProxyClient: func(context.Context) (*http.Client, error) {
+				if mode == "unconfigured" {
+					return nil, nil
+				}
+				return client("proxy"), nil
+			}}
+			archive := filepath.Join(t.TempDir(), "package.tgz")
+			err := installer.download(ctx, "https://github.com/w2z/byte-muse-go/releases/download/v0.1.101/package.tgz", archive)
+			want := map[string]string{"direct": "direct:checksum,direct:package", "proxy": "direct:checksum,direct:package,proxy:checksum,proxy:package", "unconfigured": "direct:checksum,direct:package", "cancel": "direct:checksum"}[mode]
+			if strings.Join(calls, ",") != want {
+				t.Fatalf("calls=%v", calls)
+			}
+			if mode == "direct" || mode == "proxy" {
+				if err != nil {
+					t.Fatal(err)
+				}
+				actual, _ := os.ReadFile(archive)
+				if string(actual) != body {
+					t.Fatal("升级包不是完整的校验结果")
+				}
+			} else if err == nil {
+				t.Fatal("失败应当返回错误")
+			}
+		})
+	}
+}
+
 type packageTransport func(*http.Request) (*http.Response, error)
 
 func (f packageTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
@@ -48,16 +101,14 @@ func TestStageProgress(t *testing.T) {
 	}
 	_ = tw.Close()
 	_ = gz.Close()
-	original := http.DefaultTransport
-	t.Cleanup(func() { http.DefaultTransport = original })
-	http.DefaultTransport = packageTransport(func(r *http.Request) (*http.Response, error) {
+	transport := packageTransport(func(r *http.Request) (*http.Response, error) {
 		body := archive.Bytes()
 		if strings.HasSuffix(r.URL.Path, ".sha256") {
 			body = []byte(fmt.Sprintf("%x", sha256.Sum256(body)))
 		}
 		return &http.Response{StatusCode: 200, Body: io.NopCloser(bytes.NewReader(body)), Header: make(http.Header)}, nil
 	})
-	installer := &PackageInstaller{Root: t.TempDir(), Repo: "w2z/byte-muse-go"}
+	installer := &PackageInstaller{Root: t.TempDir(), Repo: "w2z/byte-muse-go", Client: &http.Client{Transport: transport}}
 	var phases []string
 	err = installer.Stage(context.Background(), "0.1.22", func(state ports.UpgradeStatus) {
 		if state.CompletedSteps != len(phases) {
@@ -98,7 +149,7 @@ func TestDownloadChecksum(t *testing.T) {
 		path, hash string
 		valid      bool
 	}{{"/ok", checksum, true}, {"/corrupt", strings.Repeat("0", 64), false}, {"/missing", checksum, false}} {
-		err := downloadFile(context.Background(), server.URL+tc.path, filepath.Join(t.TempDir(), "package"), tc.hash)
+		err := downloadFile(context.Background(), nil, server.URL+tc.path, filepath.Join(t.TempDir(), "package"), tc.hash)
 		if (err == nil) != tc.valid {
 			t.Fatalf("path=%s err=%v", tc.path, err)
 		}

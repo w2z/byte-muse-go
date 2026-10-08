@@ -625,10 +625,14 @@ func (c *Commands) Serve(ctx context.Context) error {
 	defer func() { cancelEvents(); <-eventsDone }()
 	// 封面缓存固定开启：目录是容器内 /data/cover（随 /data 一起挂载），代理沿用设置页的爬虫代理。
 	coverCache := covercache.New(c.config.CoverRoot, coverProxyReader(settingsService))
-	versions := application.NewVersionService(c.config.Version, release.NewGitHubSource(c.config.ReleaseRepo, nil))
+	// 检查更新和下载均先直连，回退时读取当前代理设置，保存后无需重启。
+	releaseProxy := release.NewProxyClient(settingsValues(settingsService))
+	releaseSource := release.NewGitHubSource(c.config.ReleaseRepo, nil)
+	releaseSource.ProxyClient = releaseProxy
+	versions := application.NewVersionService(c.config.Version, releaseSource)
 	var installer ports.UpgradeInstaller
 	if os.Getenv("BYTEMUSE_SUPERVISED") == "1" && os.Getenv("BYTEMUSE_UPGRADE_ROOT") != "" {
-		installer = &release.PackageInstaller{Root: os.Getenv("BYTEMUSE_UPGRADE_ROOT"), Repo: c.config.ReleaseRepo}
+		installer = &release.PackageInstaller{Root: os.Getenv("BYTEMUSE_UPGRADE_ROOT"), Repo: c.config.ReleaseRepo, ProxyClient: releaseProxy}
 	}
 	handler := httpapi.New(httpapi.Dependencies{
 		ScanTasks:             scanTasks,

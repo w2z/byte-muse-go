@@ -783,7 +783,7 @@ paths:
     get:
       operationId: getSystemVersion
       summary: 读取当前版本与发布仓库版本
-      description: 返回当前运行版本与发布仓库 version.json 记录的版本，供顶栏版本标签显示与升级提示。当前版本来自 BYTEMUSE_VERSION，未注入时为 dev。服务端按 1 小时缓存成功结果、1 分钟缓存失败结果，避免耗尽 GitHub 未认证额度。远端检查失败不影响本接口：仍返回 200，失败原因放在 check_error。版本按点分数字段比较，dev 或非数字版本不判定升级。
+      description: 返回当前运行版本与发布仓库 version.json 记录的版本，供顶栏版本标签显示与升级提示。检查按 raw 直连、jsDelivr GitHub CDN 直连、已配置 PROXY 代理访问 raw 的顺序回退，每次最多10秒，成功即停止；未配置代理时跳过。直连不使用环境代理，CDN可能有缓存延迟。当前版本来自 BYTEMUSE_VERSION，未注入时为 dev。服务端按 1 小时缓存成功结果、1 分钟缓存失败结果，避免耗尽 GitHub 未认证额度。远端检查失败不影响本接口：仍返回 200，失败原因放在 check_error。版本按点分数字段比较，dev 或非数字版本不判定升级。
       parameters:
         - {in: query, name: refresh, required: false, schema: {type: boolean, default: false}, description: 为 true 时绕过成功及失败缓存，立即向发布仓库检查更新；后台自动检查省略此参数}
         - {in: cookie, name: bytemuse_session, required: true, schema: {type: string}, description: 登录签发的管理员会话 Cookie，不在示例中填写真实值}
@@ -833,7 +833,7 @@ paths:
     post:
       operationId: startSystemUpgrade
       summary: 异步升级容器内服务
-      description: 下载固定发布仓库中与当前架构匹配的完整前后端运行包，通过 SHA256、版本和启动协议校验后请求常驻启动器重启内部服务，保留同一容器。重复提交返回 409。下载失败保持旧服务运行；新服务启动后按现有迁移流程升级数据库，因此启动失败不自动降级。
+      description: 下载固定发布仓库中与当前架构匹配的完整前后端运行包。先直连 GitHub Release，失败后通过已配置 PROXY 代理完整重下；未配置时跳过代理，不使用 jsDelivr。每轮最多4分钟，重试清理部分文件并重新校验。通过 SHA256、版本和启动协议校验后请求常驻启动器重启内部服务，保留同一容器。重复提交返回 409。下载失败保持旧服务运行；新服务启动后按现有迁移流程升级数据库，因此启动失败不自动降级。
       parameters:
         - {in: cookie, name: bytemuse_session, required: true, schema: {type: string}, description: 管理员登录会话}
       requestBody:

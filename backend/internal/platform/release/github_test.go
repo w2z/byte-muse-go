@@ -2,11 +2,77 @@ package release
 
 import (
 	"context"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 )
+
+// TestVersionFallbackOrder 验证 raw、CDN、代理顺序、成功短路、缺少代理和取消停止。
+func TestVersionFallbackOrder(t *testing.T) {
+	for _, success := range []string{"raw", "cdn", "proxy", "none", "unconfigured", "cancel"} {
+		t.Run(success, func(t *testing.T) {
+			var calls []string
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			response := func(name string) (*http.Response, error) {
+				calls = append(calls, name)
+				if success == "cancel" {
+					cancel()
+					return nil, context.Canceled
+				}
+				if name != success {
+					return nil, errors.New("connection failed")
+				}
+				return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"version":"0.1.101"}`)), Header: make(http.Header)}, nil
+			}
+			direct := &http.Client{Transport: packageTransport(func(r *http.Request) (*http.Response, error) {
+				if r.URL.Host == "raw.githubusercontent.com" {
+					return response("raw")
+				}
+				if r.URL.String() != "https://cdn.jsdelivr.net/gh/w2z/byte-muse-go@HEAD/version.json" {
+					t.Errorf("cdn=%s", r.URL)
+				}
+				return response("cdn")
+			})}
+			source := NewGitHubSource("w2z/byte-muse-go", direct)
+			source.ProxyClient = func(context.Context) (*http.Client, error) {
+				if success == "unconfigured" {
+					return nil, nil
+				}
+				return &http.Client{Transport: packageTransport(func(r *http.Request) (*http.Response, error) {
+					if r.URL.Host != "raw.githubusercontent.com" {
+						t.Errorf("proxy target=%s", r.URL.Host)
+					}
+					return response("proxy")
+				})}, nil
+			}
+			_, err := source.Latest(ctx)
+			want := map[string]string{"raw": "raw", "cdn": "raw,cdn", "proxy": "raw,cdn,proxy", "none": "raw,cdn,proxy", "unconfigured": "raw,cdn", "cancel": "raw"}[success]
+			if strings.Join(calls, ",") != want {
+				t.Fatalf("calls=%v want=%s", calls, want)
+			}
+			if (err != nil) != (success == "none" || success == "unconfigured" || success == "cancel") {
+				t.Fatalf("err=%v", err)
+			}
+		})
+	}
+}
+
+// TestDirectIgnoresEnvironmentProxy 防止首轮直连被 HTTP_PROXY/HTTPS_PROXY 隐式改变。
+func TestDirectIgnoresEnvironmentProxy(t *testing.T) {
+	client := directClient()
+	defer client.CloseIdleConnections()
+	if client.Transport.(*http.Transport).Proxy != nil {
+		t.Fatal("直连不应使用环境代理")
+	}
+	factory := NewProxyClient(func(context.Context) (map[string]string, error) { return map[string]string{}, nil })
+	if client, err := factory(context.Background()); err != nil || client != nil {
+		t.Fatalf("未配置代理时应跳过: client=%v err=%v", client, err)
+	}
+}
 
 // newTestSource 把发布源指向本地测试服务器，避免真实访问 GitHub。
 func newTestSource(t *testing.T, handler http.HandlerFunc) *GitHubSource {
@@ -15,6 +81,7 @@ func newTestSource(t *testing.T, handler http.HandlerFunc) *GitHubSource {
 	t.Cleanup(server.Close)
 	source := NewGitHubSource("w2z/byte-muse-go", server.Client())
 	source.endpoint = server.URL
+	source.cdnEndpoint = ""
 	return source
 }
 
@@ -103,5 +170,51 @@ func TestGitHubSourceTimeout(t *testing.T) {
 	cancel()
 	if _, err := source.Latest(ctx); err == nil {
 		t.Fatal("取消后应当返回错误")
+	}
+}
+
+// TestReleaseProxy 验证检查更新与升级下载读取同一动态代理，保存后下一次请求生效。
+func TestReleaseProxy(t *testing.T) {
+	calls := []int{0, 0}
+	servers := make([]*httptest.Server, 2)
+	for i := range servers {
+		index := i
+		servers[i] = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls[index]++
+			if r.URL.Host != "release.example.test" {
+				t.Errorf("host=%s", r.URL.Host)
+			}
+			_, _ = w.Write([]byte(`{"version":"0.1.101"}`))
+		}))
+		defer servers[i].Close()
+	}
+	selected := servers[0].URL
+	factory := NewProxyClient(func(context.Context) (map[string]string, error) { return map[string]string{"PROXY": selected}, nil })
+	client, err := factory(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.CloseIdleConnections()
+	source := NewGitHubSource("w2z/byte-muse-go", client)
+	source.endpoint = "http://release.example.test"
+	source.cdnEndpoint = ""
+	if _, err := source.Latest(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	selected = servers[1].URL
+	client, err = factory(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.CloseIdleConnections()
+	if _, err := downloadBytes(context.Background(), client, "http://release.example.test/package.sha256", 1024); err != nil {
+		t.Fatal(err)
+	}
+	if calls[0] != 1 || calls[1] != 1 {
+		t.Fatalf("proxy calls=%v", calls)
+	}
+	selected = "file:///invalid-proxy"
+	if _, err := factory(context.Background()); err == nil {
+		t.Fatal("无效代理不应静默直连")
 	}
 }

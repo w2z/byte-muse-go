@@ -27,7 +27,13 @@ var packageVersion = regexp.MustCompile(`^[0-9]+[.][0-9]+[.][0-9]+$`)
 const maxPackageBytes int64 = 256 << 20
 
 // PackageInstaller 将升级包保存在 /data 的专用目录，不覆盖运行文件或用户配置。
-type PackageInstaller struct{ Root, Repo string }
+type PackageInstaller struct {
+	Root, Repo string
+	// Client 可注入直连测试客户端；为空时显式直连。
+	Client *http.Client
+	// ProxyClient 在直连下载失败后返回已配置的代理；nil 表示跳过代理回退。
+	ProxyClient func(context.Context) (*http.Client, error)
+}
 
 // Status 读取启动器写入的升级状态，异常状态文件按失败报告。
 func (p *PackageInstaller) Status() ports.UpgradeStatus {
@@ -85,16 +91,8 @@ func (p *PackageInstaller) Stage(ctx context.Context, version string, report fun
 	defer os.RemoveAll(temp)
 	name := "bytemuse-linux-" + runtime.GOARCH + ".tar.gz"
 	base := "https://github.com/" + p.Repo + "/releases/download/v" + version + "/" + name
-	checksum, err := downloadBytes(ctx, base+".sha256", 1024)
-	if err != nil {
-		return err
-	}
-	fields := strings.Fields(string(checksum))
-	if len(fields) == 0 || len(fields[0]) != 64 {
-		return errors.New("升级包摘要无效")
-	}
 	archive := filepath.Join(temp, "package.tgz")
-	if err := downloadFile(ctx, base, archive, fields[0]); err != nil {
+	if err := p.download(ctx, base, archive); err != nil {
 		return err
 	}
 	candidate := filepath.Join(temp, "release")
@@ -133,23 +131,71 @@ func (p *PackageInstaller) Stage(ctx context.Context, version string, report fun
 	return nil
 }
 
+// download 先直连 Release，失败后仅通过已配置代理重新下载摘要与完整包。
+// 不使用 jsDelivr（不支持 Release 附件），每次重新校验 SHA256，不复用失败的部分文件。
+func (p *PackageInstaller) download(ctx context.Context, base, archive string) error {
+	client := p.Client
+	if client == nil {
+		client = directClient()
+		defer client.CloseIdleConnections()
+	}
+	attempt := func(client *http.Client) error {
+		attemptCtx, cancel := context.WithTimeout(ctx, 4*time.Minute)
+		defer cancel()
+		checksumCtx, cancelChecksum := context.WithTimeout(attemptCtx, requestTimeout)
+		checksum, err := downloadBytes(checksumCtx, client, base+".sha256", 1024)
+		cancelChecksum()
+		if err != nil {
+			return err
+		}
+		fields := strings.Fields(string(checksum))
+		if len(fields) == 0 || len(fields[0]) != 64 {
+			return errors.New("升级包摘要无效")
+		}
+		return downloadFile(attemptCtx, client, base, archive, fields[0])
+	}
+	err := attempt(client)
+	if err == nil || ctx.Err() != nil || p.ProxyClient == nil {
+		return err
+	}
+	proxy, proxyErr := p.ProxyClient(ctx)
+	if proxyErr != nil {
+		return proxyErr
+	}
+	if proxy == nil {
+		return err
+	}
+	defer proxy.CloseIdleConnections()
+	if removeErr := os.Remove(archive); removeErr != nil && !os.IsNotExist(removeErr) {
+		return errors.New("无法清理未完成的升级包")
+	}
+	return attempt(proxy)
+}
+
 // packageClient 只允许 GitHub 的 HTTPS 制品重定向，不携带本地凭据。
-func packageClient() *http.Client {
-	return &http.Client{Timeout: 8 * time.Minute, CheckRedirect: func(req *http.Request, via []*http.Request) error {
+func packageClient(client *http.Client) *http.Client {
+	if client == nil {
+		client = http.DefaultClient
+	}
+	bounded := *client
+	// 两轮完整下载均包含在后台任务的十分钟期限内，给校验和安装留出时间。
+	bounded.Timeout = 4 * time.Minute
+	bounded.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		host := req.URL.Hostname()
 		if len(via) >= 5 || req.URL.Scheme != "https" || (host != "github.com" && !strings.HasSuffix(host, ".githubusercontent.com")) {
 			return errors.New("升级下载地址无效")
 		}
 		return nil
-	}}
+	}
+	return &bounded
 }
 
-func packageResponse(ctx context.Context, url string) (*http.Response, error) {
+func packageResponse(ctx context.Context, client *http.Client, url string) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, errors.New("升级下载请求无效")
 	}
-	resp, err := packageClient().Do(req)
+	resp, err := packageClient(client).Do(req)
 	if err != nil {
 		return nil, errors.New("下载升级包失败，请检查网络后重试")
 	}
@@ -160,8 +206,8 @@ func packageResponse(ctx context.Context, url string) (*http.Response, error) {
 	return resp, nil
 }
 
-func downloadBytes(ctx context.Context, url string, limit int64) ([]byte, error) {
-	resp, err := packageResponse(ctx, url)
+func downloadBytes(ctx context.Context, client *http.Client, url string, limit int64) ([]byte, error) {
+	resp, err := packageResponse(ctx, client, url)
 	if err != nil {
 		return nil, err
 	}
@@ -173,8 +219,8 @@ func downloadBytes(ctx context.Context, url string, limit int64) ([]byte, error)
 	return body, nil
 }
 
-func downloadFile(ctx context.Context, url, destination, expected string) error {
-	resp, err := packageResponse(ctx, url)
+func downloadFile(ctx context.Context, client *http.Client, url, destination, expected string) error {
+	resp, err := packageResponse(ctx, client, url)
 	if err != nil {
 		return err
 	}
