@@ -109,7 +109,7 @@ test("空筛选条件下点击搜索仍重新查询全部下载任务", async ()
   expect(requests[1]).toBe("/downloads?page=1&page_size=15");
 });
 
-test.each([["paused", "暂停"], ["queued", "排队"]])("筛选项 %s 点击搜索后才向服务端提交条件", async (value, label) => {
+test.each([["paused", "暂停"], ["queued", "排队中"]])("筛选项 %s 点击搜索后才向服务端提交条件", async (value, label) => {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const { container } = render(<QueryClientProvider client={client}><DownloadListPage /></QueryClientProvider>);
   await waitFor(() => expect(requests.length).toBeGreaterThan(0));
@@ -139,7 +139,7 @@ test("重置清空草稿和已应用条件并查询全部任务", async () => {
   expect(control.textContent).toContain("全部状态");
 });
 
-test.each([["queued", "排队"], ["stalled", "等待连接"], ["checking", "校验中"], ["metadata", "获取元数据"], ["moving", "移动中"], ["unknown", "待核实"], ["paused", "暂停"], ["stopped", "停止"], ["downloading", "下载中"], ["completed", "下载完成"], ["failed", "下载失败"]])("下载状态以下载器的 %s 为准，不显示内部已提交阶段", async (transferStatus, label) => {
+test.each([["queued", "排队中"], ["stalled", "等待连接"], ["checking", "校验中"], ["metadata", "获取元数据"], ["moving", "移动中"], ["unknown", "待核实"], ["paused", "暂停"], ["stopped", "停止"], ["downloading", "下载中"], ["completed", "下载完成"], ["failed", "下载失败"]])("下载状态以下载器的 %s 为准，不显示内部已提交阶段", async (transferStatus, label) => {
   responseItems = [{ id: "d1", media_id: "m1", status: "submitted", transfer_status: transferStatus }];
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(<QueryClientProvider client={client}><DownloadListPage /></QueryClientProvider>);

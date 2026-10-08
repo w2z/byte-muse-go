@@ -295,7 +295,7 @@ func mediaStatusLabel(media domain.Media, task *domain.DownloadTask) string {
 func transferStatusLabel(status string) string {
 	switch status {
 	case "queued":
-		return "排队"
+		return "排队中"
 	case "stalled":
 		return "等待连接"
 	case "checking":

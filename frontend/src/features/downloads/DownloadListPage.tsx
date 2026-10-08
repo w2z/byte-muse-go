@@ -24,7 +24,7 @@ function DownloadStatusBadge({ status, label }: { status: string; label: string 
 }
 
 const transferLabels: Record<string, string> = {
-  queued: "排队", stalled: "等待连接", checking: "校验中", metadata: "获取元数据", moving: "移动中", unknown: "待核实",
+  queued: "排队中", stalled: "等待连接", checking: "校验中", metadata: "获取元数据", moving: "移动中", unknown: "待核实",
   downloading: "下载中", paused: "暂停", stopped: "停止", failed: "下载失败", completed: "下载完成",
 };
 

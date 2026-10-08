@@ -2199,7 +2199,7 @@ components:
         transfer_status:
           type: [string, 'null']
           enum: [downloading, queued, stalled, checking, metadata, moving, unknown, paused, stopped, failed, completed, null]
-          description: 最近一次 qBittorrent 同步状态；downloading 下载中、queued 排队、stalled 等待连接、checking 校验中、metadata 获取元数据、moving 移动中、unknown 待核实、paused 暂停、stopped 停止、failed 失败、completed 下载完成；未同步为 null，不等于内部任务状态；下载完成不代表完成 PT 做种
+          description: 最近一次 qBittorrent 同步状态；downloading 下载中、queued 排队中、stalled 等待连接、checking 校验中、metadata 获取元数据、moving 移动中、unknown 待核实、paused 暂停、stopped 停止、failed 失败、completed 下载完成；未同步为 null，不等于内部任务状态；下载完成不代表完成 PT 做种
         added_at:
           type: [string, 'null']
           description: 下载器加入时间，UTC RFC3339；尚未同步为 null
