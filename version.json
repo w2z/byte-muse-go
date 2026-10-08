@@ -1,16 +1,20 @@
 {
-  "version": "0.1.111",
-  "commit": "4b0c2df79d8a0a2fa223e2f66007af19dfdc287e",
-  "short_commit": "4b0c2df",
-  "built_at": "2026-10-08T17:05:52Z",
+  "version": "0.1.112",
+  "commit": "690b3988dc6e1c783df518bb923b9421be867b4e",
+  "short_commit": "690b398",
+  "built_at": "2026-10-08T17:10:06Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.111",
-    "sha-4b0c2df",
+    "0.1.112",
+    "sha-690b398",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.112",
+      "message": "修正STRM视频计数并自动恢复重启任务"
+    },
     {
       "version": "0.1.111",
       "message": "在版本弹窗展示跨版本提交说明"
