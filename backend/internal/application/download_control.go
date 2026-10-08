@@ -59,6 +59,7 @@ func (s *DownloadService) decorateActions(ctx context.Context, items []domain.Do
 			task.AvailableActions = downloadActions(*task, nil)
 		}
 	}
+	decorateMetrics(ctx, items, clients)
 }
 
 // Control 校验最新下载器状态，执行一次明确操作并回查；不把 HTTP 成功当作任务成功。

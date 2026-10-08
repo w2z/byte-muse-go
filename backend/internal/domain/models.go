@@ -157,22 +157,44 @@ type SubscriptionPage struct {
 
 // DownloadTask is one independently tracked resource download attempt.
 type DownloadTask struct {
-	Code             *string        `json:"code"`              // 番号来自关联影片；关联缺失时为空。
-	AvailableActions []string       `json:"available_actions"` // 当前状态和下载器共同允许的操作。
-	ID               string         `json:"id"`
-	MediaID          string         `json:"media_id"`
-	SourceSite       *string        `json:"source_site"`
-	SourceKind       *string        `json:"source_kind"`
-	Downloader       *string        `json:"downloader"`
-	InfoHash         *string        `json:"info_hash"`
-	TransferStatus   *string        `json:"transfer_status"`
-	AddedAt          *time.Time     `json:"added_at"`
-	CompletedAt      *time.Time     `json:"completed_at"`
-	Status           DownloadStatus `json:"status"`
-	ExternalID       *string        `json:"external_id"`
-	ErrorMessage     *string        `json:"error_message"`
-	CreatedAt        time.Time      `json:"created_at"`
-	UpdatedAt        time.Time      `json:"updated_at"`
+	Metrics          *DownloadMetrics  `json:"metrics"`           // 当前页实时读取；未支持、任务缺失或读取失败时为空，不持久化速度。
+	Seeding          SeedingAssessment `json:"seeding"`           // 应用层按站点规则统一判断。
+	Code             *string           `json:"code"`              // 番号来自关联影片；关联缺失时为空。
+	AvailableActions []string          `json:"available_actions"` // 当前状态和下载器共同允许的操作。
+	ID               string            `json:"id"`
+	MediaID          string            `json:"media_id"`
+	SourceSite       *string           `json:"source_site"`
+	SourceKind       *string           `json:"source_kind"`
+	Downloader       *string           `json:"downloader"`
+	InfoHash         *string           `json:"info_hash"`
+	TransferStatus   *string           `json:"transfer_status"`
+	AddedAt          *time.Time        `json:"added_at"`
+	CompletedAt      *time.Time        `json:"completed_at"`
+	Status           DownloadStatus    `json:"status"`
+	ExternalID       *string           `json:"external_id"`
+	ErrorMessage     *string           `json:"error_message"`
+	CreatedAt        time.Time         `json:"created_at"`
+	UpdatedAt        time.Time         `json:"updated_at"`
+}
+
+// DownloadMetrics 是下载器实时快照；数值为空表示未提供，零表示真实零值。
+type DownloadMetrics struct {
+	SizeBytes       *int64     `json:"size_bytes"`       // 选中文件总大小，字节。
+	RemainingBytes  *int64     `json:"remaining_bytes"`  // 尚需下载字节数。
+	DownloadedBytes *int64     `json:"downloaded_bytes"` // 已下载字节数（下载器累计值）。
+	DownloadSpeed   *int64     `json:"download_speed"`   // 当前下载速度，字节/秒。
+	UploadSpeed     *int64     `json:"upload_speed"`     // 当前上传速度，字节/秒。
+	SavePath        *string    `json:"save_path"`        // 下载器保存目录。
+	ShareRatio      *float64   `json:"share_ratio"`      // 单种累计上传/下载分享率。
+	SeedingSeconds  *int64     `json:"seeding_seconds"`  // 下载器累计做种秒数。
+	Complete        bool       `json:"-"`                // 只用于服务端规则判断，不能仅用分享率认定下载完成。
+	AddedAt         *time.Time `json:"-"`                // 下载器加入时间用于限制期限内判断。
+}
+
+// SeedingAssessment 表达本地估算而非站点 H&R 官方认定；Rule 说明规则和证据限制。
+type SeedingAssessment struct {
+	Status string `json:"status"` // completed/pending/unknown/not_required/not_applicable。
+	Rule   string `json:"rule"`   // 中文规则及判断依据。
 }
 
 // DownloadPage is a repository result before request pagination metadata is attached.

@@ -1,4 +1,4 @@
-import { Badge, Button, DatePicker, Divider, Drawer, Dropdown, Menu, Modal, Select, Space, Table, Grid, type BadgeProps } from "@arco-design/web-react";
+import { Badge, Button, DatePicker, Divider, Drawer, Dropdown, Menu, Modal, Select, Space, Table, Tag, Tooltip, Grid, type BadgeProps } from "@arco-design/web-react";
 import { IconClose, IconDown } from "@arco-design/web-react/icon";
 import dayjs from "dayjs";
 import { getDateTimeShortcuts, getDisabledDateTime, isFutureDate, serializeDateTimeRange } from "../../shared/dateTimeRange";
@@ -26,6 +26,33 @@ function DownloadStatusBadge({ status, label }: { status: string; label: string 
 const transferLabels: Record<string, string> = {
   downloading: "下载中", paused: "暂停", stopped: "停止", failed: "下载失败", completed: "下载完成",
 };
+
+/** 字节数按 1024 自动换算，速度追加 /s；未知值保留占位，零不视为缺失。 */
+function formatBytes(value: number | null | undefined, speed = false): string {
+  if (value == null || !Number.isFinite(value) || value < 0) return "—";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  const index = value > 0 ? Math.min(Math.floor(Math.log(value) / Math.log(1024)), units.length - 1) : 0;
+  return `${(value / 1024 ** index).toFixed(index === 0 ? 0 : 2)} ${units[index]}${speed ? "/s" : ""}`;
+}
+
+/** 累计做种时长来自下载器，不以加入时间或下载完成时间相减估算。 */
+function formatSeedingTime(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value) || value < 0) return "—";
+  const seconds = Math.floor(value);
+  if (seconds < 60) return `${seconds} 秒`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes} 分钟`;
+  const hours = Math.floor(minutes / 60);
+  return hours < 24 ? `${hours} 小时 ${minutes % 60} 分钟` : `${Math.floor(hours / 24)} 天 ${hours % 24} 小时`;
+}
+
+/** 只展示后端规则结论；提示中保留估算依据，非 PT 使用 Tag 默认色。 */
+function SeedingTag({ task }: { task: DownloadTask }) {
+  const status = task.source_kind === "pt" ? task.seeding?.status ?? "unknown" : "not_applicable";
+  const labels = { completed: "已达标（估算）", pending: "未达标", unknown: "待确认", not_required: "无做种要求", not_applicable: "不适用" };
+  const colors = { completed: "green", pending: "orange", unknown: "red", not_required: "green", not_applicable: undefined };
+  return <Tooltip content={task.seeding?.rule || (task.source_kind === "pt" ? "暂无做种数据或站点规则" : "非 PT 任务")}><Tag color={colors[status]}>{labels[status]}</Tag></Tooltip>;
+}
 
 const actionLabels: Record<DownloadAction, string> = { pause: "暂停", stop: "停止", resume: "继续", retry: "重试", delete: "删除任务", delete_files: "删除任务+文件" };
 const statusLabels: Record<DownloadTask["status"], string> = { queued: "排队中", searching: "搜索中", submitted: "已提交", downloading: "下载中", completed: "已完成", failed: "失败", unknown: "待核实" };
@@ -190,7 +217,7 @@ export function DownloadListPage() {
             loading={query.isLoading}
             noDataElement={<div className="data-table-empty" role="status">暂无下载任务</div>}
             pagination={false}
-            scroll={{ x: 1400 }}
+            scroll={{ x: 2500 }}
             columns={[
               { title: "影片", dataIndex: "code", width: 130, render: (value: string | null, task: DownloadTask) => value && task.media_id
                 ? <Button type="text" className="code-cell" onClick={() => setSelectedMediaId(task.media_id)}>{value}</Button>
@@ -198,13 +225,17 @@ export function DownloadListPage() {
               { title: "资源站", dataIndex: "source_site", render: (value: string | null) => value || "—" },
               { title: "下载器", dataIndex: "downloader", render: (value: string | null) => value || "—" },
               { title: "下载状态", key: "download_status", render: (_: unknown, task: DownloadTask) => <DownloadStatus task={task} /> },
+              { title: "大小", key: "size", width: 110, render: (_: unknown, task: DownloadTask) => formatBytes(task.metrics?.size_bytes) },
+              { title: "剩余", key: "remaining", width: 110, render: (_: unknown, task: DownloadTask) => formatBytes(task.metrics?.remaining_bytes) },
+              { title: "已下载", key: "downloaded", width: 110, render: (_: unknown, task: DownloadTask) => formatBytes(task.metrics?.downloaded_bytes) },
+              { title: "下载速度", key: "download_speed", width: 120, render: (_: unknown, task: DownloadTask) => formatBytes(task.metrics?.download_speed, true) },
+              { title: "上传速度", key: "upload_speed", width: 120, render: (_: unknown, task: DownloadTask) => formatBytes(task.metrics?.upload_speed, true) },
+              { title: "保存路径", key: "save_path", width: 220, render: (_: unknown, task: DownloadTask) => <span style={{ overflowWrap: "anywhere" }}>{task.metrics?.save_path || "—"}</span> },
+              { title: "分享率", key: "share_ratio", width: 90, render: (_: unknown, task: DownloadTask) => task.metrics?.share_ratio == null ? "—" : task.metrics.share_ratio.toFixed(2) },
+              { title: "做种时间", key: "seeding_seconds", width: 140, render: (_: unknown, task: DownloadTask) => formatSeedingTime(task.metrics?.seeding_seconds) },
+              { title: "完成做种（PT）", key: "seeding", width: 150, render: (_: unknown, task: DownloadTask) => <SeedingTag task={task} /> },
               { title: "加入时间", dataIndex: "added_at", render: (value: string | null) => value ? dayjs(value).format("YYYY-MM-DD HH:mm") : "—" },
               { title: "完成时间", dataIndex: "completed_at", render: (value: string | null) => value ? dayjs(value).format("YYYY-MM-DD HH:mm") : "—" },
-              {
-                title: "外部任务",
-                dataIndex: "external_id",
-                render: (value: string | null | undefined) => (value ? <span className="code-cell">{value}</span> : null),
-              },
               { title: "错误", dataIndex: "error_message" },
               { title: "操作", key: "actions", width: 200, fixed: "right", render: (_: unknown, task: DownloadTask) => <DownloadActions task={task} onChanged={refreshAfterAction} /> },
             ]}

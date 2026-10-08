@@ -23,6 +23,19 @@ vi.mock("../../shared/api/client", async (importOriginal) => ({
 }));
 afterEach(() => { cleanup(); requests.length = 0; responseItems = []; detailError = false; });
 
+test("展示实时指标、PT 规则标签和未知值，移除外部任务列", async () => {
+  responseItems = [{ id: "metrics", media_id: "m1", code: "TEST-001", status: "completed", source_kind: "pt",
+    metrics: { size_bytes: 1024 ** 4, remaining_bytes: 0, downloaded_bytes: 1024 ** 3, download_speed: 1024 ** 2, upload_speed: 1024, save_path: "/downloads/test", share_ratio: 2.5, seeding_seconds: 3 * 86400 },
+    seeding: { status: "completed", rule: "规则测试" } },
+    { id: "unknown", media_id: "m2", status: "submitted", source_kind: "bt", metrics: null }];
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(<QueryClientProvider client={client}><DownloadListPage /></QueryClientProvider>);
+  const row = (await screen.findByText("/downloads/test")).closest("tr")!;
+  for (const text of ["1.00 TB", "0 B", "1.00 GB", "1.00 MB/s", "1.00 KB/s", "2.50", "3 天 0 小时", "已达标（估算）"]) expect(within(row).getByText(text)).not.toBeNull();
+  expect(screen.getByText("不适用")).not.toBeNull();
+  expect(screen.queryByText("外部任务")).toBeNull();
+});
+
 test.each([["加入开始", "added"], ["完成开始", "completed"]])("%s支持时间选择和四个快捷范围，查询保留所选时刻", async (placeholder, prefix) => {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(<QueryClientProvider client={client}><DownloadListPage /></QueryClientProvider>);

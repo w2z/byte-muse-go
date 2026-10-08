@@ -439,7 +439,7 @@ paths:
     get:
       operationId: listDownloads
       summary: 查询下载任务
-      description: 按传输状态、加入时间和完成时间先过滤再分页；code 为关联影片番号，关联缺失为 null；available_actions 根据状态和下载器能力返回。qB 4.x 支持暂停，5.x 使用停止；能力读取失败不提供外部控制操作。失败筛选包含搜索失败，不推断旧数据。
+      description: 按传输状态、加入时间和完成时间先过滤再分页；code 为关联影片番号，关联缺失为 null；available_actions 根据状态和下载器能力返回。qB 4.x 支持暂停，5.x 使用停止；能力读取失败不提供外部控制操作。当前页批量读取实时 metrics，当前支持 qBittorrent，缺失或失败为 null；seeding 按站点规则估算，不代表站点 H&R 官方认定。
       parameters:
         - $ref: '#/components/parameters/Page'
         - $ref: '#/components/parameters/PageSize'
@@ -474,6 +474,29 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/DownloadPage'
+              example:
+                page: 1
+                page_size: 15
+                total: 1
+                items:
+                  - id: task-demo
+                    media_id: media-demo
+                    code: TEST-001
+                    available_actions: [stop, delete, delete_files]
+                    status: submitted
+                    transfer_status: downloading
+                    downloader: qbittorrent
+                    source_site: Nyaa BT
+                    source_kind: bt
+                    info_hash: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+                    external_id: null
+                    error_message: null
+                    added_at: '2026-10-08T10:00:00Z'
+                    completed_at: null
+                    created_at: '2026-10-08T10:00:00Z'
+                    updated_at: '2026-10-08T10:00:00Z'
+                    metrics: {size_bytes: 10737418240, remaining_bytes: 5368709120, downloaded_bytes: 5368709120, download_speed: 10485760, upload_speed: 1048576, save_path: /downloads, share_ratio: 1.5, seeding_seconds: 0}
+                    seeding: {status: not_applicable, rule: 非 PT 任务，不适用站点做种要求}
   /downloads/{taskId}/{action}:
     post:
       operationId: controlDownload
@@ -2119,8 +2142,32 @@ components:
                 $ref: '#/components/schemas/Subscription'
     DownloadTask:
       type: object
-      required: [id, media_id, code, available_actions, status, created_at, updated_at]
+      required: [id, media_id, code, available_actions, status, created_at, updated_at, metrics, seeding]
       properties:
+        metrics:
+          description: 当前页按 hash 批量读取的下载器实时指标，不入库；当前支持 qBittorrent，未支持、任务不存在或读取失败为 null；单字段 null 表示下载器未提供
+          type: [object, 'null']
+          required: [size_bytes, remaining_bytes, downloaded_bytes, download_speed, upload_speed, save_path, share_ratio, seeding_seconds]
+          properties:
+            size_bytes: {type: [integer, 'null'], format: int64, minimum: 0, description: 选中文件总大小，字节；未知为 null, example: 10737418240}
+            remaining_bytes: {type: [integer, 'null'], format: int64, minimum: 0, description: 剩余需下载字节数；未知为 null，零表示无剩余, example: 5368709120}
+            downloaded_bytes: {type: [integer, 'null'], format: int64, minimum: 0, description: 下载器累计已下载字节数；未知为 null, example: 5368709120}
+            download_speed: {type: [integer, 'null'], format: int64, minimum: 0, description: 当前下载速度，字节每秒；未知为 null，零表示无传输, example: 10485760}
+            upload_speed: {type: [integer, 'null'], format: int64, minimum: 0, description: 当前上传速度，字节每秒；未知为 null, example: 1048576}
+            save_path: {type: [string, 'null'], description: 下载器保存目录；未知为 null, example: /downloads}
+            share_ratio: {type: [number, 'null'], minimum: 0, description: 单种累计上传与下载的分享率；未知为 null, example: 1.5}
+            seeding_seconds: {type: [integer, 'null'], format: int64, minimum: 0, description: 下载器累计做种秒数，不是加入后经过时间；未知为 null, example: 86400}
+        seeding:
+          type: object
+          required: [status, rule]
+          description: 后端按现有站点规则和下载器数据估算，不代表站点 H&R 官方认定；PTFans 35 天内做种 7 天，RousiPro 24 小时或分享率 1，NicePT 12 天内做种 3 天或分享率 2。限期以下载器加入时间估算，期限已过或起点未知时不认定达标
+          properties:
+            status:
+              type: string
+              enum: [completed, pending, unknown, not_required, not_applicable]
+              description: completed=下载完成且估算达标；pending=未达标或尚未下载完成；unknown=缺数据、未知规则或无法核实期限内历史；not_required=馒头或PTTime无H&R要求；not_applicable=非PT
+              example: pending
+            rule: {type: string, description: 中文规则与判断依据及限制，用于界面提示, example: 累计做种 ≥24 小时或单种分享率 ≥1.0；依据下载器估算，以站点认定为准}
         code:
           type: [string, 'null']
           description: 关联影片番号，用于列表展示；关联缺失时为 null，不用内部媒体 ID 替代

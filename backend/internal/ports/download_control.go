@@ -22,6 +22,11 @@ type DownloadController interface {
 	Control(context.Context, string, string) error
 }
 
+// DownloadMetricsReader 只读取当前页精确 hash 的指标；不支持的下载器无需实现。
+type DownloadMetricsReader interface {
+	ReadMetrics(context.Context, []string) (map[string]*domain.DownloadMetrics, error)
+}
+
 // DownloadControlRepository 使用已有任务租约排他控制，防止并发点击和过期状态覆盖。
 type DownloadControlRepository interface {
 	LockControl(context.Context, string) (domain.DownloadTask, string, error)

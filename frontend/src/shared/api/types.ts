@@ -89,6 +89,8 @@ export type Subscription = {
 };
 
 export type DownloadTask = {
+  metrics?: DownloadMetrics | null;
+  seeding?: { status: "completed" | "pending" | "unknown" | "not_required" | "not_applicable"; rule: string };
   id: string;
   media_id: string;
   code?: string | null;
@@ -105,6 +107,18 @@ export type DownloadTask = {
   error_message?: string | null;
   created_at: string;
   updated_at: string;
+};
+
+/** 下载器实时指标；空值表示不可用，字节和秒由页面统一格式化。 */
+export type DownloadMetrics = {
+  size_bytes: number | null;
+  remaining_bytes: number | null;
+  downloaded_bytes: number | null;
+  download_speed: number | null;
+  upload_speed: number | null;
+  save_path: string | null;
+  share_ratio: number | null;
+  seeding_seconds: number | null;
 };
 
 /** 后端按任务状态及下载器实际能力返回的允许操作。 */
