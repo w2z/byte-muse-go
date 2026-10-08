@@ -76,7 +76,7 @@ test("点击番号加载封面和资料，详情无卡片与操作并可关闭�
   expect(requests).toContain("/media/media%2Fid");
   expect(within(dialog).getByText("2026-09-28")).not.toBeNull();
   expect(within(dialog).queryByRole("article")).toBeNull();
-  expect(within(dialog).queryByRole("button", { name: "复制番号 TEST-001" })).toBeNull();
+  expect(within(dialog).getByRole("button", { name: "复制番号 TEST-001" })).not.toBeNull();
   expect(within(dialog).queryByText("已订阅")).toBeNull();
   expect(within(dialog).queryByRole("button", { name: "预告" })).toBeNull();
   fireEvent.click(within(dialog).getByRole("button", { name: "关闭影片信息" }));

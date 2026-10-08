@@ -126,14 +126,53 @@ it("完整资料分组显示真实零值与否值，无图模式不加载详细�
   expect(container.querySelector("img")).toBeNull();
 });
 
-it("详情顶部显示完整封面，移除卡片标题和复制按钮", () => {
+it("详情顶部显示完整封面，基本信息提供复制按钮", () => {
   const { container } = renderCard("VISIBLE", { variant: "detail" });
   expect(screen.getByRole("img", { name: "TEST-001 封面" })).toHaveAttribute("src", coverSrc);
   expect(screen.getByRole("img", { name: "TEST-001 封面" })).toHaveAttribute("width", "100%");
   expect(container.querySelector(".code-card")).toBeNull();
-  expect(screen.queryByRole("button", { name: "复制番号 TEST-001" })).toBeNull();
+  expect(screen.getByRole("button", { name: "复制番号 TEST-001" })).toBeInTheDocument();
   expect(screen.getByText("基本信息")).toBeInTheDocument();
   expect(screen.getByRole("img", { name: "TEST-001 剧照 1" })).toHaveAttribute("src", media.still_photos![0]);
+});
+
+it("详情点击番号文字和末尾图标都复制当前番号，失败给出提示", async () => {
+  const user = userEvent.setup();
+  const writeText = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue();
+  renderCard("INVISIBLE", { variant: "detail" });
+  await user.click(screen.getByRole("button", { name: "TEST-001" }));
+  await user.click(screen.getByRole("button", { name: "复制番号 TEST-001" }));
+  expect(writeText).toHaveBeenCalledTimes(2);
+  expect(writeText).toHaveBeenLastCalledWith("TEST-001");
+  expect((await screen.findAllByText("番号已复制")).length).toBeGreaterThan(0);
+  writeText.mockRejectedValueOnce(new Error("clipboard denied"));
+  await user.click(screen.getByRole("button", { name: "复制番号 TEST-001" }));
+  expect(await screen.findByText("番号复制失败")).toBeInTheDocument();
+});
+
+it("内网 HTTP 没有 Clipboard API 时仍能复制并恢复焦点", async () => {
+  const user = userEvent.setup();
+  const clipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+  const execCommand = Object.getOwnPropertyDescriptor(document, "execCommand");
+  const copy = vi.fn(() => {
+    expect((document.activeElement as HTMLTextAreaElement).value).toBe("TEST-001");
+    return true;
+  });
+  Object.defineProperty(navigator, "clipboard", { configurable: true, value: undefined });
+  Object.defineProperty(document, "execCommand", { configurable: true, value: copy });
+  try {
+    const { container } = renderCard("INVISIBLE", { variant: "detail" });
+    const button = screen.getByRole("button", { name: "复制番号 TEST-001" });
+    await user.click(button);
+    expect(copy).toHaveBeenCalledWith("copy");
+    expect(container.querySelector("textarea")).toBeNull();
+    expect(button).toHaveFocus();
+    expect(await screen.findByText("番号已复制")).toBeInTheDocument();
+  } finally {
+    if (clipboard) Object.defineProperty(navigator, "clipboard", clipboard);
+    if (execCommand) Object.defineProperty(document, "execCommand", execCommand);
+    else Reflect.deleteProperty(document, "execCommand");
+  }
 });
 
 it("没有剧照的详情不显示剧照区域", () => {

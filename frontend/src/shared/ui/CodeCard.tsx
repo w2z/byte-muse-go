@@ -1,4 +1,4 @@
-import { Button, Card, Descriptions, Divider, Image, Tag } from "@arco-design/web-react";
+import { Button, Card, Descriptions, Divider, Image, Space, Tag } from "@arco-design/web-react";
 import dayjs from "dayjs";
 import { IconCopy, IconImage, IconPlayArrow } from "@arco-design/web-react/icon";
 import { useQuery } from "@tanstack/react-query";
@@ -42,7 +42,7 @@ type CodeCardProps = {
   hideActions?: boolean;
   /** 隐藏番号旁的业务状态标签，默认显示。 */
   hideStatus?: boolean;
-  /** card 显示列表卡片；detail 只显示封面图及分组资料，不渲染卡片与操作。 */
+  /** card 显示列表卡片；detail 显示封面和分组资料，保留番号复制但隐藏业务操作。 */
   variant?: "card" | "detail";
   /** 需要打开详情时传入。 */
   onSelect?: () => void;
@@ -101,9 +101,27 @@ export function CodeCard({ media, meta, actions, onSelect, hideActions = false, 
     setStillsVisible(true);
   }
 
+  /** 文字与图标共用复制反馈；内网 HTTP 无 Clipboard API 时在当前抽屉内兼容复制。 */
   async function copyCode() {
     try {
-      await navigator.clipboard.writeText(media.code);
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(media.code);
+      } else {
+        const focused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+        const input = document.createElement("textarea");
+        input.value = media.code;
+        input.readOnly = true;
+        input.style.cssText = "position:fixed;opacity:0;pointer-events:none;";
+        (focused?.closest('[role="dialog"]') || document.body).appendChild(input);
+        try {
+          input.focus({ preventScroll: true });
+          input.select();
+          if (!document.execCommand("copy")) throw new Error("Copy failed");
+        } finally {
+          input.remove();
+          focused?.focus({ preventScroll: true });
+        }
+      }
       message.success?.("番号已复制");
     } catch {
       message.error?.("番号复制失败");
@@ -143,7 +161,10 @@ export function CodeCard({ media, meta, actions, onSelect, hideActions = false, 
       {showDetails ? <div style={{ marginTop: 24, overflowWrap: "anywhere" }}>
         <Descriptions title="基本信息" column={detailColumns} layout="inline-horizontal" data={[
           { label: "订阅时间", value: media.active_subscription?.created_at ? dayjs(media.active_subscription.created_at).format("YYYY-MM-DD HH:mm:ss") : missing },
-          { label: "番号", value: media.code },
+          { label: "番号", value: <Space size={0}>
+            <Button type="text" className="code-cell" onClick={() => void copyCode()}>{media.code}</Button>
+            <Button type="text" icon={<IconCopy />} aria-label={"复制番号 " + media.code} onClick={() => void copyCode()} />
+          </Space> },
           { label: "发行码", value: details?.release_code || missing },
           { label: "发行日期", value: media.release_date || missing },
           { label: "时长", value: media.duration_minutes == null ? missing : media.duration_minutes + " 分钟" },
