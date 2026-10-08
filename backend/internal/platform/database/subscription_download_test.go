@@ -3,11 +3,55 @@ package database
 import (
 	"bytemuse/backend/internal/ports"
 	"context"
+	"fmt"
 	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 )
+
+// TestDownloadActivityTotalsExcludeQueue verifies full-set filtering after normal snapshot reconciliation.
+func TestDownloadActivityTotalsExcludeQueue(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(ctx, Config{Dialect: DialectSQLite, SQLitePath: filepath.Join(t.TempDir(), "activity.db")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if err = s.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err = s.SQLDB().ExecContext(ctx, "INSERT INTO media (id,code,title,subscription_status,library_status,created_at,updated_at) VALUES ('m1','TEST-001','test','none','absent',?,?)", now, now); err != nil {
+		t.Fatal(err)
+	}
+	states := make([]ports.TransferState, 317)
+	for i := range states {
+		hash := fmt.Sprintf("%040x", i+1)
+		if _, err = s.SQLDB().ExecContext(ctx, "INSERT INTO download_tasks (id,media_id,status,info_hash,downloader,transfer_status,created_at,updated_at) VALUES (?,'m1','submitted',?,'qbittorrent','downloading',?,?)", hash, hash, now, now); err != nil {
+			t.Fatal(err)
+		}
+		status := "queued"
+		if i < 12 {
+			status = "downloading"
+		} else if i < 15 {
+			status = "stalled"
+		}
+		states[i] = ports.TransferState{Hash: hash, Status: status}
+	}
+	repo := NewSubscriptionDownloadRepository(s.SQLDB(), DialectSQLite)
+	for repeat := 0; repeat < 2; repeat++ {
+		if _, err = repo.SaveTransferStates(ctx, states); err != nil {
+			t.Fatal(err)
+		}
+		for status, total := range map[string]int{"downloading": 12, "stalled": 3, "queued": 302, "": 317} {
+			page, err := s.Downloads().List(ctx, ports.DownloadListQuery{Limit: 5, TransferStatus: status})
+			if err != nil || page.Total != total || len(page.Items) != min(total, 5) {
+				t.Fatalf("status=%s page=%+v err=%v", status, page, err)
+			}
+		}
+	}
+}
 
 func TestSubscriptionDownloadQueueDeduplicatesAndSurvivesReopen(t *testing.T) {
 	ctx := context.Background()

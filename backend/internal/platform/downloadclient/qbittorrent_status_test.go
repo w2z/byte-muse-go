@@ -89,3 +89,21 @@ func TestTransferStatusReportsErrorBeforeHistoricCompletion(t *testing.T) {
 		t.Fatalf("error after completion status=%s", got)
 	}
 }
+
+// TestTransferStatusSeparatesInactiveDownloads prevents queued and idle torrents inflating downloading totals.
+func TestTransferStatusSeparatesInactiveDownloads(t *testing.T) {
+	for state, want := range map[string]string{
+		"downloading": "downloading", "forcedDL": "downloading",
+		"queuedDL": "queued", "stalledDL": "stalled",
+		"checkingDL": "checking", "checkingResumeData": "checking",
+		"metaDL": "metadata", "forcedMetaDL": "metadata", "moving": "moving",
+		"pausedDL": "paused", "stoppedDL": "stopped", "missingFiles": "failed",
+		"unknown": "unknown", "futureState": "unknown", "": "unknown",
+	} {
+		t.Run(state, func(t *testing.T) {
+			if got := transferStatus(state, 0.5, -1); got != want {
+				t.Fatalf("state=%s got=%s want=%s", state, got, want)
+			}
+		})
+	}
+}

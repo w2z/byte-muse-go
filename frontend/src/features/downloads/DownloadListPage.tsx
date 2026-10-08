@@ -18,12 +18,13 @@ function DownloadStatusBadge({ status, label }: { status: string; label: string 
   let tone: BadgeProps["status"] = "default";
   if (status === "completed") tone = "success";
   else if (status === "failed") tone = "error";
-  else if (status === "downloading" || status === "searching" || status === "submitted") tone = "processing";
-  else if (status === "paused" || status === "unknown") tone = "warning";
+  else if (["downloading", "searching", "submitted", "checking", "metadata", "moving"].includes(status)) tone = "processing";
+  else if (status === "paused" || status === "unknown" || status === "stalled") tone = "warning";
   return <Badge status={tone} text={label} dotClassName={tone === "processing" ? "status-dot-processing" : undefined} />;
 }
 
 const transferLabels: Record<string, string> = {
+  queued: "排队", stalled: "等待连接", checking: "校验中", metadata: "获取元数据", moving: "移动中", unknown: "待核实",
   downloading: "下载中", paused: "暂停", stopped: "停止", failed: "下载失败", completed: "下载完成",
 };
 

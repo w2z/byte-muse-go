@@ -15,6 +15,7 @@ func (s *DownloadService) SetControls(repo ports.DownloadControlRepository, clie
 	s.controls, s.clients = repo, clients
 }
 
+// downloadActions intersects observed lifecycle actions with downloader capabilities; queued tasks remain stoppable.
 func downloadActions(task domain.DownloadTask, capabilities []string) []string {
 	actions := []string{}
 	if task.Status == domain.DownloadStatusFailed && (task.InfoHash == nil || *task.InfoHash == "") {
@@ -24,7 +25,7 @@ func downloadActions(task domain.DownloadTask, capabilities []string) []string {
 		return actions
 	}
 	switch *task.TransferStatus {
-	case "downloading":
+	case "downloading", "queued", "stalled", "checking", "metadata", "moving":
 		actions = []string{"pause", "stop", "delete", "delete_files"}
 	case "paused", "stopped":
 		actions = []string{"resume", "delete", "delete_files"}
@@ -141,6 +142,7 @@ func (s *DownloadService) Control(ctx context.Context, id, action string) error 
 	return fmt.Errorf("下载器操作结果未确认，请刷新后核实；未自动重复执行")
 }
 
+// controlConfirmed accepts an enabled queue or waiting state after resume; immediate traffic is not required.
 func controlConfirmed(action string, state *ports.TransferState) bool {
 	if action == "delete" || action == "delete_files" {
 		return state == nil
@@ -154,7 +156,7 @@ func controlConfirmed(action string, state *ports.TransferState) bool {
 	case "stop":
 		return state.Status == "stopped"
 	case "resume", "retry":
-		return state.Status == "downloading" || state.Status == "completed"
+		return slices.Contains([]string{"downloading", "queued", "stalled", "checking", "metadata", "moving", "completed"}, state.Status)
 	}
 	return false
 }

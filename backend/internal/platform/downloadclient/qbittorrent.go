@@ -81,6 +81,8 @@ func (c *Qbittorrent) ListTransferStates(ctx context.Context) ([]TransferState, 
 	}
 }
 
+// transferStatus preserves qB activity states; only explicit download states count as downloading.
+// Completed downloads keep their existing terminal meaning, while errors always take priority.
 func transferStatus(state string, progress float64, completed int64) string {
 	if strings.HasPrefix(state, "error") || state == "missingFiles" {
 		return "failed"
@@ -94,7 +96,24 @@ func transferStatus(state string, progress float64, completed int64) string {
 	if strings.HasPrefix(state, "paused") {
 		return "paused"
 	}
-	return "downloading"
+	switch state {
+	case "downloading", "forcedDL":
+		return "downloading"
+	case "queuedDL", "queuedUP":
+		return "queued"
+	case "stalledDL", "stalledUP":
+		return "stalled"
+	case "checkingDL", "checkingUP", "checkingResumeData":
+		return "checking"
+	case "metaDL", "forcedMetaDL":
+		return "metadata"
+	case "moving":
+		return "moving"
+	case "uploading", "forcedUP":
+		return "completed"
+	default:
+		return "unknown"
+	}
 }
 
 // NewQbittorrent configures one client without performing network activity.

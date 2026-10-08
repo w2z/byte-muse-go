@@ -99,7 +99,7 @@ export type DownloadTask = {
   source_kind?: "pt" | "bt" | null;
   downloader?: string | null;
   info_hash?: string | null;
-  transfer_status?: "downloading" | "paused" | "stopped" | "failed" | "completed" | null;
+  transfer_status?: "downloading" | "queued" | "stalled" | "checking" | "metadata" | "moving" | "unknown" | "paused" | "stopped" | "failed" | "completed" | null;
   added_at?: string | null;
   completed_at?: string | null;
   status: DownloadStatus;

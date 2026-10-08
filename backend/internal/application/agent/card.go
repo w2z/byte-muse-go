@@ -294,6 +294,18 @@ func mediaStatusLabel(media domain.Media, task *domain.DownloadTask) string {
 // transferStatusLabel 映射下载器上报的传输状态。
 func transferStatusLabel(status string) string {
 	switch status {
+	case "queued":
+		return "排队"
+	case "stalled":
+		return "等待连接"
+	case "checking":
+		return "校验中"
+	case "metadata":
+		return "获取元数据"
+	case "moving":
+		return "移动中"
+	case "unknown":
+		return "待核实"
 	case "downloading":
 		return "下载中"
 	case "paused":

@@ -449,8 +449,8 @@ paths:
             $ref: '#/components/schemas/DownloadStatus'
         - name: transfer_status
           in: query
-          description: qBittorrent 传输状态；failed 同时包含搜索或提交失败的任务；为空时不限，下载中不包含暂停、失败或完成
-          schema: {type: string, enum: [downloading, paused, stopped, failed, completed]}
+          description: qBittorrent 最近同步状态；downloading 仅实际或强制下载，不含排队、等待、校验、元数据获取及移动；failed 同时包含搜索或提交失败；为空时不限
+          schema: {type: string, enum: [downloading, queued, stalled, checking, metadata, moving, unknown, paused, stopped, failed, completed]}
         - name: added_from
           in: query
           description: 加入时间下界，含该时刻，UTC RFC3339
@@ -2198,8 +2198,8 @@ components:
           description: 选中种子的 40 位 info hash；用于下载器结果回查与去重
         transfer_status:
           type: [string, 'null']
-          enum: [downloading, paused, stopped, failed, completed, null]
-          description: 最近一次 qBittorrent 同步的传输状态；未同步为 null，不等于任务状态
+          enum: [downloading, queued, stalled, checking, metadata, moving, unknown, paused, stopped, failed, completed, null]
+          description: 最近一次 qBittorrent 同步状态；downloading 下载中、queued 排队、stalled 等待连接、checking 校验中、metadata 获取元数据、moving 移动中、unknown 待核实、paused 暂停、stopped 停止、failed 失败、completed 下载完成；未同步为 null，不等于内部任务状态；下载完成不代表完成 PT 做种
         added_at:
           type: [string, 'null']
           description: 下载器加入时间，UTC RFC3339；尚未同步为 null

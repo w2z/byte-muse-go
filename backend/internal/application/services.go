@@ -308,7 +308,9 @@ func (s *DownloadService) ListFiltered(ctx context.Context, page, pageSize int, 
 	if err := validatePagination(page, pageSize); err != nil {
 		return Page[domain.DownloadTask]{}, err
 	}
-	if query.TransferStatus != "" && query.TransferStatus != "downloading" && query.TransferStatus != "paused" && query.TransferStatus != "stopped" && query.TransferStatus != "failed" && query.TransferStatus != "completed" {
+	switch query.TransferStatus {
+	case "", "downloading", "queued", "stalled", "checking", "metadata", "moving", "unknown", "paused", "stopped", "failed", "completed":
+	default:
 		return Page[domain.DownloadTask]{}, ErrInvalidDownloadFilter
 	}
 	if query.AddedFrom != nil && query.AddedTo != nil && !query.AddedFrom.Before(*query.AddedTo) || query.CompletedFrom != nil && query.CompletedTo != nil && !query.CompletedFrom.Before(*query.CompletedTo) {

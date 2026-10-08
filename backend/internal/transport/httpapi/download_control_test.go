@@ -122,6 +122,20 @@ func TestDownloadControlHTTP(t *testing.T) {
 	if w.Code != 200 || !strings.Contains(w.Body.String(), `"code":"TEST-001"`) || !strings.Contains(w.Body.String(), `"stop"`) || strings.Contains(w.Body.String(), `"pause"`) {
 		t.Fatalf("list=%s", w.Body.String())
 	}
+	for _, status := range []string{"queued", "stalled", "checking", "metadata", "moving", "unknown"} {
+		if _, err = repo.SaveTransferStates(ctx, []ports.TransferState{{Hash: hash, Status: status}}); err != nil {
+			t.Fatal(err)
+		}
+		w = request("GET", "/downloads?transfer_status="+status, true)
+		if w.Code != 200 || !strings.Contains(w.Body.String(), `"total":1`) {
+			t.Fatalf("status=%s response=%s", status, w.Body.String())
+		}
+		w = request("GET", "/downloads?transfer_status=downloading", true)
+		if w.Code != 200 || !strings.Contains(w.Body.String(), `"total":0`) {
+			t.Fatalf("inactive task counted as downloading: %s", w.Body.String())
+		}
+	}
+	assertStatus("GET", "/downloads?transfer_status=invalid", 400)
 	assertStatus("POST", "/downloads/d1/stop", 204)
 	assertStatus("GET", "/downloads?transfer_status=stopped", 200)
 	w = request("GET", "/downloads?transfer_status=stopped", true)
