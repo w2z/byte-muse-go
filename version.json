@@ -1,14 +1,356 @@
 {
-  "version": "0.1.110",
-  "commit": "7b26f2b64ee930fd171ebbc2b04b974d2654a02a",
-  "short_commit": "7b26f2b",
-  "built_at": "2026-10-08T17:01:31Z",
+  "version": "0.1.111",
+  "commit": "4b0c2df79d8a0a2fa223e2f66007af19dfdc287e",
+  "short_commit": "4b0c2df",
+  "built_at": "2026-10-08T17:05:52Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.110",
-    "sha-7b26f2b",
+    "0.1.111",
+    "sha-4b0c2df",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
+  "changes": [
+    {
+      "version": "0.1.111",
+      "message": "在版本弹窗展示跨版本提交说明"
+    },
+    {
+      "version": "0.1.110",
+      "message": "将筛选移入表头并支持全部数据列排序"
+    },
+    {
+      "version": "0.1.109",
+      "message": "统一排队状态文案为排队中"
+    },
+    {
+      "version": "0.1.108",
+      "message": "区分排队等待状态并修正下载中筛选"
+    },
+    {
+      "version": "0.1.107",
+      "message": "支持抽屉番号与图标点击复制"
+    },
+    {
+      "version": "0.1.106",
+      "message": "展示实时传输指标并按站点规则判断做种状态"
+    },
+    {
+      "version": "0.1.105",
+      "message": "精简订阅消息并沿用数据库影片译名"
+    },
+    {
+      "version": "0.1.104",
+      "message": "使用状态点和扩散动画展示下载状态"
+    },
+    {
+      "version": "0.1.103",
+      "message": "分页同步下载器状态以支持大型任务列表"
+    },
+    {
+      "version": "0.1.102",
+      "message": "取消文件下载直链的每秒一次限制"
+    },
+    {
+      "version": "0.1.101",
+      "message": "为版本检查和运行包下载增加顺序回退"
+    },
+    {
+      "version": "0.1.100",
+      "message": "展示真实升级步骤和完成进度并在服务就绪后刷新"
+    },
+    {
+      "version": "0.1.99",
+      "message": "支持扫描生成和媒体刷新失败后断点续跑"
+    },
+    {
+      "version": "0.1.98",
+      "message": "统一六行推送格式并补齐资源来源和下载链接"
+    },
+    {
+      "version": "0.1.97",
+      "message": "完善任务恢复与同名处理并添加队列控制按钮"
+    },
+    {
+      "version": "0.1.96",
+      "message": "镜像改为直接以 root 运行并移除 UID 对齐要求与过期提示"
+    },
+    {
+      "version": "0.1.95",
+      "message": "增加版本弹窗和保留容器的服务在线升级"
+    },
+    {
+      "version": "0.1.94",
+      "message": "为 STRM 视频信息刷新记录单片番号和处理结果"
+    },
+    {
+      "version": "0.1.93",
+      "message": "将媒体信息默认并发调整为10"
+    },
+    {
+      "version": "0.1.92",
+      "message": "新增目录监控上传及目录文件进度表格"
+    },
+    {
+      "version": "0.1.91",
+      "message": "新增115事件分类并支持独立筛选"
+    },
+    {
+      "version": "0.1.90",
+      "message": "增加扫描生成与预热日志分类及任务控制"
+    },
+    {
+      "version": "0.1.89",
+      "message": "分页读取全部媒体避免数量截断"
+    },
+    {
+      "version": "0.1.88",
+      "message": "修复全量媒体查询返回零条"
+    },
+    {
+      "version": "0.1.87",
+      "message": "全量扫描并实时更新预热进度"
+    },
+    {
+      "version": "0.1.86",
+      "message": "添加媒体信息预热进度条"
+    },
+    {
+      "version": "0.1.85",
+      "message": "增加STRM媒体信息异步预热"
+    },
+    {
+      "version": "0.1.84",
+      "message": "支持按后缀并发下载媒体文件"
+    },
+    {
+      "version": "0.1.83",
+      "message": "移除更新标签的链接和文字提示"
+    },
+    {
+      "version": "0.1.82",
+      "message": "避免页长下拉面板被表格卡片裁切"
+    },
+    {
+      "version": "0.1.81",
+      "message": "立即显示本地版本并异步检查更新"
+    },
+    {
+      "version": "0.1.80",
+      "message": "为上新推荐和榜单添加订阅状态与类型筛选"
+    },
+    {
+      "version": "0.1.79",
+      "message": "以下载器状态展示下载任务"
+    },
+    {
+      "version": "0.1.78",
+      "message": "扫描入库改为边扫描边入库"
+    },
+    {
+      "version": "0.1.77",
+      "message": "生成 strm 改为边扫描边写入"
+    },
+    {
+      "version": "0.1.76",
+      "message": "限流改指数冷却并串行请求，进度展示冷却状态"
+    },
+    {
+      "version": "0.1.75",
+      "message": "根目录不可用时返回可操作的部署提示"
+    },
+    {
+      "version": "0.1.74",
+      "message": "订阅幂等键兼容非安全上下文，修复局域网点击订阅报 uuid 错误"
+    },
+    {
+      "version": "0.1.73",
+      "message": "新增每日上新采集任务"
+    },
+    {
+      "version": "0.1.72",
+      "message": "新增全量/增量生成与可暂停的持久化扫描任务"
+    },
+    {
+      "version": "0.1.71",
+      "message": "识别访问上限并对限流请求退避重试"
+    },
+    {
+      "version": "0.1.70",
+      "message": "将扫描进度数值移至进度条右侧"
+    },
+    {
+      "version": "0.1.69",
+      "message": "使用pick_code生成115播放链接并省去文件查询"
+    },
+    {
+      "version": "0.1.68",
+      "message": "统一图片代理地址并修正下载页测试参数"
+    },
+    {
+      "version": "0.1.67",
+      "message": "接入演员资料作品与BT磁力资源"
+    },
+    {
+      "version": "0.1.66",
+      "message": "启动后立即执行非日志清理任务并等待退出收尾"
+    },
+    {
+      "version": "0.1.65",
+      "message": "补齐日期时间选择与日历快捷范围"
+    },
+    {
+      "version": "0.1.64",
+      "message": "限制下载与日志时间不超过当前时刻"
+    },
+    {
+      "version": "0.1.63",
+      "message": "支持七渠道扫码获取Cookie并新增115目录扫描入库与strm排除规则"
+    },
+    {
+      "version": "0.1.62",
+      "message": "保持筛选标题左置并自适应控件宽度"
+    },
+    {
+      "version": "0.1.61",
+      "message": "将strm生成按钮移至生成后刷新Emby媒体库字段下方"
+    },
+    {
+      "version": "0.1.60",
+      "message": "调整115网盘进度条宽度与百分比并更新扫描目录文案"
+    },
+    {
+      "version": "0.1.59",
+      "message": "固定STRM根目录并调整媒体映射字段"
+    },
+    {
+      "version": "0.1.58",
+      "message": "调整映射文案与格式标题并使用组件气泡提示"
+    },
+    {
+      "version": "0.1.57",
+      "message": "将目录选择改为组合输入框的主色图标按钮"
+    },
+    {
+      "version": "0.1.56",
+      "message": "调整目录选择按钮与播放地址文案"
+    },
+    {
+      "version": "0.1.55",
+      "message": "只登记资源搜索，有资源才建下载任务并清理历史失败噪音"
+    },
+    {
+      "version": "0.1.54",
+      "message": "调整本地与网盘路径映射布局"
+    },
+    {
+      "version": "0.1.53",
+      "message": "增加 STRM 映射文件格式选择"
+    },
+    {
+      "version": "0.1.52",
+      "message": "清理目录名称首尾空格"
+    },
+    {
+      "version": "0.1.51",
+      "message": "接入热门同步与 gfriends 演员目录"
+    },
+    {
+      "version": "0.1.49",
+      "message": "目录选择改为公共组件，支持列表宫格、选中高亮与路径回显"
+    },
+    {
+      "version": "0.1.46",
+      "message": "接入115与CloudDrive2网盘及strm生成，目录选择弹窗放大到80vw"
+    },
+    {
+      "version": "0.1.45",
+      "message": "迁移版本断言改为取迁移计划最新版本"
+    },
+    {
+      "version": "0.1.44",
+      "message": "明确 DSN 端口必须用容器端口而非宿主机发布端口"
+    },
+    {
+      "version": "0.1.41",
+      "message": "移除未使用的 .env.example 及忽略例外"
+    },
+    {
+      "version": "0.1.37",
+      "message": "图片模式的无图选项文案改为默认"
+    },
+    {
+      "version": "0.1.34",
+      "message": "无图模式改用统一占位图展示封面与资料图片"
+    },
+    {
+      "version": "0.1.33",
+      "message": "版本标签在有更新时显示 Badge 小红点"
+    },
+    {
+      "version": "0.1.31",
+      "message": "115 面板新增容量与云下载配额进度条并接入配额接口"
+    },
+    {
+      "version": "0.1.28",
+      "message": "检查更新改用 raw.githubusercontent.com 读取版本记录"
+    },
+    {
+      "version": "0.1.27",
+      "message": "版本检查间隔由 10 分钟调整为 1 小时"
+    },
+    {
+      "version": "0.1.26",
+      "message": "115 扫码登录改为弹窗并支持配置多个扫描目录"
+    },
+    {
+      "version": "0.1.25",
+      "message": "顶栏版本标签图标改为 GitHub 图标"
+    },
+    {
+      "version": "0.1.24",
+      "message": "集成 GitHub 版本检查并在顶栏显示版本标签"
+    },
+    {
+      "version": "0.1.19",
+      "message": "接入 115 网盘扫码登录并新增网盘分类"
+    },
+    {
+      "version": "0.1.15",
+      "message": "固定容器时区并注入运行版本"
+    },
+    {
+      "version": "0.1.13",
+      "message": "修正规范检查把提交格式示例误判为链接"
+    },
+    {
+      "version": "0.1.12",
+      "message": "脱敏内网地址并明确 GitHub 主仓库与 Gitea 同步副本"
+    },
+    {
+      "version": "0.1.10",
+      "message": "存档"
+    },
+    {
+      "version": "0.1.9",
+      "message": "完善协作交付规范并补充相关检查"
+    },
+    {
+      "version": "0.1.8",
+      "message": "🛠️"
+    },
+    {
+      "version": "0.1.7",
+      "message": "f680"
+    },
+    {
+      "version": "0.1.6",
+      "message": "F4A5"
+    },
+    {
+      "version": "0.1.1",
+      "message": "complete ByteMuse API integration and legacy actor migration"
+    }
+  ],
   "note": "由 deploy/version.ps1 在代码提交时写入，请勿手工修改"
 }
