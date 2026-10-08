@@ -58,8 +58,13 @@ func NewEmbyMediaService(settings func(context.Context) (map[string]string, erro
 	return &EmbyMediaService{settings: settings, http: &http.Client{Timeout: 2 * time.Minute}}
 }
 
-// Restore loads the last media refresh and marks an abandoned worker interrupted.
+// Restore 恢复原任务与媒体断点；运行中任务自动继续，暂停和取消意图跨重启保留。
 func (s *EmbyMediaService) Restore(ctx context.Context, repo ports.TaskCheckpointRepository) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || s.task != nil {
+		return ErrScanTaskConflict
+	}
 	s.repo = repo
 	index := &taskJournal{repo: repo, id: "emby-latest"}
 	var task EmbyMediaTask
@@ -69,8 +74,15 @@ func (s *EmbyMediaService) Restore(ctx context.Context, repo ports.TaskCheckpoin
 	}
 	s.task = &task
 	s.journal = &taskJournal{repo: repo, id: task.ID}
-	if task.State == "running" || task.State == "queued" || task.State == "paused" || task.State == "pausing" || task.State == "canceling" {
-		s.task.State, s.task.CanRetry = "interrupted", true
+	switch task.State {
+	case "running", "queued", "interrupted":
+		_, err = s.restartLocked(false)
+		return err
+	case "paused", "pausing":
+		_, err = s.restartLocked(true)
+		return err
+	case "canceling":
+		s.task.State, s.task.CanRetry = "canceled", true
 	}
 	return s.persistLocked()
 }
@@ -260,7 +272,7 @@ sendItems:
 		state = "failed"
 		s.task.Error = "保存任务断点失败，请检查数据库"
 	} else if state == "canceling" || ctx.Err() != nil {
-		state = "canceled"
+		state = s.stoppedStateLocked()
 	} else {
 		state = "completed"
 	}
@@ -315,23 +327,7 @@ func (s *EmbyMediaService) Control(id, action string) (*EmbyMediaTask, error) {
 		if s.closed || s.task == nil || s.task.ID != id || !s.task.CanRetry {
 			return nil, ErrScanTaskConflict
 		}
-		s.task.State, s.task.Error, s.task.CanRetry = "queued", "", false
-		s.task.UpdatedAt = time.Now().UTC()
-		s.task.Processed, s.task.Total, s.task.Success, s.task.Skipped, s.task.Failed = 0, 0, 0, 0, 0
-		s.pending, s.saveErr = false, nil
-		ctx, cancel := context.WithCancel(context.Background())
-		s.cancel = cancel
-		s.wake = make(chan struct{})
-		if err := s.persistLocked(); err != nil {
-			cancel()
-			s.task.State, s.task.CanRetry = "failed", true
-			s.task.Error = "保存任务快照失败，请检查数据库"
-			return nil, err
-		}
-		copy := *s.task
-		s.wg.Add(1)
-		go func() { defer s.wg.Done(); s.run(ctx, id) }()
-		return &copy, nil
+		return s.restartLocked(false)
 	}
 	if s.task == nil || s.task.ID != id || (s.task.State != "queued" && s.task.State != "running" && s.task.State != "pausing" && s.task.State != "paused" && s.task.State != "canceling") {
 		return nil, ErrScanTaskConflict
@@ -369,6 +365,41 @@ func (s *EmbyMediaService) Control(id, action string) (*EmbyMediaTask, error) {
 	}
 	logging.Info(logging.CategoryStrmMedia, "刷新 STRM 视频信息任务控制", "task_id", id, "action", action, "state", cp.State)
 	return &cp, nil
+}
+
+// restartLocked 复用原任务日志重建执行器；统计从已保存目录重新汇总，不重复累计旧计数。
+func (s *EmbyMediaService) restartLocked(paused bool) (*EmbyMediaTask, error) {
+	s.task.State, s.task.Error, s.task.CanRetry = "queued", "", false
+	if paused {
+		s.task.State = "paused"
+	}
+	s.task.UpdatedAt = time.Now().UTC()
+	s.task.Processed, s.task.Total, s.task.Success, s.task.Skipped, s.task.Failed = 0, 0, 0, 0, 0
+	s.pending, s.saveErr = false, nil
+	ctx, cancel := context.WithCancel(context.Background())
+	s.cancel = cancel
+	s.wake = make(chan struct{})
+	if err := s.persistLocked(); err != nil {
+		cancel()
+		s.task.State, s.task.CanRetry = "failed", true
+		s.task.Error = "保存任务快照失败，请检查数据库"
+		return nil, err
+	}
+	copy := *s.task
+	s.wg.Add(1)
+	go func() { defer s.wg.Done(); defer cancel(); s.run(ctx, copy.ID) }()
+	return &copy, nil
+}
+
+// stoppedStateLocked 区分服务退出与用户停止，防止正常关闭被记成取消而失去自动恢复资格。
+func (s *EmbyMediaService) stoppedStateLocked() string {
+	if s.task.State == "canceling" || !s.closed {
+		return "canceled"
+	}
+	if s.task.State == "paused" || s.task.State == "pausing" {
+		return "paused"
+	}
+	return "interrupted"
 }
 
 func (s *EmbyMediaService) checkpoint(ctx context.Context, id string) error {
@@ -432,11 +463,11 @@ func (s *EmbyMediaService) finish(id string, err error) {
 		}
 	}()
 	if s.task != nil && s.task.ID == id {
-		if errors.Is(err, context.Canceled) || s.task.State == "canceling" {
-			s.task.State = "canceled"
+		if s.saveErr == nil && (s.closed || errors.Is(err, context.Canceled) || s.task.State == "canceling") {
+			s.task.State = s.stoppedStateLocked()
 			s.task.Error = ""
 			s.task.UpdatedAt = time.Now().UTC()
-			logging.Info(logging.CategoryStrmMedia, "刷新 STRM 视频信息任务已取消", "task_id", id, "processed", s.task.Processed, "total", s.task.Total)
+			logging.Info(logging.CategoryStrmMedia, "刷新 STRM 视频信息任务已停止", "task_id", id, "state", s.task.State, "processed", s.task.Processed, "total", s.task.Total)
 			return
 		}
 		s.task.State = "failed"
@@ -452,12 +483,12 @@ func (s *EmbyMediaService) finishCanceled(id string) {
 	if s.task == nil || s.task.ID != id {
 		return
 	}
-	s.task.State = "canceled"
+	s.task.State = s.stoppedStateLocked()
 	s.task.CanRetry = true
 	s.task.Error = ""
 	s.task.UpdatedAt = time.Now().UTC()
 	_ = s.persistLocked()
-	logging.Info(logging.CategoryStrmMedia, "刷新 STRM 视频信息任务已取消", "task_id", id, "processed", s.task.Processed, "total", s.task.Total)
+	logging.Info(logging.CategoryStrmMedia, "刷新 STRM 视频信息任务已停止", "task_id", id, "state", s.task.State, "processed", s.task.Processed, "total", s.task.Total)
 }
 
 type embyItem struct {

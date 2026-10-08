@@ -10,6 +10,7 @@ import (
 
 // ScanProgress 是当前任务的动态文件进度；Total 是已发现总数，扫描期间可增长。
 // Processed 包含成功、跳过及已尝试但失败的文件，不等同于新增文件数。
+// STRM 生成只统计对应视频，字幕、图片和 NFO 等附件下载单独计入结果。
 type ScanProgress = domain.ScanProgress
 
 type scanProgressKey struct{}

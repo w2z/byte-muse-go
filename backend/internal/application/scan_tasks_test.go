@@ -18,6 +18,148 @@ type memoryScanTasks struct {
 	items map[string]domain.ScanTask
 }
 
+// TestScanTasksCloseAndReopen verifies real persisted checkpoints survive closing and reopening the database.
+func TestScanTasksCloseAndReopen(t *testing.T) {
+	for _, paused := range []bool{false, true} {
+		t.Run(map[bool]string{false: "running", true: "paused"}[paused], func(t *testing.T) {
+			ctx := context.Background()
+			config := database.Config{Dialect: database.DialectSQLite, SQLitePath: filepath.Join(t.TempDir(), "restart.db")}
+			store, err := database.Open(ctx, config)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := store.Migrate(ctx); err != nil {
+				t.Fatal(err)
+			}
+			manager, err := NewScanTasks(ctx, database.NewScanTaskRepository(store.SQLDB(), database.DialectSQLite))
+			if err != nil {
+				t.Fatal(err)
+			}
+			entered := make(chan struct{})
+			task, err := manager.Start(ctx, "strm", "full", func(worker context.Context) (any, error) {
+				if err := completeTaskUnit(worker, "first"); err != nil {
+					return nil, err
+				}
+				close(entered)
+				<-worker.Done()
+				return nil, worker.Err()
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case <-entered:
+			case <-time.After(2 * time.Second):
+				manager.Close()
+				store.Close()
+				t.Fatal("worker did not start")
+			}
+			if paused {
+				if _, err := manager.Control(ctx, "strm", task.ID, "pause"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			manager.Close()
+			store.Close()
+			store, err = database.Open(ctx, config)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer store.Close()
+			manager, err = NewScanTasks(ctx, database.NewScanTaskRepository(store.SQLDB(), database.DialectSQLite))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer manager.Close()
+			manager.RegisterRunner("strm", func(worker context.Context, mode string) (any, error) {
+				done, err := taskUnitDone(worker, "first")
+				if err != nil || !done || mode != "full" {
+					return nil, errors.New("lost checkpoint or mode")
+				}
+				return nil, nil
+			})
+			if err := manager.Recover(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if paused {
+				waitScanState(t, manager, "strm", "paused")
+				if _, err := manager.Control(ctx, "strm", task.ID, "resume"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			waitScanState(t, manager, "strm", "completed")
+		})
+	}
+}
+
+// TestScanTasksAutoRecover verifies restart policy and reuse of persisted task identity and checkpoints.
+func TestScanTasksAutoRecover(t *testing.T) {
+	for _, state := range []string{"running", "interrupted", "paused", "pausing", "canceling", "canceled", "completed", "failed"} {
+		t.Run(state, func(t *testing.T) {
+			ctx := context.Background()
+			store, err := database.Open(ctx, database.Config{Dialect: database.DialectSQLite, SQLitePath: filepath.Join(t.TempDir(), "recover.db")})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer store.Close()
+			if err := store.Migrate(ctx); err != nil {
+				t.Fatal(err)
+			}
+			repo := database.NewScanTaskRepository(store.SQLDB(), database.DialectSQLite)
+			for _, kind := range []string{"library", "strm"} {
+				task := domain.ScanTask{ID: kind, Kind: kind, State: state, Mode: "full", CanRetry: true}
+				if err := repo.Save(ctx, task); err != nil {
+					t.Fatal(err)
+				}
+				if err := repo.SaveCheckpoint(ctx, kind, journalKey("first"), []byte("true")); err != nil {
+					t.Fatal(err)
+				}
+			}
+			manager, err := NewScanTasks(ctx, repo)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer manager.Close()
+			for _, kind := range []string{"library", "strm"} {
+				manager.RegisterRunner(kind, func(worker context.Context, mode string) (any, error) {
+					if err := scanCheckpoint(worker); err != nil {
+						return nil, err
+					}
+					done, err := taskUnitDone(worker, "first")
+					if err != nil || !done || mode != "full" {
+						return nil, errors.New("lost task input or checkpoint")
+					}
+					return nil, nil
+				})
+			}
+			if err := manager.Recover(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if err := manager.Recover(ctx); err != nil {
+				t.Fatal(err)
+			}
+			for _, kind := range []string{"library", "strm"} {
+				want := state
+				switch state {
+				case "running", "interrupted":
+					want = "completed"
+				case "pausing", "paused":
+					want = "paused"
+				case "canceling":
+					want = "canceled"
+				}
+				waitScanState(t, manager, kind, want)
+				if want == "paused" {
+					if _, err := manager.Control(ctx, kind, kind, "resume"); err != nil {
+						t.Fatal(err)
+					}
+					waitScanState(t, manager, kind, "completed")
+				}
+			}
+		})
+	}
+}
+
 // TestScanTaskRetryAfterRestart keeps completed writes and rejects stale or duplicate retries.
 func TestScanTaskRetryAfterRestart(t *testing.T) {
 	ctx := context.Background()

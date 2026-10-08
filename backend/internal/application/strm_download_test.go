@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -25,6 +26,49 @@ type downloadPan115Stub struct {
 
 func (s *downloadPan115Stub) PlayURL(_ context.Context, code, ua string) (string, error) {
 	return s.address + "/" + code, nil
+}
+
+// TestStrmProgressExcludesDownloads covers both drives, empty video sets, skips and failed downloads.
+func TestStrmProgressExcludesDownloads(t *testing.T) {
+	for _, kind := range []string{"115", "cd2"} {
+		for _, videos := range []int{0, 2} {
+			t.Run(fmt.Sprintf("%s/%d", kind, videos), func(t *testing.T) {
+				files := []domain.Pan115File{{ID: "poster", Name: "poster.jpg", PickCode: "poster"}}
+				entries := []clouddrive.Entry{{Name: "poster.jpg", FullPath: "/root/poster.jpg"}}
+				for index := 0; index < videos; index++ {
+					name := fmt.Sprintf("movie%d.mp4", index)
+					files = append(files, domain.Pan115File{ID: name, Name: name, PickCode: name})
+					entries = append(entries, clouddrive.Entry{Name: name, FullPath: "/root/" + name})
+				}
+				api := &downloadPan115Stub{address: "http://download.test", strmPan115Stub: strmPan115Stub{pages: map[string]domain.Pan115FilePage{"/root": {Files: files}}}}
+				cloud := &strmCloudStub{configured: true, entries: map[string][]clouddrive.Entry{"/root": entries}, download: clouddrive.Download{URL: "http://download.test/poster"}}
+				service := newStrmTestService(t, t.TempDir(), api, cloud, map[string]string{"STRM_DOWNLOAD_ENABLE": "true", "STRM_PATHS": strmTestMappings(t, []domain.StrmMapping{{Kind: kind, ID: "/root", Path: "/root", LocalPath: "/out"}})})
+				status := http.StatusOK
+				service.http.Transport = embyRoundTripper(func(*http.Request) (*http.Response, error) {
+					return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader("poster"))}, nil
+				})
+				for attempt, mode := range []domain.StrmGenerateMode{domain.StrmGenerateFull, domain.StrmGenerateIncremental, domain.StrmGenerateFull} {
+					if attempt == 2 {
+						status = http.StatusBadGateway
+					}
+					var progress ScanProgress
+					ctx := WithScanProgress(context.Background(), func(update ScanProgress) {
+						progress = update
+						if update.Total > videos || update.Processed > update.Total {
+							t.Errorf("invalid video progress: %+v", update)
+						}
+					})
+					result, err := service.Scan(ctx, "http://play.test", mode)
+					if err != nil || progress.Total != videos || progress.Processed != videos || progress.Percent != 100 {
+						t.Fatalf("progress=%+v err=%v", progress, err)
+					}
+					if (attempt == 0 && result.Downloaded != 1) || (attempt == 1 && result.DownloadSkipped != 1) || (attempt == 2 && result.DownloadFailed != 1) {
+						t.Fatalf("attempt=%d result=%+v", attempt, result)
+					}
+				}
+			})
+		}
+	}
 }
 
 // TestStrmMediaDownload 验证开关、默认后缀、目录、增量跳过及视频体积过滤的独立性。
@@ -52,7 +96,9 @@ func TestStrmMediaDownload(t *testing.T) {
 		t.Fatal("关闭时不应下载")
 	}
 	values["STRM_DOWNLOAD_ENABLE"] = "true"
-	result, err := svc.Scan(context.Background(), "http://example.test", domain.StrmGenerateIncremental)
+	var progress ScanProgress
+	ctx := WithScanProgress(context.Background(), func(update ScanProgress) { progress = update })
+	result, err := svc.Scan(ctx, "http://example.test", domain.StrmGenerateIncremental)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,6 +110,9 @@ func TestStrmMediaDownload(t *testing.T) {
 	}
 	if requests.Load() != 6 || result.Downloaded != 6 || result.Files != 1 {
 		t.Fatalf("下载请求=%d", requests.Load())
+	}
+	if progress.Processed != 1 || progress.Total != 1 || progress.Percent != 100 {
+		t.Fatalf("附件混入 STRM 视频进度: %+v", progress)
 	}
 	if _, err := svc.Scan(context.Background(), "http://example.test", domain.StrmGenerateIncremental); err != nil {
 		t.Fatal(err)

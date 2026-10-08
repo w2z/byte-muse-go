@@ -12,7 +12,7 @@ type ScanProgress struct {
 }
 
 // ScanTask 是独立扫描或生成任务的持久化快照，不包含网盘凭据。
-// 服务重启将活动状态改为 interrupted；取消和中断不回滚已经完成的业务写入。
+// 服务重启自动续跑有断点的运行任务；暂停和取消意图保留，不回滚已经完成的业务写入。
 type ScanTask struct {
 	ID        string          `json:"id"`
 	Kind      string          `json:"kind"`

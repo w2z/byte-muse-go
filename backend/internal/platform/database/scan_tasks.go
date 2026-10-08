@@ -88,7 +88,7 @@ func (r *ScanTaskRepository) Get(ctx context.Context, id string) (*domain.ScanTa
 	return &task, err
 }
 
-// Interrupt 在单实例启动时收敛上次未结束的任务，不重放全量生成等副作用。
+// Interrupt 收敛退出状态并保留用户暂停和取消意图；运行中任务由服务按断点恢复。
 func (r *ScanTaskRepository) Interrupt(ctx context.Context) error {
 	rows, err := r.db.QueryContext(ctx, "SELECT snapshot FROM scan_tasks WHERE state IN ('running','pausing','paused','canceling')")
 	if err != nil {
@@ -114,15 +114,28 @@ func (r *ScanTaskRepository) Interrupt(ctx context.Context) error {
 		return err
 	}
 	for _, task := range tasks {
-		task.State = "interrupted"
+		switch task.State {
+		case "paused", "pausing":
+			task.State = "paused"
+		case "canceling":
+			task.State = "canceled"
+		default:
+			task.State = "interrupted"
+		}
 		var exists int
 		if err := r.db.QueryRowContext(ctx, r.q("SELECT COUNT(*) FROM task_checkpoints WHERE task_id=?"), task.ID).Scan(&exists); err != nil {
 			return err
 		}
 		task.CanRetry = exists > 0
-		task.Error = "服务重启，任务已中断，请重新启动"
-		if task.CanRetry {
-			task.Error = "服务重启，任务已中断，可继续失败的任务"
+		task.Error = ""
+		if task.State == "interrupted" {
+			task.Error = "服务重启，任务已中断，请重新启动"
+			if task.CanRetry {
+				task.Error = "服务重启，等待从断点恢复"
+			}
+		} else if task.State == "paused" && !task.CanRetry {
+			task.State = "interrupted"
+			task.Error = "历史暂停任务缺少断点，请重新启动"
 		}
 		task.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 		if err = r.Save(ctx, task); err != nil {

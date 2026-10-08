@@ -391,6 +391,9 @@ func (c *Commands) Serve(ctx context.Context) error {
 	scanTasks.RegisterRunner("strm", func(ctx context.Context, mode string) (any, error) {
 		return strmService.Scan(ctx, "", domain.StrmGenerateMode(mode))
 	})
+	if err := scanTasks.Recover(ctx); err != nil {
+		return fmt.Errorf("recover scan tasks: %w", err)
+	}
 	// 对话回复与业务通知共用同一个渠道解析器，不另建第二套发送逻辑。
 	channels := newChannelRegistry(settingsService)
 	notifier := application.NewNotificationService(settingsValues(settingsService), channels)

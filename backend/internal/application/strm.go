@@ -480,7 +480,7 @@ func strmMappingFailure(mapping domain.StrmMapping, err error) domain.StrmScanMa
 
 // scanMapping 把一条映射的网盘文件写入本地 strm 目录，遍历到符合过滤条件的文件就立即写入。
 // 全量先清理映射本地目录下的 strm 内容，增量跳过本地已存在的文件，内容比对方式只在内容变化时改写，
-// 三种方式共用同一套过滤、播放地址与失败计数规则；成功、跳过和失败均计入已处理数。
+// 三种方式共用同一套过滤、播放地址与失败计数规则；视频的成功、跳过和失败均计入已处理数，附件下载不计入。
 // 遍历中断（限流、网络失败或取消）只影响尚未扫描到的文件，已写入的 strm 保留，中断原因写入 message。
 func (s *StrmService) scanMapping(ctx context.Context, root string, mapping domain.StrmMapping, base string, mode domain.StrmGenerateMode, walk strmWalk, advance func(), downloadFormats []string) domain.StrmScanMapping {
 	entry := domain.StrmScanMapping{Kind: mapping.Kind, Path: mapping.Path, LocalPath: mapping.LocalPath}
@@ -517,7 +517,6 @@ func (s *StrmService) scanMapping(ctx context.Context, root string, mapping doma
 			default:
 				entry.Downloaded++
 			}
-			advance()
 		})
 	}
 	walkErr := walk(ctx, func(file strmSourceFile) error {
@@ -650,7 +649,9 @@ func walkPan115Files(ctx context.Context, api pan115FileAPI, rootID string, filt
 					continue
 				}
 				// 先记发现再交给调用方处理，保证进度里总数不少于已处理数。
-				reportScanDiscovery(ctx)
+				if !isStrmMedia(file.Name, filter.downloadFormats) {
+					reportScanDiscovery(ctx)
+				}
 				if err := visit(strmSourceFile{ID: file.ID, PickCode: file.PickCode, Name: file.Name, Directory: relative}); err != nil {
 					return err
 				}
@@ -707,7 +708,9 @@ func (s *StrmService) walkCloudDrive(ctx context.Context, rootPath string, filte
 			if !filter.acceptFile(item.Name, item.Size) {
 				continue
 			}
-			reportScanDiscovery(ctx)
+			if !isStrmMedia(item.Name, filter.downloadFormats) {
+				reportScanDiscovery(ctx)
+			}
 			if err := visit(strmSourceFile{ID: full, Name: item.Name, Directory: relative}); err != nil {
 				return err
 			}

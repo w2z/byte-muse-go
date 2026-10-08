@@ -82,6 +82,120 @@ func TestEmbyMediaLogsIdentifyEachVideo(t *testing.T) {
 
 type embyRoundTripper func(*http.Request) (*http.Response, error)
 
+// TestEmbyCloseKeepsRestartIntent covers shutdown during list/probe and a user pause before shutdown.
+func TestEmbyCloseKeepsRestartIntent(t *testing.T) {
+	for _, phase := range []string{"scanning", "refreshing", "paused", "canceling"} {
+		t.Run(phase, func(t *testing.T) {
+			service := NewEmbyMediaService(func(context.Context) (map[string]string, error) {
+				return map[string]string{"EMBY_URL": "http://emby.test", "EMBY_API_KEY": "test-only"}, nil
+			})
+			defer service.Close()
+			entered := make(chan struct{}, 1)
+			service.http.Transport = embyRoundTripper(func(request *http.Request) (*http.Response, error) {
+				if phase == "refreshing" && request.Method == http.MethodGet {
+					return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"Items":[{"Id":"one","Path":"/one.strm"}],"TotalRecordCount":1}`))}, nil
+				}
+				entered <- struct{}{}
+				<-request.Context().Done()
+				return nil, request.Context().Err()
+			})
+			task, _, err := service.Enqueue(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case <-entered:
+			case <-time.After(2 * time.Second):
+				t.Fatal("worker did not start")
+			}
+			want := "interrupted"
+			if phase == "paused" {
+				if _, err := service.Control(task.ID, "pause"); err != nil {
+					t.Fatal(err)
+				}
+				want = "paused"
+			}
+			if phase == "canceling" {
+				if _, err := service.Control(task.ID, "cancel"); err != nil {
+					t.Fatal(err)
+				}
+				want = "canceled"
+			}
+			service.Close()
+			if got := service.Snapshot(); got.State != want || !got.CanRetry {
+				t.Fatalf("want %s got %+v", want, got)
+			}
+		})
+	}
+}
+
+// TestEmbyAutoRecover preserves restart intent and skips media already checkpointed.
+func TestEmbyAutoRecover(t *testing.T) {
+	for _, state := range []string{"running", "queued", "interrupted", "paused", "pausing", "canceling", "canceled", "completed", "failed"} {
+		t.Run(state, func(t *testing.T) {
+			ctx := context.Background()
+			store, err := database.Open(ctx, database.Config{Dialect: database.DialectSQLite, SQLitePath: filepath.Join(t.TempDir(), "recover.db")})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer store.Close()
+			if err := store.Migrate(ctx); err != nil {
+				t.Fatal(err)
+			}
+			repo := database.NewScanTaskRepository(store.SQLDB(), database.DialectSQLite)
+			index := &taskJournal{repo: repo, id: "emby-latest"}
+			if err := index.save(ctx, journalKey("snapshot"), EmbyMediaTask{ID: "original", State: state, Processed: 99, CanRetry: true}); err != nil {
+				t.Fatal(err)
+			}
+			journal := &taskJournal{repo: repo, id: "original"}
+			if err := journal.save(ctx, journalKey("emby-item", "done"), true); err != nil {
+				t.Fatal(err)
+			}
+			var probes atomic.Int32
+			service := NewEmbyMediaService(func(context.Context) (map[string]string, error) {
+				return map[string]string{"EMBY_URL": "http://emby.test", "EMBY_API_KEY": "test-only"}, nil
+			})
+			defer service.Close()
+			service.http.Transport = embyRoundTripper(func(request *http.Request) (*http.Response, error) {
+				body := `{"Items":[{"Id":"done","Path":"/done.strm"},{"Id":"remaining","Path":"/remaining.strm"}],"TotalRecordCount":2}`
+				if request.Method == http.MethodPost {
+					probes.Add(1)
+					if strings.Contains(request.URL.Path, "/done/") {
+						t.Error("replayed completed media")
+					}
+					body = "{}"
+				}
+				return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body))}, nil
+			})
+			if err := service.Restore(ctx, repo); err != nil {
+				t.Fatal(err)
+			}
+			shouldRun := state == "running" || state == "queued" || state == "interrupted"
+			if state == "paused" || state == "pausing" {
+				if service.Snapshot().State != "paused" || probes.Load() != 0 {
+					t.Fatal("lost pause intent")
+				}
+				if _, err := service.Control("original", "resume"); err != nil {
+					t.Fatal(err)
+				}
+				shouldRun = true
+			}
+			if shouldRun {
+				deadline := time.Now().Add(3 * time.Second)
+				for service.Snapshot().State != "completed" && time.Now().Before(deadline) {
+					time.Sleep(time.Millisecond)
+				}
+				task := service.Snapshot()
+				if task.ID != "original" || task.State != "completed" || task.Processed != 2 || task.Total != 2 || probes.Load() != 1 {
+					t.Fatalf("task=%+v probes=%d", task, probes.Load())
+				}
+			} else if probes.Load() != 0 {
+				t.Fatal("restarted terminal task")
+			}
+		})
+	}
+}
+
 // TestEmbyCheckpointExcludesPlaybackCredentials keeps inventory journals free of signed URLs.
 func TestEmbyCheckpointExcludesPlaybackCredentials(t *testing.T) {
 	service := NewEmbyMediaService(nil)

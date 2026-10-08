@@ -25,7 +25,7 @@ type scanExecution struct {
 }
 
 // ScanTasks 管理单实例内两类独立后台任务；请求断开不取消任务。
-// 暂停在安全处理点确认；服务退出保留快照并标为中断，不自动重放业务副作用。
+// 暂停在安全处理点确认；服务退出保留断点，启动后恢复运行任务但不自动解除暂停。
 type ScanTasks struct {
 	mu       sync.Mutex
 	repo     ports.ScanTaskRepository
@@ -78,6 +78,30 @@ func (s *ScanTasks) RegisterRunner(kind string, run func(context.Context, string
 	s.runners[kind] = run
 }
 
+// Recover 在全部 runner 注册后恢复最新中断任务；暂停任务只重建等待中的执行器。
+// 重复调用不会启动同一任务两次，缺少断点的历史任务及其他终态不自动执行。
+func (s *ScanTasks) Recover(ctx context.Context) error {
+	s.mu.Lock()
+	kinds := make([]string, 0, len(s.runners))
+	for kind := range s.runners {
+		kinds = append(kinds, kind)
+	}
+	s.mu.Unlock()
+	for _, kind := range kinds {
+		task, err := s.repo.Latest(ctx, kind)
+		if err != nil {
+			return err
+		}
+		if task == nil || !task.CanRetry || (task.State != "interrupted" && task.State != "paused") {
+			continue
+		}
+		if _, err := s.start(ctx, kind, "", task.ID, nil); err != nil && !errors.Is(err, ErrScanTaskConflict) {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *ScanTasks) start(ctx context.Context, kind, mode, retryID string, run func(context.Context) (any, error)) (*domain.ScanTask, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -92,7 +116,7 @@ func (s *ScanTasks) start(ctx context.Context, kind, mode, retryID string, run f
 		return nil, err
 	}
 	// 若最后一次终态落库失败，禁止用新任务覆盖尚未确认结束的持久化记录。
-	if latest != nil && latest.Active() {
+	if latest != nil && latest.Active() && !(latest.State == "paused" && retryID == latest.ID) {
 		return nil, ErrScanTaskConflict
 	}
 	var id [16]byte
@@ -108,8 +132,16 @@ func (s *ScanTasks) start(ctx context.Context, kind, mode, retryID string, run f
 		}
 		e.task = *latest
 		e.task.State, e.task.Error, e.task.CanRetry = "running", "", false
+		if latest.State == "paused" {
+			e.task.State = "paused"
+		}
 		runner := s.runners[kind]
-		run = func(ctx context.Context) (any, error) { return runner(ctx, e.task.Mode) }
+		run = func(ctx context.Context) (any, error) {
+			if err := scanCheckpoint(ctx); err != nil {
+				return nil, err
+			}
+			return runner(ctx, e.task.Mode)
+		}
 	}
 	if s.journals == nil {
 		s.journals = map[string]*taskJournal{}
@@ -156,8 +188,12 @@ func (s *ScanTasks) start(ctx context.Context, kind, mode, retryID string, run f
 		case e.task.State == "canceling":
 			e.task.State = "canceled"
 		case s.ctx.Err() != nil:
-			e.task.State = "interrupted"
-			e.task.Error = "服务停止，任务已中断，可继续失败的任务"
+			if e.task.State == "paused" || e.task.State == "pausing" {
+				e.task.State, e.task.Error = "paused", ""
+			} else {
+				e.task.State = "interrupted"
+				e.task.Error = "服务停止，下次启动后自动恢复"
+			}
 		case err != nil:
 			e.task.State = "failed"
 			e.task.Error = "任务执行失败，请检查目录配置和服务状态"
