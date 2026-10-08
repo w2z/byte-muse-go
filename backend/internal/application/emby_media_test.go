@@ -1,11 +1,13 @@
 package application
 
 import (
+	"bytemuse/backend/internal/platform/database"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -79,6 +81,110 @@ func TestEmbyMediaLogsIdentifyEachVideo(t *testing.T) {
 }
 
 type embyRoundTripper func(*http.Request) (*http.Response, error)
+
+// TestEmbyCheckpointExcludesPlaybackCredentials keeps inventory journals free of signed URLs.
+func TestEmbyCheckpointExcludesPlaybackCredentials(t *testing.T) {
+	service := NewEmbyMediaService(nil)
+	service.http.Transport = embyRoundTripper(func(*http.Request) (*http.Response, error) {
+		body := `{"Items":[{"Id":"movie","Path":"/private/SSIS-001.strm","MediaSources":[{"Path":"https://media.test/play?token=private-token","RunTimeTicks":100,"MediaStreams":[{}]}]}],"TotalRecordCount":1}`
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body))}, nil
+	})
+	journal := &taskJournal{id: "inventory"}
+	ctx := journalContext(context.Background(), journal)
+	for attempt := 0; attempt < 2; attempt++ {
+		items, err := service.list(ctx, "", "http://emby.test", "test-key")
+		if err != nil || len(items) != 1 || items[0].NeedsRefresh || items[0].Path != "SSIS-001.strm" {
+			t.Fatalf("items=%+v err=%v", items, err)
+		}
+	}
+	for _, raw := range journal.memory {
+		if strings.Contains(string(raw), "private") || strings.Contains(string(raw), "MediaSources") {
+			t.Fatal("checkpoint contains playback sources or private directory")
+		}
+	}
+}
+
+// TestEmbyRetryAfterRestore retries only failed media using the persisted inventory.
+func TestEmbyRetryAfterRestore(t *testing.T) {
+	ctx := context.Background()
+	config := database.Config{Dialect: database.DialectSQLite, SQLitePath: filepath.Join(t.TempDir(), "emby.db")}
+	store, err := database.Open(ctx, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	settings := func(context.Context) (map[string]string, error) {
+		return map[string]string{"EMBY_URL": "http://emby.test", "EMBY_API_KEY": "test-only"}, nil
+	}
+	var firstCalls, failedCalls, lists atomic.Int32
+	retry := false
+	transport := embyRoundTripper(func(request *http.Request) (*http.Response, error) {
+		status, body := 200, `{}`
+		switch {
+		case request.Method == http.MethodGet:
+			lists.Add(1)
+			body = `{"Items":[{"Id":"ok","Path":"/ok.strm"},{"Id":"bad","Path":"/bad.strm"}],"TotalRecordCount":2}`
+		case strings.Contains(request.URL.Path, "/ok/"):
+			firstCalls.Add(1)
+		default:
+			failedCalls.Add(1)
+			if !retry {
+				status = 502
+			}
+		}
+		return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(body))}, nil
+	})
+	service := NewEmbyMediaService(settings)
+	if err := service.Restore(ctx, database.NewScanTaskRepository(store.SQLDB(), database.DialectSQLite)); err != nil {
+		t.Fatal(err)
+	}
+	service.http.Transport = transport
+	task, _, err := service.Enqueue(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitMedia := func(service *EmbyMediaService) {
+		t.Helper()
+		deadline := time.Now().Add(3 * time.Second)
+		for time.Now().Before(deadline) {
+			if service.Snapshot().State == "completed" {
+				return
+			}
+			time.Sleep(time.Millisecond)
+		}
+		t.Fatalf("timeout %+v", service.Snapshot())
+	}
+	waitMedia(service)
+	if !service.Snapshot().CanRetry {
+		t.Fatal("partial failure cannot retry")
+	}
+	service.Close()
+	store.Close()
+	store, err = database.Open(ctx, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	retry = true
+	service = NewEmbyMediaService(settings)
+	defer service.Close()
+	if err := service.Restore(ctx, database.NewScanTaskRepository(store.SQLDB(), database.DialectSQLite)); err != nil {
+		t.Fatal(err)
+	}
+	service.http.Transport = transport
+	if _, err := service.Control("stale", "retry"); err == nil {
+		t.Fatal("stale retry accepted")
+	}
+	if _, err := service.Control(task.ID, "retry"); err != nil {
+		t.Fatal(err)
+	}
+	waitMedia(service)
+	if firstCalls.Load() != 1 || failedCalls.Load() != 2 || lists.Load() != 1 || service.Snapshot().CanRetry {
+		t.Fatalf("ok=%d bad=%d lists=%d task=%+v", firstCalls.Load(), failedCalls.Load(), lists.Load(), service.Snapshot())
+	}
+}
 
 func (f embyRoundTripper) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 

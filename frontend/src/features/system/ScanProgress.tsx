@@ -6,7 +6,7 @@ import { apiRequest, type ScanProgress } from "../../shared/api/client";
 export type ScanTask<T> = {
   id: string; kind: "library" | "strm"; mode: string;
   state: "running" | "pausing" | "paused" | "canceling" | "canceled" | "completed" | "failed" | "interrupted";
-  progress: ScanProgress; result: T | null; error: string; created_at: string; updated_at: string;
+  progress: ScanProgress; result: T | null; error: string; created_at: string; updated_at: string; can_retry?: boolean;
 };
 
 /** 任务进行中的状态；暂停与取消中仍属进行中，只有进行中的任务才有需要展示的实时进度。 */
@@ -39,7 +39,7 @@ export function useScanProgress<T extends { files: number }, V = void>(path: str
   const task = query.data ?? undefined;
   const control = useMutation({
     retry: false,
-    mutationFn: (action: "pause" | "resume" | "cancel") => {
+    mutationFn: (action: "pause" | "resume" | "cancel" | "retry") => {
       if (!task) throw new Error("任务尚未加载");
       return apiRequest<ScanTask<T>>(base + "/tasks/" + task.id + "/control", { method: "POST", body: JSON.stringify({ action }) });
     },
@@ -51,17 +51,18 @@ export function useScanProgress<T extends { files: number }, V = void>(path: str
   const scan = {
     mutate: start.mutate, variables: (task?.mode || start.variables) as V,
     data: task?.state === "completed" ? task.result ?? undefined : undefined,
-    isPending: start.isPending || active, isError: Boolean(error), error: error ?? new Error(""),
+    isPending: start.isPending || control.isPending || active, isError: Boolean(error), error: error ?? new Error(""),
   };
-  return { scan, progress: task?.progress, task, control, unavailable: query.isPending || query.isError, queryError: start.error ?? query.error };
+  return { scan, progress: task?.progress, task, control, controlsPending: start.isPending || control.isPending, unavailable: query.isPending || query.isError, queryError: start.error ?? query.error };
 }
 
 /** 暂停确认后显示继续；控制请求期间禁用按钮，错误保留可见。 */
 export function ScanTaskControls({ task, pending, onAction, error }: {
-  task?: ScanTask<unknown>; pending: boolean; onAction: (action: "pause" | "resume" | "cancel") => void; error?: Error | null;
+  task?: ScanTask<unknown>; pending: boolean; onAction: (action: "pause" | "resume" | "cancel" | "retry") => void; error?: Error | null;
 }) {
   const active = isScanTaskActive(task?.state);
   return <>
+    {!active && task?.can_retry ? <Button status="danger" loading={pending} disabled={pending} onClick={() => onAction("retry")}>继续失败的任务</Button> : null}
     {active ? <>
       <Button disabled={pending || task?.state === "pausing" || task?.state === "canceling"} onClick={() => onAction(task?.state === "paused" ? "resume" : "pause")}>{task?.state === "paused" ? "继续" : "暂停"}</Button>
       <Button status="danger" disabled={pending || task?.state === "canceling"} onClick={() => onAction("cancel")}>取消</Button>
@@ -74,10 +75,10 @@ export function ScanTaskControls({ task, pending, onAction, error }: {
  * 扫描与生成共用的进度展示：只在任务进行中显示进度条，结束后的结论由调用方的结果或失败文案表达。
  * 服务重启导致的中断不是进度而是状态提示，单独保留一句可操作说明。
  */
-export function ScanProgressDisplay({ progress, label, state, processingText = "处理中" }: {
-  progress?: ScanProgress; label: string; state?: ScanTask<unknown>["state"]; processingText?: string;
+export function ScanProgressDisplay({ progress, label, state, canRetry, processingText = "处理中" }: {
+  progress?: ScanProgress; label: string; state?: ScanTask<unknown>["state"]; canRetry?: boolean; processingText?: string;
 }) {
-  if (state === "interrupted") return <span className="settings-field-description">服务重启，任务已中断，请重新启动</span>;
+  if (state === "interrupted") return <span className="settings-field-description">服务重启，任务已中断，{canRetry ? "可继续失败的任务" : "请重新启动"}</span>;
   if (!progress || !isScanTaskActive(state)) return null;
   const phase = state === "paused" ? "已暂停" : state === "pausing" ? "正在暂停" : state === "canceling" ? "正在取消"
     : progress.phase === "waiting" ? "等待处理" : progress.phase === "discovering" ? "扫描中，总数持续更新"

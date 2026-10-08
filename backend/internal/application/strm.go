@@ -305,6 +305,21 @@ func (s *StrmService) Scan(ctx context.Context, playBase string, mode domain.Str
 	if err != nil {
 		return domain.StrmScanResult{}, fmt.Errorf("读取 strm 配置失败: %w", err)
 	}
+	inputs := map[string]string{}
+	for _, key := range []string{strmPathsSettingKey, strmDownloadEnableSettingKey, strmDownloadExtensionsSettingKey, strmPlayBaseSettingKey} {
+		inputs[key] = values[key]
+	}
+	if _, err := loadTaskCheckpoint(ctx, journalKey("input", "strm-settings"), &inputs); err != nil {
+		return domain.StrmScanResult{}, err
+	}
+	frozen := make(map[string]string, len(values))
+	for key, value := range values {
+		frozen[key] = value
+	}
+	for key, value := range inputs {
+		frozen[key] = value
+	}
+	values = frozen
 	mappings, err := parseStrmMappings(values[strmPathsSettingKey])
 	if err != nil {
 		return domain.StrmScanResult{}, fmt.Errorf("%w: %s %s", ErrInvalidSetting, strmPathsSettingKey, err)
@@ -321,8 +336,17 @@ func (s *StrmService) Scan(ctx context.Context, playBase string, mode domain.Str
 	if base == "" {
 		base = strings.TrimRight(strings.TrimSpace(playBase), "/")
 	}
+	if _, err := loadTaskCheckpoint(ctx, journalKey("input", "strm-base"), &base); err != nil {
+		return domain.StrmScanResult{}, err
+	}
 	if base == "" {
 		return domain.StrmScanResult{}, fmt.Errorf("%w: 缺少 ByteMuse 访问地址，无法生成 strm 内容", ErrStrmNotConfigured)
+	}
+	if err := taskInput(ctx, "strm-settings", &inputs); err != nil {
+		return domain.StrmScanResult{}, err
+	}
+	if err := taskInput(ctx, "strm-base", &base); err != nil {
+		return domain.StrmScanResult{}, err
 	}
 	result := domain.StrmScanResult{Mappings: make([]domain.StrmScanMapping, 0, len(mappings))}
 	total, processed := 0, 0
@@ -461,8 +485,16 @@ func strmMappingFailure(mapping domain.StrmMapping, err error) domain.StrmScanMa
 func (s *StrmService) scanMapping(ctx context.Context, root string, mapping domain.StrmMapping, base string, mode domain.StrmGenerateMode, walk strmWalk, advance func(), downloadFormats []string) domain.StrmScanMapping {
 	entry := domain.StrmScanMapping{Kind: mapping.Kind, Path: mapping.Path, LocalPath: mapping.LocalPath}
 	target, _, err := resolveStrmPath(root, mapping.LocalPath)
-	if err == nil && mode == domain.StrmGenerateFull {
+	cleanupKey := journalKey("cleanup", mapping.Kind, mapping.ID, mapping.LocalPath)
+	var cleaned bool
+	if err == nil {
+		_, err = loadTaskCheckpoint(ctx, cleanupKey, &cleaned)
+	}
+	if err == nil && mode == domain.StrmGenerateFull && !cleaned {
 		entry.Deleted, err = clearStrmContentContext(ctx, root, target)
+		if err == nil {
+			err = saveTaskCheckpoint(ctx, cleanupKey, true)
+		}
 	}
 	if err == nil {
 		if mkdirErr := os.MkdirAll(target, 0o755); mkdirErr != nil {
@@ -494,6 +526,16 @@ func (s *StrmService) scanMapping(ctx context.Context, root string, mapping doma
 		}
 		if downloads != nil && isStrmMedia(file.Name, downloadFormats) {
 			return downloads.enqueue(ctx, file)
+		}
+		done, err := taskUnitDone(ctx, "strm-file", target, file.Directory, file.ID)
+		if err != nil {
+			return err
+		}
+		if done {
+			entry.Files++
+			entry.Unchanged++
+			advance()
+			return nil
 		}
 		entry.Files++
 		if strings.ContainsAny(file.Name, `/\`) {
@@ -528,7 +570,7 @@ func (s *StrmService) scanMapping(ctx context.Context, root string, mapping doma
 			if exists {
 				entry.Unchanged++
 				advance()
-				return nil
+				return completeTaskUnit(ctx, "strm-file", target, file.Directory, file.ID)
 			}
 		}
 		created, changed, writeErr := writeStrmFile(absolute, strmPlayURL(base, mapping.Kind, identifier)+"\n")
@@ -542,6 +584,9 @@ func (s *StrmService) scanMapping(ctx context.Context, root string, mapping doma
 			entry.Unchanged++
 		}
 		advance()
+		if writeErr == nil {
+			return completeTaskUnit(ctx, "strm-file", target, file.Directory, file.ID)
+		}
 		return nil
 	})
 	if downloads != nil {
@@ -573,9 +618,20 @@ func walkPan115Files(ctx context.Context, api pan115FileAPI, rootID string, filt
 			if err := scanCheckpoint(ctx); err != nil {
 				return err
 			}
-			page, err := api.Files(ctx, directoryID, offset, strmListLimit)
+			var page domain.Pan115FilePage
+			pageKey := journalKey("115-page", directoryID, fmt.Sprint(offset))
+			found, err := loadTaskCheckpoint(ctx, pageKey, &page)
 			if err != nil {
 				return err
+			}
+			if !found {
+				page, err = api.Files(ctx, directoryID, offset, strmListLimit)
+				if err != nil {
+					return err
+				}
+				if err = saveTaskCheckpoint(ctx, pageKey, page); err != nil {
+					return err
+				}
 			}
 			for _, file := range page.Files {
 				if err := scanCheckpoint(ctx); err != nil {
@@ -616,9 +672,20 @@ func (s *StrmService) walkCloudDrive(ctx context.Context, rootPath string, filte
 		if err := scanCheckpoint(ctx); err != nil {
 			return err
 		}
-		entries, err := s.cloud.ListSubFiles(ctx, directory)
+		var entries []clouddrive.Entry
+		pageKey := journalKey("cd2-page", directory)
+		found, err := loadTaskCheckpoint(ctx, pageKey, &entries)
 		if err != nil {
 			return err
+		}
+		if !found {
+			entries, err = s.cloud.ListSubFiles(ctx, directory)
+			if err != nil {
+				return err
+			}
+			if err = saveTaskCheckpoint(ctx, pageKey, entries); err != nil {
+				return err
+			}
 		}
 		for _, item := range entries {
 			if err := scanCheckpoint(ctx); err != nil {

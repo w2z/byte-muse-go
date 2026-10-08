@@ -105,7 +105,7 @@ type Pan115LibraryScanResult = {
  * 扫描始终使用已保存的扫描目录，草稿改动需先保存设置；草稿为空时禁用，避免提交必然失败的请求。
  */
 export function Pan115LibraryScanAction({ value }: { value: Pan115ScanPath[] }) {
-  const { scan, progress, task, control, unavailable, queryError } = useScanProgress<Pan115LibraryScanResult>("/pan115/library/scan");
+  const { scan, progress, task, control, controlsPending, unavailable, queryError } = useScanProgress<Pan115LibraryScanResult>("/pan115/library/scan");
   const failedDirectories = scan.data?.directories.filter((item) => item.message !== "") ?? [];
 
   return (
@@ -119,12 +119,12 @@ export function Pan115LibraryScanAction({ value }: { value: Pan115ScanPath[] }) 
         >
           扫描入库
         </Button>
-        <ScanTaskControls task={task} pending={control.isPending} onAction={control.mutate} error={control.error ?? queryError} />
+        <ScanTaskControls task={task} pending={controlsPending} onAction={control.mutate} error={control.error ?? queryError} />
         <span className="settings-field-description">
           扫描使用已保存的扫描目录；修改后请先保存设置再扫描。
         </span>
       </div>
-      <ScanProgressDisplay state={task?.state} label="扫描" processingText="扫描中，边扫描边入库" progress={progress} />
+      <ScanProgressDisplay state={task?.state} canRetry={task?.can_retry} label="扫描" processingText="扫描中，边扫描边入库" progress={progress} />
       {scan.isError ? (
         <span className="settings-field-description">扫描失败：{scan.error.message}</span>
       ) : scan.data ? (

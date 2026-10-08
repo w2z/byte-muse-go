@@ -209,8 +209,8 @@ func controlStrmMediaInfo(service *application.EmbyMediaService) http.HandlerFun
 		var body struct {
 			Action string `json:"action"`
 		}
-		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024)).Decode(&body) != nil || (body.Action != "pause" && body.Action != "resume" && body.Action != "cancel") {
-			writeError(w, http.StatusBadRequest, "invalid_request", "action 必须为 pause、resume 或 cancel")
+		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024)).Decode(&body) != nil || (body.Action != "pause" && body.Action != "resume" && body.Action != "cancel" && body.Action != "retry") {
+			writeError(w, http.StatusBadRequest, "invalid_request", "action 必须为 pause、resume、cancel 或 retry")
 			return
 		}
 		task, err := service.Control(chi.URLParam(r, "id"), body.Action)

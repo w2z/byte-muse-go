@@ -4,11 +4,24 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, expect, it, vi } from "vitest";
 import { Pan115LibraryScanAction } from "./Pan115ScanPathsField";
-import { ScanProgressDisplay } from "./ScanProgress";
+import { ScanProgressDisplay, ScanTaskControls, type ScanTask } from "./ScanProgress";
 import { StrmGenerateAction } from "./StrmPathsField";
 import { apiRequest, type ScanProgress } from "../../shared/api/client";
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+
+it.each(["failed", "interrupted", "canceled", "completed"] as const)("%s 的可恢复任务显示红色继续按钮且发送 retry", (state) => {
+  const action = vi.fn();
+  const task = { id: "retry-1", state, can_retry: true } as ScanTask<unknown>;
+  const view = render(<ScanTaskControls task={task} pending={false} onAction={action} />);
+  const button = screen.getByRole("button", { name: "继续失败的任务" });
+  expect(button).toHaveClass("arco-btn-status-danger");
+  fireEvent.click(button); expect(action).toHaveBeenCalledWith("retry");
+  view.rerender(<ScanTaskControls task={task} pending={true} onAction={action} />);
+  expect(button).toBeDisabled();
+  view.rerender(<ScanTaskControls task={{ ...task, can_retry: false }} pending={false} onAction={action} />);
+  expect(screen.queryByRole("button", { name: "继续失败的任务" })).not.toBeInTheDocument();
+});
 
 it.each(["scan", "strm"])("%s 从持久化任务恢复动态进度并执行暂停继续取消", async (kind) => {
   const base = kind === "scan" ? "/pan115/library/scan" : "/strm/scan";
@@ -66,7 +79,9 @@ it("只在任务进行中显示进度条", () => {
   const running = render(<ScanProgressDisplay label="生成" progress={progress} state="running" />);
   expect(screen.getByText("50% - 2/4")).toBeInTheDocument();
   running.unmount();
-  render(<ScanProgressDisplay label="生成" progress={progress} state="interrupted" />);
+  const interrupted = render(<ScanProgressDisplay label="生成" progress={progress} state="interrupted" />);
   expect(screen.getByText("服务重启，任务已中断，请重新启动")).toBeInTheDocument();
   expect(screen.queryByText("50% - 2/4")).not.toBeInTheDocument();
+  interrupted.rerender(<ScanProgressDisplay label="生成" progress={progress} state="interrupted" canRetry />);
+  expect(screen.getByText("服务重启，任务已中断，可继续失败的任务")).toBeInTheDocument();
 });

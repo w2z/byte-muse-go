@@ -2,9 +2,11 @@ package application
 
 import (
 	"bytemuse/backend/internal/domain"
+	"bytemuse/backend/internal/platform/database"
 	"context"
 	"errors"
 	"os"
+	"path"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -14,6 +16,116 @@ import (
 type memoryScanTasks struct {
 	mu    sync.Mutex
 	items map[string]domain.ScanTask
+}
+
+// TestScanTaskRetryAfterRestart keeps completed writes and rejects stale or duplicate retries.
+func TestScanTaskRetryAfterRestart(t *testing.T) {
+	ctx := context.Background()
+	config := database.Config{Dialect: database.DialectSQLite, SQLitePath: filepath.Join(t.TempDir(), "retry.db")}
+	store, err := database.Open(ctx, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = store.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	manager, err := NewScanTasks(ctx, database.NewScanTaskRepository(store.SQLDB(), database.DialectSQLite))
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	runner := func(worker context.Context) (any, error) {
+		done, err := taskUnitDone(worker, "first")
+		if err != nil {
+			return nil, err
+		}
+		if !done {
+			calls++
+			if err := completeTaskUnit(worker, "first"); err != nil {
+				return nil, err
+			}
+		}
+		return nil, errors.New("second failed")
+	}
+	task, err := manager.Start(ctx, "library", "", runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitScanState(t, manager, "library", "failed")
+	manager.Close()
+	store.Close()
+	store, err = database.Open(ctx, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	manager, err = NewScanTasks(ctx, database.NewScanTaskRepository(store.SQLDB(), database.DialectSQLite))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	entered, release := make(chan struct{}), make(chan struct{})
+	manager.RegisterRunner("library", func(worker context.Context, _ string) (any, error) {
+		done, err := taskUnitDone(worker, "first")
+		if err != nil || !done {
+			return nil, errors.New("lost checkpoint")
+		}
+		close(entered)
+		<-release
+		return domain.Pan115LibraryScanResult{}, nil
+	})
+	if _, err := manager.Control(ctx, "library", "stale", "retry"); !errors.Is(err, ErrScanTaskConflict) {
+		t.Fatal(err)
+	}
+	next, err := manager.Control(ctx, "library", task.ID, "retry")
+	if err != nil || next.ID != task.ID {
+		t.Fatalf("%+v %v", next, err)
+	}
+	<-entered
+	_, duplicateErr := manager.Control(ctx, "library", task.ID, "retry")
+	close(release)
+	if !errors.Is(duplicateErr, ErrScanTaskConflict) {
+		t.Fatal(duplicateErr)
+	}
+	waitScanState(t, manager, "library", "completed")
+	latest, _ := manager.Latest(ctx, "library")
+	if latest.CanRetry || calls != 1 {
+		t.Fatalf("%+v calls=%d", latest, calls)
+	}
+}
+
+// TestStrmRetryPreservesFullGeneration confirms retry never clears already generated output.
+func TestStrmRetryPreservesFullGeneration(t *testing.T) {
+	root := t.TempDir()
+	source := &strmPan115Stub{pages: map[string]domain.Pan115FilePage{"root": {Files: []domain.Pan115File{
+		{ID: "ok", Name: "SSIS-001.mp4", PickCode: "pc1"},
+		{ID: "folder", Name: "child", IsDirectory: true},
+	}}}}
+	values := map[string]string{strmPathsSettingKey: strmTestMappings(t, []domain.StrmMapping{{Kind: "115", ID: "root", Path: "/source", LocalPath: "/movies"}})}
+	service := newStrmTestService(t, root, source, nil, values)
+	ctx := journalContext(context.Background(), &taskJournal{id: "test"})
+	result, err := service.Scan(ctx, "http://play.test", domain.StrmGenerateFull)
+	if err != nil || !scanResultFailed(result) {
+		t.Fatalf("%+v %v", result, err)
+	}
+	existing := filepath.Join(root, "movies", "SSIS-001.mp4.strm")
+	if err := os.WriteFile(existing, []byte("preserved"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	source.pages["folder"] = domain.Pan115FilePage{Files: []domain.Pan115File{{ID: "remaining", Name: "SSIS-002.mp4", PickCode: "pc2"}}}
+	delete(source.pages, "root")
+	values[strmPathsSettingKey] = "[]"
+	result, err = service.Scan(ctx, "", domain.StrmGenerateFull)
+	if err != nil || scanResultFailed(result) || result.Deleted != 0 {
+		t.Fatalf("%+v %v", result, err)
+	}
+	raw, _ := os.ReadFile(existing)
+	if string(raw) != "preserved" {
+		t.Fatal("rewrote completed file")
+	}
+	if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(path.Join("movies", "child", "SSIS-002.mp4.strm")))); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func (r *memoryScanTasks) Save(_ context.Context, t domain.ScanTask) error {

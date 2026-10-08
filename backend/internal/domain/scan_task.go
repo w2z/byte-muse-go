@@ -23,6 +23,7 @@ type ScanTask struct {
 	Error     string          `json:"error"`
 	CreatedAt string          `json:"created_at"`
 	UpdatedAt string          `json:"updated_at"`
+	CanRetry  bool            `json:"can_retry"`
 }
 
 // Active 表示任务仍占用对应操作入口，包括暂停与停止请求尚未完成的状态。

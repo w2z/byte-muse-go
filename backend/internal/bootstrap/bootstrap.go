@@ -2,6 +2,7 @@
 package bootstrap
 
 import (
+	"bytemuse/backend/internal/domain"
 	"context"
 	"database/sql"
 	"errors"
@@ -366,6 +367,10 @@ func (c *Commands) Serve(ctx context.Context) error {
 		return fmt.Errorf("create strm service: %w", err)
 	}
 	embyMediaService := application.NewEmbyMediaService(settingsValues(settingsService))
+	defer embyMediaService.Close()
+	if err := embyMediaService.Restore(ctx, database.NewScanTaskRepository(store.SQLDB(), database.Dialect(c.config.DatabaseDriver))); err != nil {
+		return fmt.Errorf("restore media refresh: %w", err)
+	}
 	strmService.SetEmbyMediaEnqueue(func(enqueueCtx context.Context) { _, _, _ = embyMediaService.Enqueue(enqueueCtx) })
 	embyMediaCtx, cancelEmbyMedia := context.WithCancel(ctx)
 	embyMediaDone := make(chan struct{})
@@ -382,6 +387,10 @@ func (c *Commands) Serve(ctx context.Context) error {
 		return fmt.Errorf("create scan tasks: %w", err)
 	}
 	defer scanTasks.Close()
+	scanTasks.RegisterRunner("library", func(ctx context.Context, _ string) (any, error) { return pan115LibraryService.Scan(ctx) })
+	scanTasks.RegisterRunner("strm", func(ctx context.Context, mode string) (any, error) {
+		return strmService.Scan(ctx, "", domain.StrmGenerateMode(mode))
+	})
 	// 对话回复与业务通知共用同一个渠道解析器，不另建第二套发送逻辑。
 	channels := newChannelRegistry(settingsService)
 	notifier := application.NewNotificationService(settingsValues(settingsService), channels)

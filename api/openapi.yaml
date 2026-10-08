@@ -1422,10 +1422,10 @@ paths:
           content:
             application/json:
               schema: {$ref: '#/components/schemas/Error'}
-  /pan115/library/scan/task: {"get":{"summary":"查询扫描入库任务","description":"返回该类型最新任务，尚无任务时为 null；页面刷新后从数据库恢复。服务重启标记中断，不自动续跑。","parameters":[{"in":"cookie","name":"bytemuse_session","required":true,"schema":{"type":"string"},"description":"管理员登录会话"}],"responses":{"200":{"description":"最新任务，未创建过则返回 null","content":{"application/json":{"schema":{"allOf":[{"$ref":"#/components/schemas/ScanTask"}],"nullable":true},"example":{"id":"d433936145204bbaaf4c4e9f904e4f29","kind":"library","state":"running","mode":"","progress":{"phase":"processing","processed":20,"total":100,"percent":20,"current":"/movies"},"result":null,"error":"","created_at":"2026-10-01T01:00:00Z","updated_at":"2026-10-01T01:00:01Z"}}}},"401":{"description":"未登录"},"500":{"description":"读取失败"},"503":{"description":"任务服务不可用"}}}}
-  /pan115/library/scan/tasks/{id}/control: {"post":{"summary":"控制扫描入库任务","description":"pause 在下个文件/目录请求/清理步骤的安全点暂停；resume 继续同一次任务；cancel 终止后续工作。已发出的外部操作或数据库写入可能先完成，不回滚。与另一类型任务相互独立。","parameters":[{"in":"cookie","name":"bytemuse_session","required":true,"schema":{"type":"string"},"description":"管理员登录会话"},{"in":"path","name":"id","required":true,"schema":{"type":"string"},"description":"当前任务 ID，旧任务 ID 返回 409"}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","required":["action"],"properties":{"action":{"type":"string","enum":["pause","resume","cancel"],"description":"暂停、继续、取消；重复暂停和取消在活动任务内幂等"}}},"example":{"action":"pause"}}}},"responses":{"200":{"description":"当前任务快照","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ScanTask"},"example":{"id":"d433936145204bbaaf4c4e9f904e4f29","kind":"library","state":"running","mode":"","progress":{"phase":"processing","processed":20,"total":100,"percent":20,"current":"/movies"},"result":null,"error":"","created_at":"2026-10-01T01:00:00Z","updated_at":"2026-10-01T01:00:01Z"}}}},"400":{"description":"动作无效"},"401":{"description":"未登录"},"409":{"description":"任务已结束、被替换或状态不允许"},"500":{"description":"状态保存失败"},"503":{"description":"任务服务不可用"}}}}
-  /strm/scan/task: {"get":{"summary":"查询STRM 生成任务","description":"返回该类型最新任务，尚无任务时为 null；页面刷新后从数据库恢复。服务重启标记中断，不自动续跑。","parameters":[{"in":"cookie","name":"bytemuse_session","required":true,"schema":{"type":"string"},"description":"管理员登录会话"}],"responses":{"200":{"description":"最新任务，未创建过则返回 null","content":{"application/json":{"schema":{"allOf":[{"$ref":"#/components/schemas/ScanTask"}],"nullable":true},"example":{"id":"d433936145204bbaaf4c4e9f904e4f29","kind":"strm","state":"running","mode":"incremental","progress":{"phase":"processing","processed":20,"total":100,"percent":20,"current":"/movies"},"result":null,"error":"","created_at":"2026-10-01T01:00:00Z","updated_at":"2026-10-01T01:00:01Z"}}}},"401":{"description":"未登录"},"500":{"description":"读取失败"},"503":{"description":"任务服务不可用"}}}}
-  /strm/scan/tasks/{id}/control: {"post":{"summary":"控制STRM 生成任务","description":"pause 在下个文件/目录请求/清理步骤的安全点暂停；resume 继续同一次任务；cancel 终止后续工作。已发出的外部操作或数据库写入可能先完成，不回滚。与另一类型任务相互独立。","parameters":[{"in":"cookie","name":"bytemuse_session","required":true,"schema":{"type":"string"},"description":"管理员登录会话"},{"in":"path","name":"id","required":true,"schema":{"type":"string"},"description":"当前任务 ID，旧任务 ID 返回 409"}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","required":["action"],"properties":{"action":{"type":"string","enum":["pause","resume","cancel"],"description":"暂停、继续、取消；重复暂停和取消在活动任务内幂等"}}},"example":{"action":"pause"}}}},"responses":{"200":{"description":"当前任务快照","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ScanTask"},"example":{"id":"d433936145204bbaaf4c4e9f904e4f29","kind":"strm","state":"running","mode":"incremental","progress":{"phase":"processing","processed":20,"total":100,"percent":20,"current":"/movies"},"result":null,"error":"","created_at":"2026-10-01T01:00:00Z","updated_at":"2026-10-01T01:00:01Z"}}}},"400":{"description":"动作无效"},"401":{"description":"未登录"},"409":{"description":"任务已结束、被替换或状态不允许"},"500":{"description":"状态保存失败"},"503":{"description":"任务服务不可用"}}}}
+  /pan115/library/scan/task: {"get":{"summary":"查询扫描入库任务","description":"返回该类型最新任务，尚无任务时为 null；页面刷新后从数据库恢复。服务重启标记中断，不自动续跑。 支持持久化断点；can_retry 为 true 时可提交 retry 继续同一任务，仅处理失败和未完成项。成功项不重放，全量 STRM 不重复清理目录。旧任务无断点时不允许 retry。","parameters":[{"in":"cookie","name":"bytemuse_session","required":true,"schema":{"type":"string"},"description":"管理员登录会话"}],"responses":{"200":{"description":"最新任务，未创建过则返回 null","content":{"application/json":{"schema":{"allOf":[{"$ref":"#/components/schemas/ScanTask"}],"nullable":true},"example":{"id":"d433936145204bbaaf4c4e9f904e4f29","kind":"library","state":"running","mode":"","progress":{"phase":"processing","processed":20,"total":100,"percent":20,"current":"/movies"},"result":null,"error":"","created_at":"2026-10-01T01:00:00Z","updated_at":"2026-10-01T01:00:01Z","can_retry":false}}}},"401":{"description":"未登录"},"500":{"description":"读取失败"},"503":{"description":"任务服务不可用"}}}}
+  /pan115/library/scan/tasks/{id}/control: {"post":{"summary":"控制扫描入库任务","description":"pause 在下个文件/目录请求/清理步骤的安全点暂停；resume 继续同一次任务；cancel 终止后续工作。已发出的外部操作或数据库写入可能先完成，不回滚。与另一类型任务相互独立。 支持持久化断点；can_retry 为 true 时可提交 retry 继续同一任务，仅处理失败和未完成项。成功项不重放，全量 STRM 不重复清理目录。旧任务无断点时不允许 retry。","parameters":[{"in":"cookie","name":"bytemuse_session","required":true,"schema":{"type":"string"},"description":"管理员登录会话"},{"in":"path","name":"id","required":true,"schema":{"type":"string"},"description":"当前任务 ID，旧任务 ID 返回 409"}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","required":["action"],"properties":{"action":{"type":"string","enum":["pause","resume","cancel","retry"],"description":"pause 暂停；resume 继续暂停任务；cancel 停止；retry 继续具有断点的失败或结束任务"}}},"example":{"action":"pause"}}}},"responses":{"200":{"description":"当前任务快照","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ScanTask"},"example":{"id":"d433936145204bbaaf4c4e9f904e4f29","kind":"library","state":"running","mode":"","progress":{"phase":"processing","processed":20,"total":100,"percent":20,"current":"/movies"},"result":null,"error":"","created_at":"2026-10-01T01:00:00Z","updated_at":"2026-10-01T01:00:01Z","can_retry":false}}}},"400":{"description":"动作无效"},"401":{"description":"未登录"},"409":{"description":"旧任务、重复续跑、活动任务或缺少断点"},"500":{"description":"状态保存失败"},"503":{"description":"任务服务不可用"}}}}
+  /strm/scan/task: {"get":{"summary":"查询STRM 生成任务","description":"返回该类型最新任务，尚无任务时为 null；页面刷新后从数据库恢复。服务重启标记中断，不自动续跑。 支持持久化断点；can_retry 为 true 时可提交 retry 继续同一任务，仅处理失败和未完成项。成功项不重放，全量 STRM 不重复清理目录。旧任务无断点时不允许 retry。","parameters":[{"in":"cookie","name":"bytemuse_session","required":true,"schema":{"type":"string"},"description":"管理员登录会话"}],"responses":{"200":{"description":"最新任务，未创建过则返回 null","content":{"application/json":{"schema":{"allOf":[{"$ref":"#/components/schemas/ScanTask"}],"nullable":true},"example":{"id":"d433936145204bbaaf4c4e9f904e4f29","kind":"strm","state":"running","mode":"incremental","progress":{"phase":"processing","processed":20,"total":100,"percent":20,"current":"/movies"},"result":null,"error":"","created_at":"2026-10-01T01:00:00Z","updated_at":"2026-10-01T01:00:01Z","can_retry":false}}}},"401":{"description":"未登录"},"500":{"description":"读取失败"},"503":{"description":"任务服务不可用"}}}}
+  /strm/scan/tasks/{id}/control: {"post":{"summary":"控制STRM 生成任务","description":"pause 在下个文件/目录请求/清理步骤的安全点暂停；resume 继续同一次任务；cancel 终止后续工作。已发出的外部操作或数据库写入可能先完成，不回滚。与另一类型任务相互独立。 支持持久化断点；can_retry 为 true 时可提交 retry 继续同一任务，仅处理失败和未完成项。成功项不重放，全量 STRM 不重复清理目录。旧任务无断点时不允许 retry。","parameters":[{"in":"cookie","name":"bytemuse_session","required":true,"schema":{"type":"string"},"description":"管理员登录会话"},{"in":"path","name":"id","required":true,"schema":{"type":"string"},"description":"当前任务 ID，旧任务 ID 返回 409"}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","required":["action"],"properties":{"action":{"type":"string","enum":["pause","resume","cancel","retry"],"description":"pause 暂停；resume 继续暂停任务；cancel 停止；retry 继续具有断点的失败或结束任务"}}},"example":{"action":"pause"}}}},"responses":{"200":{"description":"当前任务快照","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ScanTask"},"example":{"id":"d433936145204bbaaf4c4e9f904e4f29","kind":"strm","state":"running","mode":"incremental","progress":{"phase":"processing","processed":20,"total":100,"percent":20,"current":"/movies"},"result":null,"error":"","created_at":"2026-10-01T01:00:00Z","updated_at":"2026-10-01T01:00:01Z","can_retry":false}}}},"400":{"description":"动作无效"},"401":{"description":"未登录"},"409":{"description":"旧任务、重复续跑、活动任务或缺少断点"},"500":{"description":"状态保存失败"},"503":{"description":"任务服务不可用"}}}}
   /strm/scan:
     post:
       operationId: scanStrm
@@ -1474,7 +1474,7 @@ paths:
   /strm/emby/media-info/task:
     get:
       summary: 查询 STRM 媒体信息刷新任务
-      description: 返回当前异步媒体信息预热任务；任务仅处理 Emby 中缺少媒体流或时长的 STRM 影片。
+      description: 返回持久化媒体信息刷新任务；服务重启标记 interrupted，can_retry 为 true 时可从原列表继续失败和未完成项。
       parameters:
         - {in: cookie, name: bytemuse_session, required: true, schema: {type: string}, description: 登录签发的管理员会话 Cookie}
       responses:
@@ -1482,7 +1482,7 @@ paths:
           description: 当前任务，没有任务时为 null
           content:
             application/json:
-              schema: {type: object, nullable: true}
+              schema: {allOf: [{$ref: '#/components/schemas/EmbyMediaTask'}], nullable: true}
         '401': {description: 未登录}
   /strm/emby/media-info/refresh:
     post:
@@ -1500,14 +1500,14 @@ paths:
                 required: [task, queued]
                 properties:
                   queued: {type: boolean}
-                  task: {type: object}
+                  task: {$ref: '#/components/schemas/EmbyMediaTask'}
         '400': {description: Emby 配置缺失或刷新失败}
         '401': {description: 未登录}
         '503': {description: 服务未装配}
   /strm/emby/media-info/tasks/{id}/control:
     post:
       summary: 控制 STRM 媒体信息刷新任务
-      description: 对当前任务执行暂停、继续或停止；停止后任务状态为 canceled。
+      description: 对当前任务执行暂停、继续、停止或失败续跑；retry 仅适用于 can_retry=true 的最新任务，保留原媒体列表及完成记录，只重试失败和未完成项。
       parameters:
         - {in: path, name: id, required: true, schema: {type: string}, description: 媒体信息刷新任务 ID}
         - {in: cookie, name: bytemuse_session, required: true, schema: {type: string}, description: 登录签发的管理员会话 Cookie}
@@ -1519,13 +1519,14 @@ paths:
               type: object
               required: [action]
               properties:
-                action: {type: string, enum: [pause, resume, cancel], description: 控制动作}
+                action: {type: string, enum: [pause, resume, cancel, retry], description: pause 暂停，resume 继续暂停任务，cancel 停止，retry 继续失败或中断任务}
       responses:
         '200':
           description: 控制后的任务快照
           content:
             application/json:
-              schema: {type: object}
+              schema: {$ref: '#/components/schemas/EmbyMediaTask'}
+              example: {id: emby-123, state: queued, phase: scanning, processed: 0, total: 0, success: 0, skipped: 0, failed: 0, error: '', can_retry: false, updated_at: '2026-10-08T01:00:00Z'}
         '400': {description: action 缺失或取值非法}
         '401': {description: 未登录}
         '409': {description: 任务不存在、已结束或状态已变化}
@@ -1767,6 +1768,22 @@ components:
           schema:
             $ref: '#/components/schemas/Error'
   schemas:
+    EmbyMediaTask:
+      type: object
+      description: 持久化 STRM 媒体信息刷新任务，重启后不自动重试。
+      required: [id, state, phase, processed, total, success, skipped, failed, error, updated_at, can_retry]
+      properties:
+        id: {type: string, description: 当前任务唯一标识，续跑保持不变}
+        state: {type: string, enum: [queued, running, pausing, paused, canceling, canceled, completed, failed, interrupted], description: 排队、运行、暂停中、已暂停、停止中、已停止、已完成、失败、服务中断}
+        phase: {type: string, enum: ['', scanning, refreshing], description: 空串为尚未开始，scanning 为获取媒体列表，refreshing 为逐项刷新}
+        processed: {type: integer, description: 本轮已处理数，含成功、跳过及失败}
+        total: {type: integer, description: 已发现的 STRM 媒体数量}
+        success: {type: integer, description: 本轮刷新请求成功数}
+        skipped: {type: integer, description: 已具备媒体信息或原任务已成功而跳过的数量}
+        failed: {type: integer, description: 本轮刷新失败数}
+        error: {type: string, description: 脱敏错误说明，无错误为空串}
+        updated_at: {type: string, format: date-time, description: 快照更新时间}
+        can_retry: {type: boolean, description: 失败、中断、停止或部分失败且具备断点时为 true；活动及完全成功时为 false}
     CollectionRequest: {"type":"object","required":["source","kind"],"additionalProperties":false,"properties":{"source":{"type":"string","enum":["javdb","netflav","javlibrary","avbase","jable","supjav"],"description":"数据来源；支持能力以 /collection/sources 为准"},"kind":{"type":"string","enum":["search","detail","rank","actor","date"],"description":"search 关键词搜索；detail 站内影片 ID；rank 影片榜单；actor 演员作品（JavDB query 为来源演员 ID；AVBase query 为演员名）；date 指定日期的上新作品（当前仅 AVBase，query 为 YYYY-MM-DD）。来源与能力组合严格以 /collection/sources 为准，未公布的组合拒绝受理"},"query":{"type":"string","maxLength":200,"description":"非 rank 必填；detail 为站内 source_id，不能是 URL"},"period":{"type":"string","enum":["daily","weekly","monthly","wanted"],"description":"rank 必填：JavDB daily 日榜、weekly 周榜、monthly 月榜；JavLibrary 仅 wanted 最想要榜。其他榜单未开放"},"page":{"type":"integer","minimum":0,"maximum":100,"default":1,"description":"省略或 0 按 1；rank 只能从第 1 页启动并自动采至末页，内部翻页无 100 页限制；search/date 手动单页 1..100；detail 仅 1"}}}
     CollectedActor: {"type":"object","required":["name"],"properties":{"name":{"type":"string","description":"站点提供的演员名称"},"photo":{"type":"string","description":"演员头像地址；缺失时省略"},"aliases":{"type":"array","items":{"type":"string"},"description":"演员别名；缺失时省略，只用于目录搜索，不按别名合并历史演员"},"source_id":{"type":"string","description":"来源演员 ID；与采集批次 source 联合使用，未知时省略。JavDB actor 查询使用此 ID"}}}
     CollectedMedia: {"type":"object","required":["source_id","url","title","actors","tags"],"properties":{"source_id":{"type":"string","description":"来源站点内的稳定 ID，与 source 联合唯一"},"url":{"type":"string","description":"来源详情页地址"},"code":{"type":"string","description":"可靠番号；未识别时省略，不根据标题强行关联影片"},"title":{"type":"string","description":"原始标题"},"poster_url":{"type":"string","description":"封面地址；缺失时省略"},"release_date":{"type":"string","description":"发行日期 YYYY-MM-DD；无法确认时省略"},"duration_minutes":{"type":"integer","description":"时长，单位分钟；缺失时省略"},"actors":{"type":"array","items":{"$ref":"#/components/schemas/CollectedActor"},"description":"演员资料；未知时为空数组"},"tags":{"type":"array","items":{"type":"string"},"description":"站点标签；未知时为空数组"},"video_type":{"type":"string","enum":["censored","uncensored","uncensored_cracked","leaked"],"description":"明确的影片单值类型：有码、无码、无码破解、流出；未知时省略，不猜测，不覆盖既有影片分类"}}}
@@ -2392,7 +2409,7 @@ components:
         status:
           type: string
           enum: [ok]
-    ScanTask: {"type":"object","required":["id","kind","state","mode","progress","result","error","created_at","updated_at"],"description":"持久化任务快照；扫描与生成独立互斥。暂停在安全处理点生效，取消不回滚已完成结果；服务重启将活动任务标记 interrupted，保留进度，须重新启动。","properties":{"id":{"type":"string","description":"任务唯一标识；控制操作必须使用当前任务 ID"},"kind":{"type":"string","enum":["library","strm"],"description":"library 扫描入库；strm 生成文件"},"state":{"type":"string","enum":["running","pausing","paused","canceling","canceled","completed","failed","interrupted"],"description":"运行、请求暂停、已暂停、请求取消、已取消、完成、失败、重启中断"},"mode":{"type":"string","enum":["","full","incremental"],"description":"扫描为空串；生成使用全量或增量"},"progress":{"$ref":"#/components/schemas/ScanProgress"},"result":{"type":"object","nullable":true,"description":"仅完成时为 Pan115LibraryScanResult 或 StrmScanResult，其余状态为 null","additionalProperties":true},"error":{"type":"string","description":"脱敏错误或中断说明，无错误为空串"},"created_at":{"type":"string","format":"date-time","description":"任务创建时间，UTC RFC3339"},"updated_at":{"type":"string","format":"date-time","description":"最后快照更新时间，UTC RFC3339；活动进度最多每 250ms 落库一次，阶段与控制状态立即落库"}}}
+    ScanTask: {"type":"object","required":["id","kind","state","mode","progress","result","error","created_at","updated_at","can_retry"],"description":"持久化任务快照；retry 使用原任务配置及断点继续，保留已完成写入，全量 STRM 不重复清理已完成的目录。无断点的历史任务不可恢复。","properties":{"id":{"type":"string","description":"任务唯一标识；控制操作必须使用当前任务 ID"},"kind":{"type":"string","enum":["library","strm"],"description":"library 扫描入库；strm 生成文件"},"state":{"type":"string","enum":["running","pausing","paused","canceling","canceled","completed","failed","interrupted"],"description":"运行、请求暂停、已暂停、请求取消、已取消、完成、失败、重启中断"},"mode":{"type":"string","enum":["","full","incremental"],"description":"扫描为空串；生成使用全量或增量"},"progress":{"$ref":"#/components/schemas/ScanProgress"},"result":{"type":"object","nullable":true,"description":"已执行部分的结果；尚无结果为 null","additionalProperties":true},"error":{"type":"string","description":"脱敏错误或中断说明，无错误为空串"},"created_at":{"type":"string","format":"date-time","description":"任务创建时间，UTC RFC3339"},"updated_at":{"type":"string","format":"date-time","description":"最后快照更新时间，UTC RFC3339；活动进度最多每 250ms 落库一次，阶段与控制状态立即落库"},"can_retry":{"type":"boolean","description":"是否允许继续失败、停止、中断或部分失败的当前任务；旧任务缺少断点时为 false"}}}
     ScanProgress:
       type: object
       description: 当前任务的动态文件处理进度；总数为已发现且符合过滤规则的媒体文件数，扫描时持续增加。仅 result 事件表示操作已返回结果，百分比 100 不代表全部成功。

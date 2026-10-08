@@ -56,12 +56,19 @@ func (s *Pan115LibraryService) Scan(ctx context.Context) (domain.Pan115LibrarySc
 	if err != nil {
 		return domain.Pan115LibraryScanResult{}, fmt.Errorf("读取扫描目录配置失败: %w", err)
 	}
-	directories, err := parsePan115ScanPaths(values[pan115ScanPathsSettingKey])
+	raw := values[pan115ScanPathsSettingKey]
+	if _, err := loadTaskCheckpoint(ctx, journalKey("input", "library-settings"), &raw); err != nil {
+		return domain.Pan115LibraryScanResult{}, err
+	}
+	directories, err := parsePan115ScanPaths(raw)
 	if err != nil {
 		return domain.Pan115LibraryScanResult{}, fmt.Errorf("%w: %s %s", ErrInvalidSetting, pan115ScanPathsSettingKey, err)
 	}
 	if len(directories) == 0 {
 		return domain.Pan115LibraryScanResult{}, ErrPan115ScanNotConfigured
+	}
+	if err := taskInput(ctx, "library-settings", &raw); err != nil {
+		return domain.Pan115LibraryScanResult{}, err
 	}
 	if s.pan115 == nil {
 		return domain.Pan115LibraryScanResult{}, fmt.Errorf("%w: 115 网盘服务尚未就绪", ErrPan115NotLinked)
@@ -110,7 +117,9 @@ func (s *Pan115LibraryService) Scan(ctx context.Context) (domain.Pan115LibrarySc
 func (s *Pan115LibraryService) scanDirectory(ctx context.Context, directory pan115ScanPath, walk strmWalk, advance func()) domain.Pan115LibraryDirectoryResult {
 	entry := domain.Pan115LibraryDirectoryResult{ID: directory.ID, Path: directory.Path}
 	seen := make(map[string]bool)
+	committed := make(map[string]bool)
 	pending := make([]ports.LibraryMediaItem, 0, libraryMarkBatchSize)
+	pendingFiles := make([]strmSourceFile, 0, libraryMarkBatchSize)
 	flush := func() error {
 		if len(pending) == 0 {
 			return nil
@@ -120,6 +129,15 @@ func (s *Pan115LibraryService) scanDirectory(ctx context.Context, directory pan1
 			return fmt.Errorf("写入媒体库失败：%w", err)
 		}
 		entry.Created += created
+		for _, item := range pending {
+			committed[item.Code] = true
+		}
+		for _, file := range pendingFiles {
+			if err := completeTaskUnit(ctx, "library-file", directory.ID, file.Directory, file.ID); err != nil {
+				return err
+			}
+		}
+		pendingFiles = pendingFiles[:0]
 		pending = pending[:0]
 		return nil
 	}
@@ -128,13 +146,30 @@ func (s *Pan115LibraryService) scanDirectory(ctx context.Context, directory pan1
 			return err
 		}
 		entry.Files++
-		code := domain.ExtractCode(file.Name)
-		if code == "" {
+		done, err := taskUnitDone(ctx, "library-file", directory.ID, file.Directory, file.ID)
+		if err != nil {
+			return err
+		}
+		if done {
+			if code := domain.ExtractCode(file.Name); code != "" {
+				seen[code], committed[code] = true, true
+			}
 			entry.Skipped++
 			advance()
 			return nil
 		}
+		code := domain.ExtractCode(file.Name)
+		if code == "" {
+			entry.Skipped++
+			advance()
+			return completeTaskUnit(ctx, "library-file", directory.ID, file.Directory, file.ID)
+		}
 		if seen[code] {
+			if committed[code] {
+				advance()
+				return completeTaskUnit(ctx, "library-file", directory.ID, file.Directory, file.ID)
+			}
+			pendingFiles = append(pendingFiles, file)
 			advance()
 			return nil
 		}
@@ -146,6 +181,7 @@ func (s *Pan115LibraryService) scanDirectory(ctx context.Context, directory pan1
 			Title:     title,
 			VideoType: domain.ClassifyVideoType(code, title, nil),
 		})
+		pendingFiles = append(pendingFiles, file)
 		entry.Matched++
 		advance()
 		if len(pending) >= libraryMarkBatchSize {

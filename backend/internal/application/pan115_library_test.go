@@ -64,6 +64,41 @@ func libraryScanSettings(values map[string]string) func(context.Context) (map[st
 	return func(context.Context) (map[string]string, error) { return values, nil }
 }
 
+// TestLibraryRetryCommitsOnlyPendingBatch verifies failed traversal never loses an uncommitted tail.
+func TestLibraryRetryCommitsOnlyPendingBatch(t *testing.T) {
+	source := &libraryScanPan115Stub{files: map[string][]domain.Pan115File{"root": append(libraryScanVideoFiles("SSIS", 105), domain.Pan115File{ID: "child", Name: "child", IsDirectory: true})}}
+	writer := &libraryScanWriterStub{}
+	service := newLibraryScanService(t, source, writer, map[string]string{pan115ScanPathsSettingKey: `[{"id":"root","path":"/movies"}]`})
+	ctx := journalContext(context.Background(), &taskJournal{id: "library"})
+	result, err := service.Scan(ctx)
+	if err != nil || !scanResultFailed(result) || len(writer.batches) != 1 || len(writer.batches[0]) != 100 {
+		t.Fatalf("%+v %v batches=%v", result, err, writer.batches)
+	}
+	source.files["child"] = libraryScanVideoFiles("IPX", 1)
+	result, err = service.Scan(ctx)
+	if err != nil || scanResultFailed(result) || len(writer.batches) != 2 || len(writer.batches[1]) != 6 {
+		t.Fatalf("%+v %v batches=%v", result, err, writer.batches)
+	}
+	if len(source.calls) != 3 || source.calls[2].directoryID != "child" {
+		t.Fatalf("relisted completed page: %+v", source.calls)
+	}
+}
+
+// TestLibraryRetryDeduplicatesCommittedCode covers duplicate files after a full committed batch.
+func TestLibraryRetryDeduplicatesCommittedCode(t *testing.T) {
+	files := append(libraryScanVideoFiles("SSIS", 100), domain.Pan115File{ID: "duplicate", Name: "SSIS-00001.part2.mkv"})
+	source := &libraryScanPan115Stub{files: map[string][]domain.Pan115File{"root": files}}
+	writer := &libraryScanWriterStub{}
+	service := newLibraryScanService(t, source, writer, map[string]string{pan115ScanPathsSettingKey: `[{"id":"root","path":"/movies"}]`})
+	ctx := journalContext(context.Background(), &taskJournal{id: "duplicates"})
+	for attempt := 0; attempt < 2; attempt++ {
+		result, err := service.Scan(ctx)
+		if err != nil || scanResultFailed(result) || len(writer.batches) != 1 {
+			t.Fatalf("attempt=%d result=%+v err=%v batches=%v", attempt, result, err, writer.batches)
+		}
+	}
+}
+
 // libraryScanVideoFiles 生成 count 个可识别番号的视频文件；编号用 5 位，避免与分辨率标记冲突。
 func libraryScanVideoFiles(prefix string, count int) []domain.Pan115File {
 	files := make([]domain.Pan115File, 0, count)

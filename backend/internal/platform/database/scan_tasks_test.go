@@ -3,6 +3,7 @@ package database
 import (
 	"bytemuse/backend/internal/domain"
 	"context"
+	"fmt"
 	"path/filepath"
 	"testing"
 )
@@ -58,5 +59,60 @@ func TestScanTasksPersistAndRecover(t *testing.T) {
 	other, err := repo.Latest(ctx, "strm")
 	if err != nil || other != nil {
 		t.Fatalf("independent kind: %+v %v", other, err)
+	}
+}
+
+// TestCheckpointMigration covers fresh databases, version 39 upgrades and idempotent updates.
+func TestCheckpointMigration(t *testing.T) {
+	for _, upgrade := range []bool{false, true} {
+		t.Run(fmt.Sprint(upgrade), func(t *testing.T) {
+			ctx := context.Background()
+			store, err := Open(ctx, Config{Dialect: DialectSQLite, SQLitePath: filepath.Join(t.TempDir(), "checkpoints.db")})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer store.Close()
+			if upgrade {
+				if err := ensureMigrationTable(ctx, store.SQLDB(), DialectSQLite); err != nil {
+					t.Fatal(err)
+				}
+				for _, migration := range MigrationPlan(DialectSQLite) {
+					if migration.Version < 40 {
+						if err := applyMigration(ctx, store.SQLDB(), DialectSQLite, migration); err != nil {
+							t.Fatal(err)
+						}
+					}
+				}
+			}
+			if err := store.Migrate(ctx); err != nil {
+				t.Fatal(err)
+			}
+			repo := NewScanTaskRepository(store.SQLDB(), DialectSQLite)
+			if raw, err := repo.LoadCheckpoint(ctx, "task", "key"); err != nil || raw != nil {
+				t.Fatalf("%s %v", raw, err)
+			}
+			for _, value := range []string{`false`, `true`} {
+				if err := repo.SaveCheckpoint(ctx, "task", "key", []byte(value)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := store.Migrate(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if raw, err := repo.LoadCheckpoint(ctx, "task", "key"); err != nil || string(raw) != "true" {
+				t.Fatalf("%s %v", raw, err)
+			}
+			task := domain.ScanTask{ID: "task", Kind: "strm", State: "running"}
+			if err := repo.Save(ctx, task); err != nil {
+				t.Fatal(err)
+			}
+			if err := repo.Interrupt(ctx); err != nil {
+				t.Fatal(err)
+			}
+			restored, err := repo.Latest(ctx, "strm")
+			if err != nil || !restored.CanRetry || restored.State != "interrupted" {
+				t.Fatalf("%+v %v", restored, err)
+			}
+		})
 	}
 }

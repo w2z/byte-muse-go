@@ -15,6 +15,7 @@ import (
 
 	"bytemuse/backend/internal/domain"
 	"bytemuse/backend/internal/logging"
+	"bytemuse/backend/internal/ports"
 )
 
 // EmbyMediaTask 是 STRM 媒体信息预热任务的可观测快照。
@@ -29,6 +30,7 @@ type EmbyMediaTask struct {
 	Failed    int       `json:"failed"`
 	Error     string    `json:"error"`
 	UpdatedAt time.Time `json:"updated_at"`
+	CanRetry  bool      `json:"can_retry"`
 }
 
 // EmbyMediaService 先快速扫描 STRM 媒体，再以默认并发数刷新缺失信息；重复触发合并为下一轮。
@@ -40,6 +42,11 @@ type EmbyMediaService struct {
 	pending  bool
 	cancel   context.CancelFunc
 	wake     chan struct{}
+	repo     ports.TaskCheckpointRepository
+	journal  *taskJournal
+	saveErr  error
+	wg       sync.WaitGroup
+	closed   bool
 }
 
 const embyMediaPageSize = 200
@@ -49,6 +56,40 @@ const embyMediaWorkers = 10
 
 func NewEmbyMediaService(settings func(context.Context) (map[string]string, error)) *EmbyMediaService {
 	return &EmbyMediaService{settings: settings, http: &http.Client{Timeout: 2 * time.Minute}}
+}
+
+// Restore loads the last media refresh and marks an abandoned worker interrupted.
+func (s *EmbyMediaService) Restore(ctx context.Context, repo ports.TaskCheckpointRepository) error {
+	s.repo = repo
+	index := &taskJournal{repo: repo, id: "emby-latest"}
+	var task EmbyMediaTask
+	found, err := index.load(ctx, journalKey("snapshot"), &task)
+	if err != nil || !found {
+		return err
+	}
+	s.task = &task
+	s.journal = &taskJournal{repo: repo, id: task.ID}
+	if task.State == "running" || task.State == "queued" || task.State == "paused" || task.State == "pausing" || task.State == "canceling" {
+		s.task.State, s.task.CanRetry = "interrupted", true
+	}
+	return s.persistLocked()
+}
+
+func (s *EmbyMediaService) persistLocked() error {
+	if s.repo == nil || s.task == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	index := &taskJournal{repo: s.repo, id: "emby-latest"}
+	err := index.save(ctx, journalKey("snapshot"), s.task)
+	if err != nil {
+		s.saveErr = err
+		if s.cancel != nil {
+			s.cancel()
+		}
+	}
+	return err
 }
 
 func (s *EmbyMediaService) Snapshot() *EmbyMediaTask {
@@ -64,6 +105,10 @@ func (s *EmbyMediaService) Snapshot() *EmbyMediaTask {
 // Enqueue 请求异步刷新；已有任务运行时只合并一次后续请求。
 func (s *EmbyMediaService) Enqueue(ctx context.Context) (*EmbyMediaTask, bool, error) {
 	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return nil, false, context.Canceled
+	}
 	if s.task != nil && (s.task.State == "queued" || s.task.State == "running" || s.task.State == "pausing" || s.task.State == "paused" || s.task.State == "canceling") {
 		s.pending = true
 		cp := *s.task
@@ -72,13 +117,23 @@ func (s *EmbyMediaService) Enqueue(ctx context.Context) (*EmbyMediaTask, bool, e
 	}
 	id := fmt.Sprintf("emby-%d", time.Now().UnixNano())
 	s.task = &EmbyMediaTask{ID: id, State: "queued", UpdatedAt: time.Now().UTC()}
+	s.journal = &taskJournal{repo: s.repo, id: id}
+	s.saveErr = nil
 	workerCtx, cancel := context.WithCancel(context.Background())
 	s.cancel = cancel
 	s.wake = make(chan struct{})
+	if err := s.persistLocked(); err != nil {
+		cancel()
+		s.task.State, s.task.CanRetry = "failed", true
+		s.task.Error = "保存任务快照失败，请检查数据库"
+		s.mu.Unlock()
+		return nil, false, err
+	}
 	cp := *s.task
+	s.wg.Add(1)
 	s.mu.Unlock()
 	logging.Info(logging.CategoryStrmMedia, "刷新 STRM 视频信息任务已加入队列", "task_id", id, "queued", true)
-	go s.run(workerCtx, id)
+	go func() { defer s.wg.Done(); s.run(workerCtx, id) }()
 	return &cp, true, nil
 }
 
@@ -93,6 +148,10 @@ func (s *EmbyMediaService) run(ctx context.Context, id string) {
 	}
 	s.task.Phase = "scanning"
 	s.task.UpdatedAt = time.Now().UTC()
+	if s.journal == nil {
+		s.journal = &taskJournal{repo: s.repo, id: id}
+	}
+	ctx = journalContext(ctx, s.journal)
 	s.mu.Unlock()
 	logging.Info(logging.CategoryStrmMedia, "刷新 STRM 视频信息开始扫描媒体库", "task_id", id)
 	if checkpointErr := s.checkpoint(ctx, id); checkpointErr != nil {
@@ -105,9 +164,17 @@ func (s *EmbyMediaService) run(ctx context.Context, id string) {
 		return
 	}
 	base := strings.TrimRight(strings.TrimSpace(values["EMBY_URL"]), "/")
+	if _, err := loadTaskCheckpoint(ctx, journalKey("input", "emby-base"), &base); err != nil {
+		s.finish(id, err)
+		return
+	}
 	key := strings.TrimSpace(values["EMBY_API_KEY"])
 	if base == "" || key == "" {
 		s.finish(id, fmt.Errorf("未配置 Emby 地址或密钥"))
+		return
+	}
+	if err := taskInput(ctx, "emby-base", &base); err != nil {
+		s.finish(id, err)
 		return
 	}
 	items, err := s.list(ctx, id, base, key)
@@ -137,7 +204,20 @@ func (s *EmbyMediaService) run(ctx context.Context, id string) {
 					return
 				}
 				attrs := item.logAttrs(id)
+				done, doneErr := taskUnitDone(ctx, "emby-item", item.ID)
+				if doneErr != nil {
+					s.failWorker(doneErr)
+					return
+				}
+				if done {
+					s.updateTask(func(task *EmbyMediaTask) { task.Skipped++; task.Processed++ })
+					continue
+				}
 				if !item.NeedsRefresh {
+					if err := completeTaskUnit(ctx, "emby-item", item.ID); err != nil {
+						s.failWorker(err)
+						return
+					}
 					s.updateTask(func(task *EmbyMediaTask) { task.Skipped++; task.Processed++ })
 					logging.Info(logging.CategoryStrmMedia, "跳过 STRM 视频信息刷新", append(attrs, "reason", "已有媒体流和时长信息")...)
 					continue
@@ -151,6 +231,10 @@ func (s *EmbyMediaService) run(ctx context.Context, id string) {
 					s.updateTask(func(task *EmbyMediaTask) { task.Failed++; task.Error = probeErr.Error(); task.Processed++ })
 					logging.Error(logging.CategoryStrmMedia, "STRM 视频信息刷新失败", append(attrs, "error", probeErr.Error())...)
 				} else {
+					if err := completeTaskUnit(ctx, "emby-item", item.ID); err != nil {
+						s.failWorker(err)
+						return
+					}
 					s.updateTask(func(task *EmbyMediaTask) { task.Success++; task.Processed++ })
 					logging.Info(logging.CategoryStrmMedia, "STRM 视频信息刷新请求完成", attrs...)
 				}
@@ -172,16 +256,23 @@ sendItems:
 	workers.Wait()
 	s.mu.Lock()
 	state := s.task.State
-	if state == "canceling" || ctx.Err() != nil {
+	if s.saveErr != nil || state == "failed" {
+		state = "failed"
+		s.task.Error = "保存任务断点失败，请检查数据库"
+	} else if state == "canceling" || ctx.Err() != nil {
 		state = "canceled"
 	} else {
 		state = "completed"
 	}
 	s.task.State = state
+	s.task.CanRetry = state != "completed" || s.task.Failed > 0
 	s.task.UpdatedAt = time.Now().UTC()
-	again := state != "canceled" && s.pending
+	again := !s.closed && state == "completed" && !s.task.CanRetry && s.pending
 	s.pending = false
 	if again {
+		s.wg.Add(1)
+		s.task.ID = fmt.Sprintf("emby-%d", time.Now().UnixNano())
+		s.journal = &taskJournal{repo: s.repo, id: s.task.ID}
 		s.task.State = "queued"
 		s.task.Phase = ""
 		s.task.Processed, s.task.Total, s.task.Success, s.task.Skipped, s.task.Failed = 0, 0, 0, 0, 0
@@ -192,10 +283,11 @@ sendItems:
 		ctx = workerCtx
 	}
 	next := s.task.ID
+	_ = s.persistLocked()
 	total, success, skipped, failed := s.task.Total, s.task.Success, s.task.Skipped, s.task.Failed
 	s.mu.Unlock()
 	if again {
-		go s.run(ctx, next)
+		go func() { defer s.wg.Done(); s.run(ctx, next) }()
 	}
 	if !again && state == "completed" {
 		logging.Info(logging.CategoryStrmMedia, "刷新 STRM 视频信息任务已完成", "task_id", id, "total", total, "success", success, "skipped", skipped, "failed", failed)
@@ -204,10 +296,43 @@ sendItems:
 	}
 }
 
-// Control pauses, resumes, or stops an active media refresh task at safe item boundaries.
+// Close stops the owned worker before its checkpoint repository is closed.
+func (s *EmbyMediaService) Close() {
+	s.mu.Lock()
+	s.closed = true
+	if s.cancel != nil {
+		s.cancel()
+	}
+	s.mu.Unlock()
+	s.wg.Wait()
+}
+
+// Control manages active tasks and retries terminal tasks using their original journal.
 func (s *EmbyMediaService) Control(id, action string) (*EmbyMediaTask, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if action == "retry" {
+		if s.closed || s.task == nil || s.task.ID != id || !s.task.CanRetry {
+			return nil, ErrScanTaskConflict
+		}
+		s.task.State, s.task.Error, s.task.CanRetry = "queued", "", false
+		s.task.UpdatedAt = time.Now().UTC()
+		s.task.Processed, s.task.Total, s.task.Success, s.task.Skipped, s.task.Failed = 0, 0, 0, 0, 0
+		s.pending, s.saveErr = false, nil
+		ctx, cancel := context.WithCancel(context.Background())
+		s.cancel = cancel
+		s.wake = make(chan struct{})
+		if err := s.persistLocked(); err != nil {
+			cancel()
+			s.task.State, s.task.CanRetry = "failed", true
+			s.task.Error = "保存任务快照失败，请检查数据库"
+			return nil, err
+		}
+		copy := *s.task
+		s.wg.Add(1)
+		go func() { defer s.wg.Done(); s.run(ctx, id) }()
+		return &copy, nil
+	}
 	if s.task == nil || s.task.ID != id || (s.task.State != "queued" && s.task.State != "running" && s.task.State != "pausing" && s.task.State != "paused" && s.task.State != "canceling") {
 		return nil, ErrScanTaskConflict
 	}
@@ -239,6 +364,9 @@ func (s *EmbyMediaService) Control(id, action string) (*EmbyMediaTask, error) {
 	}
 	s.task.UpdatedAt = time.Now().UTC()
 	cp := *s.task
+	if err := s.persistLocked(); err != nil {
+		return nil, err
+	}
 	logging.Info(logging.CategoryStrmMedia, "刷新 STRM 视频信息任务控制", "task_id", id, "action", action, "state", cp.State)
 	return &cp, nil
 }
@@ -282,10 +410,27 @@ func (s *EmbyMediaService) updateTask(update func(*EmbyMediaTask)) {
 	}
 	update(s.task)
 	s.task.UpdatedAt = time.Now().UTC()
+	_ = s.persistLocked()
+}
+
+// failWorker cancels sibling workers; only the coordinator publishes the terminal state.
+func (s *EmbyMediaService) failWorker(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.saveErr = err
+	if s.cancel != nil {
+		s.cancel()
+	}
 }
 func (s *EmbyMediaService) finish(id string, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	defer func() {
+		if s.task != nil && s.task.ID == id {
+			s.task.CanRetry = true
+			_ = s.persistLocked()
+		}
+	}()
 	if s.task != nil && s.task.ID == id {
 		if errors.Is(err, context.Canceled) || s.task.State == "canceling" {
 			s.task.State = "canceled"
@@ -308,8 +453,10 @@ func (s *EmbyMediaService) finishCanceled(id string) {
 		return
 	}
 	s.task.State = "canceled"
+	s.task.CanRetry = true
 	s.task.Error = ""
 	s.task.UpdatedAt = time.Now().UTC()
+	_ = s.persistLocked()
 	logging.Info(logging.CategoryStrmMedia, "刷新 STRM 视频信息任务已取消", "task_id", id, "processed", s.task.Processed, "total", s.task.Total)
 }
 
@@ -321,7 +468,7 @@ type embyItem struct {
 		Path         string            `json:"Path"`
 		MediaStreams []json.RawMessage `json:"MediaStreams"`
 		RunTimeTicks int64             `json:"RunTimeTicks"`
-	} `json:"MediaSources"`
+	} `json:"MediaSources,omitempty"`
 }
 
 // logAttrs 用文件名识别单个视频，复用番号规则；兼容 Emby 返回的 Windows/Linux 路径，
@@ -348,41 +495,58 @@ func (s *EmbyMediaService) streamItems(ctx context.Context, id, base, key string
 		if err := s.checkpoint(ctx, id); err != nil {
 			return err
 		}
-		u := base + "/emby/Items?Recursive=true&IncludeItemTypes=Movie,Episode&Fields=Path,MediaSources&Limit=" + fmt.Sprint(embyMediaPageSize) + "&StartIndex=" + fmt.Sprint(start) + "&api_key=" + url.QueryEscape(key)
-		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
-		res, err := s.http.Do(req)
-		if err != nil {
-			return fmt.Errorf("获取 Emby 媒体列表失败: %w", err)
-		}
-		if res.StatusCode/100 != 2 {
-			res.Body.Close()
-			return fmt.Errorf("Emby 媒体列表返回状态码 %d", res.StatusCode)
-		}
 		var body struct {
 			Items            []embyItem `json:"Items"`
 			TotalRecordCount int        `json:"TotalRecordCount"`
 		}
-		err = json.NewDecoder(res.Body).Decode(&body)
-		res.Body.Close()
+		pageKey := journalKey("emby-page", fmt.Sprint(start))
+		found, err := loadTaskCheckpoint(ctx, pageKey, &body)
 		if err != nil {
-			return fmt.Errorf("解析 Emby 媒体列表失败")
+			return err
 		}
-		for _, it := range body.Items {
-			itemPath := it.Path
-			if itemPath == "" && len(it.MediaSources) > 0 {
-				itemPath = it.MediaSources[0].Path
+		if !found {
+			u := base + "/emby/Items?Recursive=true&IncludeItemTypes=Movie,Episode&Fields=Path,MediaSources&Limit=" + fmt.Sprint(embyMediaPageSize) + "&StartIndex=" + fmt.Sprint(start) + "&api_key=" + url.QueryEscape(key)
+			req, _ := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+			res, err := s.http.Do(req)
+			if err != nil {
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				return fmt.Errorf("获取 Emby 媒体列表失败，请检查服务连接")
 			}
-			if strings.ToLower(filepath.Ext(itemPath)) != ".strm" || it.ID == "" {
-				continue
+			if res.StatusCode/100 != 2 {
+				res.Body.Close()
+				return fmt.Errorf("Emby 媒体列表返回状态码 %d", res.StatusCode)
 			}
-			missing := len(it.MediaSources) == 0
-			for _, src := range it.MediaSources {
-				if len(src.MediaStreams) == 0 || src.RunTimeTicks == 0 {
-					missing = true
+			err = json.NewDecoder(res.Body).Decode(&body)
+			res.Body.Close()
+			if err != nil {
+				return fmt.Errorf("解析 Emby 媒体列表失败")
+			}
+			for index, item := range body.Items {
+				itemPath := item.Path
+				if itemPath == "" && len(item.MediaSources) > 0 {
+					itemPath = item.MediaSources[0].Path
+				}
+				missing := len(item.MediaSources) == 0
+				for _, source := range item.MediaSources {
+					if len(source.MediaStreams) == 0 || source.RunTimeTicks == 0 {
+						missing = true
+					}
+				}
+				body.Items[index] = embyItem{}
+				if strings.EqualFold(filepath.Ext(itemPath), ".strm") {
+					body.Items[index] = embyItem{ID: item.ID, Path: path.Base(strings.ReplaceAll(itemPath, "\\", "/")), NeedsRefresh: missing}
 				}
 			}
-			it.NeedsRefresh = missing
-			it.Path = itemPath
+			if err = saveTaskCheckpoint(ctx, pageKey, body); err != nil {
+				return err
+			}
+		}
+		for _, it := range body.Items {
+			if it.ID == "" {
+				continue
+			}
 			onItem(it)
 		}
 		if len(body.Items) == 0 || (body.TotalRecordCount > 0 && start+len(body.Items) >= body.TotalRecordCount) || (body.TotalRecordCount == 0 && len(body.Items) < embyMediaPageSize) {

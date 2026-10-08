@@ -74,29 +74,37 @@ type SettingGroup = {
 type SettingCategory = { code: string; title: string; groupCodes: string[] };
 type SettingsUpdate = { values: Record<string, string> };
 const TabPane = Tabs.TabPane;
-type EmbyMediaTask = { id: string; state: "queued" | "running" | "pausing" | "paused" | "canceling" | "canceled" | "completed" | "failed"; phase?: "scanning" | "refreshing"; processed: number; total: number; success: number; skipped: number; failed: number; error?: string };
+type EmbyMediaTask = { id: string; state: "queued" | "running" | "pausing" | "paused" | "canceling" | "canceled" | "completed" | "failed" | "interrupted"; phase?: "scanning" | "refreshing"; processed: number; total: number; success: number; skipped: number; failed: number; error?: string; can_retry?: boolean };
+/** 刷新任务的状态与续跑资格由服务端提供；续跑复用原任务断点。 */
 function EmbyMediaInfoAction() {
   const client = useQueryClient();
-  const query = useQuery({ queryKey: ["emby-media-task"], queryFn: () => apiRequest<EmbyMediaTask | null>("/strm/emby/media-info/task"), refetchInterval: 1000 });
+  const query = useQuery({ queryKey: ["emby-media-task"], queryFn: ({ signal }) => apiRequest<EmbyMediaTask | null>("/strm/emby/media-info/task", { signal }), refetchInterval: 1000 });
   const task = query.data;
-  const refresh = useMutation({ mutationFn: () => apiRequest<{ task: EmbyMediaTask }>("/strm/emby/media-info/refresh", { method: "POST", headers: { Prefer: "respond-async" } }), onSuccess: (result) => client.setQueryData(["emby-media-task"], result.task) });
-  const control = useMutation({ mutationFn: (action: "pause" | "resume" | "cancel") => {
+  const update = async (next: EmbyMediaTask) => {
+    await client.cancelQueries({ queryKey: ["emby-media-task"] });
+    client.setQueryData(["emby-media-task"], next);
+  };
+  const refresh = useMutation({ mutationFn: () => apiRequest<{ task: EmbyMediaTask }>("/strm/emby/media-info/refresh", { method: "POST", headers: { Prefer: "respond-async" } }), onSuccess: (result) => update(result.task) });
+  const control = useMutation({ mutationFn: (action: "pause" | "resume" | "cancel" | "retry") => {
     if (!task) throw new Error("任务尚未加载");
     return apiRequest<EmbyMediaTask>(`/strm/emby/media-info/tasks/${task.id}/control`, { method: "POST", body: JSON.stringify({ action }) });
-  }, onSuccess: (next) => client.setQueryData(["emby-media-task"], next) });
+  }, onSuccess: update });
   const active = task?.state === "queued" || task?.state === "running" || task?.state === "pausing" || task?.state === "paused" || task?.state === "canceling";
   const percent = task?.phase === "scanning" ? 0 : task && task.total > 0
     ? Math.min(100, Math.round((task.processed / task.total) * 100))
     : task?.state === "completed" ? 100 : 0;
   return (
     <div className="settings-strm-generate">
-      <Button type="secondary" loading={refresh.isPending} disabled={refresh.isPending || active} onClick={() => refresh.mutate()}>
+      <div className="settings-strm-scan">
+      <Button type="secondary" loading={refresh.isPending} disabled={refresh.isPending || control.isPending || active} onClick={() => refresh.mutate()}>
         立即刷新strm 媒体库信息
       </Button>
+      {!active && task?.can_retry ? <Button status="danger" loading={control.isPending} disabled={control.isPending || refresh.isPending} onClick={() => control.mutate("retry")}>继续失败的任务</Button> : null}
       {active ? <span className="settings-strm-generate-actions">
         <Button disabled={control.isPending || task?.state === "pausing" || task?.state === "canceling"} onClick={() => control.mutate(task?.state === "paused" ? "resume" : "pause")}>{task?.state === "paused" ? "继续" : "暂停"}</Button>
         <Button status="danger" disabled={control.isPending || task?.state === "canceling"} onClick={() => control.mutate("cancel")}>停止</Button>
       </span> : null}
+      </div>
       {active ? (
         <div className="settings-scan-progress" aria-label="STRM 媒体信息预热进度">
           <Progress percent={percent} animation={task?.state === "running"} formatText={(value) => `${value}% - ${task?.processed ?? 0}/${task?.total ?? 0}`} />

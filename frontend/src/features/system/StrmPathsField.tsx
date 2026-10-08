@@ -527,7 +527,7 @@ export function StrmPathsField({
 export function StrmGenerateAction({ value }: { value: StrmMapping[] }) {
   const incomplete = countIncompleteMappings(value);
   const duplicateLocalPaths = countDuplicateLocalPaths(value);
-  const { scan, progress, task, control, unavailable, queryError } = useScanProgress<StrmScanResult, StrmGenerateMode>((mode) => `/strm/scan?incremental=${mode === "incremental"}`);
+  const { scan, progress, task, control, controlsPending, unavailable, queryError } = useScanProgress<StrmScanResult, StrmGenerateMode>((mode) => `/strm/scan?incremental=${mode === "incremental"}`);
   const failedMappings = scan.data?.mappings.filter((item) => item.message !== "") ?? [];
   const disabled = scan.isPending || unavailable || value.length === 0 || incomplete > 0 || duplicateLocalPaths > 0;
   const incremental = scan.variables === "incremental";
@@ -551,9 +551,9 @@ export function StrmGenerateAction({ value }: { value: StrmMapping[] }) {
         >
           全量生成 strm
         </Button>
-        <ScanTaskControls task={task} pending={control.isPending} onAction={control.mutate} error={control.error ?? queryError} />
+        <ScanTaskControls task={task} pending={controlsPending} onAction={control.mutate} error={control.error ?? queryError} />
       </div>
-      <ScanProgressDisplay state={task?.state} label="生成" processingText="生成中，边扫描边写入" progress={progress} />
+      <ScanProgressDisplay state={task?.state} canRetry={task?.can_retry} label="生成" processingText="生成中，边扫描边写入" progress={progress} />
       {scan.isError ? (
         <span className="settings-field-description">生成失败：{scan.error.message}</span>
       ) : scan.data ? (

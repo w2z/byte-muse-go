@@ -27,13 +27,15 @@ type scanExecution struct {
 // ScanTasks 管理单实例内两类独立后台任务；请求断开不取消任务。
 // 暂停在安全处理点确认；服务退出保留快照并标为中断，不自动重放业务副作用。
 type ScanTasks struct {
-	mu     sync.Mutex
-	repo   ports.ScanTaskRepository
-	ctx    context.Context
-	cancel context.CancelFunc
-	active map[string]*scanExecution
-	wg     sync.WaitGroup
-	closed bool
+	mu       sync.Mutex
+	repo     ports.ScanTaskRepository
+	ctx      context.Context
+	cancel   context.CancelFunc
+	active   map[string]*scanExecution
+	wg       sync.WaitGroup
+	closed   bool
+	runners  map[string]func(context.Context, string) (any, error)
+	journals map[string]*taskJournal
 }
 
 // NewScanTasks 恢复上次运行遗留状态；必须在启动 HTTP 之前且每个服务进程仅调用一次。
@@ -63,6 +65,20 @@ func (s *ScanTasks) save(e *scanExecution) error {
 
 // Start 先提交任务快照再启动工作；同类活动任务拒绝重复提交，不同类型互不阻塞。
 func (s *ScanTasks) Start(ctx context.Context, kind, mode string, run func(context.Context) (any, error)) (*domain.ScanTask, error) {
+	return s.start(ctx, kind, mode, "", run)
+}
+
+// RegisterRunner binds a task kind to its restart-safe service entry point.
+func (s *ScanTasks) RegisterRunner(kind string, run func(context.Context, string) (any, error)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.runners == nil {
+		s.runners = map[string]func(context.Context, string) (any, error){}
+	}
+	s.runners[kind] = run
+}
+
+func (s *ScanTasks) start(ctx context.Context, kind, mode, retryID string, run func(context.Context) (any, error)) (*domain.ScanTask, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed || s.ctx.Err() != nil {
@@ -85,6 +101,30 @@ func (s *ScanTasks) Start(ctx context.Context, kind, mode string, run func(conte
 	}
 	workerCtx, cancel := context.WithCancel(s.ctx)
 	e := &scanExecution{task: domain.ScanTask{ID: hex.EncodeToString(id[:]), Kind: kind, Mode: mode, State: "running", Progress: domain.ScanProgress{Phase: "waiting"}, CreatedAt: time.Now().UTC().Format("2006-01-02T15:04:05.000000000Z")}, cancel: cancel, wake: make(chan struct{})}
+	if retryID != "" {
+		if latest == nil || latest.ID != retryID || !latest.CanRetry || s.runners[kind] == nil {
+			cancel()
+			return nil, ErrScanTaskConflict
+		}
+		e.task = *latest
+		e.task.State, e.task.Error, e.task.CanRetry = "running", "", false
+		runner := s.runners[kind]
+		run = func(ctx context.Context) (any, error) { return runner(ctx, e.task.Mode) }
+	}
+	if s.journals == nil {
+		s.journals = map[string]*taskJournal{}
+	}
+	journal := s.journals[e.task.ID]
+	if journal == nil {
+		repo, _ := s.repo.(ports.TaskCheckpointRepository)
+		journal = &taskJournal{repo: repo, id: e.task.ID}
+		s.journals[e.task.ID] = journal
+	}
+	workerCtx = journalContext(workerCtx, journal)
+	if err := completeTaskUnit(workerCtx, "initialized"); err != nil {
+		cancel()
+		return nil, err
+	}
 	if err := s.save(e); err != nil {
 		cancel()
 		return nil, err
@@ -117,15 +157,16 @@ func (s *ScanTasks) Start(ctx context.Context, kind, mode string, run func(conte
 			e.task.State = "canceled"
 		case s.ctx.Err() != nil:
 			e.task.State = "interrupted"
-			e.task.Error = "服务停止，任务已中断，请重新启动"
+			e.task.Error = "服务停止，任务已中断，可继续失败的任务"
 		case err != nil:
 			e.task.State = "failed"
 			e.task.Error = "任务执行失败，请检查目录配置和服务状态"
 		default:
 			e.task.State = "completed"
 			e.task.Progress.Percent = 100
-			e.task.Result, _ = json.Marshal(result)
 		}
+		e.task.Result, _ = json.Marshal(result)
+		e.task.CanRetry = e.task.State != "completed" || scanResultFailed(result)
 		_ = s.save(e)
 		attrs := []any{"task_id", e.task.ID, "mode", mode, "state", e.task.State, "processed", e.task.Progress.Processed, "total", e.task.Progress.Total}
 		if e.task.Error != "" {
@@ -137,6 +178,9 @@ func (s *ScanTasks) Start(ctx context.Context, kind, mode string, run func(conte
 			logging.Error(scanTaskCategory(kind), scanTaskName(kind)+" 任务未完成", attrs...)
 		}
 		delete(s.active, kind)
+		if journal.repo != nil {
+			delete(s.journals, e.task.ID)
+		}
 	}()
 	return &initial, nil
 }
@@ -173,6 +217,9 @@ func (s *ScanTasks) Get(ctx context.Context, id string) (*domain.ScanTask, error
 
 // Control 校验任务 ID 防止旧页面误操作新任务；重复暂停或取消具有幂等性。
 func (s *ScanTasks) Control(ctx context.Context, kind, id, action string) (*domain.ScanTask, error) {
+	if action == "retry" {
+		return s.start(ctx, kind, "", id, nil)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	e := s.active[kind]
@@ -206,6 +253,28 @@ func (s *ScanTasks) Control(ctx context.Context, kind, id, action string) (*doma
 	}
 	task := e.task
 	return &task, nil
+}
+
+// scanResultFailed includes isolated directory, download and final refresh failures.
+func scanResultFailed(result any) bool {
+	switch value := result.(type) {
+	case domain.StrmScanResult:
+		if value.Failed > 0 || value.DownloadFailed > 0 || (value.Emby.Attempted && !value.Emby.Refreshed) {
+			return true
+		}
+		for _, entry := range value.Mappings {
+			if entry.Message != "" {
+				return true
+			}
+		}
+	case domain.Pan115LibraryScanResult:
+		for _, entry := range value.Directories {
+			if entry.Message != "" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (s *ScanTasks) checkpoint(ctx context.Context, e *scanExecution) error {

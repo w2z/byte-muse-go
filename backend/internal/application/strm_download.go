@@ -93,7 +93,13 @@ func (s *StrmService) newDownloadPool(ctx context.Context, root, target, kind st
 		go func() {
 			defer workers.Done()
 			for file := range p.jobs {
-				skipped, err := s.downloadStrmMedia(ctx, root, target, kind, file, mode)
+				skipped, err := taskUnitDone(ctx, "download", target, file.Directory, file.ID)
+				if err == nil && !skipped {
+					skipped, err = s.downloadStrmMedia(ctx, root, target, kind, file, mode)
+					if err == nil {
+						err = completeTaskUnit(ctx, "download", target, file.Directory, file.ID)
+					}
+				}
 				p.results <- strmDownloadOutcome{skipped: skipped, err: err}
 			}
 		}()

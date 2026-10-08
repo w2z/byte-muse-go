@@ -24,6 +24,26 @@ func (r *ScanTaskRepository) q(query string) string {
 	return (&CollectionRepository{dialect: r.dialect}).q(query)
 }
 
+// LoadCheckpoint 按任务和稳定键读取断点，不存在表示该项尚未确认完成。
+func (r *ScanTaskRepository) LoadCheckpoint(ctx context.Context, taskID, key string) ([]byte, error) {
+	var raw string
+	err := r.db.QueryRowContext(ctx, r.q("SELECT payload FROM task_checkpoints WHERE task_id=? AND checkpoint_key=?"), taskID, key).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	return []byte(raw), err
+}
+
+// SaveCheckpoint 幂等保存单项断点，避免每处理一个文件都重写整份任务快照。
+func (r *ScanTaskRepository) SaveCheckpoint(ctx context.Context, taskID, key string, raw []byte) error {
+	query := "INSERT INTO task_checkpoints(task_id,checkpoint_key,payload) VALUES(?,?,?) ON CONFLICT(task_id,checkpoint_key) DO UPDATE SET payload=excluded.payload"
+	if r.dialect == DialectMySQL {
+		query = "INSERT INTO task_checkpoints(task_id,checkpoint_key,payload) VALUES(?,?,?) ON DUPLICATE KEY UPDATE payload=VALUES(payload)"
+	}
+	_, err := r.db.ExecContext(ctx, r.q(query), taskID, key, string(raw))
+	return err
+}
+
 // Save 原子替换整个快照，防止状态与进度来自不同时间点。
 func (r *ScanTaskRepository) Save(ctx context.Context, task domain.ScanTask) error {
 	raw, err := json.Marshal(task)
@@ -95,7 +115,15 @@ func (r *ScanTaskRepository) Interrupt(ctx context.Context) error {
 	}
 	for _, task := range tasks {
 		task.State = "interrupted"
+		var exists int
+		if err := r.db.QueryRowContext(ctx, r.q("SELECT COUNT(*) FROM task_checkpoints WHERE task_id=?"), task.ID).Scan(&exists); err != nil {
+			return err
+		}
+		task.CanRetry = exists > 0
 		task.Error = "服务重启，任务已中断，请重新启动"
+		if task.CanRetry {
+			task.Error = "服务重启，任务已中断，可继续失败的任务"
+		}
 		task.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 		if err = r.Save(ctx, task); err != nil {
 			return err

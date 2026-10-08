@@ -79,8 +79,8 @@ func scanTaskEndpoint(tasks *application.ScanTasks, kind string, control bool) h
 		var body struct {
 			Action string `json:"action"`
 		}
-		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024)).Decode(&body) != nil || (body.Action != "pause" && body.Action != "resume" && body.Action != "cancel") {
-			writeError(w, 400, "invalid_request", "action 必须为 pause、resume 或 cancel")
+		if json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024)).Decode(&body) != nil || (body.Action != "pause" && body.Action != "resume" && body.Action != "cancel" && body.Action != "retry") {
+			writeError(w, 400, "invalid_request", "action 必须为 pause、resume、cancel 或 retry")
 			return
 		}
 		task, err := tasks.Control(r.Context(), kind, chi.URLParam(r, "id"), body.Action)
