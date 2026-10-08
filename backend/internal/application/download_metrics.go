@@ -4,12 +4,13 @@ import (
 	"bytemuse/backend/internal/domain"
 	"bytemuse/backend/internal/ports"
 	"context"
+	"fmt"
 	"strings"
 	"time"
 )
 
-// decorateMetrics 按下载器批量读取当前页，不逐行请求，不将读取失败伪装为零。
-func decorateMetrics(ctx context.Context, items []domain.DownloadTask, clients map[string]ports.DownloadController) {
+// decorateMetrics 按下载器批量读取所给任务集合，不逐行请求，不将读取失败伪装为零。
+func decorateMetrics(ctx context.Context, items []domain.DownloadTask, clients map[string]ports.DownloadController) error {
 	groups := map[string][]string{}
 	for _, task := range items {
 		if task.Downloader != nil && task.InfoHash != nil && *task.InfoHash != "" {
@@ -17,10 +18,13 @@ func decorateMetrics(ctx context.Context, items []domain.DownloadTask, clients m
 		}
 	}
 	snapshots := map[string]map[string]*domain.DownloadMetrics{}
+	var readErr error
 	for name, hashes := range groups {
 		if reader, ok := clients[name].(ports.DownloadMetricsReader); ok {
 			if metrics, err := reader.ReadMetrics(ctx, hashes); err == nil {
 				snapshots[name] = metrics
+			} else {
+				readErr = fmt.Errorf("读取下载器实时数据失败: %w", err)
 			}
 		}
 	}
@@ -32,6 +36,7 @@ func decorateMetrics(ctx context.Context, items []domain.DownloadTask, clients m
 		}
 		task.Seeding = assessSeeding(*task, task.Metrics, now)
 	}
+	return readErr
 }
 
 // assessSeeding 统一执行现有站点规则。下载器无法证明期限内历史做种，过期后保持待确认。

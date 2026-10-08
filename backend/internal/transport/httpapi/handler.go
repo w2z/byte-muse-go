@@ -710,6 +710,13 @@ func listDownloads(service *application.DownloadService) http.HandlerFunc {
 		var filter ports.DownloadListQuery
 		filter.Status = domain.DownloadStatus(request.URL.Query().Get("status"))
 		filter.TransferStatus = request.URL.Query().Get("transfer_status")
+		filter.SortBy, filter.SortOrder = request.URL.Query().Get("sort_by"), request.URL.Query().Get("sort_order")
+		if raw := request.URL.Query().Get("column_filters"); raw != "" {
+			if len(raw) > 8192 || json.Unmarshal([]byte(raw), &filter.ColumnFilters) != nil {
+				writeError(response, 400, "invalid_download_filter", "表头筛选格式无效")
+				return
+			}
+		}
 		var valid bool
 		if filter.AddedFrom, valid = parseTime("added_from"); !valid {
 			writeError(response, 400, "invalid_download_filter", "加入时间格式无效")

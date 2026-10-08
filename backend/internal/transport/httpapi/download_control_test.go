@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -136,6 +137,15 @@ func TestDownloadControlHTTP(t *testing.T) {
 		}
 	}
 	assertStatus("GET", "/downloads?transfer_status=invalid", 400)
+	assertStatus("GET", "/downloads?sort_by=code&sort_order=desc", 200)
+	assertStatus("GET", "/downloads?sort_by=invalid", 400)
+	assertStatus("GET", "/downloads?column_filters="+url.QueryEscape(`{"source_site":["missing"]}`), 200)
+	w = request("GET", "/downloads?column_filters="+url.QueryEscape(`{"source_site":["missing"]}`), true)
+	if !strings.Contains(w.Body.String(), `"total":0`) {
+		t.Fatalf("column filter=%s", w.Body.String())
+	}
+	assertStatus("GET", "/downloads?column_filters="+url.QueryEscape(`{"size_bytes":["NaN",""]}`), 400)
+	assertStatus("GET", "/downloads?column_filters=broken", 400)
 	assertStatus("POST", "/downloads/d1/stop", 204)
 	assertStatus("GET", "/downloads?transfer_status=stopped", 200)
 	w = request("GET", "/downloads?transfer_status=stopped", true)

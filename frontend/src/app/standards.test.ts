@@ -61,7 +61,16 @@ describe("列表筛选栅格规范", () => {
     const source = readFileSync(path, "utf8");
     const required = requiredPages.some((page) => path.replaceAll("\\", "/").endsWith(page));
     const filterPage = !/[/\\](?:SettingsPage|LoginPage)\.tsx$/.test(path) && /role=["']search["']|filter-toolbar|filter-(?:field|labeled)|<Grid\.Row/.test(source);
-    if (required || filterPage) test(relative(src, path), () => expect(gridErrors(source)).toEqual([]));
+    if (path.replaceAll("\\", "/").endsWith("downloads/DownloadListPage.tsx")) {
+      test("下载任务使用完整表头筛选与远程排序", () => {
+        expect(source).not.toContain("<Grid.Row");
+        expect(source).toContain("filterDropdown:");
+        expect(source).toContain("sorter: true");
+        expect(source).toContain("column_filters");
+        expect(source).toContain("sort_by");
+        for (const field of ["code", "source_site", "downloader", "transfer_status", "size_bytes", "remaining_bytes", "downloaded_bytes", "download_speed", "upload_speed", "save_path", "share_ratio", "seeding_seconds", "seeding", "added_at", "completed_at", "error_message"]) expect(source).toContain(`...column("${field}",`);
+      });
+    } else if (required || filterPage) test(relative(src, path), () => expect(gridErrors(source)).toEqual([]));
   }
   test("七个既有筛选入口仍受检查", () => {
     for (const page of requiredPages) expect(existsSync(resolve(src, "features", page))).toBe(true);

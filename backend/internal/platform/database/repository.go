@@ -475,7 +475,13 @@ func (r *sqlDownloadRepository) List(ctx context.Context, query ports.DownloadLi
 		return domain.DownloadPage{}, err
 	}
 	args = append(args, limit, offset)
-	rows, err := r.exec.QueryContext(ctx, fmt.Sprintf(`SELECT %s FROM download_tasks%s ORDER BY updated_at DESC, id ASC LIMIT %s OFFSET %s`, downloadColumns(), where, placeholder(r.dialect, len(args)-1), placeholder(r.dialect, len(args))), args...)
+	statement := fmt.Sprintf(`SELECT %s FROM download_tasks%s ORDER BY updated_at DESC, id ASC`, downloadColumns(), where)
+	if query.All {
+		args = args[:len(args)-2]
+	} else {
+		statement += fmt.Sprintf(` LIMIT %s OFFSET %s`, placeholder(r.dialect, len(args)-1), placeholder(r.dialect, len(args)))
+	}
+	rows, err := r.exec.QueryContext(ctx, statement, args...)
 	if err != nil {
 		return domain.DownloadPage{}, err
 	}

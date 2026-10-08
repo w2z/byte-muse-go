@@ -50,6 +50,10 @@ func TestDownloadActivityTotalsExcludeQueue(t *testing.T) {
 				t.Fatalf("status=%s page=%+v err=%v", status, page, err)
 			}
 		}
+		all, err := s.Downloads().List(ctx, ports.DownloadListQuery{All: true, Limit: 5, Offset: 300})
+		if err != nil || all.Total != 317 || len(all.Items) != 317 {
+			t.Fatalf("full snapshot=%d total=%d err=%v", len(all.Items), all.Total, err)
+		}
 	}
 }
 

@@ -2,8 +2,8 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, expect, test, vi } from "vitest";
-import dayjs from "dayjs";
 import { DownloadListPage } from "./DownloadListPage";
+import { DownloadColumnFilter } from "./DownloadColumnFilter";
 
 // jsdom 未实现媒体查询，提供 Arco 响应式描述列表所需的浏览器接口。
 Object.defineProperty(window, "matchMedia", { writable: true, value: (query: string) => ({ matches: false, media: query, addListener() {}, removeListener() {} }) });
@@ -23,6 +23,72 @@ vi.mock("../../shared/api/client", async (importOriginal) => ({
 }));
 afterEach(() => { cleanup(); requests.length = 0; responseItems = []; detailError = false; });
 
+test("表头日期快捷范围使用 RFC3339，确认前不提交", async () => {
+  const apply = vi.fn();
+  render(<DownloadColumnFilter label="加入时间" kind="time" values={[]} onApply={apply} />);
+  fireEvent.click(screen.getByPlaceholderText("开始时间"));
+  for (const label of ["今天", "昨天", "本周", "本月"]) expect(await screen.findByText(label, { exact: true })).not.toBeNull();
+  fireEvent.click(screen.getByText("今天", { exact: true }));
+  expect(apply).not.toHaveBeenCalled();
+  fireEvent.click(within(screen.getByLabelText("加入时间筛选条件")).getByRole("button", { name: "确定" }));
+  const range = apply.mock.calls[0][0];
+  expect(range).toHaveLength(2);
+  expect(range[0]).toMatch(/Z$/);
+  expect(Date.parse(range[0])).toBeLessThan(Date.parse(range[1]));
+});
+
+test("数值筛选拒绝反向范围且真实零值可以提交", () => {
+  const apply = vi.fn();
+  const { rerender } = render(<DownloadColumnFilter key="invalid" label="分享率" kind="number" values={["2", "1"]} onApply={apply} />);
+  expect(screen.getByRole("alert").textContent).toContain("最小值不能大于最大值");
+  expect((screen.getByRole("button", { name: "确定" }) as HTMLButtonElement).disabled).toBe(true);
+  rerender(<DownloadColumnFilter key="zero" label="分享率" kind="number" values={["0", "0"]} onApply={apply} />);
+  fireEvent.click(screen.getByRole("button", { name: "确定" }));
+  expect(apply).toHaveBeenCalledWith(["0", "0"]);
+});
+
+test("表头筛选组合与清除保留其他列，全部数据列可远程排序", async () => {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const { container } = render(<QueryClientProvider client={client}><DownloadListPage /></QueryClientProvider>);
+  await waitFor(() => expect(requests).toHaveLength(1));
+  expect(screen.queryByRole("search")).toBeNull();
+  expect(screen.queryByLabelText("影片筛选")).toBeNull();
+  expect(container.querySelectorAll(".arco-table-sorter")).toHaveLength(16);
+  fireEvent.click(screen.getByLabelText("资源站筛选"));
+  fireEvent.change(screen.getByLabelText("资源站关键词"), { target: { value: "site" } });
+  expect(requests).toHaveLength(1);
+  fireEvent.click(screen.getByRole("button", { name: "确定" }));
+  await waitFor(() => expect(screen.queryByLabelText("资源站筛选条件")).toBeNull());
+  await waitFor(() => expect(decodeURIComponent(requests.at(-1)!)).toContain("source_site"));
+  fireEvent.click(screen.getByLabelText("大小筛选"));
+  fireEvent.change(screen.getByLabelText("大小最小值"), { target: { value: "1024" } });
+  fireEvent.blur(screen.getByLabelText("大小最小值"));
+  fireEvent.click(within(screen.getByLabelText("大小筛选条件")).getByRole("button", { name: "确定" }));
+  await waitFor(() => expect(screen.queryByLabelText("大小筛选条件")).toBeNull());
+  await waitFor(() => expect(decodeURIComponent(requests.at(-1)!)).toContain("size_bytes"));
+  expect(decodeURIComponent(requests.at(-1)!)).toContain("source_site");
+  fireEvent.click(screen.getByLabelText("大小筛选"));
+  fireEvent.click(screen.getByRole("button", { name: "清除" }));
+  await waitFor(() => expect(decodeURIComponent(requests.at(-1)!)).not.toContain("size_bytes"));
+  expect(decodeURIComponent(requests.at(-1)!)).toContain("source_site");
+  fireEvent.click(container.querySelector(".arco-table-sorter .arco-table-sorter-icon")!);
+  await waitFor(() => expect(requests.at(-1)).toContain("sort_by=code"));
+});
+
+test("刷新结果不会丢失状态筛选草稿，确认后才提交", async () => {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(<QueryClientProvider client={client}><DownloadListPage /></QueryClientProvider>);
+  await waitFor(() => expect(requests).toHaveLength(1));
+  fireEvent.click(screen.getByLabelText("下载状态筛选"));
+  fireEvent.click(within(screen.getByLabelText("下载状态筛选条件")).getByText("排队中", { exact: true }));
+  await client.invalidateQueries({ queryKey: ["downloads"] });
+  await waitFor(() => expect(requests).toHaveLength(2));
+  expect(requests.at(-1)).not.toContain("column_filters");
+  expect((within(screen.getByLabelText("下载状态筛选条件")).getByRole("checkbox", { name: "排队中" }) as HTMLInputElement).checked).toBe(true);
+  fireEvent.click(within(screen.getByLabelText("下载状态筛选条件")).getByRole("button", { name: "确定" }));
+  await waitFor(() => expect(decodeURIComponent(requests.at(-1)!)).toContain('"transfer_status":["queued"]'));
+});
+
 test("展示实时指标、PT 规则标签和未知值，移除外部任务列", async () => {
   responseItems = [{ id: "metrics", media_id: "m1", code: "TEST-001", status: "completed", source_kind: "pt",
     metrics: { size_bytes: 1024 ** 4, remaining_bytes: 0, downloaded_bytes: 1024 ** 3, download_speed: 1024 ** 2, upload_speed: 1024, save_path: "/downloads/test", share_ratio: 2.5, seeding_seconds: 3 * 86400 },
@@ -34,36 +100,6 @@ test("展示实时指标、PT 规则标签和未知值，移除外部任务列",
   for (const text of ["1.00 TB", "0 B", "1.00 GB", "1.00 MB/s", "1.00 KB/s", "2.50", "3 天 0 小时", "已达标（估算）"]) expect(within(row).getByText(text)).not.toBeNull();
   expect(screen.getByText("不适用")).not.toBeNull();
   expect(screen.queryByText("外部任务")).toBeNull();
-});
-
-test.each([["加入开始", "added"], ["完成开始", "completed"]])("%s支持时间选择和四个快捷范围，查询保留所选时刻", async (placeholder, prefix) => {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  render(<QueryClientProvider client={client}><DownloadListPage /></QueryClientProvider>);
-  await waitFor(() => expect(requests.length).toBeGreaterThan(0));
-  fireEvent.click(screen.getByPlaceholderText(placeholder));
-  for (const name of ["今天", "昨天", "本周", "本月"]) expect(await screen.findByText(name, { exact: true })).not.toBeNull();
-  expect(screen.getByText("选择时间", { exact: true })).not.toBeNull();
-  const before = dayjs();
-  fireEvent.click(screen.getByText("今天", { exact: true }));
-  fireEvent.click(screen.getByRole("button", { name: "搜索" }));
-  await waitFor(() => expect(requests.at(-1)).toContain(prefix + "_from="));
-  const params = new URLSearchParams(requests.at(-1)!.split("?")[1]);
-  const end = dayjs(params.get(prefix + "_to")!);
-  expect(dayjs(params.get(prefix + "_from")!).valueOf()).toBe(before.startOf("day").valueOf());
-  expect(end.valueOf()).toBeGreaterThanOrEqual(before.startOf("second").valueOf());
-  expect(end.valueOf()).toBeLessThanOrEqual(Date.now());
-  const appliedEnd = params.get(prefix + "_to");
-  fireEvent.click(screen.getByRole("button", { name: "搜索" }));
-  await waitFor(() => expect(requests.length).toBeGreaterThan(2));
-  expect(new URLSearchParams(requests.at(-1)!.split("?")[1]).get(prefix + "_to")).toBe(appliedEnd);
-  const exactStart = before.subtract(1, "day").hour(10).minute(11).second(12).millisecond(0);
-  fireEvent.click(screen.getByPlaceholderText(placeholder));
-  fireEvent.change(screen.getByPlaceholderText(placeholder), { target: { value: exactStart.format("YYYY-MM-DD HH:mm:ss") } });
-  fireEvent.click(screen.getByRole("button", { name: "确定" }));
-  fireEvent.click(screen.getByRole("button", { name: "搜索" }));
-  await waitFor(() => expect(new URLSearchParams(requests.at(-1)!.split("?")[1]).get(prefix + "_from")).toBe(exactStart.toISOString()));
-  fireEvent.click(screen.getByRole("button", { name: "重置" }));
-  await waitFor(() => expect(requests.at(-1)).toBe("/downloads?page=1&page_size=15"));
 });
 
 test("点击番号加载封面和资料，详情无卡片与操作并可关闭重开", async () => {
@@ -98,45 +134,6 @@ test("影片加载失败可在抽屉内重试", async () => {
   detailError = false;
   fireEvent.click(within(dialog).getByRole("button", { name: "重试" }));
   expect((await within(dialog).findAllByText("影片详情标题")).length).toBeGreaterThan(0);
-});
-
-test("空筛选条件下点击搜索仍重新查询全部下载任务", async () => {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  render(<QueryClientProvider client={client}><DownloadListPage /></QueryClientProvider>);
-  await waitFor(() => expect(requests).toHaveLength(1));
-  fireEvent.click(screen.getByRole("button", { name: "搜索" }));
-  await waitFor(() => expect(requests).toHaveLength(2));
-  expect(requests[1]).toBe("/downloads?page=1&page_size=15");
-});
-
-test.each([["paused", "暂停"], ["queued", "排队中"]])("筛选项 %s 点击搜索后才向服务端提交条件", async (value, label) => {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  const { container } = render(<QueryClientProvider client={client}><DownloadListPage /></QueryClientProvider>);
-  await waitFor(() => expect(requests.length).toBeGreaterThan(0));
-  const filters = container.querySelector(".download-filters")!;
-  expect(filters.textContent).toContain("下载状态");
-  expect(filters.textContent).toContain("加入时间");
-  expect(filters.textContent).toContain("下载完成时间");
-  const control = filters.querySelector('[aria-label="下载状态筛选"]')!;
-  fireEvent.click(control);
-  fireEvent.click(screen.getByText(label));
-  expect(requests.some((path) => path.includes(`transfer_status=${value}`))).toBe(false);
-  fireEvent.click(screen.getByRole("button", { name: "搜索" }));
-  await waitFor(() => expect(requests.some((path) => path.includes(`transfer_status=${value}`))).toBe(true));
-});
-
-test("重置清空草稿和已应用条件并查询全部任务", async () => {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  const { container } = render(<QueryClientProvider client={client}><DownloadListPage /></QueryClientProvider>);
-  await waitFor(() => expect(requests.length).toBeGreaterThan(0));
-  const control = container.querySelector('[aria-label="下载状态筛选"]')!;
-  fireEvent.click(control);
-  fireEvent.click(screen.getByText("暂停"));
-  fireEvent.click(screen.getByRole("button", { name: "搜索" }));
-  await waitFor(() => expect(requests.at(-1)).toContain("transfer_status=paused"));
-  fireEvent.click(screen.getByRole("button", { name: "重置" }));
-  await waitFor(() => expect(requests.at(-1)).toBe("/downloads?page=1&page_size=15"));
-  expect(control.textContent).toContain("全部状态");
 });
 
 test.each([["queued", "排队中"], ["stalled", "等待连接"], ["checking", "校验中"], ["metadata", "获取元数据"], ["moving", "移动中"], ["unknown", "待核实"], ["paused", "暂停"], ["stopped", "停止"], ["downloading", "下载中"], ["completed", "下载完成"], ["failed", "下载失败"]])("下载状态以下载器的 %s 为准，不显示内部已提交阶段", async (transferStatus, label) => {
@@ -175,18 +172,15 @@ test("删除下拉区分保留文件与删除文件，并显示对应确认提�
   fireEvent.click(screen.getByRole("button", { name: "取消" }));
 });
 
-test("筛选与表格共用一张卡片并由分隔条隔开", async () => {
+test("筛选位于表头且保留单张表格卡片", async () => {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const { container } = render(<QueryClientProvider client={client}><DownloadListPage /></QueryClientProvider>);
-  const filters = container.querySelector(".download-filters");
   await waitFor(() => expect(container.querySelector(".data-table table")).not.toBeNull());
   const table = container.querySelector(".data-table table")!;
-  const card = filters?.closest(".content-card");
-  const divider = card?.querySelector(".arco-divider-horizontal");
+  const card = table.closest(".content-card");
   expect(card).not.toBeNull();
   expect(table?.closest(".content-card")).toBe(card);
   expect(container.querySelectorAll(".content-card")).toHaveLength(1);
-  expect(divider).not.toBeNull();
-  expect(filters!.compareDocumentPosition(divider!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-  expect(divider!.compareDocumentPosition(table) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(container.querySelector(".download-filters")).toBeNull();
+  expect(within(table.querySelector("thead")!).getByLabelText("下载状态筛选")).not.toBeNull();
 });

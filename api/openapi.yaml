@@ -439,7 +439,8 @@ paths:
     get:
       operationId: listDownloads
       summary: 查询下载任务
-      description: 按传输状态、加入时间和完成时间先过滤再分页；code 为关联影片番号，关联缺失为 null；available_actions 根据状态和下载器能力返回。qB 4.x 支持暂停，5.x 使用停止；能力读取失败不提供外部控制操作。当前页批量读取实时 metrics，当前支持 qBittorrent，缺失或失败为 null；seeding 按站点规则估算，不代表站点 H&R 官方认定。
+      x-table-query: 表头条件在全部候选任务上执行后分页；实时字段查询失败返回错误，未提供的值不命中范围条件，排序时空值始终最后，同值按任务 ID 排序。单次全局实时查询超时30秒。
+      description: 按传输状态、加入时间和完成时间先过滤再分页；code 为关联影片番号，关联缺失为 null；available_actions 根据状态和下载器能力返回。qB 4.x 支持暂停，5.x 使用停止；能力读取失败不提供外部控制操作。默认当前页批量读取实时 metrics；按实时列筛选或排序时读取全部候选任务后处理并分页，先应用静态条件缩小读取范围，30秒超时或任批失败返回错误。当前支持 qBittorrent，未支持或任务缺失为 null；默认列表读取失败为 null；seeding 按站点规则估算，不代表站点 H&R 官方认定。
       parameters:
         - $ref: '#/components/parameters/Page'
         - $ref: '#/components/parameters/PageSize'
@@ -451,6 +452,24 @@ paths:
           in: query
           description: qBittorrent 最近同步状态；downloading 仅实际或强制下载，不含排队、等待、校验、元数据获取及移动；failed 同时包含搜索或提交失败；为空时不限
           schema: {type: string, enum: [downloading, queued, stalled, checking, metadata, moving, unknown, paused, stopped, failed, completed]}
+        - name: sort_by
+          in: query
+          description: 数据列排序字段；不传沿用更新时间倒序；支持影片番号排序，操作列不排序
+          schema: {type: string, enum: [code, source_site, downloader, transfer_status, size_bytes, remaining_bytes, downloaded_bytes, download_speed, upload_speed, save_path, share_ratio, seeding_seconds, seeding, added_at, completed_at, error_message]}
+        - name: sort_order
+          in: query
+          description: asc 升序、desc 降序；仅在 sort_by 非空时可传，默认 asc；缺失值始终排最后
+          schema: {type: string, enum: [asc, desc]}
+        - name: column_filters
+          in: query
+          description: >-
+            JSON对象，键为除 code 外的 sort_by 字段，各列取交集。source_site/downloader/save_path/error_message 为单元素关键词数组（忽略大小写，包含匹配）；
+            transfer_status/seeding 为枚举数组（同列取并集），transfer_status 同时支持尚未回查的 searching/submitted 内部阶段，seeding 可选 completed/pending/unknown/not_required/not_applicable；
+            数值列为[最小值,最大值]字符串数组（两端包含），字节数和速度使用字节及字节/秒，seeding_seconds 使用秒，share_ratio 为无单位比率；
+            added_at/completed_at 为[开始,结束] RFC3339数组（含开始、不含结束）；范围单端空字符串表示不限，省略键表示该列不限。
+            最大8192字符，非法列名、枚举、负数、非有限数或反向范围返回400。实时数据查询失败返回错误，不返回部分排序结果。
+          schema: {type: string, maxLength: 8192}
+          example: '{"transfer_status":["queued","downloading"],"size_bytes":["1073741824",""]}'
         - name: added_from
           in: query
           description: 加入时间下界，含该时刻，UTC RFC3339

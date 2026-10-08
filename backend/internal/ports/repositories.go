@@ -104,6 +104,11 @@ type SubscriptionRepository interface {
 
 // DownloadListQuery is the normalized download task pagination and status filter.
 type DownloadListQuery struct {
+	// ColumnFilters uses text/enum values or inclusive numeric and half-open time bounds; validated by the application.
+	ColumnFilters     map[string][]string
+	SortBy, SortOrder string
+	// All is internal-only: fetch one consistent candidate set before live metric filtering and pagination.
+	All            bool
 	Limit          int
 	Offset         int
 	Status         domain.DownloadStatus

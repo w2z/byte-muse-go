@@ -317,6 +317,9 @@ func (s *DownloadService) ListFiltered(ctx context.Context, page, pageSize int, 
 		return Page[domain.DownloadTask]{}, ErrInvalidDownloadFilter
 	}
 	query.Limit, query.Offset = pageSize, (page-1)*pageSize
+	if len(query.ColumnFilters) > 0 || query.SortBy != "" || query.SortOrder != "" {
+		return s.listColumns(ctx, page, pageSize, query)
+	}
 	result, err := s.repository.List(ctx, query)
 	if err != nil {
 		return Page[domain.DownloadTask]{}, fmt.Errorf("list downloads: %w", err)

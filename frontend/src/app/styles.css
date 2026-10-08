@@ -864,3 +864,5 @@ button.code-card-still-cell:hover img { opacity: .85; }
   .subscription-filter-grid { grid-template-columns: 1fr; }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; } }
+
+.download-column-filter { padding: 12px; width: min(300px, calc(100vw - 32px)); }

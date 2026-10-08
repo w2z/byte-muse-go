@@ -1,9 +1,9 @@
-import { Badge, Button, DatePicker, Divider, Drawer, Dropdown, Menu, Modal, Select, Space, Table, Tag, Tooltip, Grid, type BadgeProps } from "@arco-design/web-react";
-import { IconClose, IconDown } from "@arco-design/web-react/icon";
+import { Alert, Badge, Button, Drawer, Dropdown, Menu, Modal, Space, Table, Tag, Tooltip, type BadgeProps, type TableColumnProps } from "@arco-design/web-react";
+import { IconClose, IconDown, IconFilter } from "@arco-design/web-react/icon";
+import { DownloadColumnFilter, type DownloadFilterKind } from "./DownloadColumnFilter";
 import dayjs from "dayjs";
-import { getDateTimeShortcuts, getDisabledDateTime, isFutureDate, serializeDateTimeRange } from "../../shared/dateTimeRange";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState, type FormEvent } from "react";
+import { useState } from "react";
 import { apiRequest, type Page } from "../../shared/api/client";
 import type { DownloadAction, DownloadTask, Media } from "../../shared/api/types";
 import { CodeCard } from "../../shared/ui/CodeCard";
@@ -27,6 +27,10 @@ const transferLabels: Record<string, string> = {
   queued: "排队中", stalled: "等待连接", checking: "校验中", metadata: "获取元数据", moving: "移动中", unknown: "待核实",
   downloading: "下载中", paused: "暂停", stopped: "停止", failed: "下载失败", completed: "下载完成",
 };
+const seedingOptions = [
+  { value: "completed", label: "已达标（估算）" }, { value: "pending", label: "未达标" }, { value: "unknown", label: "待确认" },
+  { value: "not_required", label: "无做种要求" }, { value: "not_applicable", label: "不适用" },
+];
 
 /** 字节数按 1024 自动换算，速度追加 /s；未知值保留占位，零不视为缺失。 */
 function formatBytes(value: number | null | undefined, speed = false): string {
@@ -94,7 +98,7 @@ function DownloadActions({ task, onChanged }: { task: DownloadTask; onChanged: (
   </Modal></>;
 }
 
-type DownloadFilters = { status: string; added: string[]; completed: string[] };
+
 
 /** 按媒体 ID 加载封面及分组资料；抽屉关闭或切换影片时取消未完成请求。 */
 function DownloadMediaDrawer({ mediaId, onClose }: { mediaId: string | null; onClose: () => void }) {
@@ -128,21 +132,23 @@ export function DownloadListPage() {
   const [selectedMediaId, setSelectedMediaId] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
-  const [draft, setDraft] = useState<DownloadFilters>({ status: "", added: [], completed: [] });
-  const [applied, setApplied] = useState<DownloadFilters>({ status: "", added: [], completed: [] });
+  const [columnFilters, setColumnFilters] = useState<Record<string, string[]>>({});
+  const [openFilter, setOpenFilter] = useState<string | null>(null);
+  const [filterDrafts, setFilterDrafts] = useState<Record<string, string[]>>({});
+  const [filterUnits, setFilterUnits] = useState<Record<string, number>>({});
+  const [sorting, setSorting] = useState<{ field: string; direction?: "ascend" | "descend" }>({ field: "" });
   const query = useQuery({
     refetchInterval: 5000,
-    queryKey: ["downloads", page, pageSize, applied.status, applied.added, applied.completed],
-    queryFn: () => {
+    queryKey: ["downloads", page, pageSize, columnFilters, sorting],
+    queryFn: ({ signal }) => {
       const params = new URLSearchParams({ page: String(page), page_size: String(pageSize) });
-      if (applied.status) params.set("transfer_status", applied.status);
-      if (applied.added.length === 2) { params.set("added_from", applied.added[0]); params.set("added_to", applied.added[1]); }
-      if (applied.completed.length === 2) { params.set("completed_from", applied.completed[0]); params.set("completed_to", applied.completed[1]); }
-      return apiRequest<Page<DownloadTask>>("/downloads?" + params.toString());
+      if (Object.keys(columnFilters).length) params.set("column_filters", JSON.stringify(columnFilters));
+      if (sorting.direction) { params.set("sort_by", sorting.field); params.set("sort_order", sorting.direction === "ascend" ? "asc" : "desc"); }
+      return apiRequest<Page<DownloadTask>>("/downloads?" + params.toString(), { signal });
     },
   });
   const items = query.data?.items ?? [];
-  const total = query.data?.total ?? 0;
+  const total = query.error ? 0 : query.data?.total ?? 0;
   /** 删除页末任务后退到有效页，并刷新全部已缓存的下载筛选。 */
   function refreshAfterAction(deleted = false) {
     if (deleted && items.length === 1 && page > 1) setPage(page - 1);
@@ -155,94 +161,70 @@ export function DownloadListPage() {
     setPage(1);
   }
 
-  /** 提交完整筛选快照，避免日期和状态每次编辑时提前刷新列表。 */
-  function search(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (page === 1 && draft.status === applied.status &&
-      draft.added.join(",") === applied.added.join(",") &&
-      draft.completed.join(",") === applied.completed.join(",")) {
-      void query.refetch();
-      return;
-    }
-    setPage(1);
-    setApplied({ ...draft });
+  /** Apply a single header filter while preserving other columns and resetting pagination. */
+  function applyColumn(field: string, values: string[]) {
+    const next = { ...columnFilters };
+    if (values.length) next[field] = values; else delete next[field];
+    setPage(1); setColumnFilters(next);
+    if (page === 1 && JSON.stringify(next) === JSON.stringify(columnFilters)) void query.refetch();
   }
 
-  /** 同时清空控件和已应用条件，恢复第一页的完整列表。 */
-  function reset() {
-    const empty = { status: "", added: [], completed: [] };
-    setDraft(empty);
-    setApplied(empty);
-    setPage(1);
+  /** Every data column sorts remotely; movie code deliberately has no filter. */
+  function column(field: string, label: string, kind?: DownloadFilterKind): Partial<TableColumnProps<DownloadTask>> {
+    return {
+      key: field, dataIndex: field, sorter: true, sortOrder: sorting.field === field ? sorting.direction : undefined,
+      ...(kind ? { filteredValue: columnFilters[field] ?? [], filterDropdownProps: { triggerProps: { unmountOnExit: true, popupVisible: openFilter === field, onVisibleChange: (visible) => { setOpenFilter(visible ? field : null); if (visible) setFilterDrafts((current) => ({ ...current, [field]: columnFilters[field] ?? [] })); } } }, filterIcon: <span aria-label={label + "筛选"}><IconFilter /></span>,
+        filterDropdown: () => <DownloadColumnFilter label={label} kind={kind} values={filterDrafts[field] ?? []}
+          onDraftChange={(values) => setFilterDrafts((current) => ({ ...current, [field]: values }))}
+          unitValue={filterUnits[field] ?? 1} onUnitChange={(unit) => setFilterUnits((current) => ({ ...current, [field]: unit }))}
+          options={field === "transfer_status" ? Object.entries({ ...statusLabels, ...transferLabels }).map(([value, label]) => ({ value, label: <DownloadStatusBadge status={value} label={label} /> }))
+            : field === "seeding" ? seedingOptions : undefined}
+          onApply={(values) => { applyColumn(field, values); setOpenFilter(null); }} /> } : {}),
+    };
   }
 
   return (
     <section>
       <PageHeader title="下载任务" />
       <ContentCard className="table-shell data-table-shell">
-        <form className="download-filters" role="search" onSubmit={search}>
-          <Grid.Row gutter={[12, 12]} justify="start" align="center">
-            <Grid.Col xs={24} sm={12} md={8} xl={4}>
-              <div className="download-filter-field filter-field"><span className="download-filter-label filter-label">下载状态</span><Select className="filter-control" aria-label="下载状态筛选" value={draft.status} onChange={(value) => setDraft((current) => ({ ...current, status: value }))} options={[
-                { label: "全部状态", value: "" },
-                ...Object.entries(transferLabels).map(([value, label]) => ({ value, label: <DownloadStatusBadge status={value} label={label} /> })),
-              ]} /></div>
-            </Grid.Col>
-            <Grid.Col xs={24} sm={12} md={8} xl={4}>
-              <div className="download-filter-field filter-field filter-field--range"><span className="download-filter-label filter-label">加入时间</span><DatePicker.RangePicker className="filter-control" aria-label="加入时间筛选"
-                showTime={{ format: "HH:mm:ss" }} format="YYYY-MM-DD HH:mm:ss" shortcuts={getDateTimeShortcuts()}
-                value={draft.added.length === 2 ? [dayjs(draft.added[0]), dayjs(draft.added[1])] : undefined}
-                disabledDate={(current) => isFutureDate(current)} disabledTime={(current) => getDisabledDateTime()(current)}
-                onChange={(_dateStrings, values) => setDraft((current) => ({ ...current, added: serializeDateTimeRange(values) ?? [] }))} placeholder={["加入开始", "加入结束"]} />
-              </div>
-            </Grid.Col>
-            <Grid.Col xs={24} sm={12} md={8} xl={4}>
-              <div className="download-filter-field filter-field filter-field--range"><span className="download-filter-label filter-label">下载完成时间</span><DatePicker.RangePicker className="filter-control" aria-label="下载完成时间筛选"
-                showTime={{ format: "HH:mm:ss" }} format="YYYY-MM-DD HH:mm:ss" shortcuts={getDateTimeShortcuts()}
-                value={draft.completed.length === 2 ? [dayjs(draft.completed[0]), dayjs(draft.completed[1])] : undefined}
-                disabledDate={(current) => isFutureDate(current)} disabledTime={(current) => getDisabledDateTime()(current)}
-                onChange={(_dateStrings, values) => setDraft((current) => ({ ...current, completed: serializeDateTimeRange(values) ?? [] }))} placeholder={["完成开始", "完成结束"]} /></div>
-            </Grid.Col>
-            <Grid.Col xs={24} sm={12} md={8} xl={4}>
-              <div className="download-filter-actions filter-actions"><Button type="primary" htmlType="submit">搜索</Button><Button onClick={reset}>重置</Button></div>
-            </Grid.Col>
-          </Grid.Row>
-        </form>
-        <Divider />
-        <PageState isLoading={query.isLoading} error={query.error} onRetry={() => void query.refetch()}>
+        {query.error && <Alert type="error" content={query.error.message} action={<Button onClick={() => void query.refetch()}>重试</Button>} />}
           <Table
             className="data-table"
             border={false}
             rowKey="id"
-            data={items}
+            data={query.error ? [] : items}
             loading={query.isLoading}
             noDataElement={<div className="data-table-empty" role="status">暂无下载任务</div>}
             pagination={false}
             scroll={{ x: 2500 }}
+            onChange={(_, sorter, __, extra) => {
+              if (extra.action !== "sort") return;
+              const active = Array.isArray(sorter) ? sorter[0] : sorter;
+              setSorting({ field: String(active?.field ?? ""), direction: active?.direction }); setPage(1);
+            }}
             columns={[
-              { title: "影片", dataIndex: "code", width: 130, render: (value: string | null, task: DownloadTask) => value && task.media_id
+              { ...column("code", "影片"), title: "影片", width: 130, render: (value: string | null, task: DownloadTask) => value && task.media_id
                 ? <Button type="text" className="code-cell" onClick={() => setSelectedMediaId(task.media_id)}>{value}</Button>
                 : <span className="code-cell">{value || "—"}</span> },
-              { title: "资源站", dataIndex: "source_site", render: (value: string | null) => value || "—" },
-              { title: "下载器", dataIndex: "downloader", render: (value: string | null) => value || "—" },
-              { title: "下载状态", key: "download_status", render: (_: unknown, task: DownloadTask) => <DownloadStatus task={task} /> },
-              { title: "大小", key: "size", width: 110, render: (_: unknown, task: DownloadTask) => formatBytes(task.metrics?.size_bytes) },
-              { title: "剩余", key: "remaining", width: 110, render: (_: unknown, task: DownloadTask) => formatBytes(task.metrics?.remaining_bytes) },
-              { title: "已下载", key: "downloaded", width: 110, render: (_: unknown, task: DownloadTask) => formatBytes(task.metrics?.downloaded_bytes) },
-              { title: "下载速度", key: "download_speed", width: 120, render: (_: unknown, task: DownloadTask) => formatBytes(task.metrics?.download_speed, true) },
-              { title: "上传速度", key: "upload_speed", width: 120, render: (_: unknown, task: DownloadTask) => formatBytes(task.metrics?.upload_speed, true) },
-              { title: "保存路径", key: "save_path", width: 220, render: (_: unknown, task: DownloadTask) => <span style={{ overflowWrap: "anywhere" }}>{task.metrics?.save_path || "—"}</span> },
-              { title: "分享率", key: "share_ratio", width: 90, render: (_: unknown, task: DownloadTask) => task.metrics?.share_ratio == null ? "—" : task.metrics.share_ratio.toFixed(2) },
-              { title: "做种时间", key: "seeding_seconds", width: 140, render: (_: unknown, task: DownloadTask) => formatSeedingTime(task.metrics?.seeding_seconds) },
-              { title: "完成做种（PT）", key: "seeding", width: 150, render: (_: unknown, task: DownloadTask) => <SeedingTag task={task} /> },
-              { title: "加入时间", dataIndex: "added_at", render: (value: string | null) => value ? dayjs(value).format("YYYY-MM-DD HH:mm") : "—" },
-              { title: "完成时间", dataIndex: "completed_at", render: (value: string | null) => value ? dayjs(value).format("YYYY-MM-DD HH:mm") : "—" },
-              { title: "错误", dataIndex: "error_message" },
+              { ...column("source_site", "资源站", "text"), title: "资源站", render: (value: string | null) => value || "—" },
+              { ...column("downloader", "下载器", "text"), title: "下载器", render: (value: string | null) => value || "—" },
+              { ...column("transfer_status", "下载状态", "enum"), title: "下载状态", render: (_: unknown, task: DownloadTask) => <DownloadStatus task={task} /> },
+              { ...column("size_bytes", "大小", "bytes"), title: "大小", width: 110, render: (_: unknown, task: DownloadTask) => formatBytes(task.metrics?.size_bytes) },
+              { ...column("remaining_bytes", "剩余", "bytes"), title: "剩余", width: 110, render: (_: unknown, task: DownloadTask) => formatBytes(task.metrics?.remaining_bytes) },
+              { ...column("downloaded_bytes", "已下载", "bytes"), title: "已下载", width: 110, render: (_: unknown, task: DownloadTask) => formatBytes(task.metrics?.downloaded_bytes) },
+              { ...column("download_speed", "下载速度", "bytes"), title: "下载速度", width: 120, render: (_: unknown, task: DownloadTask) => formatBytes(task.metrics?.download_speed, true) },
+              { ...column("upload_speed", "上传速度", "bytes"), title: "上传速度", width: 120, render: (_: unknown, task: DownloadTask) => formatBytes(task.metrics?.upload_speed, true) },
+              { ...column("save_path", "保存路径", "text"), title: "保存路径", width: 220, render: (_: unknown, task: DownloadTask) => <span style={{ overflowWrap: "anywhere" }}>{task.metrics?.save_path || "—"}</span> },
+              { ...column("share_ratio", "分享率", "number"), title: "分享率", width: 90, render: (_: unknown, task: DownloadTask) => task.metrics?.share_ratio == null ? "—" : task.metrics.share_ratio.toFixed(2) },
+              { ...column("seeding_seconds", "做种时间", "seconds"), title: "做种时间", width: 140, render: (_: unknown, task: DownloadTask) => formatSeedingTime(task.metrics?.seeding_seconds) },
+              { ...column("seeding", "完成做种（PT）", "enum"), title: "完成做种（PT）", width: 150, render: (_: unknown, task: DownloadTask) => <SeedingTag task={task} /> },
+              { ...column("added_at", "加入时间", "time"), title: "加入时间", render: (value: string | null) => value ? dayjs(value).format("YYYY-MM-DD HH:mm") : "—" },
+              { ...column("completed_at", "完成时间", "time"), title: "完成时间", render: (value: string | null) => value ? dayjs(value).format("YYYY-MM-DD HH:mm") : "—" },
+              { ...column("error_message", "错误", "text"), title: "错误" },
               { title: "操作", key: "actions", width: 200, fixed: "right", render: (_: unknown, task: DownloadTask) => <DownloadActions task={task} onChanged={refreshAfterAction} /> },
             ]}
           />
           <ListPagination page={page} total={total} pageSize={pageSize} onChange={setPage} onPageSizeChange={changePageSize} />
-        </PageState>
       </ContentCard>
       <DownloadMediaDrawer mediaId={selectedMediaId} onClose={() => setSelectedMediaId(null)} />
     </section>
