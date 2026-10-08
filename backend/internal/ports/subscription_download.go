@@ -45,10 +45,10 @@ type ScanCandidate struct {
 }
 
 // PendingSubmission is a resource whose download-client outcome still requires reconciliation.
-// Code/Title/Site/Cover 来自已落库的任务快照，仅用于通知文案与配图，不参与提交逻辑。
+// Code/Title/Site/Kind/Cover 用于通知文案与配图；Kind 为任务保存的资源来源类型。
 type PendingSubmission struct {
 	ID, URI, InfoHash, Downloader, LeaseToken string
-	Code, Title, Site, Cover                  string
+	Code, Title, Site, Kind, Cover            string
 }
 
 // TransferState is a downloader-observed transport snapshot keyed by info hash.
@@ -61,11 +61,13 @@ type TransferState struct {
 // TransferTransition 是一次传输状态跃迁：只报告首次进入终态（completed / failed）的任务。
 // 下载器每次轮询都会重复上报同一状态，通知必须依赖这里做去重。
 type TransferTransition struct {
-	TaskID string
-	Code   string
-	Title  string
-	Cover  string
-	Status string
+	// Site/Kind/URI 来自任务已有资源快照，用于终态通知。
+	Site, Kind, URI string
+	TaskID          string
+	Code            string
+	Title           string
+	Cover           string
+	Status          string
 }
 
 // SubscriptionDownloadRepository 是订阅搜索队列与下载任务的持久化边界。

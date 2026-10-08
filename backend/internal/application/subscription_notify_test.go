@@ -65,7 +65,7 @@ func TestSubscriptionServiceNotifiesCreateOutcome(t *testing.T) {
 	if _, _, err := service.Create(ctx, command); err != nil {
 		t.Fatal(err)
 	}
-	if len(notifier.events) != 1 || notifier.events[0] != string(NotificationSubscribe)+"|番号SSIS-001已加入订阅列表|标题|"+banner {
+	if len(notifier.events) != 1 || notifier.events[0] != string(NotificationSubscribe)+"|番号: SSIS-001|状态: 已加入订阅列表\n站点: 暂无\n来源: 暂无\n下载链接: 暂无\n描述: 标题|"+banner {
 		t.Fatalf("新建订阅通知 = %v", notifier.events)
 	}
 
@@ -81,7 +81,7 @@ func TestSubscriptionServiceNotifiesCreateOutcome(t *testing.T) {
 	if _, _, err := service.Create(ctx, command); err == nil {
 		t.Fatal("期望订阅创建失败")
 	}
-	if len(notifier.events) != 2 || !strings.Contains(notifier.events[1], string(NotificationSubscribeFailed)+"|番号SSIS-001订阅失败|原因：媒体不存在") {
+	if len(notifier.events) != 2 || !strings.Contains(notifier.events[1], string(NotificationSubscribeFailed)+"|番号: SSIS-001|状态: 订阅失败\n站点: 暂无\n来源: 暂无\n下载链接: 暂无\n描述: 原因：媒体不存在") {
 		t.Fatalf("订阅失败通知 = %v", notifier.events)
 	}
 }
@@ -104,12 +104,12 @@ func TestDownloadNotificationsCarryTitleAndCover(t *testing.T) {
 	ctx := context.Background()
 	cover := "https://img.example/banner.jpg"
 
-	service.notifyDownloadStart(ctx, "SSIS-001", "标题", "站点A", cover)
+	service.notifyDownloadStart(ctx, ports.PendingSubmission{Code: "SSIS-001", Title: "标题", Site: "站点A", Kind: "bt", URI: "https://example.com/download", Cover: cover})
 	service.notifyDownloadFailed(ctx, "SSIS-001", "标题", cover, "资源站搜索失败")
 
 	want := []string{
-		string(NotificationDownloadStart) + "|番号SSIS-001开始下载|标题\n站点：站点A|" + cover,
-		string(NotificationDownloadFailed) + "|番号SSIS-001下载失败|标题\n原因：资源站搜索失败|" + cover,
+		string(NotificationDownloadStart) + "|番号: SSIS-001|状态: 开始下载\n站点: 站点A\n来源: BT\n下载链接: https://example.com/download\n描述: 标题|" + cover,
+		string(NotificationDownloadFailed) + "|番号: SSIS-001|状态: 下载失败\n站点: 暂无\n来源: 暂无\n下载链接: 暂无\n描述: 标题 原因：资源站搜索失败|" + cover,
 	}
 	if len(notifier.events) != len(want) {
 		t.Fatalf("下载通知数量 = %v", notifier.events)

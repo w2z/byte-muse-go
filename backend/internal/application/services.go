@@ -185,22 +185,16 @@ func (s *SubscriptionService) notifySubscribe(ctx context.Context, command Creat
 	if s.notifier == nil {
 		return
 	}
-	label, code, title, cover := strings.TrimSpace(command.Label), "", "", ""
+	label, title, cover := strings.TrimSpace(command.Label), "", ""
 	if item.Media != nil {
 		if mediaCode := strings.TrimSpace(item.Media.Code); mediaCode != "" {
 			label = mediaCode
-			code = mediaCode
 		}
 		title = MediaDisplayTitle(*item.Media)
 		cover = MediaCover(*item.Media)
 	}
 	// 番号取不到时不回退到内部 media_id：推送里出现用户无法对应的标识，比没有标识更糟。
-	s.notifier.Notify(ctx, NotificationSubscribe, NotificationMessage{
-		Title:    NotificationHeadline(label, "已加入订阅列表"),
-		Text:     title,
-		CoverURL: cover,
-		Code:     code,
-	})
+	s.notifier.Notify(ctx, NotificationSubscribe, NewNotificationMessage(label, "已加入订阅列表", "", "", "", title, cover))
 }
 
 // MediaDisplayTitle 返回影片的展示标题，优先使用译文；译名为空时回退原标题。
@@ -233,11 +227,7 @@ func (s *SubscriptionService) notifySubscribeFailed(ctx context.Context, command
 		return
 	}
 	label := strings.TrimSpace(command.Label)
-	// 同 notifySubscribe：番号缺失时标题只保留动作，不推送内部媒体 ID。
-	s.notifier.Notify(ctx, NotificationSubscribeFailed, NotificationMessage{
-		Title: NotificationHeadline(label, "订阅失败"),
-		Text:  "原因：" + cause.Error(),
-	})
+	s.notifier.Notify(ctx, NotificationSubscribeFailed, NewNotificationMessage(label, "订阅失败", "", "", "", "原因："+cause.Error(), ""))
 }
 
 // Cancel removes an active subscription; a repeated call returns ErrSubscriptionNotFound.

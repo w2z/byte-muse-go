@@ -88,25 +88,12 @@ type SubscriptionDownloadService struct {
 // SetNotifier 注入业务通知出口；未注入时下载流程不发送任何通知。
 func (s *SubscriptionDownloadService) SetNotifier(notifier Notifier) { s.notifier = notifier }
 
-// notifyDownloadStart 通知订阅下载已提交；标题与正文只包含番号、标题与站点，
-// 配图使用任务快照里的封面，都不含任何凭据。
-func (s *SubscriptionDownloadService) notifyDownloadStart(ctx context.Context, code, title, site, cover string) {
+// notifyDownloadStart 从已提交任务快照生成通知，首次提交与恢复回查使用同一格式。
+func (s *SubscriptionDownloadService) notifyDownloadStart(ctx context.Context, pending ports.PendingSubmission) {
 	if s.notifier == nil {
 		return
 	}
-	lines := make([]string, 0, 2)
-	if value := strings.TrimSpace(title); value != "" {
-		lines = append(lines, value)
-	}
-	if value := strings.TrimSpace(site); value != "" {
-		lines = append(lines, "站点："+value)
-	}
-	s.notifier.Notify(ctx, NotificationDownloadStart, NotificationMessage{
-		Title:    NotificationHeadline(code, "开始下载"),
-		Text:     strings.Join(lines, "\n"),
-		CoverURL: cover,
-		Code:     code,
-	})
+	s.notifier.Notify(ctx, NotificationDownloadStart, NewNotificationMessage(pending.Code, "开始下载", pending.Site, pending.Kind, pending.URI, pending.Title, pending.Cover))
 }
 
 // notifyDownloadFailed 通知订阅下载任务失败；reason 与落库的失败原因保持一致。
@@ -119,12 +106,7 @@ func (s *SubscriptionDownloadService) notifyDownloadFailed(ctx context.Context, 
 		lines = append(lines, value)
 	}
 	lines = append(lines, "原因："+reason)
-	s.notifier.Notify(ctx, NotificationDownloadFailed, NotificationMessage{
-		Title:    NotificationHeadline(code, "下载失败"),
-		Text:     strings.Join(lines, "\n"),
-		CoverURL: cover,
-		Code:     code,
-	})
+	s.notifier.Notify(ctx, NotificationDownloadFailed, NewNotificationMessage(code, "下载失败", "", "", "", strings.Join(lines, " "), cover))
 }
 
 // finishScan 删除一次已领取的搜索队列项：搜索结束且不产生下载任务，也不推送通知。
@@ -219,7 +201,7 @@ func (s *SubscriptionDownloadService) Process(ctx context.Context, limit int) er
 			if e = s.tasks.FinishSubmission(ctx, *p, true, ""); e != nil {
 				return e
 			}
-			s.notifyDownloadStart(ctx, p.Code, p.Title, p.Site, p.Cover)
+			s.notifyDownloadStart(ctx, *p)
 		} else {
 			_ = s.tasks.ReleasePending(ctx, *p, "未发现资源，需人工确认后重试")
 		}
@@ -309,7 +291,7 @@ func (s *SubscriptionDownloadService) Process(ctx context.Context, limit int) er
 			if e = s.tasks.FinishSubmission(ctx, p, true, ""); e != nil {
 				return e
 			}
-			s.notifyDownloadStart(ctx, p.Code, p.Title, p.Site, p.Cover)
+			s.notifyDownloadStart(ctx, p)
 		}
 	}
 	return nil

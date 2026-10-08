@@ -86,7 +86,7 @@ func TestSubscriptionDownloadQueueDeduplicatesAndSurvivesReopen(t *testing.T) {
 	if e != nil || claimedPending == nil || claimedPending.InfoHash != "0123456789abcdef0123456789abcdef01234567" {
 		t.Fatalf("pending=%#v err=%v", claimedPending, e)
 	}
-	if claimedPending.Code != "SSIS-001" || claimedPending.Title != "film" || claimedPending.Cover != "https://img.example/banner.jpg" {
+	if claimedPending.Code != "SSIS-001" || claimedPending.Title != "film" || claimedPending.Cover != "https://img.example/banner.jpg" || claimedPending.Site != "Nyaa BT" || claimedPending.Kind != "bt" || claimedPending.URI != pending.URI || pending.Kind != "bt" {
 		t.Fatalf("pending 文案与封面 = %#v", claimedPending)
 	}
 	if e = q.FinishSubmission(ctx, *claimedPending, true, ""); e != nil {

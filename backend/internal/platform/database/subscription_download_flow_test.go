@@ -14,6 +14,19 @@ import (
 
 type flowSearcher struct{ called int }
 
+// flowNotifier 捕获真实搜索、落库和提交链路最终生成的通知。
+type flowNotifier struct {
+	messages []application.NotificationMessage
+}
+
+func (notifier *flowNotifier) Notify(_ context.Context, _ application.NotificationEvent, message application.NotificationMessage) {
+	notifier.messages = append(notifier.messages, message)
+}
+
+func (notifier *flowNotifier) ChannelEventEnabled(context.Context, string, application.NotificationEvent) bool {
+	return true
+}
+
 func (f *flowSearcher) Search(_ context.Context, code string) ([]torrentsearch.Resource, error) {
 	f.called++
 	return []torrentsearch.Resource{{Kind: "bt", Site: "Nyaa BT", Title: code + " 中文字幕", URI: "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567", InfoHash: "0123456789abcdef0123456789abcdef01234567", Seeders: 12, Chinese: true}}, nil
@@ -84,6 +97,8 @@ func TestSubscriptionDownloadFlowSubmitsOnceAndExposesSource(t *testing.T) {
 		return map[string]string{"BT_DEFAULT_DOWNLOADER": "qbittorrent", "DEFAULT_SORT": "seeders"}, nil
 	})
 	first, e := service.Enqueue(ctx, "sub1", ports.DownloadOriginUser)
+	notifier := &flowNotifier{}
+	service.SetNotifier(notifier)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -109,6 +124,13 @@ func TestSubscriptionDownloadFlowSubmitsOnceAndExposesSource(t *testing.T) {
 	}
 	if client.submitted != 1 || search.called != 1 {
 		t.Fatalf("duplicate submission=%d search=%d", client.submitted, search.called)
+	}
+	if len(notifier.messages) != 1 {
+		t.Fatalf("通知数量 = %d，期望 1", len(notifier.messages))
+	}
+	message := notifier.messages[0]
+	if got := application.NotificationPlainText(message.Title, message.Text); got != "番号: SSIS-001\n状态: 开始下载\n站点: Nyaa BT\n来源: BT\n下载链接: magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567\n描述: film" {
+		t.Fatalf("下载通知 = %q", got)
 	}
 }
 

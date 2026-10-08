@@ -234,15 +234,33 @@ func NotificationPlainText(title, text string) string {
 	}
 }
 
-// NotificationHeadline 生成「番号X + 动作」形式的通知标题，与对标站文案一致；
-// 番号缺失时只保留动作，保证标题始终非空。
-func NotificationHeadline(code, action string) string {
-	code = strings.TrimSpace(code)
-	action = strings.TrimSpace(action)
-	if code == "" {
-		return action
+// NewNotificationMessage 统一生成六行业务通知，首行作为图文标题，其余作为正文。
+// 缺失值显示暂无，多行描述压成一行；内部 PT 引用不是下载链接，不对外展示。
+func NewNotificationMessage(code, status, site, source, uri, description, cover string) NotificationMessage {
+	field := func(value string) string {
+		value = strings.Join(strings.Fields(value), " ")
+		if value == "" {
+			return "暂无"
+		}
+		return value
 	}
-	return "番号" + code + action
+	link := strings.TrimSpace(uri)
+	parsed, err := url.Parse(link)
+	if err != nil || parsed.User != nil || !((parsed.Scheme == "https" || parsed.Scheme == "http") && parsed.Host != "" || parsed.Scheme == "magnet") {
+		link = ""
+	}
+	return NotificationMessage{
+		Title: "番号: " + field(code),
+		Text: strings.Join([]string{
+			"状态: " + field(status),
+			"站点: " + field(site),
+			"来源: " + field(strings.ToUpper(source)),
+			"下载链接: " + field(link),
+			"描述: " + field(description),
+		}, "\n"),
+		CoverURL: cover,
+		Code:     strings.TrimSpace(code),
+	}
 }
 
 // ChannelEventEnabled 实现 Notifier；设置不可读或键未声明时按关闭处理，不在未知状态下发消息。

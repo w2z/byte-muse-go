@@ -190,18 +190,21 @@ func TestChannelEventEnabledRequiresTrueValue(t *testing.T) {
 	}
 }
 
-// TestNotificationHeadlineAlwaysKeepsAction 验证标题始终非空：企业微信图文消息的 title 是必填项，
-// 番号缺失时也必须留下动作描述，否则整条图文消息会被平台拒绝。
-func TestNotificationHeadlineAlwaysKeepsAction(t *testing.T) {
-	for _, item := range []struct{ code, action, want string }{
-		{"SSIS-001", "已加入订阅列表", "番号SSIS-001已加入订阅列表"},
-		{"SSIS-001", "开始下载", "番号SSIS-001开始下载"},
-		{"", "下载失败", "下载失败"},
-		{" ", " 下载失败 ", "下载失败"},
+// TestNotificationMessageFormat 验证六行顺序、缺失值和多行内容，以及内部引用不能成为下载链接。
+func TestNotificationMessageFormat(t *testing.T) {
+	for _, item := range []struct{ name, code, source, uri, description, want string }{
+		{"HTTP链接", "EXAMPLE-001", "bt", "https://example.com/download", "资源简介", "番号: EXAMPLE-001\n状态: 开始下载\n站点: 示例站点\n来源: BT\n下载链接: https://example.com/download\n描述: 资源简介"},
+		{"磁力链接", "EXAMPLE-001", "bt", "magnet:?xt=urn:btih:abc&dn=example", "第一行\r\n第二行", "番号: EXAMPLE-001\n状态: 开始下载\n站点: 示例站点\n来源: BT\n下载链接: magnet:?xt=urn:btih:abc&dn=example\n描述: 第一行 第二行"},
+		{"PT内部引用", "EXAMPLE-001", "pt", "mteam:123", "资源简介", "番号: EXAMPLE-001\n状态: 开始下载\n站点: 示例站点\n来源: PT\n下载链接: 暂无\n描述: 资源简介"},
+		{"空值", " ", "", "", "", "番号: 暂无\n状态: 开始下载\n站点: 示例站点\n来源: 暂无\n下载链接: 暂无\n描述: 暂无"},
+		{"凭据链接", "EXAMPLE-001", "bt", "https://user:secret@example.com/download", "资源简介", "番号: EXAMPLE-001\n状态: 开始下载\n站点: 示例站点\n来源: BT\n下载链接: 暂无\n描述: 资源简介"},
 	} {
-		if got := NotificationHeadline(item.code, item.action); got != item.want {
-			t.Errorf("NotificationHeadline(%q,%q) = %q, 期望 %q", item.code, item.action, got, item.want)
-		}
+		t.Run(item.name, func(t *testing.T) {
+			message := NewNotificationMessage(item.code, "开始下载", "示例站点", item.source, item.uri, item.description, "")
+			if got := NotificationPlainText(message.Title, message.Text); got != item.want {
+				t.Fatalf("通知 = %q，期望 %q", got, item.want)
+			}
+		})
 	}
 }
 

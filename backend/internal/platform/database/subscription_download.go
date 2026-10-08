@@ -35,7 +35,7 @@ func (r *SubscriptionDownloadRepository) SaveTransferStates(ctx context.Context,
 	}
 	defer tx.Rollback()
 	update := fmt.Sprintf("UPDATE download_tasks SET transfer_status=%s,added_at=COALESCE(added_at,%s),completed_at=COALESCE(completed_at,%s) WHERE downloader='qbittorrent' AND LOWER(info_hash)=%s AND status IN ('submitted','downloading','completed') AND lease_token IS NULL AND updated_at<=%s", placeholder(r.dialect, 1), placeholder(r.dialect, 2), placeholder(r.dialect, 3), placeholder(r.dialect, 4), placeholder(r.dialect, 5))
-	current := fmt.Sprintf("SELECT t.id,COALESCE(t.transfer_status,''),COALESCE(m.code,''),COALESCE(NULLIF(m.translated_title,''),m.title,''),"+mediaCoverColumn("m")+" FROM download_tasks t LEFT JOIN media m ON m.id=t.media_id "+mediaCoverJoin("m")+" WHERE t.downloader='qbittorrent' AND LOWER(t.info_hash)=%s AND t.status IN ('submitted','downloading','completed') AND t.lease_token IS NULL AND t.updated_at<=%s", placeholder(r.dialect, 1), placeholder(r.dialect, 2))
+	current := fmt.Sprintf("SELECT t.id,COALESCE(t.transfer_status,''),COALESCE(m.code,''),COALESCE(NULLIF(m.translated_title,''),m.title,''),"+mediaCoverColumn("m")+",COALESCE(t.source_site,''),COALESCE(t.source_kind,''),COALESCE(t.resource_uri,'') FROM download_tasks t LEFT JOIN media m ON m.id=t.media_id "+mediaCoverJoin("m")+" WHERE t.downloader='qbittorrent' AND LOWER(t.info_hash)=%s AND t.status IN ('submitted','downloading','completed') AND t.lease_token IS NULL AND t.updated_at<=%s", placeholder(r.dialect, 1), placeholder(r.dialect, 2))
 	transitions := make([]ports.TransferTransition, 0, len(states))
 	for _, state := range states {
 		if state.Hash == "" {
@@ -52,8 +52,8 @@ func (r *SubscriptionDownloadRepository) SaveTransferStates(ctx context.Context,
 		if observedAt.IsZero() {
 			observedAt = time.Now().UTC()
 		}
-		var taskID, previous, code, title, cover string
-		scanErr := tx.QueryRowContext(ctx, current, state.Hash, encodeTime(observedAt, r.dialect)).Scan(&taskID, &previous, &code, &title, &cover)
+		var taskID, previous, code, title, cover, site, kind, uri string
+		scanErr := tx.QueryRowContext(ctx, current, state.Hash, encodeTime(observedAt, r.dialect)).Scan(&taskID, &previous, &code, &title, &cover, &site, &kind, &uri)
 		if scanErr != nil && !errors.Is(scanErr, sql.ErrNoRows) {
 			return nil, scanErr
 		}
@@ -64,7 +64,7 @@ func (r *SubscriptionDownloadRepository) SaveTransferStates(ctx context.Context,
 			continue
 		}
 		if state.Status == "completed" || state.Status == "failed" {
-			transitions = append(transitions, ports.TransferTransition{TaskID: taskID, Code: code, Title: title, Cover: cover, Status: state.Status})
+			transitions = append(transitions, ports.TransferTransition{TaskID: taskID, Code: code, Title: title, Cover: cover, Status: state.Status, Site: site, Kind: kind, URI: uri})
 		}
 	}
 	if err = tx.Commit(); err != nil {
@@ -241,7 +241,7 @@ func (r *SubscriptionDownloadRepository) StartTask(ctx context.Context, a ports.
 		return ports.PendingSubmission{}, ports.ErrSubscriptionTaskActive
 	}
 	now := time.Now().UTC()
-	p := ports.PendingSubmission{ID: newSortableID(), URI: c.URI, InfoHash: c.InfoHash, Downloader: c.Downloader, LeaseToken: newSortableID(), Code: a.Code, Title: a.Title, Site: c.Site, Cover: a.Cover}
+	p := ports.PendingSubmission{ID: newSortableID(), URI: c.URI, InfoHash: c.InfoHash, Downloader: c.Downloader, LeaseToken: newSortableID(), Code: a.Code, Title: a.Title, Site: c.Site, Kind: c.Kind, Cover: a.Cover}
 	insert := fmt.Sprintf("INSERT INTO download_tasks (id,media_id,subscription_id,status,source_site,source_kind,resource_uri,info_hash,downloader,filter_passed,lease_until,lease_token,created_at,updated_at,origin) VALUES (%s)", placeholders(r.dialect, 15, 1))
 	if _, e = tx.ExecContext(ctx, insert, p.ID, a.MediaID, a.SubscriptionID, domain.DownloadStatusUnknown, c.Site, c.Kind, c.URI, c.InfoHash, c.Downloader, c.FilterPassed, now.Add(2*time.Minute).UnixMilli(), p.LeaseToken, encodeTime(now, r.dialect), encodeTime(now, r.dialect), string(normalizeOrigin(a.Origin))); e != nil {
 		return ports.PendingSubmission{}, e
@@ -260,7 +260,7 @@ func (r *SubscriptionDownloadRepository) FinishSubmission(ctx context.Context, p
 	return e
 }
 
-// ClaimPending reserves an ambiguous submission for hash reconciliation.
+// ClaimPending 领取待回查任务，并读取已有来源与资源链接，保证恢复后的通知内容完整。
 func (r *SubscriptionDownloadRepository) ClaimPending(ctx context.Context, now time.Time) (*ports.PendingSubmission, error) {
 	tx, e := r.db.BeginTx(ctx, nil)
 	if e != nil {
@@ -268,8 +268,8 @@ func (r *SubscriptionDownloadRepository) ClaimPending(ctx context.Context, now t
 	}
 	defer tx.Rollback()
 	var p ports.PendingSubmission
-	q := fmt.Sprintf("SELECT d.id,d.resource_uri,d.info_hash,d.downloader,COALESCE(d.source_site,''),COALESCE(m.code,''),COALESCE(NULLIF(m.translated_title,''),m.title,''),"+mediaCoverColumn("m")+" FROM download_tasks d LEFT JOIN media m ON m.id=d.media_id "+mediaCoverJoin("m")+" WHERE d.status='unknown' AND (d.lease_until IS NULL OR d.lease_until<%s) ORDER BY d.updated_at,d.id LIMIT 1", placeholder(r.dialect, 1))
-	e = tx.QueryRowContext(ctx, q, now.UnixMilli()).Scan(&p.ID, &p.URI, &p.InfoHash, &p.Downloader, &p.Site, &p.Code, &p.Title, &p.Cover)
+	q := fmt.Sprintf("SELECT d.id,d.resource_uri,d.info_hash,d.downloader,COALESCE(d.source_site,''),COALESCE(m.code,''),COALESCE(NULLIF(m.translated_title,''),m.title,''),"+mediaCoverColumn("m")+",COALESCE(d.source_kind,'') FROM download_tasks d LEFT JOIN media m ON m.id=d.media_id "+mediaCoverJoin("m")+" WHERE d.status='unknown' AND (d.lease_until IS NULL OR d.lease_until<%s) ORDER BY d.updated_at,d.id LIMIT 1", placeholder(r.dialect, 1))
+	e = tx.QueryRowContext(ctx, q, now.UnixMilli()).Scan(&p.ID, &p.URI, &p.InfoHash, &p.Downloader, &p.Site, &p.Code, &p.Title, &p.Cover, &p.Kind)
 	if errors.Is(e, sql.ErrNoRows) {
 		return nil, nil
 	}
