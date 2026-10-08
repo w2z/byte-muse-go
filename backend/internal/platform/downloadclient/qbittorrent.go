@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -28,42 +29,56 @@ type TransferState struct {
 	CompletedAt *time.Time
 }
 
-// ListTransferStates reads qBittorrent transfer metadata without changing any torrent.
+// ListTransferStates 分页只读获取下载状态，避免任务库整体超过单次响应上限。
+// 按加入时间升序读取并按哈希去重；任一页失败时丢弃部分快照，缺失任务由下一轮重读。
 func (c *Qbittorrent) ListTransferStates(ctx context.Context) ([]TransferState, error) {
 	if err := c.login(ctx); err != nil {
 		return nil, err
 	}
-	raw, err := c.request(ctx, http.MethodGet, "/api/v2/torrents/info", nil)
-	if err != nil {
-		return nil, err
-	}
-	var values []struct {
-		Hash         string  `json:"hash"`
-		State        string  `json:"state"`
-		Progress     float64 `json:"progress"`
-		AddedOn      int64   `json:"added_on"`
-		CompletionOn int64   `json:"completion_on"`
-	}
-	if err := json.Unmarshal(raw, &values); err != nil {
-		return nil, err
-	}
-	items := make([]TransferState, 0, len(values))
-	for _, value := range values {
-		if value.Hash == "" {
-			continue
+	const pageSize = 200
+	items := make([]TransferState, 0)
+	seen := make(map[string]bool)
+	for offset := 0; ; offset += pageSize {
+		params := url.Values{"limit": {strconv.Itoa(pageSize)}, "offset": {strconv.Itoa(offset)}, "sort": {"added_on"}, "reverse": {"false"}}
+		raw, err := c.request(ctx, http.MethodGet, "/api/v2/torrents/info?"+params.Encode(), nil)
+		if err != nil {
+			return nil, err
 		}
-		item := TransferState{Hash: strings.ToLower(value.Hash), Status: transferStatus(value.State, value.Progress, value.CompletionOn)}
-		if value.AddedOn > 0 {
-			at := time.Unix(value.AddedOn, 0).UTC()
-			item.AddedAt = &at
+		var values []struct {
+			Hash         string  `json:"hash"`
+			State        string  `json:"state"`
+			Progress     float64 `json:"progress"`
+			AddedOn      int64   `json:"added_on"`
+			CompletionOn int64   `json:"completion_on"`
 		}
-		if value.CompletionOn > 0 {
-			at := time.Unix(value.CompletionOn, 0).UTC()
-			item.CompletedAt = &at
+		if err := json.Unmarshal(raw, &values); err != nil {
+			return nil, err
 		}
-		items = append(items, item)
+		previousCount := len(items)
+		for _, value := range values {
+			hash := strings.ToLower(value.Hash)
+			if hash == "" || seen[hash] {
+				continue
+			}
+			seen[hash] = true
+			item := TransferState{Hash: hash, Status: transferStatus(value.State, value.Progress, value.CompletionOn)}
+			if value.AddedOn > 0 {
+				at := time.Unix(value.AddedOn, 0).UTC()
+				item.AddedAt = &at
+			}
+			if value.CompletionOn > 0 {
+				at := time.Unix(value.CompletionOn, 0).UTC()
+				item.CompletedAt = &at
+			}
+			items = append(items, item)
+		}
+		if len(values) < pageSize {
+			return items, nil
+		}
+		if len(items) == previousCount {
+			return nil, fmt.Errorf("qBittorrent pagination made no progress")
+		}
 	}
-	return items, nil
 }
 
 func transferStatus(state string, progress float64, completed int64) string {
