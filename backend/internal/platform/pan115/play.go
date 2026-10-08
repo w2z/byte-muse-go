@@ -107,16 +107,26 @@ func (c *Client) Info(ctx context.Context, accessToken, fileID string) (FileInfo
 	return info, nil
 }
 
+type fileDownloadKey struct{}
+
+// WithFileDownload 标记后台文件下载，使直链解析不占用播放专用的每秒一次配额。
+// 全局请求间隔、并发上限、冷却和取消仍生效；该标记仅由内部下载入口设置。
+func WithFileDownload(ctx context.Context) context.Context {
+	return context.WithValue(ctx, fileDownloadKey{}, true)
+}
+
 // DownloadURL 用提取码换取带时效的下载直链。
 // 115 会把直链绑定到换取直链时的 User-Agent，因此 userAgent 必须与最终播放端一致；
 // 空字符串表示不携带 UA，与 115 官方客户端行为一致。
 //
-// 直链换取走单独的 1 请求/秒配额（见 admitPlay），并与其他链路共享限流冷却，
-// 避免播放端批量探测占满全局配额后使目录扫描与 strm 生成无法推进。
+// 播放直链走单独的 1 请求/秒配额；WithFileDownload 标记的后台下载不使用该配额。
+// 两种用途仍共享全局请求节流和限流冷却。
 func (c *Client) DownloadURL(ctx context.Context, accessToken, pickCode, userAgent string) (string, error) {
 	return callValue(c, ctx, http.MethodPost, func() (string, error) {
-		if err := c.admitPlay(ctx); err != nil {
-			return "", err
+		if download, _ := ctx.Value(fileDownloadKey{}).(bool); !download {
+			if err := c.admitPlay(ctx); err != nil {
+				return "", err
+			}
 		}
 		return c.downloadURLOnce(ctx, accessToken, pickCode, userAgent)
 	})

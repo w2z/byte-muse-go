@@ -179,7 +179,7 @@ func (s *StrmService) downloadStrmMedia(ctx context.Context, root, target, kind 
 	if identifier == "" {
 		return false, errors.New("下载文件缺少网盘标识")
 	}
-	targetURL, err := s.PlayURL(ctx, kind, identifier, strmDownloadUserAgent)
+	targetURL, err := s.PlayURL(pan115.WithFileDownload(ctx), kind, identifier, strmDownloadUserAgent)
 	if err != nil {
 		return false, errors.New("获取媒体下载地址失败，请检查网盘连接或限流状态")
 	}

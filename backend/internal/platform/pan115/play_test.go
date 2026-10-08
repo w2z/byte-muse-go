@@ -5,7 +5,49 @@ import (
 	"errors"
 	"net/http"
 	"testing"
+	"time"
 )
+
+func TestFileDownloadQuota(t *testing.T) {
+	for _, scenario := range []struct {
+		name        string
+		download    bool
+		globalWait  bool
+		wantBlocked bool
+	}{
+		{name: "download ignores playback quota", download: true},
+		{name: "playback keeps quota", wantBlocked: true},
+		{name: "download keeps cooldown", download: true, globalWait: true, wantBlocked: true},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			client := newTestClient(t, func(writer http.ResponseWriter, request *http.Request) {
+				writeJSON(t, writer, `{"state":true,"data":{"file":{"url":{"url":"https://cdn.example.com/file"}}}}`)
+			})
+			client.playGap = time.Hour
+			client.nextPlay = time.Now()
+			originalNextPlay := client.nextPlay
+			if scenario.globalWait {
+				client.extendCooldown(time.Hour)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+			defer cancel()
+			if scenario.download {
+				ctx = WithFileDownload(ctx)
+			}
+			address, err := client.DownloadURL(ctx, "token", "pick", "ByteMuse/STRM")
+			if scenario.wantBlocked {
+				if !errors.Is(err, context.DeadlineExceeded) {
+					t.Fatalf("expected quota wait cancellation, got %v", err)
+				}
+			} else if err != nil || address != "https://cdn.example.com/file" {
+				t.Fatalf("file download blocked by playback quota: %q %v", address, err)
+			}
+			if scenario.download && !client.nextPlay.Equal(originalNextPlay) {
+				t.Fatal("file download consumed playback quota")
+			}
+		})
+	}
+}
 
 // TestInfoMapsInvalidFileIDCode 验证 115 对非法文件标识返回的通用「参数错误」
 // 被归一化为 ErrInvalidFileID，避免上层把它当成未知故障。
