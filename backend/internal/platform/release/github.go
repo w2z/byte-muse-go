@@ -158,10 +158,11 @@ func (s *GitHubSource) read(ctx context.Context, client *http.Client, endpoint s
 		return ports.ReleaseInfo{}, errors.New("读取发布版本记录失败")
 	}
 	var record struct {
-		Version string `json:"version"`
-		Commit  string `json:"commit"`
-		BuiltAt string `json:"built_at"`
-		Source  string `json:"source"`
+		Version string                `json:"version"`
+		Commit  string                `json:"commit"`
+		BuiltAt string                `json:"built_at"`
+		Source  string                `json:"source"`
+		Changes []ports.ReleaseChange `json:"changes"`
 	}
 	if json.Unmarshal(body, &record) != nil {
 		return ports.ReleaseInfo{}, errors.New("发布版本记录格式无效")
@@ -175,5 +176,6 @@ func (s *GitHubSource) read(ctx context.Context, client *http.Client, endpoint s
 		Commit:  strings.TrimSpace(record.Commit),
 		BuiltAt: strings.TrimSpace(record.BuiltAt),
 		Source:  strings.TrimSpace(record.Source),
+		Changes: record.Changes,
 	}, nil
 }

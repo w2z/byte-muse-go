@@ -16,6 +16,34 @@ type stubReleaseSource struct {
 	calls int
 }
 
+// TestVersionChanges 验证只展示当前版本之后、最新版本以内的提交说明，并按版本升序排列。
+func TestVersionChanges(t *testing.T) {
+	source := &stubReleaseSource{info: ports.ReleaseInfo{Version: "0.1.24", Changes: []ports.ReleaseChange{
+		{Version: "0.1.25", Message: "未来版本"},
+		{Version: "0.1.24", Message: " 修复升级 "},
+		{Version: "0.1.21", Message: "已经安装"},
+		{Version: "0.1.22", Message: "增加进度"},
+		{Version: "0.1.23", Message: "  "},
+		{Version: "invalid", Message: "无效版本"},
+	}}}
+	for _, current := range []string{"v0.1.21", "0.1.24", "0.1.30", "dev"} {
+		status, err := NewVersionService(current, source).Status(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if status.Changes == nil {
+			t.Fatal("空列表必须序列化为数组")
+		}
+		if current == "v0.1.21" {
+			if len(status.Changes) != 2 || status.Changes[0].Version != "0.1.22" || status.Changes[1].Message != "修复升级" {
+				t.Fatalf("changes=%+v", status.Changes)
+			}
+		} else if len(status.Changes) != 0 {
+			t.Fatalf("current=%s changes=%+v", current, status.Changes)
+		}
+	}
+}
+
 func (s *stubReleaseSource) Latest(context.Context) (ports.ReleaseInfo, error) {
 	s.calls++
 	return s.info, s.err

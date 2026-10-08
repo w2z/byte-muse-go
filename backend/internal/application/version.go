@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"errors"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -35,6 +36,8 @@ type VersionStatus struct {
 	CheckedAt string `json:"checked_at"`
 	// CheckError 是远端检查的脱敏失败原因，已确认可用时为空。
 	CheckError string `json:"check_error"`
+	// Changes 按版本升序返回 current < version <= latest 的非空提交说明；无更新或旧文件缺省时为 []。
+	Changes []ports.ReleaseChange `json:"changes"`
 }
 
 // VersionService 比较当前运行版本与发布仓库记录的版本。
@@ -80,7 +83,7 @@ func (s *VersionService) status(ctx context.Context, refresh bool) (VersionStatu
 	if s == nil || s.source == nil {
 		return VersionStatus{}, ErrVersionUnavailable
 	}
-	status := VersionStatus{Current: s.Current(), CheckedAt: s.now().UTC().Format(time.RFC3339)}
+	status := VersionStatus{Current: s.Current(), CheckedAt: s.now().UTC().Format(time.RFC3339), Changes: []ports.ReleaseChange{}}
 	info, err := s.latest(ctx, refresh)
 	if err != nil {
 		status.CheckError = err.Error()
@@ -89,6 +92,17 @@ func (s *VersionService) status(ctx context.Context, refresh bool) (VersionStatu
 	status.Latest = info.Version
 	status.ReleaseURL = info.Source
 	status.HasUpdate = ports.CompareVersions(status.Current, info.Version) < 0
+	if status.HasUpdate {
+		for _, change := range info.Changes {
+			change.Message = strings.TrimSpace(change.Message)
+			if change.Message != "" && ports.CompareVersions(status.Current, change.Version) < 0 && ports.CompareVersions(change.Version, info.Version) <= 0 {
+				status.Changes = append(status.Changes, change)
+			}
+		}
+		sort.SliceStable(status.Changes, func(i, j int) bool {
+			return ports.CompareVersions(status.Changes[i].Version, status.Changes[j].Version) < 0
+		})
+	}
 	return status, nil
 }
 

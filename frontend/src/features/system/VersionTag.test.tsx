@@ -30,6 +30,25 @@ function renderTag() {
 
 const base: SystemVersion = { current: "0.1.21", latest: "0.1.21", has_update: false, release_url: "", checked_at: "2026-09-29T12:00:00Z", check_error: "" };
 
+it("有更新时在状态位置按编号展示跨版本说明，按纯文本渲染", async () => {
+  vi.mocked(apiRequest).mockImplementation((path) => Promise.resolve(path === "/system/upgrade"
+    ? { enabled: true, phase: "idle", target: "", error: "" }
+    : { ...base, latest: "0.1.23", has_update: true, changes: [
+      { version: "0.1.22", message: "新增升级进度" },
+      { version: "0.1.23", message: "<script>修复版本检查</script>" },
+    ] }));
+  renderTag();
+  fireEvent.click(screen.getByRole("button", { name: "v0.1.21" }));
+  const list = await screen.findByRole("list", { name: "更新内容" });
+  expect(list.tagName).toBe("OL");
+  expect(list.querySelectorAll("li")).toHaveLength(2);
+  expect(list.textContent).toContain("新增升级进度");
+  expect(list.textContent).toContain("<script>修复版本检查</script>");
+  expect(list.querySelector("script")).toBeNull();
+  expect(screen.queryByText("当前已是最新版本")).toBeNull();
+  expect(screen.queryByText("新版本 0.1.23 已发布")).toBeNull();
+});
+
 it("点击版本打开弹窗，异步检查后切换升级操作，暂不升级关闭弹窗", async () => {
   let resolve!: (value: SystemVersion) => void;
   vi.mocked(apiRequest).mockImplementation((path) => path === "/system/upgrade" ? Promise.resolve({ enabled:true, phase:"idle", target:"", error:"" }) : path.includes("refresh") ? new Promise<SystemVersion>((done) => { resolve = done; }) : Promise.resolve(base));

@@ -88,6 +88,21 @@ $commit = Invoke-GitText rev-parse HEAD
 $shortCommit = Invoke-GitText rev-parse --short HEAD
 $builtAt = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss') + 'Z'
 
+# 从实际构建提交生成说明，排除版本回写和纯文档提交；每条沿用正式版本计数，不能按列表位置推算。
+# 从完整历史重建，首次启用也能展示跨旧版本的更新，不依赖用户安装过中间版本。
+if ((Invoke-GitText rev-parse --is-shallow-repository) -eq 'true') {
+    throw '生成更新说明需要完整 Git 历史，请先获取完整历史再生成版本记录'
+}
+$changes = @(foreach ($revision in @(Invoke-Git log --format=%H HEAD -- @buildInputs)) {
+    $revisionCount = Invoke-GitText rev-list --count $revision -- ':(exclude)version.json'
+    $message = Invoke-GitText log -1 --format=%s $revision
+    # 只保留提交标题的说明部分；清理旧提交的控制字符，正文不进入公开版本记录。
+    $message = ($message -replace '\p{Cc}', '') -replace '^.*?\b(?:feat|fix|docs|style|refactor|perf|test|chore)(?:\([^)]*\))?!?:\s*', ''
+    if (-not [string]::IsNullOrWhiteSpace($message)) {
+        [ordered]@{ version = "0.1.$revisionCount"; message = $message.Trim() }
+    }
+})
+
 $record = [ordered]@{
     version      = $version
     commit       = $commit
@@ -96,6 +111,7 @@ $record = [ordered]@{
     image        = $image
     tags         = @($version, "sha-$shortCommit", 'latest')
     source       = $source
+    changes      = $changes
     note         = '由 deploy/version.ps1 在代码提交时写入，请勿手工修改'
 }
 $json = (($record | ConvertTo-Json -Depth 4) -replace "`r`n", "`n") + "`n"

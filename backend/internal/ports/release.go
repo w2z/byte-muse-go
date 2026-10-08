@@ -17,6 +17,14 @@ type ReleaseInfo struct {
 	BuiltAt string
 	// Source 是发布仓库地址，仅作为发布来源元数据。
 	Source string
+	// Changes 是发布脚本从构建提交生成的版本说明历史；旧版本文件可缺省。
+	Changes []ReleaseChange
+}
+
+// ReleaseChange 将提交说明与其发布版本绑定，供服务按升级区间筛选。
+type ReleaseChange struct {
+	Version string `json:"version"`
+	Message string `json:"message"`
 }
 
 // ReleaseSource 读取发布仓库当前记录的版本。

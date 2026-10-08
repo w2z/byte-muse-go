@@ -147,6 +147,8 @@ body button.arco-btn[class]:focus-visible { box-shadow: none; }
 .version-dialog-label, .version-dialog-note { color: var(--muted); font-size: 13px; }
 .version-dialog-number { margin-top: 4px; font-size: 32px; font-variant-numeric: tabular-nums; color: var(--ink); }
 .version-dialog-error { color: var(--danger); }
+.version-dialog-changes { margin: 16px 0 0; padding-left: 24px; max-height: 240px; overflow-y: auto; line-height: 1.8; }
+.version-dialog-changes li { padding-left: 4px; margin-bottom: 8px; white-space: pre-wrap; }
 .version-upgrade-progress { margin-top: 24px; width: 100%; }
 .version-upgrade-steps { margin: 16px 0 0; padding-left: 24px; color: var(--ink); }
 .version-upgrade-steps li { padding: 4px 0; line-height: 1.6; }

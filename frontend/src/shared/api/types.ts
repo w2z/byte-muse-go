@@ -153,6 +153,8 @@ export type SystemSettings = {
 
 /** 顶栏版本标签数据：当前运行版本与发布仓库版本的比较结果。 */
 export type SystemVersion = {
+  /** current 之后到 latest 的更新说明，按版本升序；旧服务可不返回。 */
+  changes?: { version: string; message: string }[];
   /** 当前运行版本；未注入构建版本时为 dev。 */
   current: string;
   /** 发布仓库当前记录的版本；检查失败时为空串。 */

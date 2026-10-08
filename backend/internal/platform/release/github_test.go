@@ -87,7 +87,7 @@ func newTestSource(t *testing.T, handler http.HandlerFunc) *GitHubSource {
 
 // TestGitHubSourceLatest 验证内容读取、请求形态和响应校验。
 func TestGitHubSourceLatest(t *testing.T) {
-	const body = `{"version":"0.1.22","commit":"abc123","built_at":"2026-09-29T12:00:00Z","source":"https://github.com/w2z/byte-muse-go"}`
+	const body = `{"version":"0.1.22","commit":"abc123","built_at":"2026-09-29T12:00:00Z","source":"https://github.com/w2z/byte-muse-go","changes":[{"version":"0.1.22","message":"修复版本检查"}]}`
 	source := newTestSource(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/w2z/byte-muse-go/HEAD/version.json" {
 			t.Errorf("请求路径=%s", r.URL.Path)
@@ -103,6 +103,9 @@ func TestGitHubSourceLatest(t *testing.T) {
 	info, err := source.Latest(context.Background())
 	if err != nil {
 		t.Fatal(err)
+	}
+	if len(info.Changes) != 1 || info.Changes[0].Message != "修复版本检查" {
+		t.Fatalf("changes=%+v", info.Changes)
 	}
 	if info.Version != "0.1.22" || info.Commit != "abc123" || info.Source != "https://github.com/w2z/byte-muse-go" {
 		t.Fatalf("info=%+v", info)

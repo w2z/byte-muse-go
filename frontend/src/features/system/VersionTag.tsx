@@ -10,7 +10,7 @@ const UPGRADE_KEY = ["system", "upgrade"] as const;
 const ACTIVE_PHASES = ["downloading", "extracting", "installing", "restarting"];
 const UPGRADE_STEPS = ["开始下载文件", "开始解压文件", "正在升级", "正在重启"];
 
-/** 本地版本立即显示；升级按后端完成步骤显示进度，断连继续等待，目标服务就绪后刷新页面。 */
+/** 本地版本立即显示；更新说明按服务端版本区间展示，升级断连继续等待，目标就绪后刷新。 */
 export function VersionTag() {
   const [visible, setVisible] = useState(false);
   const [waitingTarget, setWaitingTarget] = useState("");
@@ -59,6 +59,7 @@ export function VersionTag() {
   const completedSteps = install.isPending ? 0 : Math.min(4, Math.max(0, upgrade.data?.completed_steps ?? (phase === "success" ? 4 : ACTIVE_PHASES.indexOf(phase))));
   const showProgress = busy || (Boolean(upgrade.data?.target) && phase !== "idle");
   const failure = install.error?.message || upgrade.data?.error || check.error?.message || data?.check_error || error?.message;
+  const showChanges = hasUpdate && !busy && !checking && !failure && !waitExpired && Boolean(data?.changes?.length);
   const summary = waitExpired ? "等待服务恢复超时，请检查容器日志后刷新页面。" : busy ? (phase === "success" ? "升级完成，正在刷新页面…" : UPGRADE_STEPS[Math.min(completedSteps, 3)] + "…")
     : checking ? "正在检查更新…" : failure ? failure : hasUpdate ? `新版本 ${data?.latest} 已发布`
       : data?.latest ? "当前已是最新版本" : "点击下方按钮检查更新";
@@ -88,7 +89,11 @@ export function VersionTag() {
                   aria-current={index === completedSteps && busy ? "step" : undefined}><span>{label}</span></li>)}
               </ol>
             </div>}
-            <p role="status" aria-live="polite" className={failure && !busy ? "version-dialog-error" : undefined}>{summary}</p>
+            <div role="status" aria-live="polite">
+              {showChanges ? <ol className="version-dialog-changes" aria-label="更新内容" tabIndex={0}>
+                {data?.changes?.map((change, index) => <li key={`${change.version}-${index}`}>{change.message}</li>)}
+              </ol> : <p className={failure && !busy ? "version-dialog-error" : undefined}>{summary}</p>}
+            </div>
             {hasUpdate && !busy && <p className="version-dialog-note">升级期间服务会短暂重启，完成后页面自动刷新。</p>}
             {hasUpdate && upgrade.data?.enabled === false && <p className="version-dialog-error">当前镜像不支持容器内升级，请先更新一次镜像。</p>}
           </div>

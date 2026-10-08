@@ -841,7 +841,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SystemVersion'
-              example: {current: 0.1.21, latest: 0.1.22, has_update: true, release_url: 'https://github.com/w2z/byte-muse-go', checked_at: '2026-09-29T12:00:00Z', check_error: ''}
+              example: {current: 0.1.21, latest: 0.1.23, has_update: true, release_url: 'https://github.com/w2z/byte-muse-go', checked_at: '2026-09-29T12:00:00Z', check_error: '', changes: [{version: 0.1.22, message: 新增升级进度}, {version: 0.1.23, message: 修复版本检查}]}
         '401':
           description: 未登录或会话失效
           content:
@@ -2314,7 +2314,7 @@ components:
           type: integer
     SystemVersion:
       type: object
-      required: [current, latest, has_update, release_url, checked_at, check_error]
+      required: [current, latest, has_update, release_url, checked_at, check_error, changes]
       description: 检查更新结果；远端检查失败时 latest、release_url 为空串且 has_update 为 false，当前版本始终可用
       properties:
         current: {type: string, description: 当前运行版本，来自 BYTEMUSE_VERSION；未注入时为 dev}
@@ -2323,6 +2323,18 @@ components:
         release_url: {type: string, description: '发布仓库地址，取自 version.json 的 source；检查失败时为空串'}
         checked_at: {type: string, format: date-time, description: 本次结论的产生时间，UTC RFC 3339}
         check_error: {type: string, description: '远端检查的脱敏中文失败原因；已确认可用时为空串'}
+        changes:
+          type: array
+          description: '当前版本之后至最新版本（current < version <= latest）的非空提交说明，按版本升序。无更新、检查失败或旧版本文件未提供说明时为 []；纯文本，不含 HTML。'
+          items:
+            type: object
+            required: [version, message]
+            properties:
+              version: {type: string, description: 该提交对应的发布版本号}
+              message: {type: string, description: 提交标题中的更新说明，移除提交类型前缀后按纯文本展示}
+          example:
+            - {version: '0.1.100', message: 升级弹窗显示分步进度并在服务恢复后刷新}
+            - {version: '0.1.101', message: 版本检查与升级下载按直连和代理顺序回退}
     SystemUpgrade:
       type: object
       required: [enabled, phase, completed_steps, target, error]
