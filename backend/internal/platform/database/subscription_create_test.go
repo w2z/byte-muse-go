@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"bytemuse/backend/internal/application"
 	"bytemuse/backend/internal/domain"
 	"bytemuse/backend/internal/logging"
 	"bytemuse/backend/internal/ports"
@@ -51,6 +52,39 @@ func TestSubscriptionCreateReturnsMediaSnapshot(t *testing.T) {
 	}
 	if item.Media.BannerURL == nil || *item.Media.BannerURL != "https://img.example/banner.jpg" {
 		t.Fatalf("影片快照封面 = %#v", item.Media.BannerURL)
+	}
+	for _, sample := range []struct {
+		name        string
+		translation any
+		want        string
+	}{
+		{"已翻译", "翻译后的标题", "翻译后的标题"},
+		{"未翻译", nil, "原标题"},
+		{"空白译文", "  ", "原标题"},
+	} {
+		t.Run(sample.name, func(t *testing.T) {
+			if _, err := store.SQLDB().ExecContext(ctx, "UPDATE media SET translated_title=? WHERE id=?", sample.translation, "m1"); err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := store.Subscriptions().Cancel(ctx, item.ID); err != nil {
+				t.Fatal(err)
+			}
+			notifier := &flowNotifier{}
+			service := application.NewSubscriptionService(store.Subscriptions())
+			service.SetNotifier(notifier)
+			var createErr error
+			item, _, createErr = service.Create(ctx, application.CreateSubscriptionCommand{IdempotencyKey: "notify-" + sample.name, MediaID: "m1", Mode: domain.SubscriptionModeStrict})
+			if createErr != nil {
+				t.Fatal(createErr)
+			}
+			if len(notifier.messages) != 1 {
+				t.Fatalf("通知数量 = %d", len(notifier.messages))
+			}
+			message := notifier.messages[0]
+			if message.Title != "番号: SSIS-001" || message.Text != "状态: 已加入订阅列表\n描述: "+sample.want || message.CoverURL != "https://img.example/banner.jpg" {
+				t.Fatalf("数据库影片通知 = %+v", message)
+			}
+		})
 	}
 }
 

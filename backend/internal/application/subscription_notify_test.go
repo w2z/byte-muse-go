@@ -65,7 +65,7 @@ func TestSubscriptionServiceNotifiesCreateOutcome(t *testing.T) {
 	if _, _, err := service.Create(ctx, command); err != nil {
 		t.Fatal(err)
 	}
-	if len(notifier.events) != 1 || notifier.events[0] != string(NotificationSubscribe)+"|番号: SSIS-001|状态: 已加入订阅列表\n站点: 暂无\n来源: 暂无\n下载链接: 暂无\n描述: 标题|"+banner {
+	if len(notifier.events) != 1 || notifier.events[0] != string(NotificationSubscribe)+"|番号: SSIS-001|状态: 已加入订阅列表\n描述: 标题|"+banner {
 		t.Fatalf("新建订阅通知 = %v", notifier.events)
 	}
 
@@ -81,7 +81,7 @@ func TestSubscriptionServiceNotifiesCreateOutcome(t *testing.T) {
 	if _, _, err := service.Create(ctx, command); err == nil {
 		t.Fatal("期望订阅创建失败")
 	}
-	if len(notifier.events) != 2 || !strings.Contains(notifier.events[1], string(NotificationSubscribeFailed)+"|番号: SSIS-001|状态: 订阅失败\n站点: 暂无\n来源: 暂无\n下载链接: 暂无\n描述: 原因：媒体不存在") {
+	if len(notifier.events) != 2 || !strings.Contains(notifier.events[1], string(NotificationSubscribeFailed)+"|番号: SSIS-001|状态: 订阅失败\n描述: 原因：媒体不存在") {
 		t.Fatalf("订阅失败通知 = %v", notifier.events)
 	}
 }
