@@ -15,6 +15,7 @@ afterEach(() => {
   cleanup();
   vi.mocked(apiRequest).mockReset();
   vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
 });
 
 /** 渲染独立查询客户端下的版本标签，避免用例间缓存串扰。 */
@@ -113,4 +114,44 @@ it("更新请求未返回时立即显示本地版本，返回后再显示更新�
   await waitFor(() => expect(container.querySelector(".arco-badge-dot")).not.toBeNull());
   expect(screen.getByText("v0.1.21")).toBeInTheDocument();
   expect(screen.queryByRole("link")).toBeNull();
+});
+
+it("升级按实际阶段完成步骤，失败保留进度且不标记当前步骤完成", async () => {
+  vi.mocked(apiRequest).mockImplementation((path) => Promise.resolve(path === "/system/upgrade"
+    ? { enabled: true, phase: "failed", completed_steps: 2, target: "0.1.22", error: "安装失败" }
+    : { ...base, latest: "0.1.22", has_update: true }));
+  renderTag();
+  fireEvent.click(screen.getByRole("button", { name: "v0.1.21" }));
+  expect(await screen.findByText("安装失败")).toBeInTheDocument();
+  expect(screen.getByText("开始下载文件").closest("li")).toHaveClass("is-complete");
+  expect(screen.getByText("开始解压文件").closest("li")).toHaveClass("is-complete");
+  expect(screen.getByText("正在升级").closest("li")).not.toHaveClass("is-complete");
+  expect(screen.getByRole("progressbar", { name: "升级进度" })).toHaveAttribute("aria-valuenow", "50");
+});
+
+it("升级依次展示进度，断连不误判完成，目标就绪后刷新", async () => {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const reload = vi.fn();
+  vi.stubGlobal("location", { ...window.location, reload });
+  const state = { enabled: true, phase: "idle", completed_steps: 0, target: "0.1.22", error: "" };
+  vi.mocked(apiRequest).mockImplementation((path, init) => Promise.resolve(path !== "/system/upgrade"
+    ? { ...base, latest: "0.1.22", has_update: true } : { ...state, phase: init?.method === "POST" ? "downloading" : "idle" }));
+  render(<QueryClientProvider client={client}><VersionTag /></QueryClientProvider>);
+  fireEvent.click(screen.getByRole("button", { name: "v0.1.21" }));
+  fireEvent.click(await screen.findByRole("button", { name: "立即升级" }));
+  await waitFor(() => expect(screen.getByRole("progressbar", { name: "升级进度" })).toHaveAttribute("aria-valuenow", "0"));
+  for (const [index, phase] of ["extracting", "installing", "restarting"].entries()) {
+    await act(async () => { client.setQueryData(["system", "upgrade"], { ...state, phase, completed_steps: index + 1 }); });
+    await waitFor(() => expect(screen.getByRole("progressbar", { name: "升级进度" })).toHaveAttribute("aria-valuenow", String((index + 1) * 25)));
+    expect(document.querySelectorAll(".version-upgrade-steps .is-complete")).toHaveLength(index + 1);
+    expect(reload).not.toHaveBeenCalled();
+  }
+  vi.mocked(apiRequest).mockRejectedValueOnce(new Error("服务断开"));
+  await act(async () => { await client.refetchQueries({ queryKey: ["system", "upgrade"] }); });
+  expect(screen.getByRole("progressbar", { name: "升级进度" })).toHaveAttribute("aria-valuenow", "75");
+  expect(reload).not.toHaveBeenCalled();
+  await act(async () => { client.setQueryData(["system", "upgrade"], { ...state, phase: "success", completed_steps: 4 }); });
+  await waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
+  vi.unstubAllGlobals();
+  client.clear();
 });

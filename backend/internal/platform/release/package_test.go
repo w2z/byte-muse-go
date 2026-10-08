@@ -2,18 +2,85 @@ package release
 
 import (
 	"archive/tar"
+	"bytemuse/backend/internal/ports"
 	"bytes"
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
+
+type packageTransport func(*http.Request) (*http.Response, error)
+
+func (f packageTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// TestStageProgress 使用真实运行包完成暂存，验证阶段报告与持久化一致，且不会提前重启。
+func TestStageProgress(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("升级安装器只在 Linux 运行")
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	binary, err := os.ReadFile(executable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var archive bytes.Buffer
+	gz := gzip.NewWriter(&archive)
+	tw := tar.NewWriter(gz)
+	for name, body := range map[string][]byte{"bytemuse": binary, "web/index.html": []byte("html"), "version.json": []byte(`{"version":"0.1.22","protocol":1}`)} {
+		if err := tw.WriteHeader(&tar.Header{Name: name, Mode: 0700, Size: int64(len(body))}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tw.Write(body); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_ = tw.Close()
+	_ = gz.Close()
+	original := http.DefaultTransport
+	t.Cleanup(func() { http.DefaultTransport = original })
+	http.DefaultTransport = packageTransport(func(r *http.Request) (*http.Response, error) {
+		body := archive.Bytes()
+		if strings.HasSuffix(r.URL.Path, ".sha256") {
+			body = []byte(fmt.Sprintf("%x", sha256.Sum256(body)))
+		}
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(bytes.NewReader(body)), Header: make(http.Header)}, nil
+	})
+	installer := &PackageInstaller{Root: t.TempDir(), Repo: "w2z/byte-muse-go"}
+	var phases []string
+	err = installer.Stage(context.Background(), "0.1.22", func(state ports.UpgradeStatus) {
+		if state.CompletedSteps != len(phases) {
+			t.Errorf("state=%+v", state)
+		}
+		if persisted := installer.Status(); persisted != state {
+			t.Errorf("persisted=%+v state=%+v", persisted, state)
+		}
+		if _, err := os.Stat(filepath.Join(installer.Root, "pending.json")); !os.IsNotExist(err) {
+			t.Error("重启请求提前提交")
+		}
+		phases = append(phases, state.Phase)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(phases, ",") != "downloading,extracting,installing" {
+		t.Fatalf("phases=%v", phases)
+	}
+	if _, err := readActivation(installer.Root, "pending.json"); err != nil {
+		t.Fatal(err)
+	}
+}
 
 // TestDownloadChecksum 验证损坏或尚未发布的升级包不会被接受。
 func TestDownloadChecksum(t *testing.T) {

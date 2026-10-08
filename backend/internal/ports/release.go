@@ -27,15 +27,18 @@ type ReleaseSource interface {
 
 // UpgradeStatus 描述容器内升级任务；success 仅在新服务健康检查通过后写入。
 type UpgradeStatus struct {
-	Enabled bool   `json:"enabled"`
-	Phase   string `json:"phase"`
-	Target  string `json:"target"`
-	Error   string `json:"error"`
+	// CompletedSteps 为已完成的下载、解压、安装、重启步骤数，失败保留当前值。
+	CompletedSteps int    `json:"completed_steps"`
+	Enabled        bool   `json:"enabled"`
+	Phase          string `json:"phase"`
+	Target         string `json:"target"`
+	Error          string `json:"error"`
 }
 
 // UpgradeInstaller 下载校验并暂存完整升级包；提交后由常驻启动器切换服务。
 type UpgradeInstaller interface {
-	Stage(context.Context, string) error
+	// Stage 在持久化阶段后同步报告状态；回调不得在返回后继续调用。
+	Stage(context.Context, string, func(UpgradeStatus)) error
 	Status() UpgradeStatus
 }
 

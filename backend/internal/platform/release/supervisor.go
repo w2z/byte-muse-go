@@ -68,9 +68,10 @@ func Supervise(ctx context.Context, root, executable, web, version, address stri
 		return err
 	}
 	state := (&PackageInstaller{Root: root}).Status()
-	if state.Phase == "downloading" {
+	if state.Phase == "downloading" || state.Phase == "extracting" || state.Phase == "installing" {
 		if _, err := os.Stat(filepath.Join(root, "pending.json")); os.IsNotExist(err) {
-			_ = writeRecord(root, "status.json", ports.UpgradeStatus{Enabled: true, Phase: "failed", Target: state.Target, Error: "上次升级下载被中断，请重试"})
+			state.Phase, state.Error = "failed", "上次升级被中断，请重试"
+			_ = writeRecord(root, "status.json", state)
 		}
 	}
 	active, err := readActivation(root, "active.json")
@@ -98,8 +99,10 @@ func Supervise(ctx context.Context, root, executable, web, version, address stri
 		command.Env = childEnvironment(root, staticDir, current)
 		command.Stdout = output
 		command.Stderr = output
+		state = (&PackageInstaller{Root: root}).Status()
 		if err := command.Start(); err != nil {
-			_ = writeRecord(root, "status.json", ports.UpgradeStatus{Enabled: true, Phase: "failed", Target: current, Error: "新服务无法启动，请检查容器日志"})
+			state.Phase, state.Error = "failed", "新服务无法启动，请检查容器日志"
+			_ = writeRecord(root, "status.json", state)
 			return fmt.Errorf("start service: %w", err)
 		}
 		exited := make(chan error, 1)
@@ -124,10 +127,10 @@ func Supervise(ctx context.Context, root, executable, web, version, address stri
 				if checking && !healthy {
 					healthy = serviceReady(address)
 					if healthy {
-						_ = writeRecord(root, "status.json", ports.UpgradeStatus{Enabled: true, Phase: "success", Target: current})
+						_ = writeRecord(root, "status.json", ports.UpgradeStatus{Enabled: true, Phase: "success", CompletedSteps: 4, Target: current})
 					} else if time.Since(started) > 2*time.Minute {
 						checking = false
-						_ = writeRecord(root, "status.json", ports.UpgradeStatus{Enabled: true, Phase: "failed", Target: current, Error: "新服务未在两分钟内就绪，请检查容器日志"})
+						_ = writeRecord(root, "status.json", ports.UpgradeStatus{Enabled: true, Phase: "failed", CompletedSteps: 3, Target: current, Error: "新服务未在两分钟内就绪，请检查容器日志"})
 					}
 				}
 				pending, err := readActivation(root, "pending.json")
@@ -147,7 +150,7 @@ func Supervise(ctx context.Context, root, executable, web, version, address stri
 					continue
 				}
 				_ = os.Remove(filepath.Join(root, "pending.json"))
-				_ = writeRecord(root, "status.json", ports.UpgradeStatus{Enabled: true, Phase: "restarting", Target: pending.Version})
+				_ = writeRecord(root, "status.json", ports.UpgradeStatus{Enabled: true, Phase: "restarting", CompletedSteps: 3, Target: pending.Version})
 				next = pending
 				stopService(command, exited, shutdown)
 				break loop
@@ -155,7 +158,9 @@ func Supervise(ctx context.Context, root, executable, web, version, address stri
 		}
 		ticker.Stop()
 		if next.Version == "" {
-			_ = writeRecord(root, "status.json", ports.UpgradeStatus{Enabled: true, Phase: "failed", Target: current, Error: "服务已退出，请检查容器日志"})
+			state = (&PackageInstaller{Root: root}).Status()
+			state.Phase, state.Error = "failed", "服务已退出，请检查容器日志"
+			_ = writeRecord(root, "status.json", state)
 			return fmt.Errorf("service exited: %v", runErr)
 		}
 		active = next

@@ -51,7 +51,7 @@ func (s *UpgradeService) Start(target string) (ports.UpgradeStatus, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	persisted := s.installer.Status()
-	if s.running || persisted.Phase == "restarting" || persisted.Phase == "downloading" {
+	if s.running || persisted.Phase == "restarting" || persisted.Phase == "downloading" || persisted.Phase == "extracting" || persisted.Phase == "installing" {
 		return s.state, ErrUpgradeBusy
 	}
 	if ports.CompareVersions(s.versions.Current(), target) >= 0 {
@@ -72,7 +72,11 @@ func (s *UpgradeService) run(target string) {
 		err = errors.New("发布版本已变化或检查失败，请重新检查更新")
 	}
 	if err == nil {
-		err = s.installer.Stage(ctx, target)
+		err = s.installer.Stage(ctx, target, func(state ports.UpgradeStatus) {
+			s.mu.Lock()
+			s.state = state
+			s.mu.Unlock()
+		})
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -82,5 +86,6 @@ func (s *UpgradeService) run(target string) {
 		s.running = false
 	} else {
 		s.state.Phase = "restarting"
+		s.state.CompletedSteps = 3
 	}
 }

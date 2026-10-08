@@ -40,23 +40,42 @@ func (p *PackageInstaller) Status() ports.UpgradeStatus {
 		state.Phase = "failed"
 		state.Error = "无法读取升级状态"
 	}
+	// 常驻的旧版启动器不写步骤数，依据其终态补齐协议字段。
+	if state.Phase == "restarting" {
+		state.CompletedSteps = 3
+	}
+	if state.Phase == "success" {
+		state.CompletedSteps = 4
+	}
 	return state
 }
 
 // Stage 从固定仓库的版本 Release 下载与本机架构匹配的包，校验 SHA256 后原子提交重启请求。
-func (p *PackageInstaller) Stage(ctx context.Context, version string) (resultErr error) {
+func (p *PackageInstaller) Stage(ctx context.Context, version string, report func(ports.UpgradeStatus)) (resultErr error) {
 	if runtime.GOOS != "linux" || !packageVersion.MatchString(version) || !repoPattern.MatchString(p.Repo) {
 		return errors.New("当前平台或升级版本无效")
 	}
 	if err := os.MkdirAll(p.Root, 0700); err != nil {
 		return errors.New("升级目录不可写")
 	}
-	if err := writeRecord(p.Root, "status.json", ports.UpgradeStatus{Enabled: true, Phase: "downloading", Target: version}); err != nil {
+	state := ports.UpgradeStatus{Enabled: true, Phase: "downloading", Target: version}
+	advance := func(phase string, completed int) error {
+		state.Phase, state.CompletedSteps = phase, completed
+		if err := writeRecord(p.Root, "status.json", state); err != nil {
+			return errors.New("无法保存升级状态")
+		}
+		if report != nil {
+			report(state)
+		}
+		return nil
+	}
+	if err := advance("downloading", 0); err != nil {
 		return errors.New("无法保存升级状态")
 	}
 	defer func() {
 		if resultErr != nil {
-			_ = writeRecord(p.Root, "status.json", ports.UpgradeStatus{Enabled: true, Phase: "failed", Target: version, Error: resultErr.Error()})
+			state.Phase, state.Error = "failed", resultErr.Error()
+			_ = writeRecord(p.Root, "status.json", state)
 		}
 	}()
 	temp, err := os.MkdirTemp(p.Root, "staging-")
@@ -79,6 +98,9 @@ func (p *PackageInstaller) Stage(ctx context.Context, version string) (resultErr
 		return err
 	}
 	candidate := filepath.Join(temp, "release")
+	if err := advance("extracting", 1); err != nil {
+		return err
+	}
 	if err := extractPackage(archive, candidate, version); err != nil {
 		return err
 	}
@@ -92,6 +114,9 @@ func (p *PackageInstaller) Stage(ctx context.Context, version string) (resultErr
 		return errors.New("升级程序架构不匹配")
 	}
 	releases := filepath.Join(p.Root, "releases")
+	if err := advance("installing", 2); err != nil {
+		return err
+	}
 	if err := os.MkdirAll(releases, 0700); err != nil {
 		return errors.New("无法创建版本目录")
 	}

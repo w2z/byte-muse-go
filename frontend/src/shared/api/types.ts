@@ -156,7 +156,9 @@ export type SystemVersion = {
 /** 容器内升级状态；success 仅表示新服务已通过就绪检查。 */
 export type SystemUpgrade = {
   enabled: boolean;
-  phase: "idle" | "downloading" | "restarting" | "success" | "failed";
+  phase: "idle" | "downloading" | "extracting" | "installing" | "restarting" | "success" | "failed";
+  /** 已完成步骤数（0–4），失败保留；旧服务可能不返回此字段。 */
+  completed_steps?: number;
   target: string;
   error: string;
 };
