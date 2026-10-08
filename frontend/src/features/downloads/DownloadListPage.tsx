@@ -1,4 +1,4 @@
-import { Button, DatePicker, Divider, Drawer, Dropdown, Menu, Modal, Select, Space, Table, Tag, Grid } from "@arco-design/web-react";
+import { Badge, Button, DatePicker, Divider, Drawer, Dropdown, Menu, Modal, Select, Space, Table, Grid, type BadgeProps } from "@arco-design/web-react";
 import { IconClose, IconDown } from "@arco-design/web-react/icon";
 import dayjs from "dayjs";
 import { getDateTimeShortcuts, getDisabledDateTime, isFutureDate, serializeDateTimeRange } from "../../shared/dateTimeRange";
@@ -13,11 +13,14 @@ import { PageHeader } from "../../shared/ui/PageHeader";
 import { PageState } from "../../shared/ui/PageState";
 import { useFeedbackMessage } from "../../shared/ui/FeedbackMessage";
 
-/** 下载器状态与内部阶段共用标签色板：完成为正常态，失败告警，其余为中性态。 */
-function statusTone(status: string): string {
-  if (status === "completed") return "active";
-  if (status === "failed") return "warn";
-  return "idle";
+/** 列表、筛选选项及选中值共用状态点语义，颜色跟随 Arco 主题。 */
+function DownloadStatusBadge({ status, label }: { status: string; label: string }) {
+  let tone: BadgeProps["status"] = "default";
+  if (status === "completed") tone = "success";
+  else if (status === "failed") tone = "error";
+  else if (status === "downloading" || status === "searching" || status === "submitted") tone = "processing";
+  else if (status === "paused" || status === "unknown") tone = "warning";
+  return <Badge status={tone} text={label} dotClassName={tone === "processing" ? "status-dot-processing" : undefined} />;
 }
 
 const transferLabels: Record<string, string> = {
@@ -31,7 +34,7 @@ const statusLabels: Record<DownloadTask["status"], string> = { queued: "排队�
 function DownloadStatus({ task }: { task: DownloadTask }) {
   const status = task.transfer_status || task.status;
   const label = task.transfer_status ? (transferLabels[status] ?? status) : statusLabels[task.status];
-  return <Tag className={`state-tag ${statusTone(status)}`}>{label}</Tag>;
+  return <DownloadStatusBadge status={status} label={label} />;
 }
 
 /** 操作只消费后端能力，删除模式明确确认；同一行请求期间禁用全部按钮。 */
@@ -153,9 +156,8 @@ export function DownloadListPage() {
           <Grid.Row gutter={[12, 12]} justify="start" align="center">
             <Grid.Col xs={24} sm={12} md={8} xl={4}>
               <div className="download-filter-field filter-field"><span className="download-filter-label filter-label">下载状态</span><Select className="filter-control" aria-label="下载状态筛选" value={draft.status} onChange={(value) => setDraft((current) => ({ ...current, status: value }))} options={[
-                { label: "全部状态", value: "" }, { label: "下载中", value: "downloading" }, { label: "暂停", value: "paused" },
-                { label: "停止", value: "stopped" },
-                { label: "下载失败", value: "failed" }, { label: "下载完成", value: "completed" },
+                { label: "全部状态", value: "" },
+                ...Object.entries(transferLabels).map(([value, label]) => ({ value, label: <DownloadStatusBadge status={value} label={label} /> })),
               ]} /></div>
             </Grid.Col>
             <Grid.Col xs={24} sm={12} md={8} xl={4}>

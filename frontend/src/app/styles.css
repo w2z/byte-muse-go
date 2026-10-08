@@ -489,6 +489,24 @@ button.code-card-still-cell:hover img { opacity: .85; }
 .state-tag.idle { color: var(--ink-2) !important; background: rgba(155,168,167,.14) !important; }
 .state-tag.warn { color: var(--orange) !important; background: rgba(242,163,108,.16) !important; }
 .state-tag.danger { color: var(--danger) !important; background: rgba(245,63,63,.12) !important; }
+/* 通过 Badge.dotClassName 复用 Processing 外圈扩散，不改变状态点尺寸及布局。 */
+.status-dot-processing { position: relative; }
+.status-dot-processing::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border: 1px solid rgb(var(--primary-6));
+  border-radius: 50%;
+  pointer-events: none;
+  animation: status-dot-processing 1.2s ease-in-out infinite;
+}
+@keyframes status-dot-processing {
+  0% { opacity: .5; transform: scale(.8); }
+  100% { opacity: 0; transform: scale(2.4); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .status-dot-processing::after { animation: none; opacity: 0; }
+}
 .danger-action { color: var(--danger) !important; background: transparent !important; border: 1px solid rgba(234,130,122,.28) !important; }
 .danger-action:hover { background: rgba(234,130,122,.08) !important; }
 .settings-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
