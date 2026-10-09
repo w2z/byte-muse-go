@@ -1,13 +1,14 @@
 import { Button, InputNumber, Popconfirm, Radio, Switch } from "@arco-design/web-react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { apiRequest, isApiError } from "../api/client";
 import { createMediaSubscription } from "../api/catalogSubscriptions";
-import type { Media, Subscription, SubscriptionMode } from "../api/types";
+import type { Media, Subscription, SubscriptionMode, SystemSettings } from "../api/types";
 import { useFeedbackMessage } from "./FeedbackMessage";
 import { AppDialog } from "./AppDialog";
 
-type SubscriptionFilterForm = {
+/** 弹窗展示已知字段，同时保留未展示规则，避免保存时丢失配置。 */
+type SubscriptionFilterForm = Record<string, unknown> & {
   only_chinese: boolean;
   only_uc: boolean;
   exclude_uc: boolean;
@@ -29,6 +30,29 @@ const emptyFilter: SubscriptionFilterForm = {
   max_size: null,
 };
 
+/** 设置体积可能是字符串，空值表示不限；拒绝无效值，避免静默改变过滤条件。 */
+function filterSize(value: unknown): number | null {
+  if (value === null || value === undefined || value === "") return null;
+  const number = typeof value === "number" || typeof value === "string" ? Number(value) : NaN;
+  if (!Number.isFinite(number) || number < 0) throw new Error("过滤规则中的体积无效，请检查设置");
+  return number;
+}
+
+/** 将全局或已保存的规则转成表单值，保留额外字段和明确的零值。 */
+function filterForm(source: Record<string, unknown>): SubscriptionFilterForm {
+  return {
+    ...source,
+    only_chinese: source.only_chinese === true || source.only_chinese === "true",
+    only_uc: source.only_uc === true || source.only_uc === "true",
+    exclude_uc: source.exclude_uc === true || source.exclude_uc === "true",
+    only_free: source.only_free === true || source.only_free === "true",
+    only_uhd: source.only_uhd === true || source.only_uhd === "true",
+    exclude_uhd: source.exclude_uhd === true || source.exclude_uhd === "true",
+    min_size: filterSize(source.min_size),
+    max_size: filterSize(source.max_size),
+  };
+}
+
 type MediaSubscriptionActionsProps = { media: Media };
 
 /** 所有番号页共用的订阅、取消与编辑操作；成功后统一刷新查询缓存。 */
@@ -40,6 +64,12 @@ export function MediaSubscriptionActions({ media }: MediaSubscriptionActionsProp
   const [mode, setMode] = useState<SubscriptionMode>("strict");
   const [filter, setFilter] = useState<SubscriptionFilterForm>(emptyFilter);
   const active = media.active_subscription ?? null;
+  const targetKey = JSON.stringify([media.id, active?.id, active?.version]);
+  const currentTarget = useRef(targetKey);
+  const mounted = useRef(true);
+  currentTarget.current = targetKey;
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  const [draftTarget, setDraftTarget] = useState(targetKey);
 
   async function refresh() {
     await queryClient.invalidateQueries();
@@ -47,6 +77,7 @@ export function MediaSubscriptionActions({ media }: MediaSubscriptionActionsProp
 
   const save = useMutation({
     mutationFn: async () => {
+      if (draftTarget !== currentTarget.current || (editing && !active)) throw new Error("订阅状态已变化，请重新打开弹窗");
       if (editing && active) {
         return apiRequest<Subscription>("/subscriptions/" + encodeURIComponent(active.id), {
           method: "PUT",
@@ -80,29 +111,36 @@ export function MediaSubscriptionActions({ media }: MediaSubscriptionActionsProp
     onError: (error: Error) => message.error?.(error.message),
   });
 
-  function openCreate() {
-    setEditing(false);
-    setMode("strict");
-    setFilter({ ...emptyFilter });
-    setVisible(true);
-  }
-
-  function openEdit() {
-    const source = active?.filter ?? {};
-    setEditing(true);
-    setMode(active?.mode ?? "strict");
-    setFilter({
-      only_chinese: source.only_chinese === true,
-      only_uc: source.only_uc === true,
-      exclude_uc: source.exclude_uc === true,
-      only_free: source.only_free === true,
-      only_uhd: source.only_uhd === true,
-      exclude_uhd: source.exclude_uhd === true,
-      min_size: typeof source.min_size === "number" ? source.min_size : null,
-      max_size: typeof source.max_size === "number" ? source.max_size : null,
-    });
-    setVisible(true);
-  }
+  // 只在打开时读取默认值，后续缓存刷新不覆盖用户在弹窗内修改的草稿。
+  const open = useMutation({
+    mutationFn: async (edit: boolean) => {
+      let source = edit ? active?.filter ?? {} : {};
+      if (!edit || Object.keys(source).length === 0) {
+        const settings = await queryClient.fetchQuery({
+          queryKey: ["system-settings"],
+          queryFn: () => apiRequest<SystemSettings>("/system/settings"),
+          staleTime: 0,
+          retry: false,
+        });
+        const raw = settings.values.DEFAULT_FILTER;
+        let parsed: unknown;
+        try { parsed = raw ? JSON.parse(raw) : {}; }
+        catch { throw new Error("默认过滤规则格式无效，请检查设置"); }
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("默认过滤规则格式无效，请检查设置");
+        source = parsed as Record<string, unknown>;
+      }
+      return { target: targetKey, edit, mode: edit ? active?.mode ?? "strict" : "strict" as SubscriptionMode, filter: filterForm(source) };
+    },
+    onSuccess: (draft) => {
+      if (!mounted.current || draft.target !== currentTarget.current) return;
+      setDraftTarget(draft.target);
+      setEditing(draft.edit);
+      setMode(draft.mode);
+      setFilter(draft.filter);
+      setVisible(true);
+    },
+    onError: (error: Error) => message.error(error.message),
+  });
 
   function setBoolean(key: keyof SubscriptionFilterForm, value: boolean) {
     setFilter((current) => ({ ...current, [key]: value }));
@@ -122,17 +160,17 @@ export function MediaSubscriptionActions({ media }: MediaSubscriptionActionsProp
             cancelText="取消"
             okType="primary"
             onOk={() => cancel.mutate()}
-            disabled={cancel.isPending}
+            disabled={cancel.isPending || open.isPending}
             okButtonProps={{ status: "danger", loading: cancel.isPending }}
             cancelButtonProps={{ disabled: cancel.isPending }}
           >
-            <Button status="danger" disabled={cancel.isPending} loading={cancel.isPending}>取消订阅</Button>
+            <Button status="danger" disabled={cancel.isPending || open.isPending} loading={cancel.isPending}>取消订阅</Button>
           </Popconfirm>
-          <Button disabled={cancel.isPending} onClick={openEdit}>编辑</Button>
+          <Button disabled={cancel.isPending || open.isPending} loading={open.isPending} onClick={() => open.mutate(true)}>编辑</Button>
         </>
       ) : (
         // subscribe-action 由 .code-card 内的样式渲染成描边主色，与卡片底部其它按钮同一观感。
-        <Button type="primary" className="subscribe-action" onClick={openCreate}>订阅</Button>
+        <Button type="primary" className="subscribe-action" disabled={open.isPending} loading={open.isPending} onClick={() => open.mutate(false)}>订阅</Button>
       )}
       <AppDialog
         title={(editing ? "编辑订阅 " : "订阅 ") + media.code}
