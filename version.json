@@ -1,16 +1,20 @@
 {
-  "version": "0.1.139",
-  "commit": "61e72527eeb108e1f4480fc8817b6c0776df273e",
-  "short_commit": "61e7252",
-  "built_at": "2026-10-09T13:53:45Z",
+  "version": "0.1.140",
+  "commit": "d76afd0ac946ea4f87f0e97545a456e47498bd71",
+  "short_commit": "d76afd0",
+  "built_at": "2026-10-09T14:05:56Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.139",
-    "sha-61e7252",
+    "0.1.140",
+    "sha-d76afd0",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.140",
+      "message": "添加 ByPass DNS 污染警告提示"
+    },
     {
       "version": "0.1.139",
       "message": "添加排除VR规则与免确认订阅开关"
