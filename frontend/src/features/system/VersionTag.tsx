@@ -83,9 +83,10 @@ export function VersionTag() {
             <strong className="version-dialog-number">{`v${version}`}</strong>
             {showProgress && <div className="version-upgrade-progress">
               <div role="group" aria-label="升级步骤" className="version-upgrade-steps">
-                <Steps direction="vertical" size="small" current={completedSteps + 1}>
+                <Steps direction="horizontal" size="small" lineless current={completedSteps + 1}>
                   {UPGRADE_STEPS.map((label, index) => <Steps.Step key={label}
-                    title={<span className={index < completedSteps ? "is-complete" : index === completedSteps ? "is-current" : undefined}
+                    style={{ flex: 1, minWidth: 0, marginRight: 0, display: "flex", flexDirection: "column", alignItems: "center" }}
+                    title={<span style={{ display: "inline-block", maxWidth: "4em", whiteSpace: "normal", textAlign: "center" }} className={index < completedSteps ? "is-complete" : index === completedSteps ? "is-current" : undefined}
                       aria-current={index === completedSteps ? "step" : undefined}>{label}</span>} />)}
                 </Steps>
               </div>
