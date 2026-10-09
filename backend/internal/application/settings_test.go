@@ -414,3 +414,20 @@ func TestSiteCookieCredentialHonorsModeWithoutFallback(t *testing.T) {
 		}
 	}
 }
+
+// TestSkipSubscriptionConfirmSetting 验证免确认开关可保存并拒绝非法布尔值。
+func TestSkipSubscriptionConfirmSetting(t *testing.T) {
+	svc, err := NewSettingsService(&settingsMemoryRepository{}, "sqlite", strings.Repeat("x", 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, value := range []string{"true", "false"} {
+		got, e := svc.Update(context.Background(), map[string]string{"SUBSCRIPTION_SKIP_CONFIRM": value})
+		if e != nil || got.Values["SUBSCRIPTION_SKIP_CONFIRM"] != value {
+			t.Fatalf("got=%+v err=%v", got, e)
+		}
+	}
+	if _, e := svc.Update(context.Background(), map[string]string{"SUBSCRIPTION_SKIP_CONFIRM": "yes"}); !errors.Is(e, ErrInvalidSetting) {
+		t.Fatal(e)
+	}
+}

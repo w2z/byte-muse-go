@@ -90,3 +90,21 @@ test("读取继承设置期间目标订阅消失时丢弃迟到的编辑弹窗",
   await act(async () => resolve({ values: { DEFAULT_FILTER: "{}" } }));
   expect(screen.queryByRole("dialog")).toBeNull();
 });
+
+test("开启免确认后直接按默认规则订阅，重复点击不重复提交", async () => {
+ let finish!: (value: unknown) => void;
+ vi.mocked(apiRequest).mockImplementation(async (path) => path === "/system/settings" ? { values: { SUBSCRIPTION_SKIP_CONFIRM: "true", DEFAULT_FILTER: JSON.stringify({exclude_vr:true,min_size:"1024"}) } } as never : new Promise((resolve) => { finish = resolve; }));
+ show(); const button=screen.getByRole("button",{name:"订阅"});fireEvent.click(button);
+ await waitFor(()=>expect(vi.mocked(apiRequest).mock.calls.some(([path])=>path==="/subscriptions")).toBe(true));
+ expect(screen.queryByRole("dialog")).toBeNull();expect(button).toBeDisabled();fireEvent.click(button);
+ expect(vi.mocked(apiRequest).mock.calls.filter(([path])=>path==="/subscriptions")).toHaveLength(1);
+ const call=vi.mocked(apiRequest).mock.calls.find(([path])=>path==="/subscriptions")!;
+ expect(JSON.parse(String(call[1]?.body))).toMatchObject({mode:"strict",filter:{exclude_vr:true,min_size:1024}});
+ await act(async()=>finish({}));expect(await screen.findByText("订阅已创建")).toBeInTheDocument();
+});
+test("编辑即使开启免确认仍显示排除VR表单", async () => {
+ vi.mocked(apiRequest).mockResolvedValue({values:{SUBSCRIPTION_SKIP_CONFIRM:"true",DEFAULT_FILTER:'{"exclude_vr":true}'}});
+ show({...media,display_status:"subscribed",active_subscription:{id:"s",media_id:"a",status:"active",mode:"strict",filter:{},version:1,created_at:"",updated_at:""}});
+ fireEvent.click(screen.getByRole("button",{name:"编辑"}));await screen.findByRole("dialog");
+ expect(screen.getByRole("switch",{name:"排除 VR"})).toBeChecked();expect(vi.mocked(apiRequest).mock.calls.every(([,init])=>!init?.method)).toBe(true);
+});

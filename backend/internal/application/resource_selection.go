@@ -10,10 +10,15 @@ import (
 
 // selectResource applies the legacy strict/preload semantics to normalized resources.
 // The boolean reports whether the selected candidate meets the subscription filter.
-func selectResource(items []torrentsearch.Resource, mode domain.SubscriptionMode, filter map[string]any, sortOrder, mainSite string) (*torrentsearch.Resource, bool) {
+// mediaCode supplements resource titles when enforcing the hard VR exclusion.
+func selectResource(items []torrentsearch.Resource, mode domain.SubscriptionMode, filter map[string]any, sortOrder, mainSite string, mediaCode ...string) (*torrentsearch.Resource, bool) {
 	seen := make(map[string]bool, len(items))
 	candidates := make([]torrentsearch.Resource, 0, len(items))
 	for _, item := range items {
+		// 排除 VR 是硬排除，预下载也不能回退到 VR 候选。
+		if filter["exclude_vr"] == true && strings.Contains(strings.ToUpper(item.Title+" "+strings.Join(mediaCode, " ")), "VR") {
+			continue
+		}
 		key := strings.ToLower(item.InfoHash)
 		if key == "" {
 			key = item.URI

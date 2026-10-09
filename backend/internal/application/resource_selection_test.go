@@ -51,3 +51,29 @@ func TestBTPreferenceIncludesJavDBAndNyaa(t *testing.T) {
 		}
 	}
 }
+
+// TestExcludeVR 在严格与预下载模式中均排除 VR，且保留普通资源。
+func TestExcludeVR(t *testing.T) {
+	for _, mode := range []domain.SubscriptionMode{domain.SubscriptionModeStrict, domain.SubscriptionModePreload} {
+		items := []torrentsearch.Resource{{Title: "TEST-vr-001", InfoHash: "a", Seeders: 100}, {Title: "TEST-002", InfoHash: "b", Seeders: 1}}
+		selected, passed := selectResource(items, mode, map[string]any{"exclude_vr": true}, "seeders", "")
+		if selected == nil || selected.InfoHash != "b" || !passed {
+			t.Fatalf("selected=%+v passed=%v", selected, passed)
+		}
+		selected, _ = selectResource(items[:1], mode, map[string]any{"exclude_vr": true}, "seeders", "")
+		if selected != nil {
+			t.Fatalf("VR was not excluded: %+v", selected)
+		}
+		selected, _ = selectResource(items, mode, map[string]any{"exclude_vr": false}, "seeders", "")
+		if selected == nil || selected.InfoHash != "a" {
+			t.Fatal("disabled exclusion altered selection")
+		}
+	}
+}
+
+func TestExcludeVRUsesMediaCodeWhenResourceTitleOmitsIt(t *testing.T) {
+	selected, _ := selectResource([]torrentsearch.Resource{{Title: "video", InfoHash: "a"}}, domain.SubscriptionModePreload, map[string]any{"exclude_vr": true}, "seeders", "", "TEST-VR-001")
+	if selected != nil {
+		t.Fatal("VR media code bypassed exclusion")
+	}
+}

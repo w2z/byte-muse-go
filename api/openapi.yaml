@@ -2179,6 +2179,10 @@ components:
         exclude_uhd:
           type: boolean
           description: 排除 UHD 资源
+        exclude_vr:
+          type: boolean
+          default: false
+          description: 排除资源标题或影片番号包含 VR 的资源（忽略大小写）；严格和预下载模式均不选择这些资源。省略或 false 不排除。
         min_size:
           type: [number, 'null']
           minimum: 0
@@ -2427,7 +2431,8 @@ components:
             设置值。键名与旧版 template.env、对标站 /config 一致；敏感值也会在已登录管理员会话中回显，
             按对标站设置页分组维护：站点、Emby、Plex、Jellyfin、微信、Telegram、Qbittorrent、
             Transmission、aria2、迅雷、CloudDrive2、115网盘、过滤、排序、定时任务、翻译、Agent、其他。
-            布尔取值固定为 true / false；数字为非负整数字符串；DEFAULT_FILTER 为过滤规则 JSON 字符串；
+            布尔取值固定为 true / false；数字为非负整数字符串；DEFAULT_FILTER 为过滤规则 JSON 字符串，其中 exclude_vr 布尔字段表示排除标题或番号含 VR 的资源；
+            SUBSCRIPTION_SKIP_CONFIRM 为 true/false 字符串，默认 false，开启后点击订阅直接使用默认规则创建，编辑订阅仍显示表单；
             DEFAULT_SORT 为逗号分隔的排序标签（uc、!uc、seeders、chinese、uhd、!uhd、site、free）；
             PTFANS_AUTH_TYPE、ROUSIPRO_AUTH_TYPE、NICEPT_AUTH_TYPE 为 key（密钥）或 cookie（Cookie），默认 key，空值使用密钥；
             PTFANS_API_KEY、ROUSIPRO_API_KEY、NICEPT_API_KEY 是分别加密保存的密钥，空值表示未配置；
@@ -2451,6 +2456,8 @@ components:
             RANK_SCHEDULE_TIME、ACTOR_SCHEDULE_TIME、TAG_SCHEDULE_TIME、DOWNLOAD_SCHEDULE_TIME 为标准 5 段 cron
             （分 时 日 月 周，如 0 20 * * * 表示每天 20:00），空值表示不注册该定时任务；非法表达式保存时返回 400 invalid_setting；保存后立即重排，无需重启后端。
           properties:
+            SUBSCRIPTION_SKIP_CONFIRM: {type: string, enum: ['true', 'false', ''], default: 'false', description: '订阅时不再弹出确认框。true 直接按当前默认过滤规则创建严格模式订阅；false、空值或缺失时显示确认表单。编辑订阅始终显示表单；保存时省略保留原值。'}
+            DEFAULT_FILTER: {type: string, example: '{"exclude_vr":true,"min_size":1024,"max_size":8192}', description: '默认过滤规则 JSON 字符串，字段见 SubscriptionFilter；exclude_vr 为布尔值，空值或空对象表示无默认过滤条件。'}
             PTT_AUTH_TYPE: {type: string, deprecated: true, enum: [key, cookie, ''], description: '历史兼容字段，不参与运行；PTTime 固定使用 PTT_COOKIE'}
             CLOUD_UPLOAD_PATHS: {"type":"string","default":"[]","description":"本地到网盘映射JSON数组字符串。每项kind为115或cd2、id为115数字目录ID或CD2绝对路径、path为网盘显示路径、local_path为服务主机绝对路径，均必填；空数组无映射，重复映射拒绝。"}
             CLOUD_UPLOAD_ENABLE: {"type":"string","enum":["true","false"],"default":"false","description":"保存后后台开始或停止目录监控；首次开启扫描已有文件，递归上传常规文件，跳过符号链接。"}
@@ -2507,11 +2514,14 @@ components:
             待保存的业务设置，只提交当前分组；页面应提交当前字段的完整值。普通字段和敏感字段的空值都会保存为空，
             用于显式清除配置；保存其他字段时不要提交未编辑的敏感字段。
             取值域与 SystemSettings.values 一致，越界或未声明的键返回 400 invalid_setting。
+            SUBSCRIPTION_SKIP_CONFIRM 控制新建订阅免确认，省略保留原值；DEFAULT_FILTER 内 exclude_vr 布尔字段控制排除 VR。
             AGENT_SYSTEM_PROMPT 和 TRANSLATION_PROMPT 各允许最多 61440 个 UTF-8 字节，其他值最多 8192 字节；按去除首尾空白前的输入计算，超限拒绝整批且不截断。
             站点模式与两种凭据可同时提交；只修改模式不应清空另一种凭据，显式提交空字符串才清除密钥或 Cookie。
             BYPASS_ENGINE 的 cloudflare_bypass_for_scraping 在页面显示为 ByPass，协议值不变。BYPASS_USE_PROXY 默认 false；关闭增强时同一事务强制关闭代理开关，再次启用增强不会自动开启代理。Scrapling HTTP 协议尚未接入。
             RANK_SCHEDULE_TIME、ACTOR_SCHEDULE_TIME、TAG_SCHEDULE_TIME、DOWNLOAD_SCHEDULE_TIME 只接受标准 5 段 cron（分 时 日 月 周），空字符串表示不注册该定时任务，非法表达式返回 400 invalid_setting；保存后立即重排，无需重启后端。
           properties:
+            SUBSCRIPTION_SKIP_CONFIRM: {type: string, enum: ['true', 'false', ''], default: 'false', description: '订阅时不再弹出确认框。true 直接按当前默认过滤规则创建严格模式订阅；false、空值或缺失时显示确认表单。编辑订阅始终显示表单；保存时省略保留原值。'}
+            DEFAULT_FILTER: {type: string, example: '{"exclude_vr":true,"min_size":1024,"max_size":8192}', description: '默认过滤规则 JSON 字符串，字段见 SubscriptionFilter；exclude_vr 为布尔值，空值或空对象表示无默认过滤条件。'}
             CLOUD_UPLOAD_PATHS: {"type":"string","default":"[]","description":"本地到网盘映射JSON数组字符串。每项kind为115或cd2、id为115数字目录ID或CD2绝对路径、path为网盘显示路径、local_path为服务主机绝对路径，均必填；空数组无映射，重复映射拒绝。"}
             CLOUD_UPLOAD_ENABLE: {"type":"string","enum":["true","false"],"default":"false","description":"保存后后台开始或停止目录监控；首次开启扫描已有文件，递归上传常规文件，跳过符号链接。"}
             CLOUD_UPLOAD_CONFLICT: {"type":"string","enum":["skip","overwrite","keep_both"],"default":"skip","description":"同名文件策略：跳过、覆盖、保留两者（自动编号）。只适用于文件；不覆盖目录。"}

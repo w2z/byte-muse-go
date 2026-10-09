@@ -191,7 +191,8 @@ type FilterSwitchKey =
   | "exclude_uc"
   | "only_free"
   | "only_uhd"
-  | "exclude_uhd";
+  | "exclude_uhd"
+  | "exclude_vr";
 type FilterDraft = Record<FilterSwitchKey, boolean> & {
   min_size: string;
   max_size: string;
@@ -204,6 +205,7 @@ const emptyFilterDraft: FilterDraft = {
   only_free: false,
   only_uhd: false,
   exclude_uhd: false,
+  exclude_vr: false,
   min_size: "",
   max_size: "",
 };
@@ -215,6 +217,7 @@ const filterSwitches: { key: FilterSwitchKey; label: string }[] = [
   { key: "only_free", label: "仅免费" },
   { key: "only_uhd", label: "仅UHD" },
   { key: "exclude_uhd", label: "排除UHD" },
+  { key: "exclude_vr", label: "排除 VR" },
 ];
 
 /** OpenAI 翻译引擎依赖的「翻译模型」配置键；三者任一为空即视为未配置，Prompt 不参与判定。 */
@@ -604,7 +607,8 @@ const groups: SettingGroup[] = [
   {
     code: "filter",
     title: "过滤",
-    fields: [{ key: "DEFAULT_FILTER", label: "默认过滤规则", kind: "json" }],
+    fields: [{ key: "DEFAULT_FILTER", label: "默认过滤规则", kind: "json" },
+      { key: "SUBSCRIPTION_SKIP_CONFIRM", label: "订阅时不再弹出确认框", kind: "bool", description: "开启后点击订阅，直接使用当前默认过滤规则创建订阅；编辑已有订阅仍显示表单。" }],
   },
   {
     code: "sort",

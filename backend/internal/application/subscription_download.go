@@ -227,7 +227,7 @@ func (s *SubscriptionDownloadService) Process(ctx context.Context, limit int) er
 				continue
 			}
 		}
-		selected, passed := selectResource(items, a.Mode, filter, settings["DEFAULT_SORT"], settings["MAIN_SITE"])
+		selected, passed := selectResource(items, a.Mode, filter, settings["DEFAULT_SORT"], settings["MAIN_SITE"], a.Code)
 		if selected == nil {
 			s.failSearch(ctx, a, "暂未找到符合条件的资源")
 			continue

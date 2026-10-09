@@ -15,6 +15,7 @@ type SubscriptionFilterForm = Record<string, unknown> & {
   only_free: boolean;
   only_uhd: boolean;
   exclude_uhd: boolean;
+  exclude_vr: boolean;
   min_size: number | null;
   max_size: number | null;
 };
@@ -26,6 +27,7 @@ const emptyFilter: SubscriptionFilterForm = {
   only_free: false,
   only_uhd: false,
   exclude_uhd: false,
+  exclude_vr: false,
   min_size: null,
   max_size: null,
 };
@@ -48,6 +50,7 @@ function filterForm(source: Record<string, unknown>): SubscriptionFilterForm {
     only_free: source.only_free === true || source.only_free === "true",
     only_uhd: source.only_uhd === true || source.only_uhd === "true",
     exclude_uhd: source.exclude_uhd === true || source.exclude_uhd === "true",
+    exclude_vr: source.exclude_vr === true || source.exclude_vr === "true",
     min_size: filterSize(source.min_size),
     max_size: filterSize(source.max_size),
   };
@@ -76,7 +79,11 @@ export function MediaSubscriptionActions({ media }: MediaSubscriptionActionsProp
   }
 
   const save = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (direct?: { target: string; filter: SubscriptionFilterForm }) => {
+      if (direct) {
+        if (direct.target !== currentTarget.current) throw new Error("订阅状态已变化，请重试");
+        return createMediaSubscription(media.id, "strict", direct.filter);
+      }
       if (draftTarget !== currentTarget.current || (editing && !active)) throw new Error("订阅状态已变化，请重新打开弹窗");
       if (editing && active) {
         return apiRequest<Subscription>("/subscriptions/" + encodeURIComponent(active.id), {
@@ -86,13 +93,13 @@ export function MediaSubscriptionActions({ media }: MediaSubscriptionActionsProp
       }
       return createMediaSubscription(media.id, mode, filter);
     },
-    onSuccess: async () => {
+    onSuccess: async (_result, direct) => {
       setVisible(false);
-      message.success?.(editing ? "订阅已更新" : "订阅已创建");
+      message.success?.(!direct && editing ? "订阅已更新" : "订阅已创建");
       await refresh();
     },
-    onError: (error: Error) => {
-      if (!editing && isApiError(error) && error.status === 409) {
+    onError: (error: Error, direct) => {
+      if ((direct || !editing) && isApiError(error) && error.status === 409) {
         const localStatus = media.library_status === "present" ? "本地文件已存在" : media.library_status === "absent" ? "本地文件不存在" : "本地文件状态未知";
         message.error?.(`该番号已订阅，未重复添加；${localStatus}`);
         void queryClient.invalidateQueries();
@@ -115,6 +122,7 @@ export function MediaSubscriptionActions({ media }: MediaSubscriptionActionsProp
   const open = useMutation({
     mutationFn: async (edit: boolean) => {
       let source = edit ? active?.filter ?? {} : {};
+      let skipConfirm = false;
       if (!edit || Object.keys(source).length === 0) {
         const settings = await queryClient.fetchQuery({
           queryKey: ["system-settings"],
@@ -122,6 +130,7 @@ export function MediaSubscriptionActions({ media }: MediaSubscriptionActionsProp
           staleTime: 0,
           retry: false,
         });
+        skipConfirm = !edit && settings.values.SUBSCRIPTION_SKIP_CONFIRM === "true";
         const raw = settings.values.DEFAULT_FILTER;
         let parsed: unknown;
         try { parsed = raw ? JSON.parse(raw) : {}; }
@@ -129,10 +138,11 @@ export function MediaSubscriptionActions({ media }: MediaSubscriptionActionsProp
         if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("默认过滤规则格式无效，请检查设置");
         source = parsed as Record<string, unknown>;
       }
-      return { target: targetKey, edit, mode: edit ? active?.mode ?? "strict" : "strict" as SubscriptionMode, filter: filterForm(source) };
+      return { target: targetKey, edit, skipConfirm, mode: edit ? active?.mode ?? "strict" : "strict" as SubscriptionMode, filter: filterForm(source) };
     },
     onSuccess: (draft) => {
       if (!mounted.current || draft.target !== currentTarget.current) return;
+      if (draft.skipConfirm) { save.mutate({ target: draft.target, filter: draft.filter }); return; }
       setDraftTarget(draft.target);
       setEditing(draft.edit);
       setMode(draft.mode);
@@ -170,7 +180,7 @@ export function MediaSubscriptionActions({ media }: MediaSubscriptionActionsProp
         </>
       ) : (
         // subscribe-action 由 .code-card 内的样式渲染成描边主色，与卡片底部其它按钮同一观感。
-        <Button type="primary" className="subscribe-action" disabled={open.isPending} loading={open.isPending} onClick={() => open.mutate(false)}>订阅</Button>
+        <Button type="primary" className="subscribe-action" disabled={open.isPending || save.isPending} loading={open.isPending || save.isPending} onClick={() => open.mutate(false)}>订阅</Button>
       )}
       <AppDialog
         title={(editing ? "编辑订阅 " : "订阅 ") + media.code}
@@ -185,6 +195,7 @@ export function MediaSubscriptionActions({ media }: MediaSubscriptionActionsProp
           <label><span>仅免费</span><Switch aria-label="仅免费" checked={filter.only_free} onChange={(value) => setBoolean("only_free", value)} /></label>
           <label><span>仅 UHD</span><Switch aria-label="仅 UHD" checked={filter.only_uhd} onChange={(value) => setBoolean("only_uhd", value)} /></label>
           <label><span>排除 UHD</span><Switch aria-label="排除 UHD" checked={filter.exclude_uhd} onChange={(value) => setBoolean("exclude_uhd", value)} /></label>
+          <label><span>排除 VR</span><Switch aria-label="排除 VR" checked={filter.exclude_vr} onChange={(value) => setBoolean("exclude_vr", value)} /></label>
           <label className="subscription-filter-number"><span>最小体积 MB</span><InputNumber aria-label="最小体积 MB" min={0} value={filter.min_size ?? undefined} onChange={(value) => setFilter((current) => ({ ...current, min_size: value ?? null }))} /></label>
           <label className="subscription-filter-number"><span>最大体积 MB</span><InputNumber aria-label="最大体积 MB" min={0} value={filter.max_size ?? undefined} onChange={(value) => setFilter((current) => ({ ...current, max_size: value ?? null }))} /></label>
         </div>

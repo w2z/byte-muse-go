@@ -1155,3 +1155,14 @@ describe("网盘设置", () => {
     expect(values).not.toHaveProperty("STRM_ROOT");
   });
 });
+
+it("过滤页保存排除VR和免确认开关", async () => {
+ const user=userEvent.setup();let values:Record<string,string>={};
+ vi.mocked(apiRequest).mockImplementation(async (_path,options)=>{if(options?.method==="PUT")values={...values,...JSON.parse(String(options.body)).values};return {database_driver:"sqlite",values:{...values},configured:{}};});
+ renderSettings();await user.click(await screen.findByRole("tab",{name:/^过滤$/}));
+ expect(screen.getByRole("switch",{name:"排除 VR"})).not.toBeChecked();
+ expect(screen.getByRole("switch",{name:"订阅时不再弹出确认框"})).not.toBeChecked();
+ await user.click(screen.getByRole("switch",{name:"排除 VR"}));await user.click(screen.getByRole("switch",{name:"订阅时不再弹出确认框"}));
+ await user.click(screen.getByRole("button",{name:"保存设置"}));
+ await waitFor(()=>expect(values.SUBSCRIPTION_SKIP_CONFIRM).toBe("true"));expect(JSON.parse(values.DEFAULT_FILTER).exclude_vr).toBe(true);
+});

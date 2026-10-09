@@ -202,7 +202,8 @@ var writableSettings = map[string]settingSpec{
 	strmEmbyMediaAfterRefreshKey:     {kind: settingBool},
 
 	// 过滤
-	"DEFAULT_FILTER": {kind: settingJSON},
+	"DEFAULT_FILTER":            {kind: settingJSON},
+	"SUBSCRIPTION_SKIP_CONFIRM": {kind: settingBool},
 
 	// 排序
 	"DEFAULT_SORT": {kind: settingSort},
