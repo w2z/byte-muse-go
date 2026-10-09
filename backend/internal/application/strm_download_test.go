@@ -73,11 +73,12 @@ func TestStrmProgressExcludesDownloads(t *testing.T) {
 							t.Errorf("invalid video progress: %+v", update)
 						}
 					})
+					ctx = context.WithValue(ctx, strmRetryKey{}, &strmRetryPolicy{wait: func(context.Context, string, error) error { status = http.StatusOK; return nil }})
 					result, err := service.Scan(ctx, "http://play.test", mode)
 					if err != nil || progress.Total != videos || progress.Processed != videos || progress.Percent != 100 {
 						t.Fatalf("progress=%+v err=%v", progress, err)
 					}
-					if (attempt == 0 && result.Downloaded != 1) || (attempt == 1 && result.DownloadSkipped != 1) || (attempt == 2 && result.DownloadFailed != 1) {
+					if (attempt == 0 && result.Downloaded != 1) || (attempt == 1 && result.DownloadSkipped != 1) || (attempt == 2 && (result.DownloadFailed != 0 || result.Downloaded != 1)) {
 						t.Fatalf("attempt=%d result=%+v", attempt, result)
 					}
 				}

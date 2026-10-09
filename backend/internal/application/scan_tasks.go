@@ -169,7 +169,7 @@ func (s *ScanTasks) start(ctx context.Context, kind, mode, retryID string, run f
 	}
 	initial := e.task
 	logging.Info(scanTaskCategory(kind), scanTaskName(kind)+" 任务已开始", "task_id", e.task.ID, "mode", mode)
-	workerCtx = context.WithValue(workerCtx, scanCheckpointKey{}, func() error { return s.checkpoint(workerCtx, e) })
+	workerCtx = context.WithValue(workerCtx, scanCheckpointKey{}, func(ctx context.Context) error { return s.checkpoint(ctx, e) })
 	workerCtx = WithScanProgress(workerCtx, func(p ScanProgress) {
 		s.mu.Lock()
 		defer s.mu.Unlock()
@@ -349,8 +349,8 @@ type scanCheckpointKey struct{}
 
 // scanCheckpoint 仅在后台任务上下文中等待暂停；同步调用沿用原有取消语义。
 func scanCheckpoint(ctx context.Context) error {
-	if fn, ok := ctx.Value(scanCheckpointKey{}).(func() error); ok {
-		return fn()
+	if fn, ok := ctx.Value(scanCheckpointKey{}).(func(context.Context) error); ok {
+		return fn(ctx)
 	}
 	return ctx.Err()
 }

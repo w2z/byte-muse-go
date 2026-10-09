@@ -246,8 +246,24 @@ func TestStrmRetryPreservesFullGeneration(t *testing.T) {
 	values := map[string]string{strmPathsSettingKey: strmTestMappings(t, []domain.StrmMapping{{Kind: "115", ID: "root", Path: "/source", LocalPath: "/movies"}})}
 	service := newStrmTestService(t, root, source, nil, values)
 	ctx := journalContext(context.Background(), &taskJournal{id: "test"})
+	ctx = context.WithValue(ctx, strmRetryKey{}, &strmRetryPolicy{wait: func(waitCtx context.Context, _ string, _ error) error {
+		for {
+			done, err := taskUnitDone(waitCtx, "strm-file", filepath.Join(root, "movies"), "", "ok")
+			if err != nil {
+				return err
+			}
+			if done {
+				return context.Canceled
+			}
+			select {
+			case <-waitCtx.Done():
+				return waitCtx.Err()
+			case <-time.After(time.Millisecond):
+			}
+		}
+	}})
 	result, err := service.Scan(ctx, "http://play.test", domain.StrmGenerateFull)
-	if err != nil || !scanResultFailed(result) {
+	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("%+v %v", result, err)
 	}
 	existing := filepath.Join(root, "movies", "SSIS-001.mp4.strm")

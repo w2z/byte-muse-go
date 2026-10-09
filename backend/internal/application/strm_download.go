@@ -12,7 +12,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"bytemuse/backend/internal/domain"
@@ -56,11 +55,6 @@ func strmDownloadFormats(values map[string]string) ([]string, error) {
 	return parseStrmDownloadExtensions(values[strmDownloadExtensionsSettingKey])
 }
 
-type strmDownloadOutcome struct {
-	skipped bool
-	err     error
-}
-
 // strmDownloadReader 在收到数据时续期空闲超时，不限制正常传输的总时长。
 type strmDownloadReader struct {
 	reader io.Reader
@@ -77,82 +71,6 @@ func (r strmDownloadReader) Read(buffer []byte) (int, error) {
 		}
 	}
 	return n, err
-}
-
-// strmDownloadPool 以固定大小队列提供背压；所有结果由扫描线程归并，避免进度与计数竞争。
-type strmDownloadPool struct {
-	jobs    chan strmSourceFile
-	results chan strmDownloadOutcome
-	pending int
-	apply   func(strmDownloadOutcome)
-}
-
-func (s *StrmService) newDownloadPool(ctx context.Context, root, target, kind string, mode domain.StrmGenerateMode, apply func(strmDownloadOutcome)) *strmDownloadPool {
-	// 进度回调只允许扫描线程调用；下载仍沿用 115 客户端的全局冷却和限速。
-	ctx = pan115.WithCooldownReporter(ctx, func(time.Duration) {})
-	p := &strmDownloadPool{jobs: make(chan strmSourceFile), results: make(chan strmDownloadOutcome, strmDownloadWorkers), apply: apply}
-	var workers sync.WaitGroup
-	for i := 0; i < strmDownloadWorkers; i++ {
-		workers.Add(1)
-		go func() {
-			defer workers.Done()
-			for file := range p.jobs {
-				finishFile := startScanFile(ctx, file, "download")
-				skipped, err := taskUnitDone(ctx, "download", target, file.Directory, file.ID)
-				if err == nil && !skipped {
-					skipped, err = s.downloadStrmMedia(ctx, root, target, kind, file, mode)
-					if err == nil {
-						err = completeTaskUnit(ctx, "download", target, file.Directory, file.ID)
-					}
-				}
-				state := "completed"
-				if err != nil {
-					state = "failed"
-					if ctx.Err() != nil {
-						state = "interrupted"
-					}
-				} else if skipped {
-					state = "skipped"
-				}
-				finishFile(state, err)
-				p.results <- strmDownloadOutcome{skipped: skipped, err: err}
-			}
-		}()
-	}
-	go func() { workers.Wait(); close(p.results) }()
-	return p
-}
-
-// enqueue 在五项尚未完成时等待结果，使扫描不会无界积压下载或占用内存。
-func (p *strmDownloadPool) enqueue(ctx context.Context, file strmSourceFile) error {
-	finishFile := trackScanFile(ctx, file, "download", "waiting")
-	for p.pending >= strmDownloadWorkers {
-		select {
-		case result := <-p.results:
-			p.pending--
-			p.apply(result)
-		case <-ctx.Done():
-			finishFile("interrupted", ctx.Err())
-			return ctx.Err()
-		}
-	}
-	select {
-	case p.jobs <- file:
-		p.pending++
-		return nil
-	case <-ctx.Done():
-		finishFile("interrupted", ctx.Err())
-		return ctx.Err()
-	}
-}
-
-// finish 等待所有已提交下载结束，确保函数返回和 Emby 通知前文件已落盘或临时文件已清理。
-func (p *strmDownloadPool) finish() {
-	close(p.jobs)
-	for result := range p.results {
-		p.pending--
-		p.apply(result)
-	}
 }
 
 // downloadStrmMedia 复用网盘直链解析，保持 UA/请求头一致，通过受限根目录原子落盘。

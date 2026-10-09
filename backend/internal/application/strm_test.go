@@ -343,7 +343,7 @@ func TestScanFullClearsStaleLocalStrm(t *testing.T) {
 	for target, content := range map[string]string{
 		"movies/A.mkv.strm":       "http://bm.local/files/play/115/legacy\n",
 		"movies/removed.mkv.strm": "http://bm.local/files/play/115/gone\n",
-		"movies/合集/old.mkv.strm": "http://bm.local/files/play/115/gone\n",
+		"movies/合集/old.mkv.strm":  "http://bm.local/files/play/115/gone\n",
 		"movies/poster.jpg":       "cover",
 	} {
 		absolute := filepath.Join(root, filepath.FromSlash(target))
@@ -433,8 +433,9 @@ func TestScanMissingPickCode(t *testing.T) {
 	if err != nil || len(files) != 2 || files[0].ID != "f1" || files[1].ID != "f2" || files[1].PickCode != "pc-2" {
 		t.Fatalf("扫描标识未保留: %+v err=%v", files, err)
 	}
-	result, err := service.Scan(context.Background(), "http://bm.local", domain.StrmGenerateFull)
-	if err != nil || result.Files != 2 || result.Failed != 1 || result.Created != 1 || !strings.Contains(result.Mappings[0].Message, "pick_code") {
+	ctx := context.WithValue(context.Background(), strmRetryKey{}, &strmRetryPolicy{wait: func(context.Context, string, error) error { return context.Canceled }})
+	result, err := service.Scan(ctx, "http://bm.local", domain.StrmGenerateFull)
+	if !errors.Is(err, context.Canceled) || result.Files != 2 || result.Failed != 1 || result.Created != 1 || !strings.Contains(result.Mappings[0].Message, "pick_code") {
 		t.Fatalf("缺失提取码结果不符: %+v err=%v", result, err)
 	}
 	if _, err := os.Stat(filepath.Join(root, "movies", "missing.mkv.strm")); !errors.Is(err, os.ErrNotExist) {

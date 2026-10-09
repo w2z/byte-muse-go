@@ -14,6 +14,17 @@ import (
 // pngSignature 是 PNG 文件头，用于让 http.DetectContentType 识别二维码图片。
 var pngSignature = []byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A}
 
+// TestExternalRetryDoesNotCoolOtherStages leaves retry scheduling to independent task queues.
+func TestExternalRetryDoesNotCoolOtherStages(t *testing.T) {
+	client := New(nil)
+	attempts := 0
+	ctx := WithExternalRetry(context.Background())
+	_, err := callValue(client, ctx, "GET", func() (int, error) { attempts++; return 0, &APIError{Code: 20018, Message: "请求过于频繁"} })
+	if err == nil || attempts != 1 || !client.retryAt.IsZero() {
+		t.Fatalf("attempts=%d cooldown=%v err=%v", attempts, client.retryAt, err)
+	}
+}
+
 // newTestClient 返回指向测试服务器的客户端，并关闭节流与退避等待以免拖慢测试；
 // 需要验证退避行为的用例自行改写 gap/playGap/cooldown/backoff。
 func newTestClient(t *testing.T, handler http.HandlerFunc) *Client {

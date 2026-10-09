@@ -294,6 +294,14 @@ func (c *Client) extendCooldown(wait time.Duration) {
 // cooldownReporterKey 承载可选的限流冷却观察者。
 type cooldownReporterKey struct{}
 
+type externalRetryKey struct{}
+
+// WithExternalRetry delegates retries to task-owned stage queues without extending the client's global cooldown.
+// Normal request pacing and concurrency limits remain active; interactive clients keep their original retry policy.
+func WithExternalRetry(ctx context.Context) context.Context {
+	return context.WithValue(ctx, externalRetryKey{}, true)
+}
+
 // WithCooldownReporter 注册限流冷却观察者：每次进入或延长全局冷却时回调本次等待时长。
 // 回调在请求 goroutine 内同步执行，只用于把「正在等待 115 恢复」反馈到任务进度，
 // 不改变限流与重试语义；report 为 nil 时原样返回 ctx。
@@ -353,6 +361,9 @@ func callValue[T any](c *Client, ctx context.Context, method string, attempt fun
 		value, err := attempt()
 		if err == nil {
 			return value, nil
+		}
+		if external, _ := ctx.Value(externalRetryKey{}).(bool); external {
+			return zero, err
 		}
 		wait, retryable := c.retryDelay(method, err, index)
 		if !retryable {

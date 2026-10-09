@@ -20,7 +20,6 @@ import (
 	"bytemuse/backend/internal/domain"
 	"bytemuse/backend/internal/logging"
 	"bytemuse/backend/internal/platform/clouddrive"
-	"bytemuse/backend/internal/platform/pan115"
 	"bytemuse/backend/internal/ports"
 )
 
@@ -353,36 +352,13 @@ func (s *StrmService) Scan(ctx context.Context, playBase string, mode domain.Str
 	if err := taskInput(ctx, "strm-base", &base); err != nil {
 		return domain.StrmScanResult{}, err
 	}
-	result := domain.StrmScanResult{Mappings: make([]domain.StrmScanMapping, 0, len(mappings))}
-	total, processed := 0, 0
-	for _, mapping := range mappings {
-		if err := scanCheckpoint(ctx); err != nil {
-			return result, err
-		}
-		// 边扫描边写：先确认网盘来源可用（不发起请求），再清理本地目录，
-		// 然后在遍历过程中逐个写入，使限流或中断只影响尚未扫描到的部分。
-		walk, walkErr := s.mappingWalk(ctx, mapping, downloadFormats)
-		if walkErr != nil {
-			result.Mappings = append(result.Mappings, strmMappingFailure(mapping, walkErr))
-			continue
-		}
-		reportScanProgress(ctx, "processing", processed, total, mapping.Path)
-		walkCtx := withScanDiscovery(ctx, func() {
-			total++
-			reportScanProgress(ctx, "processing", processed, total, mapping.Path)
-		})
-		// 115 限流时把冷却反馈到任务进度：冷却期间不再产生新请求，任务仍在运行。
-		walkCtx = pan115.WithCooldownReporter(walkCtx, func(wait time.Duration) {
-			reportScanProgress(ctx, "cooling", processed, total, pan115CooldownNotice(mapping.Path, wait))
-		})
-		entry := s.scanMapping(walkCtx, root, mapping, base, mode, walk, func() {
-			processed++
-			reportScanProgress(ctx, "processing", processed, total, mapping.Path)
-		}, downloadFormats)
-		if err := scanCheckpoint(ctx); err != nil {
-			return result, err
-		}
-		result.Mappings = append(result.Mappings, entry)
+	if _, ok := ctx.Value(strmRetryKey{}).(*strmRetryPolicy); !ok {
+		ctx = context.WithValue(ctx, strmRetryKey{}, &strmRetryPolicy{})
+	}
+	progress := &strmPipelineProgress{ctx: ctx}
+	entries, pipelineErr := s.scanMappings(ctx, root, mappings, base, mode, downloadFormats, progress)
+	result := domain.StrmScanResult{Mappings: entries}
+	for _, entry := range entries {
 		result.Files += entry.Files
 		result.Deleted += entry.Deleted
 		result.Created += entry.Created
@@ -392,6 +368,10 @@ func (s *StrmService) Scan(ctx context.Context, playBase string, mode domain.Str
 		result.DownloadSkipped += entry.DownloadSkipped
 		result.DownloadFailed += entry.DownloadFailed
 	}
+	if pipelineErr != nil {
+		return result, pipelineErr
+	}
+	total, processed := progress.total, progress.processed
 	reportScanProgress(ctx, "finalizing", processed, total, "")
 	if err := scanCheckpoint(ctx); err != nil {
 		logging.Error(logging.CategoryStrmGenerate, "生成 STRM 已取消", "mode", string(mode), "error", err.Error())
@@ -483,161 +463,16 @@ func strmMappingFailure(mapping domain.StrmMapping, err error) domain.StrmScanMa
 	return domain.StrmScanMapping{Kind: mapping.Kind, Path: mapping.Path, LocalPath: mapping.LocalPath, Message: err.Error()}
 }
 
-// scanMapping 把一条映射的网盘文件写入本地 strm 目录，遍历到符合过滤条件的文件就立即写入。
-// 全量先清理映射本地目录下的 strm 内容，增量跳过本地已存在的文件，内容比对方式只在内容变化时改写，
-// 三种方式共用同一套过滤、播放地址与失败计数规则；视频的成功、跳过和失败均计入已处理数，附件下载不计入。
-// 遍历中断（限流、网络失败或取消）只影响尚未扫描到的文件，已写入的 strm 保留，中断原因写入 message。
+// scanMapping shares the pipeline with event synchronization, without enabling perpetual retries for event polling.
 func (s *StrmService) scanMapping(ctx context.Context, root string, mapping domain.StrmMapping, base string, mode domain.StrmGenerateMode, walk strmWalk, advance func(), downloadFormats []string) domain.StrmScanMapping {
-	ctx = withScanFileMapping(ctx, mapping)
-	finishMapping := scanFileDirectory(ctx, "")
-	discovered := false
-	defer func() { finishMapping(discovered) }()
-	entry := domain.StrmScanMapping{Kind: mapping.Kind, Path: mapping.Path, LocalPath: mapping.LocalPath}
-	ctx, trackingErr := s.managedContext(ctx, mapping, downloadFormats)
-	if trackingErr != nil {
-		entry.Message = trackingErr.Error()
-		return entry
-	}
-	target, _, err := resolveStrmPath(root, mapping.LocalPath)
-	cleanupKey := journalKey("cleanup", mapping.Kind, mapping.ID, mapping.LocalPath)
-	var cleaned bool
-	if err == nil {
-		_, err = loadTaskCheckpoint(ctx, cleanupKey, &cleaned)
-	}
-	if err == nil && mode == domain.StrmGenerateFull && !cleaned {
-		entry.Deleted, err = clearStrmContentContext(ctx, root, target)
-		if err == nil {
-			err = saveTaskCheckpoint(ctx, cleanupKey, true)
-		}
-	}
-	if err == nil {
-		if mkdirErr := os.MkdirAll(target, 0o755); mkdirErr != nil {
-			err = strmRootFailure("创建", target, mkdirErr)
-		}
+	entries, err := s.scanMappings(ctx, root, []domain.StrmMapping{mapping}, base, mode, downloadFormats, &strmPipelineProgress{ctx: ctx, advance: advance}, walk)
+	if len(entries) == 0 {
+		return strmMappingFailure(mapping, err)
 	}
 	if err != nil {
-		entry.Message = "准备本地 strm 目录失败：" + err.Error()
-		return entry
+		entries[0].Message = scanFileError(err)
 	}
-	var downloads *strmDownloadPool
-	if len(downloadFormats) > 0 {
-		downloads = s.newDownloadPool(ctx, root, target, mapping.Kind, mode, func(outcome strmDownloadOutcome) {
-			switch {
-			case outcome.err != nil:
-				entry.DownloadFailed++
-				entry.Message = "下载媒体失败：" + outcome.err.Error()
-			case outcome.skipped:
-				entry.DownloadSkipped++
-			default:
-				entry.Downloaded++
-			}
-		})
-	}
-	walkErr := walk(ctx, func(file strmSourceFile) (fileErr error) {
-		if err := scanCheckpoint(ctx); err != nil {
-			return err
-		}
-		if downloads != nil && isStrmMedia(file.Name, downloadFormats) {
-			return downloads.enqueue(ctx, file)
-		}
-		finishFile := startScanFile(ctx, file, "generate")
-		var itemErr error
-		failed, unchanged := entry.Failed, entry.Unchanged
-		defer func() {
-			state := "completed"
-			if fileErr != nil || entry.Failed > failed {
-				state = "failed"
-				if ctx.Err() != nil {
-					state = "interrupted"
-				}
-			} else if entry.Unchanged > unchanged {
-				state = "skipped"
-			}
-			if fileErr != nil {
-				itemErr = fileErr
-			}
-			finishFile(state, itemErr)
-		}()
-		done, err := taskUnitDone(ctx, "strm-file", target, file.Directory, file.ID)
-		if err != nil {
-			return err
-		}
-		if done {
-			entry.Files++
-			entry.Unchanged++
-			advance()
-			return nil
-		}
-		entry.Files++
-		if strings.ContainsAny(file.Name, `/\`) {
-			itemErr = errors.New("STRM 文件名包含路径分隔符")
-			entry.Failed++
-			advance()
-			return nil
-		}
-		absolute := filepath.Join(target, filepath.FromSlash(file.Directory), file.Name+".strm")
-		if !withinStrmRoot(root, absolute) {
-			itemErr = errors.New("STRM 文件路径超出根目录")
-			entry.Failed++
-			advance()
-			return nil
-		}
-		identifier := file.ID
-		if mapping.Kind == domain.StrmKindPan115 {
-			identifier = strings.TrimSpace(file.PickCode)
-			if identifier == "" {
-				entry.Failed++
-				entry.Message = "115 文件缺少 pick_code，无法生成播放链接"
-				itemErr = errors.New(entry.Message)
-				advance()
-				return nil
-			}
-		}
-		if mode == domain.StrmGenerateIncremental {
-			exists, statErr := strmFileExists(absolute)
-			if statErr != nil {
-				entry.Failed++
-				entry.Message = "读取本地 strm 文件失败：" + statErr.Error()
-				itemErr = errors.New(entry.Message)
-				advance()
-				return nil
-			}
-			if exists {
-				entry.Unchanged++
-				advance()
-				return completeTaskUnit(ctx, "strm-file", target, file.Directory, file.ID)
-			}
-		}
-		created, changed, writeErr := s.writeManagedStrm(ctx, file, absolute, strmPlayURL(base, mapping.Kind, identifier)+"\n")
-		switch {
-		case writeErr != nil:
-			entry.Failed++
-			entry.Message = "写入 strm 文件失败：" + writeErr.Error()
-			itemErr = errors.New(entry.Message)
-		case created:
-			entry.Created++
-		case !changed:
-			entry.Unchanged++
-		}
-		advance()
-		if writeErr == nil {
-			return completeTaskUnit(ctx, "strm-file", target, file.Directory, file.ID)
-		}
-		return nil
-	})
-	if downloads != nil {
-		downloads.finish()
-	}
-	discovered = walkErr == nil
-	if walkErr != nil {
-		// 中断原因放在最前：它解释了本次结果为何不完整，单文件提示保留在后。
-		if entry.Message == "" {
-			entry.Message = walkErr.Error()
-		} else {
-			entry.Message = walkErr.Error() + "；" + entry.Message
-		}
-	}
-	return entry
+	return entries[0]
 }
 
 // pan115FileAPI 是递归遍历 115 目录所需的最小能力；生成 strm 与扫描入库都只依赖它。
@@ -667,7 +502,11 @@ func walkPan115Files(ctx context.Context, api pan115FileAPI, rootID string, filt
 				return err
 			}
 			if !found {
-				page, err = api.Files(ctx, directoryID, offset, strmListLimit)
+				err = retryStrmScan(ctx, func() error {
+					var requestErr error
+					page, requestErr = api.Files(ctx, directoryID, offset, strmListLimit)
+					return requestErr
+				})
 				if err != nil {
 					return err
 				}
@@ -725,7 +564,11 @@ func (s *StrmService) walkCloudDrive(ctx context.Context, rootPath string, filte
 			return err
 		}
 		if !found {
-			entries, err = s.cloud.ListSubFiles(ctx, directory)
+			err = retryStrmScan(ctx, func() error {
+				var requestErr error
+				entries, requestErr = s.cloud.ListSubFiles(ctx, directory)
+				return requestErr
+			})
 			if err != nil {
 				return err
 			}

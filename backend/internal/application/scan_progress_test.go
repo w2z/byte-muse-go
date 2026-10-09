@@ -22,6 +22,7 @@ func TestScanFileErrors(t *testing.T) {
 		t.Run(scenario, func(t *testing.T) {
 			tree := newScanFileTree("errors")
 			ctx := context.WithValue(context.Background(), scanFileTreeKey{}, tree)
+			ctx = context.WithValue(ctx, strmRetryKey{}, &strmRetryPolicy{wait: func(context.Context, string, error) error { return context.Canceled }})
 			files := []domain.Pan115File{{ID: "video", Name: "movie.mp4"}}
 			want := "115 文件缺少 pick_code"
 			if scenario == "download" {
@@ -157,19 +158,6 @@ func TestScanFileWaitingLifecycle(t *testing.T) {
 	if got := tree.page("", 1, 15, false).Items[0]; got.Total != 1 || got.Processed != 1 {
 		t.Fatalf("duplicate: %+v", got)
 	}
-	for _, pending := range []int{0, strmDownloadWorkers} {
-		canceled, cancel := context.WithCancel(ctx)
-		cancel()
-		pool := &strmDownloadPool{pending: pending}
-		if err := pool.enqueue(canceled, strmSourceFile{ID: fmt.Sprint(pending), Name: "queued.jpg"}); !errors.Is(err, context.Canceled) {
-			t.Fatal(err)
-		}
-	}
-	for _, row := range tree.page(root.ID, 1, 15, false).Items {
-		if row.Name == "queued.jpg" && row.State != "interrupted" {
-			t.Fatalf("canceled: %+v", row)
-		}
-	}
 }
 
 // TestScanFileStatusOrdering verifies priority before pagination, stable ties and live transitions.
@@ -238,7 +226,7 @@ func TestScanProgressCountsFiles(t *testing.T) {
 		t.Run(kind, func(t *testing.T) {
 			var updates []ScanProgress
 			ctx := WithScanProgress(context.Background(), func(p ScanProgress) { updates = append(updates, p) })
-			files := []domain.Pan115File{{ID: "a", Name: "ABC-001.mp4"}, {ID: "b", Name: "unknown.mp4"}}
+			files := []domain.Pan115File{{ID: "a", Name: "ABC-001.mp4", PickCode: "a"}, {ID: "b", Name: "unknown.mp4", PickCode: "b"}}
 			if kind == "library" {
 				service := newLibraryScanService(t, &libraryScanPan115Stub{files: map[string][]domain.Pan115File{"1": files, "2": files}}, &libraryScanWriterStub{}, map[string]string{pan115ScanPathsSettingKey: `[{"id":"1","path":"/a"},{"id":"2","path":"/b"}]`})
 				if _, err := service.Scan(ctx); err != nil {
@@ -259,7 +247,7 @@ func TestScanProgressCountsFiles(t *testing.T) {
 				if p.Phase == "processing" && p.Processed == 3 && p.Total == 4 && p.Percent == 75 {
 					dynamic = true
 				}
-				if p.Phase == "processing" && p.Processed == 1 && p.Total == 2 && p.Percent == 50 {
+				if p.Phase == "processing" && p.Processed > 0 && p.Processed < p.Total && p.Percent == p.Processed*100/p.Total {
 					halfway = true
 				}
 			}

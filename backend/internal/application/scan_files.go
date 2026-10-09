@@ -152,8 +152,13 @@ func trackScanFile(ctx context.Context, file strmSourceFile, operation, initialS
 		for ancestor := parent; ancestor != ""; ancestor = tree.rows[ancestor].parent {
 			tree.rows[ancestor].Total++
 		}
-	} else if row := tree.rows[id]; row.Processed == 0 && initialState == "processing" {
-		row.State = "processing"
+	} else if row := tree.rows[id]; initialState == "processing" && row.State != "completed" && row.State != "skipped" {
+		for ancestor := row.parent; ancestor != ""; ancestor = tree.rows[ancestor].parent {
+			tree.rows[ancestor].Processed -= row.Processed
+			tree.rows[ancestor].Failed -= row.Failed
+		}
+		row.State, row.Error = "processing", ""
+		row.Processed, row.Failed, row.Percent, row.Bytes = 0, 0, 0, 0
 	}
 	tree.mu.Unlock()
 	return func(state string, err error) {
