@@ -1,16 +1,20 @@
 {
-  "version": "0.1.125",
-  "commit": "9d55708a606c09ea30469bc2e5e13a87874c9212",
-  "short_commit": "9d55708",
-  "built_at": "2026-10-09T11:34:35Z",
+  "version": "0.1.126",
+  "commit": "55ed88921acd521246ba4476f04229d201bc0562",
+  "short_commit": "55ed889",
+  "built_at": "2026-10-09T11:47:21Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.125",
-    "sha-9d55708",
+    "0.1.126",
+    "sha-55ed889",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.126",
+      "message": "添加手机端菜单展开关闭按钮"
+    },
     {
       "version": "0.1.125",
       "message": "在推送消息顶部展示影片标题"
