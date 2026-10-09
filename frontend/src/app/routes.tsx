@@ -73,7 +73,7 @@ export const routes: RouteObject[] = [
       { path: "release-today", element: <ReleaseTodayPage />, handle: meta("上新", "通用", "white") },
       { path: "recommend", element: <RecommendPage />, handle: meta("推荐", "通用", "white") },
       { path: "rank", element: <RankPage />, handle: meta("榜单", "通用", "white") },
-      { path: "search", element: <SearchPage />, handle: meta("搜索", "通用") },
+      { path: "search", element: <SearchPage />, handle: meta("搜索", "通用", "white") },
       { path: "task", element: <TaskListPage />, handle: meta("任务", "系统") },
       { path: "logs", element: <LogsPage />, handle: meta("日志", "系统") },
       { path: "*", element: <Navigate to="/dashboard" replace /> },
