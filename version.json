@@ -1,16 +1,20 @@
 {
-  "version": "0.1.129",
-  "commit": "9fd4e3018fa6df7d394fa55aea837e056a377975",
-  "short_commit": "9fd4e30",
-  "built_at": "2026-10-09T12:24:47Z",
+  "version": "0.1.130",
+  "commit": "db2ece334d9ef6603c753548da786c51d6a42854",
+  "short_commit": "db2ece3",
+  "built_at": "2026-10-09T12:25:50Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.129",
-    "sha-9fd4e30",
+    "0.1.130",
+    "sha-db2ece3",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.130",
+      "message": "分离扫描生成下载并增加独立冷却重试"
+    },
     {
       "version": "0.1.129",
       "message": "支持编辑全部定时任务执行计划并即时生效"
