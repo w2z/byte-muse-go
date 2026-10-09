@@ -12,9 +12,9 @@ export const videoTypeOptions = [
   { label: "流出", value: "leaked" }, { label: "未分类", value: "unknown" },
 ];
 
-/** 订阅状态和类型共用控件；由页面决定查询与回到首页，组件只展示和回传选择。 */
-export function CatalogFilters({ subscription, videoType, onSubscriptionChange, onVideoTypeChange }: {
-  subscription: string; videoType: string;
+/** 共用订阅、类型及可选 VR 筛选；由页面负责查询和重置页码。 */
+export function CatalogFilters({ subscription, videoType, vr = "", onVRChange, onSubscriptionChange, onVideoTypeChange }: {
+  subscription: string; videoType: string; vr?: string; onVRChange?: (value: string) => void;
   onSubscriptionChange: (value: string) => void; onVideoTypeChange: (value: string) => void;
 }) {
   return <>
@@ -24,13 +24,17 @@ export function CatalogFilters({ subscription, videoType, onSubscriptionChange, 
     <Grid.Col xs={24} sm={12} md={8} xl={4}>
       <div className="filter-labeled"><span className="filter-label">影片类型</span><Select aria-label="影片类型筛选" value={videoType} onChange={onVideoTypeChange} options={videoTypeOptions} /></div>
     </Grid.Col>
+    {onVRChange && <Grid.Col xs={24} sm={12} md={8} xl={4}>
+      <div className="filter-labeled"><span className="filter-label">VR</span><Select aria-label="VR筛选" value={vr} onChange={onVRChange} options={[{ label: "全部影片", value: "" }, { label: "隐藏VR影片", value: "hide" }, { label: "只显示VR影片", value: "only" }]} /></div>
+    </Grid.Col>}
   </>;
 }
 
 /** 在分页参数后附加非空筛选，供上新、推荐及榜单使用。 */
-export function catalogFilterParams(subscription: string, videoType: string): string {
+export function catalogFilterParams(subscription: string, videoType: string, vr = ""): string {
   const params = new URLSearchParams();
   if (subscription) params.set("subscription", subscription);
   if (videoType) params.set("video_type", videoType);
+  if (vr) params.set("vr", vr);
   return params.size ? "&" + params.toString() : "";
 }

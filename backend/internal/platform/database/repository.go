@@ -43,7 +43,7 @@ func (r *sqlMediaRepository) List(ctx context.Context, query ports.MediaListQuer
 	return domain.MediaPage{Items: items, Total: total}, nil
 }
 
-// mediaListWhere builds the shared server-side filters for all-media and library views.
+// mediaListWhere 为影片视图共用服务端筛选；VR 按番号判断，统计与分页复用相同条件。
 func mediaListWhere(dialect Dialect, query ports.MediaListQuery) (string, []any) {
 	clauses := make([]string, 0, 4)
 	args := make([]any, 0, 4)
@@ -73,6 +73,12 @@ func mediaListWhere(dialect Dialect, query ports.MediaListQuery) (string, []any)
 		clauses = append(clauses, "m.video_type IS NULL")
 	} else if value != "" {
 		add("m.video_type = %s", value)
+	}
+	switch query.VR {
+	case "hide":
+		clauses = append(clauses, "UPPER(m.code) NOT LIKE '%VR%'")
+	case "only":
+		clauses = append(clauses, "UPPER(m.code) LIKE '%VR%'")
 	}
 	if len(clauses) == 0 {
 		return "", args

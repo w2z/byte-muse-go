@@ -188,7 +188,15 @@ paths:
           in: query
           description: 与所有影片一致；空值或省略为全部类型，unknown 匹配未分类（数据库 NULL），其余值对应影片类型。
           schema: {type: string, enum: ["", censored, uncensored, uncensored_cracked, leaked, unknown]}
+        - $ref: '#/components/parameters/VRFilter'
       responses:
+        '400':
+          description: 分页、影片类型或 VR 筛选无效；非法 vr 返回 invalid_vr_filter
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example: {code: invalid_vr_filter, message: VR筛选条件无效}
         '200':
           description: 按数据库中榜单快照顺序返回媒体分页数据
           content:
@@ -211,7 +219,15 @@ paths:
           in: query
           description: 与所有影片一致；空值或省略为全部类型，unknown 匹配未分类（数据库 NULL），其余值对应影片类型。
           schema: {type: string, enum: ["", censored, uncensored, uncensored_cracked, leaked, unknown]}
+        - $ref: '#/components/parameters/VRFilter'
       responses:
+        '400':
+          description: 分页、影片类型或 VR 筛选无效；非法 vr 返回 invalid_vr_filter
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example: {code: invalid_vr_filter, message: VR筛选条件无效}
         '200':
           description: 仅返回发布日期等于服务当前本地日期的数据库媒体分页数据
           content:
@@ -234,7 +250,15 @@ paths:
           in: query
           description: 与所有影片一致；空值或省略为全部类型，unknown 匹配未分类（数据库 NULL），其余值对应影片类型。
           schema: {type: string, enum: ["", censored, uncensored, uncensored_cracked, leaked, unknown]}
+        - $ref: '#/components/parameters/VRFilter'
       responses:
+        '400':
+          description: 分页、影片类型或 VR 筛选无效；非法 vr 返回 invalid_vr_filter
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example: {code: invalid_vr_filter, message: VR筛选条件无效}
         '200':
           description: 根据数据库中的订阅、完成记录及媒体元数据计算的推荐分页数据；没有偏好数据时返回空列表
           content:
@@ -1777,6 +1801,12 @@ components:
       in: cookie
       name: bytemuse_session
   parameters:
+    VRFilter:
+      name: vr
+      in: query
+      required: false
+      description: 空值或省略为全部影片；hide 隐藏 VR 影片，only 只显示 VR 影片。沿用番号包含 VR（不区分大小写）的判定，先筛选再统计和分页。其他值返回 400。
+      schema: {type: string, enum: ["", hide, only], default: ""}
     ScanProgressAccept:
       in: header
       name: Accept

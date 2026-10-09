@@ -76,22 +76,23 @@ const RANK_SOURCES: RankSource[] = [
  * - HTTP 层 backend/internal/transport/httpapi/handler.go 的 listRank 也只透传 type，没有枚举排行榜类型的接口，
  *   所以前端无法动态拉取选项，只能使用上述旧库中已确认存在的取值。
  *
- * 订阅状态和类型在服务端过滤后分页；筛选后的序号不表示原榜单名次。
+ * 订阅状态、类型和 VR 在服务端过滤后分页；筛选后的序号不表示原榜单名次。
  */
 export function RankPage() {
   const [source, setSource] = useState(RANK_SOURCES[0].value);
   const [period, setPeriod] = useState(RANK_SOURCES[0].defaultPeriod);
   const [subscription, setSubscription] = useState("");
   const [videoType, setVideoType] = useState("");
+  const [vr, setVR] = useState("");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
 
   const currentSource = RANK_SOURCES.find((item) => item.value === source) ?? RANK_SOURCES[0];
 
-  const listPath = `/ranks?type=${period}&${catalogFilterParams(subscription, videoType).replace(/^&/, "")}`;
+  const listPath = `/ranks?type=${period}&${catalogFilterParams(subscription, videoType, vr).replace(/^&/, "")}`;
   const query = useQuery({
-    queryKey: ["ranks", period, page, pageSize, subscription, videoType],
-    queryFn: () => apiRequest<Page<Media>>(`/ranks?type=${period}&page=${page}&page_size=${pageSize}${catalogFilterParams(subscription, videoType)}`),
+    queryKey: ["ranks", period, page, pageSize, subscription, videoType, vr],
+    queryFn: () => apiRequest<Page<Media>>(`/ranks?type=${period}&page=${page}&page_size=${pageSize}${catalogFilterParams(subscription, videoType, vr)}`),
   });
   const items = query.data?.items ?? [];
   const total = query.data?.total ?? 0;
@@ -154,8 +155,8 @@ export function RankPage() {
                 />
               </div>
             </Grid.Col>
-          <CatalogFilters subscription={subscription} videoType={videoType} onSubscriptionChange={(value) => { setSubscription(value); setPage(1); }} onVideoTypeChange={(value) => { setVideoType(value); setPage(1); }} />
-          <Grid.Col xs={24} sm={12} md={8} xl={4}><div className="filter-actions"><Button type="primary" onClick={() => { if (page === 1) void query.refetch(); else setPage(1); }}>搜索</Button><Button onClick={() => { if (!subscription && !videoType && page === 1) void query.refetch(); setSubscription(""); setVideoType(""); setPage(1); }}>重置</Button></div></Grid.Col>
+          <CatalogFilters vr={vr} onVRChange={(value) => { setVR(value); setPage(1); }} subscription={subscription} videoType={videoType} onSubscriptionChange={(value) => { setSubscription(value); setPage(1); }} onVideoTypeChange={(value) => { setVideoType(value); setPage(1); }} />
+          <Grid.Col xs={24} sm={12} md={8} xl={4}><div className="filter-actions"><Button type="primary" onClick={() => { if (page === 1) void query.refetch(); else setPage(1); }}>搜索</Button><Button onClick={() => { if (!subscription && !videoType && !vr && page === 1) void query.refetch(); setSubscription(""); setVideoType(""); setVR(""); setPage(1); }}>重置</Button></div></Grid.Col>
           <Grid.Col xs={24} sm={12} md={8} xl={4} className="catalog-subscription-column"><div className="catalog-subscription-actions"><CatalogSubscriptionButton items={items} total={total} listPath={listPath} disabled={query.isFetching || !!query.error} onComplete={() => setPage(1)} /></div></Grid.Col>
           </Grid.Row>
       </div>
@@ -169,7 +170,7 @@ export function RankPage() {
         onPageChange={setPage}
         onPageSizeChange={changePageSize}
         columns="wide"
-        renderMeta={(_media, index) => <div className="code-card-meta">{subscription || videoType ? "筛选结果第 " : "第 "}{rankOf(index)}{subscription || videoType ? " 项" : " 名"}</div>}
+        renderMeta={(_media, index) => <div className="code-card-meta">{subscription || videoType || vr ? "筛选结果第 " : "第 "}{rankOf(index)}{subscription || videoType || vr ? " 项" : " 名"}</div>}
       />
     </section>
   );

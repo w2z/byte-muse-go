@@ -28,12 +28,19 @@ test.each([["上新", ReleaseTodayPage, "/codes/release_today"], ["推荐", Reco
     expect(url).toContain(endpoint); expect(url).toContain("page=1");
     expect(url).toContain("subscription=active&video_type=unknown");
   });
+  fireEvent.click(screen.getByLabelText("VR筛选"));
+  fireEvent.click(screen.getByText("隐藏VR影片", { exact: true }));
+  await waitFor(() => expect(vi.mocked(apiRequest).mock.calls.at(-1)?.[0]).toContain("vr=hide"));
+  fireEvent.click(screen.getByLabelText("VR筛选"));
+  fireEvent.click(screen.getByText("只显示VR影片", { exact: true }));
+  await waitFor(() => expect(vi.mocked(apiRequest).mock.calls.at(-1)?.[0]).toContain("vr=only"));
   const beforeSearch = vi.mocked(apiRequest).mock.calls.length;
   fireEvent.click(screen.getByRole("button", { name: "搜索" }));
   await waitFor(() => expect(vi.mocked(apiRequest).mock.calls.length).toBeGreaterThan(beforeSearch));
   fireEvent.click(screen.getByRole("button", { name: "重置" }));
   await waitFor(() => expect(vi.mocked(apiRequest).mock.calls.at(-1)?.[0]).not.toContain("subscription="));
   expect(vi.mocked(apiRequest).mock.calls.at(-1)?.[0]).not.toContain("video_type=");
+  expect(vi.mocked(apiRequest).mock.calls.at(-1)?.[0]).not.toContain("vr=");
 });
 
 test.each([["上新", ReleaseTodayPage], ["推荐", RecommendPage], ["榜单", RankPage]] as const)("%s 批量完成后回到首页避免筛选结果缩短导致越界", async (_name, Component) => {

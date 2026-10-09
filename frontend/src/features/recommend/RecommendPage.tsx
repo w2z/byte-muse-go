@@ -19,13 +19,14 @@ import { PageHeader } from "../../shared/ui/PageHeader";
 export function RecommendPage() {
   const [subscription, setSubscription] = useState("");
   const [videoType, setVideoType] = useState("");
+  const [vr, setVR] = useState("");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
-  const listPath = `/codes/recommend?${catalogFilterParams(subscription, videoType).replace(/^&/, "")}`;
+  const listPath = `/codes/recommend?${catalogFilterParams(subscription, videoType, vr).replace(/^&/, "")}`;
   const query = useQuery({
-    queryKey: ["recommend", page, pageSize, subscription, videoType],
+    queryKey: ["recommend", page, pageSize, subscription, videoType, vr],
     queryFn: () =>
-      apiRequest<Page<Media>>(`/codes/recommend?page=${page}&page_size=${pageSize}${catalogFilterParams(subscription, videoType)}`),
+      apiRequest<Page<Media>>(`/codes/recommend?page=${page}&page_size=${pageSize}${catalogFilterParams(subscription, videoType, vr)}`),
   });
   const items = query.data?.items ?? [];
   const total = query.data?.total ?? 0;
@@ -40,8 +41,8 @@ export function RecommendPage() {
     <section>
       <PageHeader title="推荐" />
       <div className="filter-toolbar" role="search"><Grid.Row gutter={[12, 12]} justify="start" align="center">
-          <CatalogFilters subscription={subscription} videoType={videoType} onSubscriptionChange={(value) => { setSubscription(value); setPage(1); }} onVideoTypeChange={(value) => { setVideoType(value); setPage(1); }} />
-          <Grid.Col xs={24} sm={12} md={8} xl={4}><div className="filter-actions"><Button type="primary" onClick={() => { if (page === 1) void query.refetch(); else setPage(1); }}>搜索</Button><Button onClick={() => { if (!subscription && !videoType && page === 1) void query.refetch(); setSubscription(""); setVideoType(""); setPage(1); }}>重置</Button></div></Grid.Col>
+          <CatalogFilters vr={vr} onVRChange={(value) => { setVR(value); setPage(1); }} subscription={subscription} videoType={videoType} onSubscriptionChange={(value) => { setSubscription(value); setPage(1); }} onVideoTypeChange={(value) => { setVideoType(value); setPage(1); }} />
+          <Grid.Col xs={24} sm={12} md={8} xl={4}><div className="filter-actions"><Button type="primary" onClick={() => { if (page === 1) void query.refetch(); else setPage(1); }}>搜索</Button><Button onClick={() => { if (!subscription && !videoType && !vr && page === 1) void query.refetch(); setSubscription(""); setVideoType(""); setVR(""); setPage(1); }}>重置</Button></div></Grid.Col>
           <Grid.Col xs={24} sm={12} md={8} xl={4} className="catalog-subscription-column"><div className="catalog-subscription-actions"><CatalogSubscriptionButton items={items} total={total} listPath={listPath} disabled={query.isFetching || !!query.error} onComplete={() => setPage(1)} /></div></Grid.Col>
       </Grid.Row></div>
       <MediaCardGrid

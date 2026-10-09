@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -112,6 +113,15 @@ func TestCatalogViewFilters(t *testing.T) {
 		}
 	}
 	service := application.NewCatalogQueryService(database.NewCatalogQueryRepository(store.SQLDB(), database.DialectSQLite))
+	// VR 沿用番号识别，验证大小写与分页前筛选；不改变元数据或订阅状态。
+	for _, table := range []string{"media", "legacy_media_metadata", "rank_entries"} {
+		if _, err = store.SQLDB().Exec("UPDATE " + table + " SET code='TEST-vr-0' WHERE code='TEST-0'"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = store.SQLDB().Exec("UPDATE " + table + " SET code='TEST-VR-2' WHERE code='TEST-2'"); err != nil {
+			t.Fatal(err)
+		}
+	}
 	for name, handler := range map[string]http.HandlerFunc{"rank": listRank(service), "release": listReleaseToday(service), "recommend": listRecommendations(service)} {
 		for _, tc := range []struct {
 			query               string
@@ -121,6 +131,12 @@ func TestCatalogViewFilters(t *testing.T) {
 			{"subscription=none&video_type=unknown", 1, 1, 200},
 			{"subscription=active&video_type=uncensored", 0, 0, 200},
 			{"", 4, 4, 200}, {"video_type=invalid", 0, 0, 400},
+			{"vr=only&page_size=1&page=2", 2, 1, 200},
+			{"vr=hide&page_size=1&page=2", 2, 1, 200},
+			{"vr=only&subscription=active&video_type=censored", 1, 1, 200},
+			{"vr=hide&subscription=none&video_type=unknown", 1, 1, 200},
+			{"vr=only&video_type=unknown", 0, 0, 200},
+			{"vr=invalid", 0, 0, 400},
 		} {
 			t.Run(name+tc.query, func(t *testing.T) {
 				response := httptest.NewRecorder()
@@ -134,6 +150,7 @@ func TestCatalogViewFilters(t *testing.T) {
 				var result struct {
 					Total int
 					Items []struct {
+						Code         string
 						VideoType    *string `json:"video_type"`
 						Subscription string  `json:"subscription_status"`
 					}
@@ -143,6 +160,12 @@ func TestCatalogViewFilters(t *testing.T) {
 				}
 				if result.Total != tc.total || len(result.Items) != tc.size {
 					t.Fatalf("result=%s", response.Body)
+				}
+				for _, item := range result.Items {
+					isVR := strings.Contains(strings.ToUpper(item.Code), "VR")
+					if strings.Contains(tc.query, "vr=only") && !isVR || strings.Contains(tc.query, "vr=hide") && isVR {
+						t.Fatalf("VR filter leaked item: %s", response.Body)
+					}
 				}
 			})
 		}

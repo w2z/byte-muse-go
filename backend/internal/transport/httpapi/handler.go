@@ -503,7 +503,7 @@ func listRank(service *application.CatalogQueryService) http.HandlerFunc {
 		if !ok {
 			return
 		}
-		result, err := service.Rank(request.Context(), request.URL.Query().Get("type"), page, pageSize, ports.MediaListQuery{SubscriptionStatus: request.URL.Query().Get("subscription"), VideoType: request.URL.Query().Get("video_type")})
+		result, err := service.Rank(request.Context(), request.URL.Query().Get("type"), page, pageSize, ports.MediaListQuery{SubscriptionStatus: request.URL.Query().Get("subscription"), VideoType: request.URL.Query().Get("video_type"), VR: request.URL.Query().Get("vr")})
 		if err != nil {
 			logging.Error(logging.CategoryCollection, "榜单查询失败", "rank_type", request.URL.Query().Get("type"))
 			writeApplicationError(response, err)
@@ -524,7 +524,7 @@ func listReleaseToday(service *application.CatalogQueryService) http.HandlerFunc
 		if !ok {
 			return
 		}
-		result, err := service.ReleaseToday(request.Context(), page, pageSize, ports.MediaListQuery{SubscriptionStatus: request.URL.Query().Get("subscription"), VideoType: request.URL.Query().Get("video_type")})
+		result, err := service.ReleaseToday(request.Context(), page, pageSize, ports.MediaListQuery{SubscriptionStatus: request.URL.Query().Get("subscription"), VideoType: request.URL.Query().Get("video_type"), VR: request.URL.Query().Get("vr")})
 		if err != nil {
 			writeApplicationError(response, err)
 			return
@@ -543,7 +543,7 @@ func listRecommendations(service *application.CatalogQueryService) http.HandlerF
 		if !ok {
 			return
 		}
-		result, err := service.Recommend(request.Context(), page, pageSize, ports.MediaListQuery{SubscriptionStatus: request.URL.Query().Get("subscription"), VideoType: request.URL.Query().Get("video_type")})
+		result, err := service.Recommend(request.Context(), page, pageSize, ports.MediaListQuery{SubscriptionStatus: request.URL.Query().Get("subscription"), VideoType: request.URL.Query().Get("video_type"), VR: request.URL.Query().Get("vr")})
 		if err != nil {
 			writeApplicationError(response, err)
 			return
@@ -976,6 +976,8 @@ func writeApplicationError(response http.ResponseWriter, err error) {
 		writeError(response, 400, "invalid_tag_rule", "标签类型、订阅状态或限制日期无效，日期须为 YYYY-MM-DD")
 	case errors.Is(err, ports.ErrTagNotFound):
 		writeError(response, 404, "not_found", "标签不存在")
+	case errors.Is(err, application.ErrInvalidVRFilter):
+		writeError(response, http.StatusBadRequest, "invalid_vr_filter", "VR筛选条件无效")
 	case errors.Is(err, application.ErrInvalidVideoType):
 		writeError(response, http.StatusBadRequest, "invalid_video_type", "影片类型无效")
 	case errors.Is(err, application.ErrInvalidDownloadFilter):

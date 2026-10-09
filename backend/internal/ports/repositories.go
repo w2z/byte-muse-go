@@ -44,6 +44,7 @@ type MediaListQuery struct {
 	DownloadStatus     string
 	LibraryStatus      string
 	VideoType          string // 空串不限；unknown 查询尚未分类。
+	VR                 string // 空串不限；hide 隐藏番号含 VR 的影片，only 仅显示，忽略大小写。
 }
 
 // MediaRepository reads normalized catalog media without exposing database details.

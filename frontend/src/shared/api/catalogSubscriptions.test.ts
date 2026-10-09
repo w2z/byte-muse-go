@@ -32,11 +32,12 @@ test("所有先按服务端页长读完筛选快照再写入，避免未订阅�
     expect(params.get("type")).toBe("weekly");
     expect(params.get("subscription")).toBe("none");
     expect(params.get("video_type")).toBe("unknown");
+    expect(params.get("vr")).toBe("hide");
     const page = Number(params.get("page"));
     events.push("read" + page);
     return { items: page === 1 ? [film("a"), film("b")] : [film("c")], page, page_size: 2, total: 3 } as never;
   });
-  const result = await subscribeCatalog({ scope: "all", items: [film("other")], listPath: "/ranks?type=weekly&subscription=none&video_type=unknown", signal: new AbortController().signal });
+  const result = await subscribeCatalog({ scope: "all", items: [film("other")], listPath: "/ranks?type=weekly&subscription=none&video_type=unknown&vr=hide", signal: new AbortController().signal });
   expect(events).toEqual(["read1", "read2", "a", "b", "c"]);
   expect(result.succeeded).toBe(3);
 });

@@ -15,6 +15,8 @@ import (
 var (
 	// ErrInvalidPagination reports page values outside the public API contract.
 	ErrInvalidPagination = errors.New("invalid pagination")
+	// ErrInvalidVRFilter 表示 VR 筛选不在允许范围内。
+	ErrInvalidVRFilter = errors.New("invalid VR filter")
 	// ErrInvalidVideoType 表示影片类型不在允许的筛选范围内。
 	ErrInvalidVideoType = errors.New("invalid video type")
 	// ErrInvalidSubscription reports a malformed subscription command.
@@ -412,8 +414,12 @@ func nonNil[T any](items []T) []T {
 	return items
 }
 
-// validateMediaFilters 统一所有影片视图的类型校验，unknown 表示未分类。
+// validateMediaFilters 统一影片类型及 VR 筛选校验，unknown 表示未分类。
 func validateMediaFilters(query *ports.MediaListQuery) error {
+	query.VR = strings.TrimSpace(query.VR)
+	if query.VR != "" && query.VR != "hide" && query.VR != "only" {
+		return ErrInvalidVRFilter
+	}
 	query.VideoType = strings.TrimSpace(query.VideoType)
 	if query.VideoType != "" && query.VideoType != "unknown" && !domain.ValidVideoType(query.VideoType) {
 		return ErrInvalidVideoType
