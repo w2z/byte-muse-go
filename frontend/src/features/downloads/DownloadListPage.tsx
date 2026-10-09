@@ -208,10 +208,10 @@ export function DownloadListPage() {
               setSorting({ field: String(active?.field ?? ""), direction: active?.direction }); setPage(1);
             }}
             columns={[
-              { ...column("code", "影片", "text"), title: "影片", width: 150, render: (value: string | null, task: DownloadTask) => value && task.media_id
+              { ...column("code", "影片", "text"), title: "影片", width: 150, fixed: "left", render: (value: string | null, task: DownloadTask) => value && task.media_id
                 ? <Button type="text" className="code-cell" onClick={() => setSelectedMediaId(task.media_id)}>{value}</Button>
                 : <span className="code-cell">{value || "—"}</span> },
-              { ...column("source_site", "资源站", "text"), title: "资源站", render: (value: string | null) => value || "—" },
+              { ...column("source_site", "资源站", "text"), title: "资源站", width: 150, fixed: "left", render: (value: string | null) => value || "—" },
               { ...column("downloader", "下载器", "enum"), title: "下载器", render: (value: string | null) => value || "—" },
               { ...column("transfer_status", "下载状态", "enum"), title: "下载状态", render: (_: unknown, task: DownloadTask) => <DownloadStatus task={task} /> },
               { ...column("size_bytes", "大小", "bytes"), title: "大小", width: 110, render: (_: unknown, task: DownloadTask) => formatBytes(task.metrics?.size_bytes) },
