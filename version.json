@@ -1,16 +1,20 @@
 {
-  "version": "0.1.123",
-  "commit": "3c2ef1fd7c6435833b7586de2a798c1ddce3095b",
-  "short_commit": "3c2ef1f",
-  "built_at": "2026-10-09T10:02:01Z",
+  "version": "0.1.124",
+  "commit": "1175113a18eb3da7d17416c64a2637eebca1d48a",
+  "short_commit": "1175113",
+  "built_at": "2026-10-09T11:30:01Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.123",
-    "sha-3c2ef1f",
+    "0.1.124",
+    "sha-1175113",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.124",
+      "message": "恢复步骤连接线并显示下载解压实际进度"
+    },
     {
       "version": "0.1.123",
       "message": "按处理状态优先级排列文件进度"
