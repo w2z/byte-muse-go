@@ -1,16 +1,20 @@
 {
-  "version": "0.1.114",
-  "commit": "053469f5f86a4a285003dc7027de031f9b358e83",
-  "short_commit": "053469f",
-  "built_at": "2026-10-09T02:49:33Z",
+  "version": "0.1.115",
+  "commit": "0c1b34d983c18c2f860dbf922e435304b53e1663",
+  "short_commit": "0c1b34d",
+  "built_at": "2026-10-09T03:07:41Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.114",
-    "sha-053469f",
+    "0.1.115",
+    "sha-0c1b34d",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.115",
+      "message": "使用步骤条展示升级阶段并清除完成后的残留进度"
+    },
     {
       "version": "0.1.114",
       "message": "实现定向生成与受管本地文件删除"
