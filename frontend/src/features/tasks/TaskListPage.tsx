@@ -147,7 +147,7 @@ export function TaskListPage() {
                     setEditing(task);
                   }}>编辑</Button>
                   <Button
-                    type="secondary"
+                    type="primary"
                     icon={<IconPlayArrow />}
                     loading={runMutation.isPending && runMutation.variables === task.name}
                     disabled={task.running || runMutation.isPending}
