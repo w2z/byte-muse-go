@@ -1,16 +1,20 @@
 {
-  "version": "0.1.147",
-  "commit": "8cbf81facf73c778b4a83d6b56fc9b34f7f8c840",
-  "short_commit": "8cbf81f",
-  "built_at": "2026-10-09T16:51:28Z",
+  "version": "0.1.148",
+  "commit": "7431a94113fa998e76efaa5f855fa2d991c88713",
+  "short_commit": "7431a94",
+  "built_at": "2026-10-09T17:00:33Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.147",
-    "sha-8cbf81f",
+    "0.1.148",
+    "sha-7431a94",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.148",
+      "message": "保留已有附件并修复增量扫描同名误判"
+    },
     {
       "version": "0.1.147",
       "message": "将影片标题移至描述上方并添加TG复制按钮"
