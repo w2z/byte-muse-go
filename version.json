@@ -1,16 +1,20 @@
 {
-  "version": "0.1.116",
-  "commit": "9114e8a005f3e8ed66a1f5397982108de0887a8b",
-  "short_commit": "9114e8a",
-  "built_at": "2026-10-09T08:01:30Z",
+  "version": "0.1.117",
+  "commit": "d8a9d18abd69dec6393e158f6b4ad0fccee08748",
+  "short_commit": "d8a9d18",
+  "built_at": "2026-10-09T08:03:06Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.116",
-    "sha-9114e8a",
+    "0.1.117",
+    "sha-d8a9d18",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.117",
+      "message": "修复筛选弹层背景并完善影片与下载器筛选"
+    },
     {
       "version": "0.1.116",
       "message": "增加目录展开列表和文件下载进度"
