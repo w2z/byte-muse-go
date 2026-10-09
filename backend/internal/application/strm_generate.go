@@ -22,6 +22,18 @@ func strmVideoName(name string) string {
 	return strings.TrimSuffix(name, filepath.Ext(name)) + ".strm"
 }
 
+// strmVideoOutputPath 在增量模式优先复用旧双后缀文件，保留既有资源及其配套 NFO。
+func strmVideoOutputPath(target string, file strmSourceFile, mode domain.StrmGenerateMode) string {
+	directory := filepath.Join(target, filepath.FromSlash(file.Directory))
+	if mode == domain.StrmGenerateIncremental {
+		legacy := filepath.Join(directory, file.Name+".strm")
+		if info, err := os.Lstat(legacy); err == nil && info.Mode().IsRegular() {
+			return legacy
+		}
+	}
+	return filepath.Join(directory, strmVideoName(file.Name))
+}
+
 // generateStrmFile 统一手动与事件生成的命名和写入：替换视频后缀，播放地址仍使用原始网盘标识。
 func (s *StrmService) generateStrmFile(ctx context.Context, root, target, kind, base string, mode domain.StrmGenerateMode, file strmSourceFile) (strmGenerateOutcome, error) {
 	var outcome strmGenerateOutcome
@@ -36,7 +48,7 @@ func (s *StrmService) generateStrmFile(ctx context.Context, root, target, kind, 
 	if strings.ContainsAny(file.Name, `/\`) {
 		return outcome, errors.New("STRM 文件名包含路径分隔符")
 	}
-	absolute := filepath.Join(target, filepath.FromSlash(file.Directory), strmVideoName(file.Name))
+	absolute := strmVideoOutputPath(target, file, mode)
 	if !withinStrmRoot(root, absolute) {
 		return outcome, errors.New("STRM 文件路径超出根目录")
 	}
@@ -258,7 +270,7 @@ func (s *StrmService) scanMappings(ctx context.Context, root string, mappings []
 	var scanErr error
 	// 不同源文件去掉视频后缀后可能同名；入队前拒绝冲突，禁止后写覆盖或静默跳过。
 	destinations := make(map[string]string)
-	preservedDownloads := make(map[string]string)
+	preservedOutputs := make(map[string]string)
 	scanMessages := make([]string, len(mappings))
 	for index, scope := range scopes {
 		if scope.walk == nil {
@@ -293,17 +305,20 @@ func (s *StrmService) scanMappings(ctx context.Context, root string, mappings []
 				mutex.Unlock()
 			}
 			absolute := filepath.Join(scope.target, filepath.FromSlash(file.Directory), name)
+			if operation == "generate" {
+				absolute = strmVideoOutputPath(scope.target, file, mode)
+			}
 			destination := strings.ToLower(absolute)
 			source := journalKey(mapping.Kind, file.ID, file.Directory, file.Name)
 			previous, exists := destinations[destination]
-			if !exists && operation == "download" && mode != domain.StrmGenerateFull {
-				// 记录首次发现时已存在的附件，避免把本轮刚下载的文件当成可跳过的旧文件。
+			if !exists && mode == domain.StrmGenerateIncremental {
+				// 记录首次发现时已存在的输出，避免把本轮刚写入的文件当成可跳过的旧文件。
 				info, err := os.Lstat(absolute)
 				if err == nil && info.Mode().IsRegular() {
-					preservedDownloads[destination] = absolute
+					preservedOutputs[destination] = absolute
 				}
 			}
-			if exists && previous != source && preservedDownloads[destination] != absolute {
+			if exists && previous != source && preservedOutputs[destination] != absolute {
 				if operation == "download" {
 					return fmt.Errorf("网盘附件文件名冲突：%s", name)
 				}

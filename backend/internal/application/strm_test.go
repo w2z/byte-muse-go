@@ -801,3 +801,45 @@ func TestScanRejectsSameStemVideos(t *testing.T) {
 		t.Fatalf("data=%q err=%v", data, err)
 	}
 }
+
+// TestStrmIncrementalPreservesDuplicateVideos 验证已有标准名或旧名 STRM 在增量扫描中保留且不阻断后续文件。
+func TestStrmIncrementalPreservesDuplicateVideos(t *testing.T) {
+	for _, legacy := range []bool{false, true} {
+		t.Run(map[bool]string{false: "standard", true: "legacy"}[legacy], func(t *testing.T) {
+			root := t.TempDir()
+			target := filepath.Join(root, "out")
+			if err := os.MkdirAll(target, 0755); err != nil {
+				t.Fatal(err)
+			}
+			names := []string{"movie.mp4", "movie.mp4"}
+			outputs := []string{"movie.strm"}
+			if legacy {
+				names[1] = "movie.mkv"
+				outputs = []string{"movie.mp4.strm", "movie.mkv.strm"}
+			}
+			for _, name := range outputs {
+				if err := os.WriteFile(filepath.Join(target, name), []byte("preserved-"+name), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			api := &strmPan115Stub{pages: map[string]domain.Pan115FilePage{"root": {Files: []domain.Pan115File{
+				{ID: "a", PickCode: "a", Name: names[0]}, {ID: "b", PickCode: "b", Name: names[1]}, {ID: "next", PickCode: "next", Name: "next.mp4"},
+			}}}}
+			service := newStrmTestService(t, root, api, nil, map[string]string{strmPathsSettingKey: strmTestMappings(t, []domain.StrmMapping{{Kind: "115", ID: "root", Path: "/root", LocalPath: "/out"}})})
+			result, err := service.Scan(context.Background(), "https://media.example.com", domain.StrmGenerateIncremental)
+			if err != nil || result.Created != 1 || result.Unchanged != 2 {
+				t.Fatalf("result=%+v err=%v", result, err)
+			}
+			for _, name := range outputs {
+				body, err := os.ReadFile(filepath.Join(target, name))
+				if err != nil || string(body) != "preserved-"+name {
+					t.Fatalf("%s changed: %q %v", name, body, err)
+				}
+			}
+			entries, err := os.ReadDir(target)
+			if err != nil || len(entries) != len(outputs)+1 {
+				t.Fatalf("unexpected outputs: %v %v", entries, err)
+			}
+		})
+	}
+}

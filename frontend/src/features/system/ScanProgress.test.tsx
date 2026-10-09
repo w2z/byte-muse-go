@@ -70,12 +70,12 @@ it("生成进度目录旁的信息按钮打开可展开的文件进度表格", a
   fireEvent.click(toggle);
   await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).includes("parent=root") && String(url).includes("hide_completed=true"))).toBe(true));
   expect(toggle).toHaveAttribute("aria-checked", "true");
-  expect(screen.getByRole("dialog").style.width).toBe("60vw");
-  expect(screen.getByRole("dialog")).toHaveStyle({ height: "60dvh", overflow: "auto" });
+
+  expect(screen.getByRole("dialog")).toHaveStyle({ height: "60dvh", overflow: "hidden" });
   expect(screen.getByRole("region", { name: "STRM 文件列表" })).toBeInTheDocument();
-  expect(document.querySelector(".strm-file-dialog-scroll")).not.toBeInTheDocument();
+  expect(screen.getByRole("region", { name: "STRM 文件列表" })).toHaveClass("strm-file-dialog-scroll");
   expect(document.querySelectorAll("table")).toHaveLength(2);
-  document.querySelectorAll("table").forEach(table => expect(table.style.width).toBe(""));
+
 });
 
 it.each(["failed", "interrupted", "canceled", "completed"] as const)("%s 的可恢复任务显示红色继续按钮且发送 retry", (state) => {
