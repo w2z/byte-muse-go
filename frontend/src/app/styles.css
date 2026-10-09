@@ -730,12 +730,11 @@ button.code-card-still-cell:hover img { opacity: .85; }
 .settings-scan-progress { display: flex; min-width: 0; flex-direction: column; gap: 8px; width: 100%; }
 .settings-scan-progress-current { overflow-wrap: anywhere; }
 .settings-scan-progress-location { display: flex; align-items: center; gap: 4px; min-width: 0; }
-.strm-file-table { min-width: 0; max-width: 100%; overflow: auto; }
-.strm-file-name { overflow-wrap: anywhere; }
-.strm-file-dialog-content { height: min(600px, calc(100dvh - 160px)); display: flex; flex-direction: column; gap: 12px; min-height: 0; }
+.strm-file-table { min-width: 600px; width: max-content; }
+.strm-file-name { display: inline-block; max-width: 320px; overflow-wrap: anywhere; }
+.strm-file-dialog-content { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 .strm-file-dialog-content > p { margin: 0; }
 .strm-file-filter { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
-.strm-file-dialog-scroll { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; }
 .settings-strm-picker-create { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .settings-strm-picker-create > .arco-input { flex: 1 1 160px; min-width: 0; }
 /* 排除规则录入：贴合式组合输入框（左前置匹配方式下拉 + 关键字输入框）与「添加」按钮同一行，规则标签另起一行自动换行。 */

@@ -59,7 +59,7 @@ function DirectoryFiles({ taskId, parent = "", paused, hideCompleted }: { taskId
   return <div className="strm-file-table">
     {query.error ? <span role="alert">加载文件进度失败：{query.error.message}</span> : null}
     <Table<FileRow>
-      rowKey="id" data={query.data?.items ?? []} loading={query.isPending} pagination={false} tableLayoutFixed
+      rowKey="id" data={query.data?.items ?? []} loading={query.isPending} pagination={false}
       expandedRowKeys={expanded} onExpandedRowsChange={setExpanded}
       expandedRowRender={row => expanded.includes(row.id) ? <DirectoryFiles taskId={taskId} parent={row.id} paused={paused} hideCompleted={hideCompleted} /> : null}
       expandProps={{
@@ -86,7 +86,6 @@ function DirectoryFiles({ taskId, parent = "", paused, hideCompleted }: { taskId
         </div> },
         { title: "进度", width: 210, render: (_, row) => <FileProgress row={row} /> },
       ]}
-      scroll={{ x: 600 }}
     />
     {query.data && query.data.total > DEFAULT_PAGE_SIZE ? <ListPagination
       page={page} total={query.data.total} pageSize={pageSize}
@@ -96,7 +95,7 @@ function DirectoryFiles({ taskId, parent = "", paused, hideCompleted }: { taskId
   </div>;
 }
 
-/** 信息入口仅属于 STRM 任务；弹窗展示实时文件及目录进度，不触发扫描或下载。 */
+/** 信息入口仅属于 STRM 任务；60% 视口弹窗统一承载各层溢出滚动，不触发扫描或下载。 */
 export function StrmFileProgress({ taskId, paused }: { taskId: string; paused: boolean }) {
   const [visible, setVisible] = useState(false);
   const [hideCompleted, setHideCompleted] = useState(false);
@@ -104,7 +103,7 @@ export function StrmFileProgress({ taskId, paused }: { taskId: string; paused: b
     <Tooltip content="查看生成与下载文件进度">
       <Button type="text" shape="circle" icon={<IconInfoCircle />} aria-label="查看 STRM 文件进度" onClick={() => { setHideCompleted(false); setVisible(true); }} />
     </Tooltip>
-    <Modal title="STRM 生成与下载进度" visible={visible} onCancel={() => setVisible(false)} footer={null} unmountOnExit style={{ width: "min(960px, calc(100vw - 24px))" }}>
+    <Modal title="STRM 生成与下载进度" visible={visible} onCancel={() => setVisible(false)} footer={null} unmountOnExit style={{ width: "60vw", height: "60dvh", overflow: "auto", overscrollBehavior: "contain" }}>
       <div className="strm-file-dialog-content">
         <p>展开目录查看子目录和文件。目录总数随扫描增加；文件进度按已处理项或下载字节计算。</p>
         <Grid.Row gutter={[12, 12]} justify="start" align="center" className="filter-toolbar">
@@ -112,7 +111,7 @@ export function StrmFileProgress({ taskId, paused }: { taskId: string; paused: b
             <label className="strm-file-filter">隐藏已完成 <Switch aria-label="隐藏已完成" checked={hideCompleted} onChange={setHideCompleted} /></label>
           </Grid.Col>
         </Grid.Row>
-        <div className="strm-file-dialog-scroll" role="region" aria-label="STRM 文件列表" tabIndex={0}>
+        <div role="region" aria-label="STRM 文件列表" tabIndex={0}>
           {visible ? <DirectoryFiles key={taskId} taskId={taskId} paused={paused} hideCompleted={hideCompleted} /> : null}
         </div>
       </div>
