@@ -1,16 +1,20 @@
 {
-  "version": "0.1.135",
-  "commit": "540c4d84c290d079ebc8ec7becdee06d665eaee5",
-  "short_commit": "540c4d8",
-  "built_at": "2026-10-09T13:26:45Z",
+  "version": "0.1.136",
+  "commit": "cee898bec649bd0cd1db04e919af4819a21a0074",
+  "short_commit": "cee898b",
+  "built_at": "2026-10-09T13:34:15Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.135",
-    "sha-540c4d8",
+    "0.1.136",
+    "sha-cee898b",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.136",
+      "message": "补齐搜索页面白色内容背景"
+    },
     {
       "version": "0.1.135",
       "message": "同步确认弹窗的默认过滤参数并保护编辑状态"
