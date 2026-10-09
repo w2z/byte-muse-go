@@ -859,13 +859,6 @@ const groups: SettingGroup[] = [
         label: "已入库资源跳过下载",
         kind: "bool",
       },
-      {
-        key: "LOG_RETENTION_DAYS",
-        label: "定时删除日志",
-        kind: "int",
-        unit: "天",
-        placeholder: "默认 30；0 或留空表示不自动删除",
-      },
     ],
   },
 ];
@@ -1181,9 +1174,7 @@ export function SettingsPage() {
         if (isStructuredField(field.kind)) continue;
         const raw = Object.prototype.hasOwnProperty.call(values, field.key)
           ? values[field.key]
-          : field.key === "LOG_RETENTION_DAYS"
-            ? "30"
-            : field.key === strmDownloadExtensionsKey ? defaultDownloadExtensions : field.key === "CLOUD_UPLOAD_CONFLICT" ? "skip" : "";
+          : field.key === strmDownloadExtensionsKey ? defaultDownloadExtensions : field.key === "CLOUD_UPLOAD_CONFLICT" ? "skip" : "";
         next[field.key] = field.kind === "bool" ? raw === "true" : raw;
         if (field.siteAuth) {
           const auth = field.siteAuth;
@@ -1263,7 +1254,6 @@ export function SettingsPage() {
       .flatMap((group) => groupFields(group))
       .find((item) => item.key === key);
     if (field?.kind === "bool") return "false";
-    if (key === "LOG_RETENTION_DAYS") return "30";
     if (key === strmDownloadExtensionsKey) return defaultDownloadExtensions;
     if (field && isStructuredField(field.kind)) return "";
     return "";

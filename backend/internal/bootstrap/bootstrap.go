@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -472,32 +471,8 @@ func (c *Commands) Serve(ctx context.Context) error {
 	}
 	jobs = append(jobs, scheduler.Job{Name: "同步上新", Spec: releaseTodaySpec, Run: collectionReleaseTodayJob(collectionService)})
 	jobs = append(jobs, scheduler.Job{Name: "同步演员目录", Spec: actorCatalogSpec, Run: actorCatalogJob(actorCatalog, false)})
-	// 日志清理按服务所在时区每天零点执行，保留天数仍在执行时读取。
-	jobs = append(jobs, scheduler.Job{Name: logCleanupTaskName, Spec: logCleanupSpec, Run: func(jobCtx context.Context) scheduler.JobResult {
-		settings, err := settingsService.Get(jobCtx)
-		if err != nil {
-			logging.Error(logging.CategorySystem, "读取日志保留设置失败", "error", err.Error())
-			return nil
-		}
-		raw := strings.TrimSpace(settings.Values["LOG_RETENTION_DAYS"])
-		if raw == "" || raw == "0" {
-			return nil
-		}
-		days, err := strconv.Atoi(raw)
-		if err != nil || days < 0 {
-			logging.Error(logging.CategorySystem, "日志保留天数配置无效", "value", raw)
-			return nil
-		}
-		if days == 0 {
-			return nil
-		}
-		deleted, err := logging.Default.DeleteBefore(jobCtx, time.Now().UTC().Add(-time.Duration(days)*24*time.Hour))
-		if err != nil {
-			logging.Error(logging.CategorySystem, "定时清理日志失败", "error", err.Error())
-			return nil
-		}
-		return scheduler.JobResult{"deleted": deleted, "retention_days": days}
-	}})
+	// 日志清理每天零点和手动执行时均清空全部日志。
+	jobs = append(jobs, scheduler.Job{Name: logCleanupTaskName, Spec: logCleanupSpec, Run: logCleanupJob(logging.Default)})
 	manager, err := scheduler.New(jobs)
 	if err != nil {
 		return fmt.Errorf("create scheduler: %w", err)
@@ -677,6 +652,18 @@ var scheduleDefinitions = []struct{ name, key string }{
 	{"同步热门演员", "ACTOR_SCHEDULE_TIME"},
 	{"标签追新", "TAG_SCHEDULE_TIME"},
 	{"订阅下载", "DOWNLOAD_SCHEDULE_TIME"},
+}
+
+// logCleanupJob 清空执行时的全部日志；定时与手动入口共用，清理后的新日志正常保留。
+func logCleanupJob(logger *logging.Logger) func(context.Context) scheduler.JobResult {
+	return func(ctx context.Context) scheduler.JobResult {
+		deleted, err := logger.Clear(ctx, logging.Query{})
+		if err != nil {
+			logger.Error(logging.CategorySystem, "清理系统日志失败", "error", err.Error())
+			return scheduler.JobResult{"success": false, "error": err.Error()}
+		}
+		return scheduler.JobResult{"deleted": deleted}
+	}
 }
 
 // 日志清理是系统固定任务，表达式不来自设置。它必须始终出现在调度期望集合中，

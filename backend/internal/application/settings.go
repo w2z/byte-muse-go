@@ -248,7 +248,6 @@ var writableSettings = map[string]settingSpec{
 	"BYPASS_USE_PROXY":     {kind: settingBool},
 	"ENABLE_BT_ANTI_LEECH": {kind: settingBool},
 	"ENABLE_AUTO_COMPLETE": {kind: settingBool},
-	"LOG_RETENTION_DAYS":   {kind: settingInt},
 }
 
 // SettingsService validates the bounded setting set and encrypts secret values before persistence.

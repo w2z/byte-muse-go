@@ -176,13 +176,21 @@ func TestSettingsGetSkipsSecretThatCannotBeDecrypted(t *testing.T) {
 	}
 }
 
-func TestSettingsRejectsNegativeRetentionDays(t *testing.T) {
-	service, err := NewSettingsService(settingsRepositoryStub{}, "sqlite", "a-development-secret-with-at-least-32-bytes")
+// TestSettingsIgnoresRetiredLogRetention 验证旧值不再回显或允许保存，避免产生无效配置。
+func TestSettingsIgnoresRetiredLogRetention(t *testing.T) {
+	service, err := NewSettingsService(settingsRepositoryStub{items: []ports.StoredSetting{{Key: "LOG_RETENTION_DAYS", Value: "30"}}}, "sqlite", "a-development-secret-with-at-least-32-bytes")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.Update(context.Background(), map[string]string{"LOG_RETENTION_DAYS": "-1"}); err == nil {
-		t.Fatal("negative retention days must be rejected")
+	settings, err := service.Get(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := settings.Values["LOG_RETENTION_DAYS"]; exists {
+		t.Fatal("retired retention setting must not be exposed")
+	}
+	if _, err := service.Update(context.Background(), map[string]string{"LOG_RETENTION_DAYS": "30"}); !errors.Is(err, ErrInvalidSetting) {
+		t.Fatalf("retired retention setting must be rejected: %v", err)
 	}
 }
 
