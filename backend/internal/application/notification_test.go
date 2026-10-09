@@ -190,19 +190,35 @@ func TestChannelEventEnabledRequiresTrueValue(t *testing.T) {
 	}
 }
 
-// TestNotificationMessageFormat 验证标题置顶、字段顺序、缺失值和多行内容，以及内部引用不能成为下载链接。
+// TestNotificationMessageFormat 验证标题紧邻描述、字段顺序、缺失值和多行内容，以及内部引用不能成为下载链接。
 func TestNotificationMessageFormat(t *testing.T) {
 	for _, item := range []struct{ name, code, source, uri, description, want string }{
-		{"HTTP链接", "EXAMPLE-001", "bt", "https://example.com/download", "资源简介", "番号: EXAMPLE-001\n状态: 开始下载\n站点: 示例站点\n来源: BT\n下载链接: https://example.com/download\n描述: 资源简介"},
-		{"磁力链接", "EXAMPLE-001", "bt", "magnet:?xt=urn:btih:abc&dn=example", "第一行\r\n第二行", "番号: EXAMPLE-001\n状态: 开始下载\n站点: 示例站点\n来源: BT\n下载链接: magnet:?xt=urn:btih:abc&dn=example\n描述: 第一行 第二行"},
-		{"PT内部引用", "EXAMPLE-001", "pt", "mteam:123", "资源简介", "番号: EXAMPLE-001\n状态: 开始下载\n站点: 示例站点\n来源: PT\n下载链接: 暂无\n描述: 资源简介"},
-		{"空值", " ", "", "", "", "番号: 暂无\n状态: 开始下载\n站点: 示例站点\n来源: 暂无\n下载链接: 暂无\n描述: 暂无"},
-		{"凭据链接", "EXAMPLE-001", "bt", "https://user:secret@example.com/download", "资源简介", "番号: EXAMPLE-001\n状态: 开始下载\n站点: 示例站点\n来源: BT\n下载链接: 暂无\n描述: 资源简介"},
+		{"HTTP链接", "EXAMPLE-001", "bt", "https://example.com/download", "资源简介", "番号: EXAMPLE-001\n状态: 开始下载\n站点: 示例站点\n来源: BT\n下载链接: https://example.com/download\n标题: 影片标题\n描述: 资源简介"},
+		{"磁力链接", "EXAMPLE-001", "bt", "magnet:?xt=urn:btih:abc&dn=example", "第一行\r\n第二行", "番号: EXAMPLE-001\n状态: 开始下载\n站点: 示例站点\n来源: BT\n下载链接: magnet:?xt=urn:btih:abc&dn=example\n标题: 影片标题\n描述: 第一行 第二行"},
+		{"PT内部引用", "EXAMPLE-001", "pt", "mteam:123", "资源简介", "番号: EXAMPLE-001\n状态: 开始下载\n站点: 示例站点\n来源: PT\n下载链接: 暂无\n标题: 影片标题\n描述: 资源简介"},
+		{"空值", " ", "", "", "", "番号: 暂无\n状态: 开始下载\n站点: 示例站点\n来源: 暂无\n下载链接: 暂无\n标题: 影片标题\n描述: 暂无"},
+		{"凭据链接", "EXAMPLE-001", "bt", "https://user:secret@example.com/download", "资源简介", "番号: EXAMPLE-001\n状态: 开始下载\n站点: 示例站点\n来源: BT\n下载链接: 暂无\n标题: 影片标题\n描述: 资源简介"},
 	} {
 		t.Run(item.name, func(t *testing.T) {
 			message := NewNotificationMessage(item.code, "影片标题", "开始下载", "示例站点", item.source, item.uri, item.description, "")
-			if got := NotificationPlainText(message.Title, message.Text); got != "标题: 影片标题\n"+item.want {
+			if got := NotificationPlainText(message.Title, message.Text); got != item.want {
 				t.Fatalf("通知 = %q，期望 %q", got, item.want)
+			}
+			wantButtons := 0
+			if strings.TrimSpace(item.code) != "" {
+				wantButtons = 1
+			}
+			if item.uri == "https://example.com/download" || item.uri == "magnet:?xt=urn:btih:abc&dn=example" {
+				wantButtons = 2
+			}
+			if len(message.CopyButtons) != wantButtons {
+				t.Fatalf("通知复制按钮 = %#v，期望数量 %d", message.CopyButtons, wantButtons)
+			}
+			if wantButtons > 0 && message.CopyButtons[0].Text != strings.TrimSpace(item.code) {
+				t.Fatalf("番号复制按钮 = %#v，期望 %q", message.CopyButtons[0], item.code)
+			}
+			if wantButtons == 2 && message.CopyButtons[1].Text != item.uri {
+				t.Fatalf("下载链接复制按钮 = %#v，期望 %q", message.CopyButtons[1], item.uri)
 			}
 		})
 	}

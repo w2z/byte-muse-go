@@ -81,7 +81,7 @@ func TestSubscriptionCreateReturnsMediaSnapshot(t *testing.T) {
 				t.Fatalf("通知数量 = %d", len(notifier.messages))
 			}
 			message := notifier.messages[0]
-			if message.Title != "标题: "+sample.want || message.Text != "番号: SSIS-001\n状态: 已加入订阅列表\n描述: "+sample.want || message.CoverURL != "https://img.example/banner.jpg" {
+			if message.Title != "番号: SSIS-001" || message.Text != "状态: 已加入订阅列表\n标题: "+sample.want+"\n描述: "+sample.want || message.CoverURL != "https://img.example/banner.jpg" {
 				t.Fatalf("数据库影片通知 = %+v", message)
 			}
 		})

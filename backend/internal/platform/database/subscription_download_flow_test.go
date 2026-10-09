@@ -133,7 +133,7 @@ func TestSubscriptionDownloadFlowSubmitsOnceAndExposesSource(t *testing.T) {
 		t.Fatalf("通知数量 = %d，期望 1", len(notifier.messages))
 	}
 	message := notifier.messages[0]
-	if got := application.NotificationPlainText(message.Title, message.Text); got != "标题: film\n番号: SSIS-001\n状态: 开始下载\n站点: Nyaa BT\n来源: BT\n下载链接: magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567\n描述: film" {
+	if got := application.NotificationPlainText(message.Title, message.Text); got != "番号: SSIS-001\n状态: 开始下载\n站点: Nyaa BT\n来源: BT\n下载链接: magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567\n标题: film\n描述: film" {
 		t.Fatalf("下载通知 = %q", got)
 	}
 }

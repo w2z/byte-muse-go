@@ -106,10 +106,11 @@ type Notifier interface {
 // Text 是通知正文；CoverURL 是可选封面，渠道按自身能力渲染，缺失时降级为纯文本。
 // Code 是影片番号，配置「外网访问地址」后用它把封面改写成本机缓存地址（文件名即番号）。
 type NotificationMessage struct {
-	Title    string
-	Text     string
-	CoverURL string
-	Code     string
+	Title       string
+	Text        string
+	CoverURL    string
+	Code        string
+	CopyButtons []ports.CopyTextButton
 }
 
 // NotificationService 按设置中的渠道开关推送业务通知。
@@ -179,6 +180,9 @@ func (n *NotificationService) Notify(ctx context.Context, event NotificationEven
 func sendNotification(ctx context.Context, sender ports.ChannelSender, target string, message NotificationMessage) error {
 	title := strings.TrimSpace(message.Title)
 	text := strings.TrimSpace(message.Text)
+	if enhanced, ok := sender.(ports.NotificationSender); ok {
+		return enhanced.SendNotification(ctx, target, title, text, message.CoverURL, message.CopyButtons)
+	}
 	if cover := strings.TrimSpace(message.CoverURL); cover != "" {
 		return sender.SendPhoto(ctx, target, cover, title, text)
 	}
@@ -243,18 +247,20 @@ func notificationField(value string) string {
 	return value
 }
 
-// newSubscriptionNotificationMessage 生成订阅通知，影片标题置顶，正文包含番号、状态和描述。
+// newSubscriptionNotificationMessage 生成订阅通知，频道标题使用番号，正文中的影片标题位于描述前。
 // 订阅尚未选中下载资源，不显示站点、来源或下载链接。
 func newSubscriptionNotificationMessage(code, title, status, description, cover string) NotificationMessage {
+	copyButtons := notificationCopyButtons(code, "")
 	return NotificationMessage{
-		Title:    "标题: " + notificationField(title),
-		Text:     "番号: " + notificationField(code) + "\n状态: " + notificationField(status) + "\n描述: " + notificationField(description),
-		CoverURL: cover,
-		Code:     strings.TrimSpace(code),
+		Title:       "番号: " + notificationField(code),
+		Text:        "状态: " + notificationField(status) + "\n标题: " + notificationField(title) + "\n描述: " + notificationField(description),
+		CoverURL:    cover,
+		Code:        strings.TrimSpace(code),
+		CopyButtons: copyButtons,
 	}
 }
 
-// NewNotificationMessage 统一生成七行下载通知，影片标题置顶，其余作为正文。
+// NewNotificationMessage 统一生成七行下载通知，频道标题使用番号，正文中的影片标题位于描述前。
 // 缺失值显示暂无，多行描述压成一行；内部 PT 引用不是下载链接，不对外展示。
 func NewNotificationMessage(code, title, status, site, source, uri, description, cover string) NotificationMessage {
 	link := strings.TrimSpace(uri)
@@ -263,18 +269,31 @@ func NewNotificationMessage(code, title, status, site, source, uri, description,
 		link = ""
 	}
 	return NotificationMessage{
-		Title: "标题: " + notificationField(title),
+		Title: "番号: " + notificationField(code),
 		Text: strings.Join([]string{
-			"番号: " + notificationField(code),
 			"状态: " + notificationField(status),
 			"站点: " + notificationField(site),
 			"来源: " + notificationField(strings.ToUpper(source)),
 			"下载链接: " + notificationField(link),
+			"标题: " + notificationField(title),
 			"描述: " + notificationField(description),
 		}, "\n"),
-		CoverURL: cover,
-		Code:     strings.TrimSpace(code),
+		CoverURL:    cover,
+		Code:        strings.TrimSpace(code),
+		CopyButtons: notificationCopyButtons(code, link),
 	}
+}
+
+// notificationCopyButtons 生成通知可复制字段；下载链接仅在已验证为公开链接时提供。
+func notificationCopyButtons(code, link string) []ports.CopyTextButton {
+	buttons := make([]ports.CopyTextButton, 0, 2)
+	if normalized := strings.TrimSpace(code); normalized != "" {
+		buttons = append(buttons, ports.CopyTextButton{Label: "复制番号", Text: normalized})
+	}
+	if normalized := strings.TrimSpace(link); normalized != "" {
+		buttons = append(buttons, ports.CopyTextButton{Label: "复制下载链接", Text: normalized})
+	}
+	return buttons
 }
 
 // ChannelEventEnabled 实现 Notifier；设置不可读或键未声明时按关闭处理，不在未知状态下发消息。

@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"bytemuse/backend/internal/logging"
 	"bytemuse/backend/internal/ports"
@@ -113,6 +114,39 @@ func (c *Client) SendPhoto(ctx context.Context, chatID, photoURL, title, text st
 	return nil
 }
 
+// SendNotification 发送带可复制按钮的通知；按钮由 Telegram 原生 copy_text 控件处理。
+// 图片说明超限或图文发送失败时保留全文分片发送，复制按钮只附在最后一片。
+func (c *Client) SendNotification(ctx context.Context, chatID, title, text, photoURL string, buttons []ports.CopyTextButton) error {
+	caption := composeCaption(title, text)
+	markup, hasCopyButtons := copyTextKeyboard(buttons)
+	if strings.TrimSpace(photoURL) != "" && utf8.RuneCountInString(caption) <= maxCaptionRunes {
+		payload := map[string]any{
+			"chat_id": chatID,
+			"photo":   photoURL,
+			"caption": caption,
+		}
+		if hasCopyButtons {
+			payload["reply_markup"] = markup
+		}
+		c.applySpoiler(payload)
+		if _, err := c.postJSON(ctx, "sendPhoto", payload, defaultRequestTimeout); err == nil {
+			c.logPhoto(photoKindNotification)
+			return nil
+		}
+	}
+	chunks := splitMessage(caption, maxMessageRunes)
+	for index, chunk := range chunks {
+		payload := map[string]any{"chat_id": chatID, "text": chunk}
+		if hasCopyButtons && index == len(chunks)-1 {
+			payload["reply_markup"] = markup
+		}
+		if _, err := c.postJSON(ctx, "sendMessage", payload, defaultRequestTimeout); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // applySpoiler 按「防剧透」设置给图文消息打码：开启时附带 has_spoiler，
 // 封面在客户端先显示为打码状态，用户点击后才展开。
 // 纯文本没有可打码的对象，因此只在图片载荷上调用；推送通知与番号卡片共用本方法，
@@ -197,6 +231,23 @@ func inlineKeyboard(buttons []ports.ActionButton) map[string]any {
 		rows = append(rows, row)
 	}
 	return map[string]any{"inline_keyboard": rows}
+}
+
+// copyTextKeyboard 使用原生复制按钮；超过平台 256 字符上限的内容不生成按钮，不截断复制地址。
+func copyTextKeyboard(buttons []ports.CopyTextButton) (map[string]any, bool) {
+	row := make([]map[string]any, 0, len(buttons))
+	for _, button := range buttons {
+		label := strings.TrimSpace(button.Label)
+		text := strings.TrimSpace(button.Text)
+		if label == "" || text == "" || utf8.RuneCountInString(text) > 256 {
+			continue
+		}
+		row = append(row, map[string]any{
+			"text":      label,
+			"copy_text": map[string]string{"text": text},
+		})
+	}
+	return map[string]any{"inline_keyboard": [][]map[string]any{row}}, len(row) > 0
 }
 
 // SendChatAction 上报聊天状态（如 typing），用于长任务前的即时反馈；action 为空时回退 typing。

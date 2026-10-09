@@ -245,6 +245,109 @@ func TestSendPhotoFallsBackToText(t *testing.T) {
 	}
 }
 
+func TestSendNotificationAddsCopyTextButtons(t *testing.T) {
+	var payloads []map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode payload: %v", err)
+		}
+		payloads = append(payloads, payload)
+		writeJSON(w, `{"ok":true,"result":{"message_id":1}}`)
+	}))
+	defer server.Close()
+
+	client := newTestClient(t, server.URL)
+	buttons := []ports.CopyTextButton{
+		{Label: "复制番号", Text: "EXAMPLE-001"},
+		{Label: "复制下载链接", Text: "https://example.com/download"},
+	}
+	if err := client.SendNotification(context.Background(), "1001", "番号: EXAMPLE-001", "状态: 已完成下载", "", buttons); err != nil {
+		t.Fatalf("SendNotification returned error: %v", err)
+	}
+	if len(payloads) != 1 || payloads[0]["text"] != "番号: EXAMPLE-001\n状态: 已完成下载" {
+		t.Fatalf("通知请求=%#v", payloads)
+	}
+	rows, ok := payloads[0]["reply_markup"].(map[string]any)
+	if !ok {
+		t.Fatalf("通知请求缺少 reply_markup=%#v", payloads[0])
+	}
+	keyboard, ok := rows["inline_keyboard"].([]any)
+	if !ok || len(keyboard) != 1 {
+		t.Fatalf("inline_keyboard=%#v", rows["inline_keyboard"])
+	}
+	buttonsJSON, ok := keyboard[0].([]any)
+	if !ok || len(buttonsJSON) != 2 {
+		t.Fatalf("通知按钮=%#v", keyboard[0])
+	}
+	for index, item := range buttonsJSON {
+		button, ok := item.(map[string]any)
+		if !ok {
+			t.Fatalf("按钮 %d=%#v", index, item)
+		}
+		copyText, ok := button["copy_text"].(map[string]any)
+		if !ok || copyText["text"] != buttons[index].Text || button["text"] != buttons[index].Label {
+			t.Fatalf("按钮 %d=%#v", index, button)
+		}
+	}
+}
+
+// TestSendNotificationPreservesLongText 验证超长图文通知降级时保留全文并按平台上限分片。
+func TestSendNotificationPreservesLongText(t *testing.T) {
+	fixture := &cardFixture{}
+	server := fixture.server(t, nil)
+	defer server.Close()
+	client := newTestClient(t, server.URL)
+	body := strings.Repeat("正文", maxMessageRunes)
+	if err := client.SendNotification(context.Background(), "1001", "番号: EXAMPLE-001", body, "https://example.com/a.jpg", nil); err != nil {
+		t.Fatal(err)
+	}
+	var combined strings.Builder
+	for _, call := range fixture.snapshot() {
+		if call.method != "sendMessage" {
+			t.Fatalf("超长通知不应截断为图片说明: %s", call.method)
+		}
+		chunk := call.body["text"].(string)
+		if utf8.RuneCountInString(chunk) > maxMessageRunes {
+			t.Fatal("消息超过平台长度上限")
+		}
+		combined.WriteString(chunk)
+	}
+	if combined.String() != "番号: EXAMPLE-001\n"+body {
+		t.Fatal("通知全文丢失")
+	}
+}
+
+// TestCopyTextKeyboardLength 验证复制内容超限时不截断地址、不发送非法按钮。
+func TestCopyTextKeyboardLength(t *testing.T) {
+	for _, length := range []int{256, 257} {
+		_, enabled := copyTextKeyboard([]ports.CopyTextButton{{Label: "复制下载链接", Text: strings.Repeat("字", length)}})
+		if enabled != (length == 256) {
+			t.Fatalf("复制长度 %d: enabled=%v", length, enabled)
+		}
+	}
+}
+
+func TestSendNotificationOmitsEmptyCopyKeyboard(t *testing.T) {
+	var payload map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode payload: %v", err)
+		}
+		writeJSON(w, `{"ok":true,"result":{"message_id":1}}`)
+	}))
+	defer server.Close()
+
+	client := newTestClient(t, server.URL)
+	buttons := []ports.CopyTextButton{{Label: " ", Text: "EXAMPLE-001"}}
+	if err := client.SendNotification(context.Background(), "1001", "标题", "正文", "", buttons); err != nil {
+		t.Fatalf("SendNotification returned error: %v", err)
+	}
+	if _, ok := payload["reply_markup"]; ok {
+		t.Fatalf("无有效复制按钮时不应发送 reply_markup=%#v", payload["reply_markup"])
+	}
+}
+
 // TestSendPhotoAppliesSpoilerSetting 验证「图片防剧透」只影响图文消息：开启时附带 has_spoiler，
 // 关闭时不带该字段，两种情况下都不影响文本降级路径。
 func TestSendPhotoAppliesSpoilerSetting(t *testing.T) {

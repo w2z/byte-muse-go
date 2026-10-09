@@ -42,6 +42,13 @@ type ActionButton struct {
 	Data  string
 }
 
+// CopyTextButton 是通知消息上的复制按钮；不参与业务回调，只把指定文本复制到剪贴板。
+// 不支持该能力的渠道应忽略它并按普通通知发送，不能影响正文投递。
+type CopyTextButton struct {
+	Label string
+	Text  string
+}
+
 // OutboundCard 是一张带操作按钮的图文卡片：上方封面、下方按钮。
 // 渠道按自身能力渲染；按钮无法渲染时 SendCard 必须返回错误。
 type OutboundCard struct {
@@ -87,6 +94,12 @@ type ChannelSender interface {
 	// ReplaceButtons 用新按钮替换已发送卡片的按钮，使按钮与最新状态一致。
 	// 渠道不支持更新卡片时返回 nil（不视为失败），调用方不依赖该调用成功。
 	ReplaceButtons(ctx context.Context, chatID, messageID string, buttons []ActionButton) error
+}
+
+// NotificationSender 是支持通知专用交互控件的渠道发送器。
+// 普通对话仍使用 ChannelSender；通知调用方通过可选接口使用复制按钮等渠道能力。
+type NotificationSender interface {
+	SendNotification(ctx context.Context, chatID, title, text, photoURL string, buttons []CopyTextButton) error
 }
 
 // ChannelResolver 按渠道名解析当前配置的发送器。
