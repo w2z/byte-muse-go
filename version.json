@@ -1,16 +1,20 @@
 {
-  "version": "0.1.134",
-  "commit": "70d5edf8c144cd68cc7f461990d4bebda37a6a93",
-  "short_commit": "70d5edf",
-  "built_at": "2026-10-09T13:15:06Z",
+  "version": "0.1.135",
+  "commit": "540c4d84c290d079ebc8ec7becdee06d665eaee5",
+  "short_commit": "540c4d8",
+  "built_at": "2026-10-09T13:26:45Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.134",
-    "sha-70d5edf",
+    "0.1.135",
+    "sha-540c4d8",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.135",
+      "message": "同步确认弹窗的默认过滤参数并保护编辑状态"
+    },
     {
       "version": "0.1.134",
       "message": "按未订阅影片范围禁用批量订阅入口"
