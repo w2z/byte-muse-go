@@ -1,3 +1,7 @@
+.task-schedule-preview { margin-bottom: 16px; }
+.task-schedule-notes { margin-top: 8px; color: var(--muted); font-size: 12px; line-height: 1.4; }
+.task-schedule-notes p { margin: 4px 0; }
+
 .task-table .arco-table-td {
   vertical-align: middle;
 }
