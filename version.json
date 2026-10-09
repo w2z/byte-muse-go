@@ -1,16 +1,20 @@
 {
-  "version": "0.1.149",
-  "commit": "2f8449b7a8b8170f3c49a810e1582174195797d2",
-  "short_commit": "2f8449b",
-  "built_at": "2026-10-09T17:11:38Z",
+  "version": "0.1.150",
+  "commit": "b6c8791cf6496623d8bf12ecd2b629359133bfe3",
+  "short_commit": "b6c8791",
+  "built_at": "2026-10-09T17:28:16Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.149",
-    "sha-2f8449b",
+    "0.1.150",
+    "sha-b6c8791",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.150",
+      "message": "保留增量同名资源并适配进度弹框宽高"
+    },
     {
       "version": "0.1.149",
       "message": "按当前步骤独立显示升级进度"
