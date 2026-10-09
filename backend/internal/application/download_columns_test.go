@@ -79,12 +79,28 @@ func TestDownloadColumnsGlobalSnapshot(t *testing.T) {
 func TestDownloadColumnValidation(t *testing.T) {
 	for _, q := range []ports.DownloadListQuery{
 		{SortBy: "DROP TABLE"}, {SortOrder: "desc"}, {SortBy: "code", SortOrder: "sideways"},
-		{ColumnFilters: map[string][]string{"code": {"x"}}}, {ColumnFilters: map[string][]string{"size_bytes": {"NaN", ""}}},
+		{ColumnFilters: map[string][]string{"downloader": {"bogus"}}}, {ColumnFilters: map[string][]string{"size_bytes": {"NaN", ""}}},
 		{ColumnFilters: map[string][]string{"size_bytes": {"5", "2"}}}, {ColumnFilters: map[string][]string{"share_ratio": {"-1", ""}}},
 		{ColumnFilters: map[string][]string{"transfer_status": {"bogus"}}}, {ColumnFilters: map[string][]string{"added_at": {"bad", ""}}},
 	} {
 		if validateDownloadColumns(q) == nil {
 			t.Fatalf("accepted %+v", q)
 		}
+	}
+}
+
+// TestDownloadCodeAndDownloaderFilters checks case-insensitive code search, exact client choices and global pagination.
+func TestDownloadCodeAndDownloaderFilters(t *testing.T) {
+	r := &columnRepository{}
+	for i, name := range []string{"qbittorrent", "transmission", "aria2", "qbittorrent-copy"} {
+		code := "TEST-001"
+		r.items = append(r.items, domain.DownloadTask{ID: fmt.Sprint(i), Code: &code, Downloader: &name})
+	}
+	r.items = append(r.items, domain.DownloadTask{ID: "missing"})
+	s := NewDownloadService(r)
+	q := ports.DownloadListQuery{SortBy: "code", ColumnFilters: map[string][]string{"code": {"test-"}, "downloader": {"qbittorrent", "transmission"}}}
+	p, err := s.ListFiltered(context.Background(), 2, 1, q)
+	if err != nil || p.Total != 2 || len(p.Items) != 1 || p.Items[0].ID != "1" || !r.all {
+		t.Fatalf("page=%+v all=%t err=%v", p, r.all, err)
 	}
 }

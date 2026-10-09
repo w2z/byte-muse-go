@@ -31,6 +31,11 @@ const seedingOptions = [
   { value: "completed", label: "已达标（估算）" }, { value: "pending", label: "未达标" }, { value: "unknown", label: "待确认" },
   { value: "not_required", label: "无做种要求" }, { value: "not_applicable", label: "不适用" },
 ];
+const downloaderOptions = [
+  { value: "qbittorrent", label: "qBittorrent" }, { value: "transmission", label: "Transmission" },
+  { value: "aria2", label: "aria2" }, { value: "thunder", label: "迅雷" },
+  { value: "pan115", label: "115 网盘" }, { value: "clouddrive2", label: "CloudDrive2" },
+];
 
 /** 字节数按 1024 自动换算，速度追加 /s；未知值保留占位，零不视为缺失。 */
 function formatBytes(value: number | null | undefined, speed = false): string {
@@ -169,7 +174,7 @@ export function DownloadListPage() {
     if (page === 1 && JSON.stringify(next) === JSON.stringify(columnFilters)) void query.refetch();
   }
 
-  /** Every data column sorts remotely; movie code deliberately has no filter. */
+  /** 所有数据列在服务端筛选和排序，影片按番号关键词匹配。 */
   function column(field: string, label: string, kind?: DownloadFilterKind): Partial<TableColumnProps<DownloadTask>> {
     return {
       key: field, dataIndex: field, sorter: true, sortOrder: sorting.field === field ? sorting.direction : undefined,
@@ -178,7 +183,7 @@ export function DownloadListPage() {
           onDraftChange={(values) => setFilterDrafts((current) => ({ ...current, [field]: values }))}
           unitValue={filterUnits[field] ?? 1} onUnitChange={(unit) => setFilterUnits((current) => ({ ...current, [field]: unit }))}
           options={field === "transfer_status" ? Object.entries({ ...statusLabels, ...transferLabels }).map(([value, label]) => ({ value, label: <DownloadStatusBadge status={value} label={label} /> }))
-            : field === "seeding" ? seedingOptions : undefined}
+            : field === "seeding" ? seedingOptions : field === "downloader" ? downloaderOptions : undefined}
           onApply={(values) => { applyColumn(field, values); setOpenFilter(null); }} /> } : {}),
     };
   }
@@ -203,11 +208,11 @@ export function DownloadListPage() {
               setSorting({ field: String(active?.field ?? ""), direction: active?.direction }); setPage(1);
             }}
             columns={[
-              { ...column("code", "影片"), title: "影片", width: 130, render: (value: string | null, task: DownloadTask) => value && task.media_id
+              { ...column("code", "影片", "text"), title: "影片", width: 150, render: (value: string | null, task: DownloadTask) => value && task.media_id
                 ? <Button type="text" className="code-cell" onClick={() => setSelectedMediaId(task.media_id)}>{value}</Button>
                 : <span className="code-cell">{value || "—"}</span> },
               { ...column("source_site", "资源站", "text"), title: "资源站", render: (value: string | null) => value || "—" },
-              { ...column("downloader", "下载器", "text"), title: "下载器", render: (value: string | null) => value || "—" },
+              { ...column("downloader", "下载器", "enum"), title: "下载器", render: (value: string | null) => value || "—" },
               { ...column("transfer_status", "下载状态", "enum"), title: "下载状态", render: (_: unknown, task: DownloadTask) => <DownloadStatus task={task} /> },
               { ...column("size_bytes", "大小", "bytes"), title: "大小", width: 110, render: (_: unknown, task: DownloadTask) => formatBytes(task.metrics?.size_bytes) },
               { ...column("remaining_bytes", "剩余", "bytes"), title: "剩余", width: 110, render: (_: unknown, task: DownloadTask) => formatBytes(task.metrics?.remaining_bytes) },
@@ -215,7 +220,7 @@ export function DownloadListPage() {
               { ...column("download_speed", "下载速度", "bytes"), title: "下载速度", width: 120, render: (_: unknown, task: DownloadTask) => formatBytes(task.metrics?.download_speed, true) },
               { ...column("upload_speed", "上传速度", "bytes"), title: "上传速度", width: 120, render: (_: unknown, task: DownloadTask) => formatBytes(task.metrics?.upload_speed, true) },
               { ...column("save_path", "保存路径", "text"), title: "保存路径", width: 220, render: (_: unknown, task: DownloadTask) => <span style={{ overflowWrap: "anywhere" }}>{task.metrics?.save_path || "—"}</span> },
-              { ...column("share_ratio", "分享率", "number"), title: "分享率", width: 90, render: (_: unknown, task: DownloadTask) => task.metrics?.share_ratio == null ? "—" : task.metrics.share_ratio.toFixed(2) },
+              { ...column("share_ratio", "分享率", "number"), title: <span className="download-ratio">分享率</span>, width: 130, render: (_: unknown, task: DownloadTask) => <span className="download-ratio">{task.metrics?.share_ratio == null ? "—" : task.metrics.share_ratio.toFixed(2)}</span> },
               { ...column("seeding_seconds", "做种时间", "seconds"), title: "做种时间", width: 140, render: (_: unknown, task: DownloadTask) => formatSeedingTime(task.metrics?.seeding_seconds) },
               { ...column("seeding", "完成做种（PT）", "enum"), title: "完成做种（PT）", width: 150, render: (_: unknown, task: DownloadTask) => <SeedingTag task={task} /> },
               { ...column("added_at", "加入时间", "time"), title: "加入时间", render: (value: string | null) => value ? dayjs(value).format("YYYY-MM-DD HH:mm") : "—" },

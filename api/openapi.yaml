@@ -464,13 +464,13 @@ paths:
         - name: column_filters
           in: query
           description: >-
-            JSON对象，键为除 code 外的 sort_by 字段，各列取交集。source_site/downloader/save_path/error_message 为单元素关键词数组（忽略大小写，包含匹配）；
-            transfer_status/seeding 为枚举数组（同列取并集），transfer_status 同时支持尚未回查的 searching/submitted 内部阶段，seeding 可选 completed/pending/unknown/not_required/not_applicable；
+            JSON对象，键为 sort_by 字段，各列取交集。code/source_site/save_path/error_message 为单元素关键词数组（忽略大小写，包含匹配），code 匹配影片番号；
+            downloader/transfer_status/seeding 为枚举数组（同列取并集、精确匹配），downloader 可选 qbittorrent/transmission/aria2/thunder/pan115/clouddrive2；transfer_status 同时支持尚未回查的 searching/submitted 内部阶段，seeding 可选 completed/pending/unknown/not_required/not_applicable；
             数值列为[最小值,最大值]字符串数组（两端包含），字节数和速度使用字节及字节/秒，seeding_seconds 使用秒，share_ratio 为无单位比率；
             added_at/completed_at 为[开始,结束] RFC3339数组（含开始、不含结束）；范围单端空字符串表示不限，省略键表示该列不限。
             最大8192字符，非法列名、枚举、负数、非有限数或反向范围返回400。实时数据查询失败返回错误，不返回部分排序结果。
           schema: {type: string, maxLength: 8192}
-          example: '{"transfer_status":["queued","downloading"],"size_bytes":["1073741824",""]}'
+          example: '{"code":["TEST-"],"downloader":["qbittorrent","transmission"],"transfer_status":["queued","downloading"],"size_bytes":["1073741824",""]}'
         - name: added_from
           in: query
           description: 加入时间下界，含该时刻，UTC RFC3339

@@ -15,7 +15,7 @@ import (
 
 // downloadColumnKinds is the authoritative allowlist for public table queries.
 var downloadColumnKinds = map[string]string{
-	"code": "text", "source_site": "text", "downloader": "text", "transfer_status": "enum",
+	"code": "text", "source_site": "text", "downloader": "enum", "transfer_status": "enum",
 	"size_bytes": "number", "remaining_bytes": "number", "downloaded_bytes": "number", "download_speed": "number", "upload_speed": "number",
 	"save_path": "text", "share_ratio": "number", "seeding_seconds": "number", "seeding": "enum", "added_at": "time", "completed_at": "time", "error_message": "text",
 }
@@ -27,7 +27,7 @@ func validateDownloadColumns(q ports.DownloadListQuery) error {
 	}
 	for key, values := range q.ColumnFilters {
 		kind := downloadColumnKinds[key]
-		if kind == "" || key == "code" || len(values) == 0 || len(values) > 16 {
+		if kind == "" || len(values) == 0 || len(values) > 16 {
 			return ErrInvalidDownloadFilter
 		}
 		if kind == "text" && (len(values) != 1 || len(values[0]) > 512) {
@@ -39,6 +39,13 @@ func validateDownloadColumns(q ports.DownloadListQuery) error {
 				allowed = []string{"completed", "pending", "unknown", "not_required", "not_applicable"}
 			}
 			for _, v := range values {
+				if key == "downloader" {
+					// Reuse the supported-client policy; filtering does not constrain the resource protocol.
+					if ValidateDownloader(SourceBT, DownloaderKind(v)) != nil {
+						return ErrInvalidDownloadFilter
+					}
+					continue
+				}
 				if !slices.Contains(allowed, v) {
 					return ErrInvalidDownloadFilter
 				}

@@ -52,7 +52,7 @@ test("表头筛选组合与清除保留其他列，全部数据列可远程排�
   const { container } = render(<QueryClientProvider client={client}><DownloadListPage /></QueryClientProvider>);
   await waitFor(() => expect(requests).toHaveLength(1));
   expect(screen.queryByRole("search")).toBeNull();
-  expect(screen.queryByLabelText("影片筛选")).toBeNull();
+  expect(screen.getByLabelText("影片筛选")).not.toBeNull();
   expect(container.querySelectorAll(".arco-table-sorter")).toHaveLength(16);
   fireEvent.click(screen.getByLabelText("资源站筛选"));
   fireEvent.change(screen.getByLabelText("资源站关键词"), { target: { value: "site" } });
@@ -73,6 +73,27 @@ test("表头筛选组合与清除保留其他列，全部数据列可远程排�
   expect(decodeURIComponent(requests.at(-1)!)).toContain("source_site");
   fireEvent.click(container.querySelector(".arco-table-sorter .arco-table-sorter-icon")!);
   await waitFor(() => expect(requests.at(-1)).toContain("sort_by=code"));
+});
+
+test("影片输入与下载器多选组合提交，清除影片保留下载器", async () => {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(<QueryClientProvider client={client}><DownloadListPage /></QueryClientProvider>);
+  await waitFor(() => expect(requests).toHaveLength(1));
+  fireEvent.click(screen.getByLabelText("影片筛选"));
+  fireEvent.change(screen.getByLabelText("影片关键词"), { target: { value: "TEST-001" } });
+  expect(requests).toHaveLength(1);
+  fireEvent.keyDown(screen.getByLabelText("影片关键词"), { key: "Enter", keyCode: 13 });
+  await waitFor(() => expect(screen.queryByLabelText("影片筛选条件")).toBeNull());
+  fireEvent.click(screen.getByLabelText("下载器筛选"));
+  expect(screen.queryByLabelText("下载器关键词")).toBeNull();
+  fireEvent.click(screen.getByLabelText("qBittorrent"));
+  fireEvent.click(screen.getByLabelText("Transmission"));
+  fireEvent.click(screen.getByRole("button", { name: "确定" }));
+  await waitFor(() => expect(JSON.parse(new URLSearchParams(requests.at(-1)!.split("?")[1]).get("column_filters")!)).toEqual({ code: ["TEST-001"], downloader: ["qbittorrent", "transmission"] }));
+  await waitFor(() => expect(screen.queryByLabelText("下载器筛选条件")).toBeNull());
+  fireEvent.click(screen.getByLabelText("影片筛选"));
+  fireEvent.click(screen.getByRole("button", { name: "清除" }));
+  await waitFor(() => expect(JSON.parse(new URLSearchParams(requests.at(-1)!.split("?")[1]).get("column_filters")!)).toEqual({ downloader: ["qbittorrent", "transmission"] }));
 });
 
 test("刷新结果不会丢失状态筛选草稿，确认后才提交", async () => {

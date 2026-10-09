@@ -869,4 +869,5 @@ button.code-card-still-cell:hover img { opacity: .85; }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; } }
 
-.download-column-filter { padding: 12px; width: min(300px, calc(100vw - 32px)); }
+.download-column-filter { padding: 12px; width: min(300px, calc(100vw - 32px)); color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 4px; box-shadow: 0 4px 16px rgba(0, 0, 0, .16); }
+.download-ratio { white-space: nowrap; font-variant-numeric: tabular-nums; }
