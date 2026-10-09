@@ -1,16 +1,20 @@
 {
-  "version": "0.1.132",
-  "commit": "0e85c355fd7df96e17a10b54834963a17d6a5e39",
-  "short_commit": "0e85c35",
-  "built_at": "2026-10-09T12:38:11Z",
+  "version": "0.1.133",
+  "commit": "5ab331ab457343c46b128e224ca916f59de4d1ab",
+  "short_commit": "5ab331a",
+  "built_at": "2026-10-09T13:04:45Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.132",
-    "sha-0e85c35",
+    "0.1.133",
+    "sha-5ab331a",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.133",
+      "message": "为上新推荐和榜单添加VR筛选并联动批量订阅"
+    },
     {
       "version": "0.1.132",
       "message": "为上新推荐和榜单添加一键批量订阅"
