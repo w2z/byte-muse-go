@@ -147,7 +147,7 @@ services:
   # 设置页：BYPASS_ENGINE=flaresolverr，BYPASS_URL=http://flareSolverr_byte_muse_go:8191。
   # 需要代理时，在 ByteMuse 设置 PROXY 并开启 BYPASS_USE_PROXY，由请求传入代理。
   # flareSolverr_byte_muse_go:
-  #   image: ghcr.io/flaresolverr/flaresolverr:v3.5.2
+  #   image: ghcr.io/flaresolverr/flaresolverr:latest
   #   container_name: flareSolverr_byte_muse_go
   #   restart: always
   #   networks:
@@ -158,12 +158,22 @@ services:
   #     TZ: Asia/Shanghai
   #     LOG_LEVEL: info
   #     LOG_HTML: "false"
+  #     # 可选默认代理：按需取消以下参数的注释；请求或会话传入的代理优先。
+  #     # 设置后即使 ByteMuse 关闭 BYPASS_USE_PROXY，FlareSolverr 仍会使用默认代理。
+  #     # PROXY_URL: http://<代理主机>:<代理端口>
+  #     # 代理需要认证时再填写下面两项。
+  #     # PROXY_USERNAME: <代理用户名>
+  #     # PROXY_PASSWORD: <代理密码>
 
   # 可选 Scrapling：这是独立 MCP 服务，当前 ByteMuse 未接入，不能直接作为 BYPASS_URL。
   # 取消下方服务配置的注释并替换认证令牌后启用；MCP 路径为 /mcp。
   # MCP 客户端使用 Authorization: Bearer <认证令牌>；抓取代理通过工具的 proxy 参数传入。
+  # 浏览器抓取不依赖 HTTP_PROXY / HTTPS_PROXY；在 open_session 或单次抓取工具中传 proxy。
+  # 无认证参数示例：{"proxy": "http://<代理主机>:<代理端口>"}
+  # 带认证参数示例：{"proxy": "http://<代理用户名>:<代理密码>@<代理主机>:<代理端口>"}
+  # 用户名、密码中的特殊字符需 URL 编码；会话请求复用 open_session 设置的代理。
   # scrapling_byte_muse_go:
-  #   image: ghcr.io/d4vinci/scrapling:0.4.15
+  #   image: ghcr.io/d4vinci/scrapling:latest
   #   container_name: scrapling_byte_muse_go
   #   restart: always
   #   networks:
@@ -258,7 +268,7 @@ services:
   # 设置页：BYPASS_ENGINE=flaresolverr，BYPASS_URL=http://flareSolverr_byte_muse_go:8191。
   # 需要代理时，在 ByteMuse 设置 PROXY 并开启 BYPASS_USE_PROXY，由请求传入代理。
   # flareSolverr_byte_muse_go:
-  #   image: ghcr.io/flaresolverr/flaresolverr:v3.5.2
+  #   image: ghcr.io/flaresolverr/flaresolverr:latest
   #   container_name: flareSolverr_byte_muse_go
   #   restart: always
   #   networks:
@@ -269,12 +279,22 @@ services:
   #     TZ: Asia/Shanghai
   #     LOG_LEVEL: info
   #     LOG_HTML: "false"
+  #     # 可选默认代理：按需取消以下参数的注释；请求或会话传入的代理优先。
+  #     # 设置后即使 ByteMuse 关闭 BYPASS_USE_PROXY，FlareSolverr 仍会使用默认代理。
+  #     # PROXY_URL: http://<代理主机>:<代理端口>
+  #     # 代理需要认证时再填写下面两项。
+  #     # PROXY_USERNAME: <代理用户名>
+  #     # PROXY_PASSWORD: <代理密码>
 
   # 可选 Scrapling：这是独立 MCP 服务，当前 ByteMuse 未接入，不能直接作为 BYPASS_URL。
   # 取消下方服务配置的注释并替换认证令牌后启用；MCP 路径为 /mcp。
   # MCP 客户端使用 Authorization: Bearer <认证令牌>；抓取代理通过工具的 proxy 参数传入。
+  # 浏览器抓取不依赖 HTTP_PROXY / HTTPS_PROXY；在 open_session 或单次抓取工具中传 proxy。
+  # 无认证参数示例：{"proxy": "http://<代理主机>:<代理端口>"}
+  # 带认证参数示例：{"proxy": "http://<代理用户名>:<代理密码>@<代理主机>:<代理端口>"}
+  # 用户名、密码中的特殊字符需 URL 编码；会话请求复用 open_session 设置的代理。
   # scrapling_byte_muse_go:
-  #   image: ghcr.io/d4vinci/scrapling:0.4.15
+  #   image: ghcr.io/d4vinci/scrapling:latest
   #   container_name: scrapling_byte_muse_go
   #   restart: always
   #   networks:
@@ -370,7 +390,7 @@ services:
   # 设置页：BYPASS_ENGINE=flaresolverr，BYPASS_URL=http://flareSolverr_byte_muse_go:8191。
   # 需要代理时，在 ByteMuse 设置 PROXY 并开启 BYPASS_USE_PROXY，由请求传入代理。
   # flareSolverr_byte_muse_go:
-  #   image: ghcr.io/flaresolverr/flaresolverr:v3.5.2
+  #   image: ghcr.io/flaresolverr/flaresolverr:latest
   #   container_name: flareSolverr_byte_muse_go
   #   restart: always
   #   networks:
@@ -381,12 +401,22 @@ services:
   #     TZ: Asia/Shanghai
   #     LOG_LEVEL: info
   #     LOG_HTML: "false"
+  #     # 可选默认代理：按需取消以下参数的注释；请求或会话传入的代理优先。
+  #     # 设置后即使 ByteMuse 关闭 BYPASS_USE_PROXY，FlareSolverr 仍会使用默认代理。
+  #     # PROXY_URL: http://<代理主机>:<代理端口>
+  #     # 代理需要认证时再填写下面两项。
+  #     # PROXY_USERNAME: <代理用户名>
+  #     # PROXY_PASSWORD: <代理密码>
 
   # 可选 Scrapling：这是独立 MCP 服务，当前 ByteMuse 未接入，不能直接作为 BYPASS_URL。
   # 取消下方服务配置的注释并替换认证令牌后启用；MCP 路径为 /mcp。
   # MCP 客户端使用 Authorization: Bearer <认证令牌>；抓取代理通过工具的 proxy 参数传入。
+  # 浏览器抓取不依赖 HTTP_PROXY / HTTPS_PROXY；在 open_session 或单次抓取工具中传 proxy。
+  # 无认证参数示例：{"proxy": "http://<代理主机>:<代理端口>"}
+  # 带认证参数示例：{"proxy": "http://<代理用户名>:<代理密码>@<代理主机>:<代理端口>"}
+  # 用户名、密码中的特殊字符需 URL 编码；会话请求复用 open_session 设置的代理。
   # scrapling_byte_muse_go:
-  #   image: ghcr.io/d4vinci/scrapling:0.4.15
+  #   image: ghcr.io/d4vinci/scrapling:latest
   #   container_name: scrapling_byte_muse_go
   #   restart: always
   #   networks:
