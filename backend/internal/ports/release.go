@@ -35,6 +35,8 @@ type ReleaseSource interface {
 
 // UpgradeStatus 描述容器内升级任务；success 仅在新服务健康检查通过后写入。
 type UpgradeStatus struct {
+	// PhaseProgressPercent 为当前步骤的独立进度；切换步骤归零，通过校验才达到 100。
+	PhaseProgressPercent int `json:"phase_progress_percent"`
 	// ProgressPercent 为按四阶段等权折算的实际进度，成功前不达到 100。
 	ProgressPercent int `json:"progress_percent"`
 	// ProgressIndeterminate 表示当前阶段尚无可计算总量，页面显示处理中而非伪造百分比。

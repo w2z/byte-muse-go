@@ -31,15 +31,15 @@ function renderTag() {
 
 const base: SystemVersion = { current: "0.1.21", latest: "0.1.21", has_update: false, release_url: "", checked_at: "2026-09-29T12:00:00Z", check_error: "" };
 
-it.each([["downloading", 0, 12], ["extracting", 1, 37], ["installing", 2, 66]] as const)("%s 显示服务端阶段内进度", async (phase, completed_steps, progress_percent) => {
+it.each([["downloading", 0, 12], ["extracting", 1, 37], ["installing", 2, 66]] as const)("%s 独立显示当前步骤百分比", async (phase, completed_steps, phase_progress_percent) => {
   vi.mocked(apiRequest).mockImplementation(path => Promise.resolve(path === "/system/upgrade"
-    ? { enabled: true, phase, completed_steps, progress_percent, target: "0.1.22", error: "" }
+    ? { enabled: true, phase, completed_steps, phase_progress_percent, progress_percent: 75, target: "0.1.22", error: "" }
     : { ...base, latest: "0.1.22", has_update: true }));
   renderTag();
   fireEvent.click(screen.getByRole("button", { name: "v0.1.21" }));
   const progress = await screen.findByRole("progressbar", { name: "升级进度" });
-  expect(progress).toHaveAttribute("aria-valuenow", String(progress_percent));
-  expect(screen.getByText(`${progress_percent}%`)).toBeInTheDocument();
+  expect(progress).toHaveAttribute("aria-valuenow", String(phase_progress_percent));
+  expect(screen.getByText(`${phase_progress_percent}%`)).toBeInTheDocument();
   expect(screen.getByText("下载文件")).toBeInTheDocument();
   expect(screen.getByText("解压文件")).toBeInTheDocument();
   expect(document.querySelector(".arco-steps-lineless")).toBeNull();
@@ -54,6 +54,15 @@ it("未知文件大小时显示处理中，不误报零进度", async () => {
   const progress = await screen.findByRole("progressbar", { name:"升级进度" });
   expect(progress).not.toHaveAttribute("aria-valuenow");
   expect(screen.getByText("处理中")).toBeInTheDocument();
+});
+
+it.each([["extracting", 1, 37, 48], ["installing", 2, 50, 0]] as const)("旧服务 %s 总进度转换为当前步骤进度", async (phase, completed_steps, progress_percent, expected) => {
+  vi.mocked(apiRequest).mockImplementation(path => Promise.resolve(path === "/system/upgrade"
+    ? { enabled: true, phase, completed_steps, progress_percent, target: "0.1.22", error: "" }
+    : { ...base, latest: "0.1.22", has_update: true }));
+  renderTag();
+  fireEvent.click(screen.getByRole("button", { name: "v0.1.21" }));
+  expect(await screen.findByRole("progressbar", { name: "升级进度" })).toHaveAttribute("aria-valuenow", String(expected));
 });
 
 it("有更新时在状态位置按编号展示跨版本说明，按纯文本渲染", async () => {
@@ -189,7 +198,7 @@ it("升级依次展示进度，断连不误判完成，目标就绪后刷新", a
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const reload = vi.fn();
   vi.stubGlobal("location", { ...window.location, reload });
-  const state = { enabled: true, phase: "idle", completed_steps: 0, target: "0.1.22", error: "" };
+  const state = { enabled: true, phase: "idle", completed_steps: 0, phase_progress_percent: 0, target: "0.1.22", error: "" };
   vi.mocked(apiRequest).mockImplementation((path, init) => Promise.resolve(path !== "/system/upgrade"
     ? { ...base, latest: "0.1.22", has_update: true } : { ...state, phase: init?.method === "POST" ? "downloading" : "idle" }));
   render(<QueryClientProvider client={client}><VersionTag /></QueryClientProvider>);
@@ -200,15 +209,19 @@ it("升级依次展示进度，断连不误判完成，目标就绪后刷新", a
   expect(steps.querySelector(".arco-steps")).not.toBeNull();
   expect(steps.compareDocumentPosition(screen.getByRole("progressbar", { name: "升级进度" })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   for (const [index, phase] of ["extracting", "installing", "restarting"].entries()) {
+    await act(async () => { client.setQueryData(["system", "upgrade"], { ...state, phase: ["downloading", "extracting", "installing"][index], completed_steps: index, phase_progress_percent: 100 }); });
+    await waitFor(() => expect(screen.getByRole("progressbar", { name: "升级进度" })).toHaveAttribute("aria-valuenow", "100"));
     await act(async () => { client.setQueryData(["system", "upgrade"], { ...state, phase, completed_steps: index + 1 }); });
-    await waitFor(() => expect(screen.getByRole("progressbar", { name: "升级进度" })).toHaveAttribute("aria-valuenow", String((index + 1) * 25)));
+    const bar = screen.getByRole("progressbar", { name: "升级进度" });
+    if (phase === "restarting") await waitFor(() => expect(bar).toHaveAttribute("aria-valuetext", "处理中"));
+    else await waitFor(() => expect(bar).toHaveAttribute("aria-valuenow", "0"));
     expect(document.querySelectorAll(".version-upgrade-steps .is-complete")).toHaveLength(index + 1);
     expect(screen.getByText(UPGRADE_LABELS[index + 1])).toHaveAttribute("aria-current", "step");
     expect(reload).not.toHaveBeenCalled();
   }
   vi.mocked(apiRequest).mockRejectedValueOnce(new Error("服务断开"));
   await act(async () => { await client.refetchQueries({ queryKey: ["system", "upgrade"] }); });
-  expect(screen.getByRole("progressbar", { name: "升级进度" })).toHaveAttribute("aria-valuenow", "75");
+  expect(screen.getByRole("progressbar", { name: "升级进度" })).toHaveAttribute("aria-valuetext", "处理中");
   expect(reload).not.toHaveBeenCalled();
   await act(async () => { client.setQueryData(["system", "upgrade"], { ...state, phase: "success", completed_steps: 4 }); });
   await waitFor(() => expect(reload).toHaveBeenCalledTimes(1));

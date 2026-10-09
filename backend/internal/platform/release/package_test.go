@@ -134,12 +134,22 @@ func TestStageProgress(t *testing.T) {
 		if strings.HasSuffix(r.URL.Path, ".sha256") {
 			body = []byte(fmt.Sprintf("%x", sha256.Sum256(body)))
 		}
-		return &http.Response{StatusCode: 200, Body: io.NopCloser(bytes.NewReader(body)), Header: make(http.Header)}, nil
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(bytes.NewReader(body)), ContentLength: int64(len(body)), Header: make(http.Header)}, nil
 	})
 	installer := &PackageInstaller{Root: t.TempDir(), Repo: "w2z/byte-muse-go", Client: &http.Client{Transport: transport}}
 	var phases []string
+	lastProgress := map[string]int{}
+	intermediatePhases := map[string]bool{}
 	var intermediate bool
 	err = installer.Stage(context.Background(), "0.1.22", func(state ports.UpgradeStatus) {
+		previous, seen := lastProgress[state.Phase]
+		if (!seen && state.PhaseProgressPercent != 0) || state.PhaseProgressPercent < previous || state.PhaseProgressPercent > 100 {
+			t.Errorf("步骤进度未独立从零递增: %+v previous=%d", state, previous)
+		}
+		lastProgress[state.Phase] = state.PhaseProgressPercent
+		if state.PhaseProgressPercent > 0 && state.PhaseProgressPercent < 100 {
+			intermediatePhases[state.Phase] = true
+		}
 		if state.ProgressPercent > state.CompletedSteps*25 {
 			intermediate = true
 		}
@@ -149,7 +159,7 @@ func TestStageProgress(t *testing.T) {
 		if persisted := installer.Status(); persisted.Phase != state.Phase || persisted.CompletedSteps != state.CompletedSteps {
 			t.Errorf("persisted=%+v state=%+v", persisted, state)
 		}
-		if _, err := os.Stat(filepath.Join(installer.Root, "pending.json")); !os.IsNotExist(err) {
+		if _, err := os.Stat(filepath.Join(installer.Root, "pending.json")); !os.IsNotExist(err) && !(state.Phase == "installing" && state.PhaseProgressPercent == 100) {
 			t.Error("重启请求提前提交")
 		}
 		if len(phases) == 0 || phases[len(phases)-1] != state.Phase {
@@ -164,6 +174,11 @@ func TestStageProgress(t *testing.T) {
 	}
 	if !intermediate {
 		t.Fatal("缺少阶段内部实际进度")
+	}
+	for _, phase := range phases {
+		if lastProgress[phase] != 100 || !intermediatePhases[phase] {
+			t.Errorf("%s 未独立完成: progress=%d intermediate=%v", phase, lastProgress[phase], intermediatePhases[phase])
+		}
 	}
 	if _, err := readActivation(installer.Root, "pending.json"); err != nil {
 		t.Fatal(err)

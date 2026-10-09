@@ -73,10 +73,12 @@ func (p *PackageInstaller) Status() ports.UpgradeStatus {
 	// 常驻的旧版启动器不写步骤数，依据其终态补齐协议字段。
 	if state.Phase == "restarting" {
 		state.CompletedSteps = 3
+		state.PhaseProgressPercent = 0
 		state.ProgressIndeterminate = true
 	}
 	if state.Phase == "success" {
 		state.CompletedSteps = 4
+		state.PhaseProgressPercent = 100
 		state.ProgressIndeterminate = false
 	}
 	if state.ProgressPercent < state.CompletedSteps*25 {
@@ -97,6 +99,7 @@ func (p *PackageInstaller) Stage(ctx context.Context, version string, report fun
 	advance := func(phase string, completed int) error {
 		state.Phase, state.CompletedSteps = phase, completed
 		state.ProgressPercent, state.ProgressIndeterminate = completed*25, false
+		state.PhaseProgressPercent = 0
 		if err := writeRecord(p.Root, "status.json", state); err != nil {
 			return errors.New("无法保存升级状态")
 		}
@@ -105,18 +108,28 @@ func (p *PackageInstaller) Stage(ctx context.Context, version string, report fun
 		}
 		return nil
 	}
-	// 每个整数百分比最多报告一次；过程进度只更新内存，阶段边界才持久化，避免频繁写盘。
+	// 当前步骤每个整数百分比变化时报告；过程只更新内存，阶段边界才持久化。
 	progress := func(done, total int64) {
 		percent := state.CompletedSteps * 25
+		phasePercent := 0
 		if total > 0 {
 			percent += int(min(int64(24), done*25/total))
+			phasePercent = int(min(int64(99), done*100/total))
 		}
 		unknown := total <= 0
-		if percent != state.ProgressPercent || unknown != state.ProgressIndeterminate {
+		if phasePercent != state.PhaseProgressPercent || percent != state.ProgressPercent || unknown != state.ProgressIndeterminate {
 			state.ProgressPercent, state.ProgressIndeterminate = percent, unknown
+			state.PhaseProgressPercent = phasePercent
 			if report != nil {
 				report(state)
 			}
+		}
+	}
+	// 只有当前步骤的实际操作与校验全部成功，才报告该步骤完成。
+	complete := func() {
+		state.PhaseProgressPercent, state.ProgressIndeterminate = 100, false
+		if report != nil {
+			report(state)
 		}
 	}
 	if err := advance("downloading", 0); err != nil {
@@ -140,6 +153,7 @@ func (p *PackageInstaller) Stage(ctx context.Context, version string, report fun
 	if err := p.download(ctx, base, archive, progress); err != nil {
 		return err
 	}
+	complete()
 	candidate := filepath.Join(temp, "release")
 	if err := advance("extracting", 1); err != nil {
 		return err
@@ -156,6 +170,7 @@ func (p *PackageInstaller) Stage(ctx context.Context, version string, report fun
 	if (runtime.GOARCH == "amd64" && machine != elf.EM_X86_64) || (runtime.GOARCH == "arm64" && machine != elf.EM_AARCH64) {
 		return errors.New("升级程序架构不匹配")
 	}
+	complete()
 	releases := filepath.Join(p.Root, "releases")
 	if err := advance("installing", 2); err != nil {
 		return err
@@ -175,6 +190,7 @@ func (p *PackageInstaller) Stage(ctx context.Context, version string, report fun
 		_ = os.RemoveAll(dest)
 		return errors.New("无法提交服务重启请求")
 	}
+	complete()
 	return nil
 }
 

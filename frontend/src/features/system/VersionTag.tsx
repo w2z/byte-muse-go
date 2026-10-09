@@ -57,8 +57,10 @@ export function VersionTag() {
   const busy = install.isPending || Boolean(waitingTarget);
   const phase = install.isPending ? "downloading" : upgrade.data?.phase ?? "idle";
   const completedSteps = install.isPending ? 0 : Math.min(4, Math.max(0, upgrade.data?.completed_steps ?? (phase === "success" ? 4 : ACTIVE_PHASES.indexOf(phase))));
-  const percent = install.isPending ? 0 : Math.min(100, Math.max(completedSteps * 25, upgrade.data?.progress_percent ?? 0));
-  const indeterminate = install.isPending || upgrade.data?.progress_indeterminate === true;
+  // 新服务直接提供步骤进度；旧服务的四阶段总进度只在此转换，不累加已完成步骤。
+  const phasePercent = upgrade.data?.phase_progress_percent ?? (upgrade.data?.progress_percent == null ? undefined : (upgrade.data.progress_percent - completedSteps * 25) * 4);
+  const percent = install.isPending ? 0 : Math.min(100, Math.max(0, phasePercent ?? 0));
+  const indeterminate = install.isPending || phase === "restarting" || phasePercent == null || upgrade.data?.progress_indeterminate === true;
   // 服务保留上次任务的终态；历史成功或失败不能让步骤常驻，断连等待期间仍保留进度。
   const showProgress = (busy || ACTIVE_PHASES.includes(phase)) && phase !== "success" && phase !== "failed";
   const failure = install.error?.message || upgrade.data?.error || check.error?.message || data?.check_error || error?.message;
@@ -93,7 +95,7 @@ export function VersionTag() {
                 </Steps>
               </div>
               <div role="progressbar" aria-label="升级进度" aria-valuemin={0} aria-valuemax={100} aria-valuenow={indeterminate ? undefined : percent} aria-valuetext={indeterminate ? "处理中" : `${percent}%`}>
-                <div aria-hidden="true"><Progress percent={percent} status="normal" animation formatText={indeterminate ? () => "处理中" : undefined} /></div>
+                <div aria-hidden="true"><Progress key={phase} percent={percent} status="normal" animation formatText={indeterminate ? () => "处理中" : undefined} /></div>
               </div>
             </div>}
             <div role="status" aria-live="polite">

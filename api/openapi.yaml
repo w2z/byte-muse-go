@@ -954,7 +954,7 @@ paths:
           content:
             application/json:
               schema: {$ref: '#/components/schemas/SystemUpgrade'}
-              example: {enabled: true, phase: downloading, completed_steps: 0, progress_percent: 12, progress_indeterminate: false, target: 0.1.118, error: ''}
+              example: {enabled: true, phase: downloading, completed_steps: 0, phase_progress_percent: 48, progress_percent: 12, progress_indeterminate: false, target: 0.1.118, error: ''}
         '401':
           description: 未登录或会话失效
           content:
@@ -982,7 +982,7 @@ paths:
           content:
             application/json:
               schema: {$ref: '#/components/schemas/SystemUpgrade'}
-              example: {enabled: true, phase: downloading, completed_steps: 0, progress_percent: 0, progress_indeterminate: true, target: 0.1.118, error: ''}
+              example: {enabled: true, phase: downloading, completed_steps: 0, phase_progress_percent: 0, progress_percent: 0, progress_indeterminate: true, target: 0.1.118, error: ''}
         '400':
           description: 请求格式或目标版本无效
           content:
@@ -2441,13 +2441,14 @@ components:
             - {version: '0.1.101', message: 版本检查与升级下载按直连和代理顺序回退}
     SystemUpgrade:
       type: object
-      required: [enabled, phase, completed_steps, progress_percent, progress_indeterminate, target, error]
+      required: [enabled, phase, completed_steps, phase_progress_percent, progress_percent, progress_indeterminate, target, error]
       properties:
         enabled: {type: boolean, description: 是否通过支持升级的 Linux 容器启动器运行}
         phase: {type: string, enum: [idle, downloading, extracting, installing, restarting, success, failed], description: 'idle 尚无任务；downloading 下载及校验；extracting 解压及验证；installing 安装版本；restarting 切换服务；success 新服务就绪；failed 失败，详见 error'}
         completed_steps: {type: integer, minimum: 0, maximum: 4, description: '已完成步骤数：下载、解压、安装、重启各一步；用于步骤条，失败保留已完成数，idle为0，success为4'}
-        progress_percent: {type: integer, minimum: 0, maximum: 100, description: '四阶段等权总体进度：下载按响应字节数、解压按压缩包读取字节数、安装按实际完成操作推进；阶段未验证完成时最多占该阶段24个百分点，成功为100。重试重新计数可能回退，不表示剩余时间'}
-        progress_indeterminate: {type: boolean, description: '当前阶段总量未知或等待服务就绪时为true，页面显示处理中；false时显示progress_percent百分比。失败和成功为false'}
+        phase_progress_percent: {type: integer, minimum: 0, maximum: 100, default: 0, description: '当前步骤独立进度。下载按响应字节数、解压按压缩包读取字节数、安装按实际完成操作计算；校验完成前最多99，步骤完成为100，切换步骤归零。重试重新计数，重启等待为0并显示处理中，成功为100，失败保留；非空，旧服务可能缺省。'}
+        progress_percent: {type: integer, minimum: 0, maximum: 100, description: '兼容旧客户端的四阶段等权总体进度，新页面使用phase_progress_percent：下载按响应字节数、解压按压缩包读取字节数、安装按实际完成操作推进；阶段未验证完成时最多占该阶段24个百分点，成功为100。重试重新计数可能回退，不表示剩余时间'}
+        progress_indeterminate: {type: boolean, description: '当前阶段总量未知或等待服务就绪时为true，页面显示处理中；false时显示phase_progress_percent当前步骤百分比。失败和成功为false'}
         target: {type: string, description: 本次任务的目标版本，尚无任务时为空串}
         error: {type: string, description: 脱敏中文失败原因，未失败时为空串}
     SystemSettings:

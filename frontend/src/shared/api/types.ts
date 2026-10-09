@@ -173,6 +173,8 @@ export type SystemVersion = {
 
 /** 容器内升级状态；success 仅表示新服务已通过就绪检查。 */
 export type SystemUpgrade = {
+  /** 当前步骤独立进度（0–100），切换步骤归零；旧服务缺省。 */
+  phase_progress_percent?: number;
   /** 四阶段等权进度（0–100），旧服务缺省时按已完成阶段回退。 */
   progress_percent?: number;
   /** 当前阶段总量未知，显示处理中而非伪造百分比。 */

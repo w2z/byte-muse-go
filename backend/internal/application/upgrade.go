@@ -89,6 +89,7 @@ func (s *UpgradeService) run(target string) {
 		s.state.Phase = "restarting"
 		s.state.CompletedSteps = 3
 		s.state.ProgressPercent = 75
+		s.state.PhaseProgressPercent = 0
 		s.state.ProgressIndeterminate = true
 	}
 }
