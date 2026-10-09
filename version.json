@@ -1,16 +1,20 @@
 {
-  "version": "0.1.118",
-  "commit": "b8e2cc84f37f754fc0dadb65f3beb398341b4b4c",
-  "short_commit": "b8e2cc8",
-  "built_at": "2026-10-09T08:09:43Z",
+  "version": "0.1.119",
+  "commit": "6876b294e3d56d2959477f91b64ac48f5b9e2515",
+  "short_commit": "6876b29",
+  "built_at": "2026-10-09T08:13:52Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.118",
-    "sha-b8e2cc8",
+    "0.1.119",
+    "sha-6876b29",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.119",
+      "message": "固定影片与资源站列到表格左侧"
+    },
     {
       "version": "0.1.118",
       "message": "将升级步骤条改为横向等分排列"
