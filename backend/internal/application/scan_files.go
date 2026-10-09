@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"sort"
 	"strings"
 	"sync"
 
@@ -165,16 +166,12 @@ func reportScanFileBytes(ctx context.Context, file strmSourceFile, bytes, size i
 	}
 }
 
-func (tree *scanFileTree) page(parent string, page, size int) ScanFilePage {
+// page filters and stably puts completed rows last before slicing, including directory snapshots.
+func (tree *scanFileTree) page(parent string, page, size int, hideCompleted bool) ScanFilePage {
 	tree.mu.Lock()
-	defer tree.mu.Unlock()
 	ids := tree.children[parent]
-	result := ScanFilePage{Items: []ScanFileRow{}, Total: len(ids), Available: true}
-	start := len(ids)
-	if page > 0 && size > 0 && page-1 <= len(ids)/size {
-		start = min(len(ids), (page-1)*size)
-	}
-	for _, id := range ids[start:min(len(ids), start+size)] {
+	result := ScanFilePage{Items: []ScanFileRow{}, Available: true}
+	for _, id := range ids {
 		row := *tree.rows[id]
 		if row.Kind == "directory" {
 			if row.Total > 0 {
@@ -193,13 +190,25 @@ func (tree *scanFileTree) page(parent string, page, size int) ScanFilePage {
 				row.Percent = min(99, row.Percent)
 			}
 		}
-		result.Items = append(result.Items, row)
+		if !hideCompleted || row.State != "completed" {
+			result.Items = append(result.Items, row)
+		}
 	}
+	tree.mu.Unlock()
+	sort.SliceStable(result.Items, func(first, second int) bool {
+		return result.Items[first].State != "completed" && result.Items[second].State == "completed"
+	})
+	result.Total = len(result.Items)
+	start := result.Total
+	if page > 0 && size > 0 && page-1 <= result.Total/size {
+		start = min(result.Total, (page-1)*size)
+	}
+	result.Items = result.Items[start:min(result.Total, start+size)]
 	return result
 }
 
 // Files pages the latest execution only. A restart rebuilds this observational list from checkpoints.
-func (s *ScanTasks) Files(ctx context.Context, id, parent string, page, size int) (ScanFilePage, error) {
+func (s *ScanTasks) Files(ctx context.Context, id, parent string, page, size int, hideCompleted bool) (ScanFilePage, error) {
 	latest, err := s.repo.Latest(ctx, "strm")
 	if err != nil {
 		return ScanFilePage{}, err
@@ -213,5 +222,5 @@ func (s *ScanTasks) Files(ctx context.Context, id, parent string, page, size int
 	if tree == nil || tree.id != id {
 		return ScanFilePage{Items: []ScanFileRow{}, Available: false}, nil
 	}
-	return tree.page(parent, max(1, page), max(1, min(200, size))), nil
+	return tree.page(parent, max(1, page), max(1, min(200, size)), hideCompleted), nil
 }

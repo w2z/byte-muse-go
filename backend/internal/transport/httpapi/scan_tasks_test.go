@@ -63,6 +63,8 @@ func TestManagedScanDisconnectAndRestart(t *testing.T) {
 		{task.ID + "/files?page_size=201", 400},
 		{task.ID + "/files?page=0", 400},
 		{task.ID + "/files?page=abc", 400},
+		{task.ID + "/files?hide_completed=invalid", 400},
+		{task.ID + "/files?hide_completed=true", 200},
 		{"old-task/files", 409},
 	} {
 		recorder := httptest.NewRecorder()
@@ -83,7 +85,7 @@ func TestManagedScanDisconnectAndRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer manager.Close()
-	page, err := manager.Files(ctx, task.ID, "", 1, 15)
+	page, err := manager.Files(ctx, task.ID, "", 1, 15, false)
 	if err != nil || page.Available || page.Items == nil {
 		t.Fatalf("restart files: %+v %v", page, err)
 	}

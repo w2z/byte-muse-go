@@ -28,12 +28,12 @@ func TestScanFilesTrackActualGenerationAndDownload(t *testing.T) {
 	if err != nil || result.Downloaded != 1 || result.Created != 1 {
 		t.Fatalf("%+v %v", result, err)
 	}
-	root := tree.page("", 1, 15).Items[0]
-	children := tree.page(root.ID, 1, 15)
+	root := tree.page("", 1, 15, false).Items[0]
+	children := tree.page(root.ID, 1, 15, false)
 	if root.State != "completed" || root.Total != 2 || children.Total != 1 {
 		t.Fatalf("%+v %+v", root, children)
 	}
-	files := tree.page(children.Items[0].ID, 1, 15)
+	files := tree.page(children.Items[0].ID, 1, 15, false)
 	if files.Total != 2 || files.Items[1].Bytes != 6 || files.Items[1].Percent != 100 {
 		t.Fatalf("%+v", files)
 	}
@@ -48,19 +48,19 @@ func TestScanFileTreeProgress(t *testing.T) {
 	file := strmSourceFile{ID: "1", Name: "poster.jpg", Directory: "子目录"}
 	finish := startScanFile(ctx, file, "download")
 	reportScanFileBytes(ctx, file, 50, 100)
-	root := tree.page("", 1, 15).Items[0]
-	child := tree.page(root.ID, 1, 15).Items[0]
-	row := tree.page(child.ID, 1, 15).Items[0]
+	root := tree.page("", 1, 15, false).Items[0]
+	child := tree.page(root.ID, 1, 15, false).Items[0]
+	row := tree.page(child.ID, 1, 15, false).Items[0]
 	if root.Total != 1 || child.Percent != 0 || row.Percent != 50 || row.Bytes != 50 {
 		t.Fatalf("%+v %+v %+v", root, child, row)
 	}
 	finish("completed")
-	child = tree.page(root.ID, 1, 15).Items[0]
+	child = tree.page(root.ID, 1, 15, false).Items[0]
 	if child.State == "completed" || child.Processed != 1 {
 		t.Fatalf("premature completion: %+v", child)
 	}
 	finishDirectory(true)
-	child = tree.page(root.ID, 1, 15).Items[0]
+	child = tree.page(root.ID, 1, 15, false).Items[0]
 	if child.State != "completed" || child.Percent != 100 {
 		t.Fatalf("%+v", child)
 	}
@@ -70,23 +70,57 @@ func TestScanFileTreeProgress(t *testing.T) {
 		go func() { defer workers.Done(); finish("completed") }()
 	}
 	workers.Wait()
-	if got := tree.page(root.ID, 1, 15).Items[0]; got.Processed != 1 {
+	if got := tree.page(root.ID, 1, 15, false).Items[0]; got.Processed != 1 {
 		t.Fatalf("duplicate completion: %+v", got)
 	}
-	if got := tree.page(child.ID, 2, 15); len(got.Items) != 0 || got.Total != 1 {
+	if got := tree.page(child.ID, 2, 15, false); len(got.Items) != 0 || got.Total != 1 {
 		t.Fatalf("pagination: %+v", got)
 	}
 	finishSecond := startScanFile(ctx, strmSourceFile{ID: "2", Name: "second.jpg", Directory: "子目录"}, "download")
-	if got := tree.page(root.ID, 1, 15).Items[0]; got.State != "processing" || got.Percent != 50 {
+	if got := tree.page(root.ID, 1, 15, false).Items[0]; got.State != "processing" || got.Percent != 50 {
 		t.Fatalf("pending download: %+v", got)
 	}
 	finishSecond("failed")
-	if got := tree.page(root.ID, 1, 15).Items[0]; got.State != "failed" || got.Failed != 1 {
+	if got := tree.page(root.ID, 1, 15, false).Items[0]; got.State != "failed" || got.Failed != 1 {
 		t.Fatalf("failed download: %+v", got)
 	}
 	finishDirectory(false)
-	if got := tree.page(root.ID, 1, 15).Items[0]; got.State != "interrupted" {
+	if got := tree.page(root.ID, 1, 15, false).Items[0]; got.State != "interrupted" {
 		t.Fatalf("interrupted discovery: %+v", got)
+	}
+}
+
+// TestScanFileCompletionOrdering verifies filtering and stable ordering before pagination at every level.
+func TestScanFileCompletionOrdering(t *testing.T) {
+	tree := newScanFileTree("task")
+	tree.add(ScanFileRow{ID: "done", Kind: "directory", closed: true})
+	tree.add(ScanFileRow{ID: "pending", Kind: "directory", State: "scanning"})
+	tree.add(ScanFileRow{ID: "failed", Kind: "directory", closed: true, Failed: 1})
+	tree.add(ScanFileRow{ID: "finished-file", parent: "pending", Kind: "file", State: "completed"})
+	tree.add(ScanFileRow{ID: "active-file", parent: "pending", Kind: "file", State: "processing"})
+	tree.add(ScanFileRow{ID: "skipped-file", parent: "pending", Kind: "file", State: "skipped"})
+	first := tree.page("", 1, 2, false)
+	if first.Total != 3 || first.Items[0].ID != "pending" || first.Items[1].ID != "failed" {
+		t.Fatalf("first page: %+v", first)
+	}
+	last := tree.page("", 2, 2, false)
+	if len(last.Items) != 1 || last.Items[0].ID != "done" {
+		t.Fatalf("last page: %+v", last)
+	}
+	hidden := tree.page("", 1, 2, true)
+	if hidden.Total != 2 || len(hidden.Items) != 2 {
+		t.Fatalf("hidden: %+v", hidden)
+	}
+	files := tree.page("pending", 1, 10, true)
+	if files.Total != 2 || files.Items[0].ID != "active-file" || files.Items[1].ID != "skipped-file" {
+		t.Fatalf("nested: %+v", files)
+	}
+	if tree.rows["done"].State != "" {
+		t.Fatal("query mutated live state")
+	}
+	tree.rows["pending"].closed = true
+	if got := tree.page("", 1, 10, true); got.Total != 1 || got.Items[0].ID != "failed" {
+		t.Fatalf("completion update: %+v", got)
 	}
 }
 

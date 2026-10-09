@@ -11,6 +11,7 @@ import { apiRequest, type ScanProgress } from "../../shared/api/client";
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 it("生成进度目录旁的信息按钮打开可展开的文件进度表格", async () => {
+  vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: false, addListener: vi.fn(), removeListener: vi.fn() })));
   const fetchMock = vi.fn(async (input: string) => {
     const nested = String(input).includes("parent=root");
     return Response.json({ available:true,total:1,items:nested ? [{id:"file",name:"poster.jpg",kind:"file",operation:"download",state:"processing",total:1,processed:0,failed:0,percent:50,bytes:512,size:1024}] : [{id:"root",name:"电影",kind:"directory",operation:"",state:"scanning",total:2,processed:1,failed:0,percent:50,bytes:0,size:0}] });
@@ -25,6 +26,14 @@ it("生成进度目录旁的信息按钮打开可展开的文件进度表格", a
   expect(await screen.findByText("poster.jpg")).toBeInTheDocument();
   expect(screen.getByText("512 B / 1.0 KiB")).toBeInTheDocument();
   expect(screen.getByText("下载附件")).toBeInTheDocument();
+  const toggle = screen.getByRole("switch", { name: "隐藏已完成" });
+  expect(toggle).toHaveAttribute("aria-checked", "false");
+  expect(fetchMock.mock.calls.every(([url]) => String(url).includes("hide_completed=false"))).toBe(true);
+  fireEvent.click(toggle);
+  await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).includes("parent=root") && String(url).includes("hide_completed=true"))).toBe(true));
+  expect(toggle).toHaveAttribute("aria-checked", "true");
+  expect(document.querySelector(".strm-file-dialog-content")).toBeInTheDocument();
+  expect(document.querySelector(".strm-file-dialog-scroll")).toBeInTheDocument();
 });
 
 it.each(["failed", "interrupted", "canceled", "completed"] as const)("%s 的可恢复任务显示红色继续按钮且发送 retry", (state) => {

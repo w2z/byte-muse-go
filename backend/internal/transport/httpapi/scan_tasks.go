@@ -29,7 +29,12 @@ func scanFilesEndpoint(tasks *application.ScanTasks) http.HandlerFunc {
 				*target = value
 			}
 		}
-		result, err := tasks.Files(r.Context(), chi.URLParam(r, "id"), r.URL.Query().Get("parent"), page, size)
+		hideCompleted := r.URL.Query().Get("hide_completed")
+		if hideCompleted != "" && hideCompleted != "true" && hideCompleted != "false" {
+			writeError(w, 400, "invalid_request", "hide_completed 必须为 true 或 false")
+			return
+		}
+		result, err := tasks.Files(r.Context(), chi.URLParam(r, "id"), r.URL.Query().Get("parent"), page, size, hideCompleted == "true")
 		if err != nil {
 			writeScanTaskError(w, err)
 			return

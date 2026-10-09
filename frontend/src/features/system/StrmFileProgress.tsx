@@ -1,7 +1,7 @@
-import { Button, Modal, Progress, Table, Tag, Tooltip } from "@arco-design/web-react";
+import { Button, Grid, Modal, Progress, Switch, Table, Tag, Tooltip } from "@arco-design/web-react";
 import { IconDown, IconFile, IconFolder, IconInfoCircle, IconRight } from "@arco-design/web-react/icon";
 import { useQuery } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { apiRequest } from "../../shared/api/client";
 import { DEFAULT_PAGE_SIZE, ListPagination } from "../../shared/ui/ListPagination";
 
@@ -34,25 +34,34 @@ function FileProgress({ row }: { row: FileRow }) {
   </div>;
 }
 
-/** 每个展开目录独立查询直属子项，收起后卸载查询；已展开目录的分页互不影响。 */
-function DirectoryFiles({ taskId, parent = "", paused }: { taskId: string; parent?: string; paused: boolean }) {
-  const [page, setPage] = useState(1);
+/** 每层独立分页，过滤切换同步回第一页并保留展开状态；实时完成导致页数缩减时回到有效页。 */
+function DirectoryFiles({ taskId, parent = "", paused, hideCompleted }: { taskId: string; parent?: string; paused: boolean; hideCompleted: boolean }) {
+  const [pagination, setPagination] = useState({ page: 1, hideCompleted });
+  const page = pagination.hideCompleted === hideCompleted ? pagination.page : 1;
+  const setPage = (next: number) => setPagination({ page: next, hideCompleted });
+  if (pagination.hideCompleted !== hideCompleted) setPagination({ page: 1, hideCompleted });
   const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
   const [expanded, setExpanded] = useState<(string | number)[]>([]);
   const query = useQuery({
-    queryKey: ["strm-task-files", taskId, parent, page, pageSize],
+    queryKey: ["strm-task-files", taskId, parent, page, pageSize, hideCompleted],
     queryFn: ({ signal }) => apiRequest<FilePage>(
-      "/strm/scan/tasks/" + taskId + "/files?parent=" + encodeURIComponent(parent) + "&page=" + page + "&page_size=" + pageSize,
+      "/strm/scan/tasks/" + taskId + "/files?parent=" + encodeURIComponent(parent) + "&page=" + page + "&page_size=" + pageSize + "&hide_completed=" + hideCompleted,
       { signal },
     ),
     refetchInterval: 750, retry: false,
   });
+  const total = query.data?.total;
+  useEffect(() => {
+    if (total !== undefined && page > Math.max(1, Math.ceil(total / pageSize))) {
+      setPagination({ page: Math.max(1, Math.ceil(total / pageSize)), hideCompleted });
+    }
+  }, [total, page, pageSize, hideCompleted]);
   return <div className="strm-file-table">
     {query.error ? <span role="alert">加载文件进度失败：{query.error.message}</span> : null}
     <Table<FileRow>
       rowKey="id" data={query.data?.items ?? []} loading={query.isPending} pagination={false} tableLayoutFixed
       expandedRowKeys={expanded} onExpandedRowsChange={setExpanded}
-      expandedRowRender={row => expanded.includes(row.id) ? <DirectoryFiles taskId={taskId} parent={row.id} paused={paused} /> : null}
+      expandedRowRender={row => expanded.includes(row.id) ? <DirectoryFiles taskId={taskId} parent={row.id} paused={paused} hideCompleted={hideCompleted} /> : null}
       expandProps={{
         rowExpandable: row => row.kind === "directory",
         icon: ({ record, expanded: open }) => <span
@@ -65,7 +74,7 @@ function DirectoryFiles({ taskId, parent = "", paused }: { taskId: string; paren
           }}
         >{open ? <IconDown /> : <IconRight />}</span>,
       }}
-      noDataElement={query.data?.available === false ? "明细等待任务恢复后重建" : "尚未发现符合规则的文件"}
+      noDataElement={query.data?.available === false ? "明细等待任务恢复后重建" : hideCompleted ? "暂无未完成项" : "尚未发现符合规则的文件"}
       columns={[
         { title: "目录 / 文件", dataIndex: "name", render: (_, row) => <span className="strm-file-name">{row.kind === "directory" ? <IconFolder /> : <IconFile />}{row.name}</span> },
         { title: "状态", width: 125, render: (_, row) => <div>
@@ -90,13 +99,23 @@ function DirectoryFiles({ taskId, parent = "", paused }: { taskId: string; paren
 /** 信息入口仅属于 STRM 任务；弹窗展示实时文件及目录进度，不触发扫描或下载。 */
 export function StrmFileProgress({ taskId, paused }: { taskId: string; paused: boolean }) {
   const [visible, setVisible] = useState(false);
+  const [hideCompleted, setHideCompleted] = useState(false);
   return <>
     <Tooltip content="查看生成与下载文件进度">
-      <Button type="text" shape="circle" icon={<IconInfoCircle />} aria-label="查看 STRM 文件进度" onClick={() => setVisible(true)} />
+      <Button type="text" shape="circle" icon={<IconInfoCircle />} aria-label="查看 STRM 文件进度" onClick={() => { setHideCompleted(false); setVisible(true); }} />
     </Tooltip>
     <Modal title="STRM 生成与下载进度" visible={visible} onCancel={() => setVisible(false)} footer={null} unmountOnExit style={{ width: "min(960px, calc(100vw - 24px))" }}>
-      <p>展开目录查看子目录和文件。目录总数随扫描增加；文件进度按已处理项或下载字节计算。</p>
-      {visible ? <DirectoryFiles key={taskId} taskId={taskId} paused={paused} /> : null}
+      <div className="strm-file-dialog-content">
+        <p>展开目录查看子目录和文件。目录总数随扫描增加；文件进度按已处理项或下载字节计算。</p>
+        <Grid.Row gutter={[12, 12]} justify="start" align="center" className="filter-toolbar">
+          <Grid.Col xs={24} sm={12} md={8} xl={4}>
+            <label className="strm-file-filter">隐藏已完成 <Switch aria-label="隐藏已完成" checked={hideCompleted} onChange={setHideCompleted} /></label>
+          </Grid.Col>
+        </Grid.Row>
+        <div className="strm-file-dialog-scroll" role="region" aria-label="STRM 文件列表" tabIndex={0}>
+          {visible ? <DirectoryFiles key={taskId} taskId={taskId} paused={paused} hideCompleted={hideCompleted} /> : null}
+        </div>
+      </div>
     </Modal>
   </>;
 }
