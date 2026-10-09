@@ -30,12 +30,46 @@ test("菜单当前页提交订阅，执行中禁用重复点击，结束后刷�
   await waitFor(() => expect(screen.getByRole("button", { name: "一键订阅" })).toBeEnabled());
 });
 
-test("所有菜单读取当前筛选范围，空结果不发送订阅", async () => {
-  vi.mocked(apiRequest).mockResolvedValue({ items: [], page: 1, page_size: 100, total: 0 });
-  render(<QueryClientProvider client={new QueryClient()}><CatalogSubscriptionButton items={[]} total={2} listPath="/ranks?type=weekly&subscription=none" disabled={false} /></QueryClientProvider>);
+test("当前筛选无未订阅影片时禁用主按钮", async () => {
+  vi.mocked(apiRequest).mockResolvedValue({ items: [], page: 1, page_size: 1, total: 0 });
+  render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><CatalogSubscriptionButton items={[{ ...media, subscription_status: "active" }]} total={20} listPath="/ranks?type=weekly&vr=hide&video_type=censored" disabled={false} /></QueryClientProvider>);
+  await waitFor(() => expect(apiRequest).toHaveBeenCalled());
+  expect(screen.getByRole("button", { name: "一键订阅" })).toBeDisabled();
+  const params = new URL("https://example.test" + vi.mocked(apiRequest).mock.calls[0][0]).searchParams;
+  expect(Object.fromEntries(params)).toEqual({ type: "weekly", vr: "hide", video_type: "censored", subscription: "none", page: "1", page_size: "1" });
+});
+
+test("当前页全已订阅但其他页可订阅时仅禁用当前页菜单", async () => {
+  vi.mocked(apiRequest).mockResolvedValue({ items: [media], page: 1, page_size: 1, total: 1 });
+  render(<QueryClientProvider client={new QueryClient()}><CatalogSubscriptionButton items={[{ ...media, subscription_status: "active" }]} total={20} listPath="/codes/recommend" disabled={false} /></QueryClientProvider>);
+  await waitFor(() => expect(screen.getByRole("button", { name: "一键订阅" })).toBeEnabled());
   fireEvent.click(screen.getByRole("button", { name: "一键订阅" }));
-  fireEvent.click(await screen.findByText("订阅所有"));
-  expect(await screen.findByText("订阅完成：成功 0，跳过 0，失败 0")).toBeInTheDocument();
-  expect(apiRequest).toHaveBeenCalledTimes(1);
-  expect(vi.mocked(apiRequest).mock.calls[0][0]).toContain("type=weekly&subscription=none");
+  expect(await screen.findByRole("menuitem", { name: "订阅当前页" })).toHaveAttribute("aria-disabled", "true");
+  expect(screen.getByRole("menuitem", { name: "订阅所有" })).not.toHaveAttribute("aria-disabled", "true");
+  fireEvent.click(screen.getByRole("menuitem", { name: "订阅当前页" }));
+  expect(vi.mocked(apiRequest).mock.calls.every(([, init]) => init?.method !== "POST")).toBe(true);
+});
+
+test.each([0, 1])("空结果或已完整加载且全已订阅时不额外查询并禁用按钮 (%s)", (total) => {
+  render(<QueryClientProvider client={new QueryClient()}><CatalogSubscriptionButton items={total ? [{ ...media, subscription_status: "active" }] : []} total={total} listPath="/codes/recommend" disabled={false} /></QueryClientProvider>);
+  expect(screen.getByRole("button", { name: "一键订阅" })).toBeDisabled();
+  expect(apiRequest).not.toHaveBeenCalled();
+});
+
+test("已订阅筛选不越过当前范围查询未订阅影片", () => {
+  render(<QueryClientProvider client={new QueryClient()}><CatalogSubscriptionButton items={[{ ...media, subscription_status: "active" }]} total={20} listPath="/codes/recommend?subscription=active&vr=only" disabled={false} /></QueryClientProvider>);
+  expect(screen.getByRole("button", { name: "一键订阅" })).toBeDisabled();
+  expect(apiRequest).not.toHaveBeenCalled();
+});
+
+test("查询失败时保持禁用，切换筛选不使用之前的可订阅结果", async () => {
+  vi.mocked(apiRequest).mockResolvedValueOnce({ total: 1 }).mockRejectedValue(new Error("查询失败"));
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const props = { items: [{ ...media, subscription_status: "active" as const }], total: 20, disabled: false };
+  const view = render(<QueryClientProvider client={client}><CatalogSubscriptionButton {...props} listPath="/ranks?vr=only" /></QueryClientProvider>);
+  await waitFor(() => expect(screen.getByRole("button", { name: "一键订阅" })).toBeEnabled());
+  view.rerender(<QueryClientProvider client={client}><CatalogSubscriptionButton {...props} listPath="/ranks?vr=hide" /></QueryClientProvider>);
+  expect(screen.getByRole("button", { name: "一键订阅" })).toBeDisabled();
+  await waitFor(() => expect(apiRequest).toHaveBeenCalledTimes(2));
+  expect(screen.getByRole("button", { name: "一键订阅" })).toBeDisabled();
 });

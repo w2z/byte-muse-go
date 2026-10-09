@@ -1,12 +1,13 @@
 import { Button, Dropdown, Menu } from "@arco-design/web-react";
 import { IconHeart } from "@arco-design/web-react/icon";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { subscribeCatalog, type CatalogSubscriptionProgress } from "../api/catalogSubscriptions";
 import type { Media } from "../api/types";
+import { apiRequest, type Page } from "../api/client";
 import { useFeedbackMessage } from "./FeedbackMessage";
 
-/** 筛选区批量订阅入口；固定点击时的数据范围，卸载时停止后续操作，完成后刷新服务端状态。 */
+/** 筛选区批量订阅入口；跨页可订阅性由服务端筛选确认，完成后刷新状态，卸载后停止后续操作。 */
 export function CatalogSubscriptionButton({ items, total, listPath, disabled, onComplete }: { items: Media[]; total: number; listPath: string; disabled: boolean; onComplete?: () => void }) {
   const client = useQueryClient();
   const [message, holder] = useFeedbackMessage();
@@ -14,10 +15,30 @@ export function CatalogSubscriptionButton({ items, total, listPath, disabled, on
   const [visible, setVisible] = useState(false);
   const running = useRef<AbortController | null>(null);
   useEffect(() => () => running.current?.abort(), []);
+  const hasPageUnsubscribed = items.some((media) => media.subscription_status !== "active");
+  const [path, search] = listPath.split("?");
+  const params = new URLSearchParams(search);
+  const subscription = params.get("subscription");
+  // 当前筛选已限定订阅状态或当前页足以裁决时，不再额外请求。
+  const needsLookup = total > items.length && !hasPageUnsubscribed && !subscription;
+  params.set("subscription", "none");
+  params.set("page", "1");
+  params.set("page_size", "1");
+  const availability = useQuery({
+    queryKey: ["catalog-subscription-availability", listPath],
+    queryFn: ({ signal }) => apiRequest<Page<Media>>(`${path}?${params}`, { signal }),
+    enabled: needsLookup && !disabled && !progress,
+    retry: false,
+  });
+  const hasUnsubscribed = total > 0 && subscription !== "active" && (
+    hasPageUnsubscribed || subscription === "none" ||
+    (needsLookup && availability.isSuccess && !availability.isFetching && availability.data.total > 0)
+  );
+  const buttonDisabled = disabled || !!progress || !hasUnsubscribed;
 
   /** 同步锁拦截连续点击；收集失败不写入，单项失败仍处理其余影片并汇总。 */
   async function start(scope: "page" | "all") {
-    if (running.current || disabled) return;
+    if (running.current || buttonDisabled || (scope === "page" && !hasPageUnsubscribed)) return;
     const controller = new AbortController();
     running.current = controller;
     setVisible(false);
@@ -42,13 +63,13 @@ export function CatalogSubscriptionButton({ items, total, listPath, disabled, on
 
   return <>
     {holder}
-    <Dropdown trigger="click" position="br" disabled={disabled || !!progress} popupVisible={visible} onVisibleChange={setVisible} droplist={
+    <Dropdown trigger="click" position="br" disabled={buttonDisabled} popupVisible={visible && !buttonDisabled} onVisibleChange={setVisible} droplist={
       <Menu onClickMenuItem={(key) => { if (key === "page" || key === "all") void start(key); }}>
-        <Menu.Item key="page" disabled={!items.length}>订阅当前页</Menu.Item>
-        <Menu.Item key="all" disabled={!total}>订阅所有</Menu.Item>
+        <Menu.Item key="page" disabled={!hasPageUnsubscribed} aria-disabled={!hasPageUnsubscribed}>订阅当前页</Menu.Item>
+        <Menu.Item key="all" disabled={!hasUnsubscribed} aria-disabled={!hasUnsubscribed}>订阅所有</Menu.Item>
       </Menu>
     }>
-      <Button type="primary" icon={<IconHeart />} disabled={disabled || !!progress} loading={!!progress}>一键订阅</Button>
+      <Button type="primary" icon={<IconHeart />} disabled={buttonDisabled} loading={!!progress}>一键订阅</Button>
     </Dropdown>
     {progress && <div className="catalog-subscription-progress" role="status">{progress.phase === "collecting" ? "读取影片" : "订阅中"} {progress.processed}/{progress.total}（{progress.total ? Math.round(progress.processed / progress.total * 100) : 0}%）</div>}
   </>;
