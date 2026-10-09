@@ -1,16 +1,20 @@
 {
-  "version": "0.1.136",
-  "commit": "cee898bec649bd0cd1db04e919af4819a21a0074",
-  "short_commit": "cee898b",
-  "built_at": "2026-10-09T13:34:15Z",
+  "version": "0.1.139",
+  "commit": "61e72527eeb108e1f4480fc8817b6c0776df273e",
+  "short_commit": "61e7252",
+  "built_at": "2026-10-09T13:53:45Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.136",
-    "sha-cee898b",
+    "0.1.139",
+    "sha-61e7252",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.139",
+      "message": "添加排除VR规则与免确认订阅开关"
+    },
     {
       "version": "0.1.136",
       "message": "补齐搜索页面白色内容背景"
