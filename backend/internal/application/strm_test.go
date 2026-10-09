@@ -9,10 +9,27 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"bytemuse/backend/internal/domain"
 	"bytemuse/backend/internal/platform/clouddrive"
 )
+
+// TestStrmLongVideoName 验证 NAS 的字节限制、UTF-8 完整性以及相同前缀的资源不会因截断合并。
+func TestStrmLongVideoName(t *testing.T) {
+	prefix := strings.Repeat("日文影片", 40)
+	first := strmVideoName(prefix + "A.mkv")
+	second := strmVideoName(prefix + "B.mkv")
+	if len(first) > 255 || !utf8.ValidString(first) || !strings.HasSuffix(first, ".strm") {
+		t.Fatalf("不可写入 NAS 的名称：%d bytes, valid=%v", len(first), utf8.ValidString(first))
+	}
+	if first == second || first != strmVideoName(prefix+"A.mkv") {
+		t.Fatal("缩短名称必须稳定且保留不同名称的区分")
+	}
+	if got := strmVideoName("ABC-123-C.mp4"); got != "ABC-123-C.strm" {
+		t.Fatalf("普通名称被改变：%s", got)
+	}
+}
 
 // strmPan115Stub 按目录 ID 返回预设的 115 目录内容，使 strm 生成与播放解析可离线验证。
 type strmPan115Stub struct {

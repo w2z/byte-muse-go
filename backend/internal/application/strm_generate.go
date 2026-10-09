@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"net/url"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"bytemuse/backend/internal/domain"
 	"bytemuse/backend/internal/platform/pan115"
@@ -17,9 +19,19 @@ import (
 
 type strmGenerateOutcome struct{ created, changed, skipped bool }
 
-// strmVideoName 用 STRM 后缀替换源视频后缀，保留名称内的分段和版本标识，与海报和 NFO 同名。
+// strmVideoName 替换视频后缀；超过 NAS 单文件名的 255 字节限制时，保留 UTF-8 前缀及名称摘要以免截断重名。
 func strmVideoName(name string) string {
-	return strings.TrimSuffix(name, filepath.Ext(name)) + ".strm"
+	stem := strings.TrimSuffix(name, filepath.Ext(name))
+	if len(stem)+len(".strm") <= 255 {
+		return stem + ".strm"
+	}
+	digest := sha256.Sum256([]byte(stem))
+	suffix := fmt.Sprintf("-%x.strm", digest[:8])
+	end := 255 - len(suffix)
+	for end > 0 && !utf8.RuneStart(stem[end]) {
+		end--
+	}
+	return stem[:end] + suffix
 }
 
 // strmVideoOutputPath 在增量模式优先复用旧双后缀文件，保留既有资源及其配套 NFO。
