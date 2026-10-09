@@ -198,7 +198,7 @@ func TestStrmRootIgnoresLegacySetting(t *testing.T) {
 	if err != nil || result.Created != 1 {
 		t.Fatalf("生成异常: %+v err=%v", result, err)
 	}
-	if _, err := os.Stat(filepath.Join(root, "movies", "A.mkv.strm")); err != nil {
+	if _, err := os.Stat(filepath.Join(root, "movies", "A.strm")); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(legacy, "movies")); !errors.Is(err, os.ErrNotExist) {
@@ -287,7 +287,7 @@ func TestScanWritesPlayableStrmFiles(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(root, "movies"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(root, "movies", "A.mkv.strm"), []byte("http://bm.local/files/play/115/f1\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "movies", "A.strm"), []byte("http://bm.local/files/play/115/f1\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -295,7 +295,7 @@ func TestScanWritesPlayableStrmFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("生成 strm 失败: %v", err)
 	}
-	// 预置的 A.mkv.strm 内容已过期，全量生成必须先清理再按 pick_code 重建。
+	// 预置的 A.strm 内容已过期，全量生成必须先清理再按 pick_code 重建。
 	if result.Files != 3 || result.Deleted != 1 || result.Created != 3 || result.Failed != 0 {
 		t.Fatalf("生成统计不符: %+v", result)
 	}
@@ -303,9 +303,9 @@ func TestScanWritesPlayableStrmFiles(t *testing.T) {
 		t.Fatalf("未开启自动刷新时不应请求 Emby: %+v", result.Emby)
 	}
 	for target, want := range map[string]string{
-		"movies/A.mkv.strm":    "http://bm.local/files/play/115/pc-1\n",
-		"movies/合集/C.mp4.strm": "http://bm.local/files/play/115/pc-3\n",
-		"cloud/S1/B.mkv.strm":  "http://bm.local/files/play/cd2/115/%E5%BD%B1%E7%89%87/S1/B.mkv\n",
+		"movies/A.strm":    "http://bm.local/files/play/115/pc-1\n",
+		"movies/合集/C.strm": "http://bm.local/files/play/115/pc-3\n",
+		"cloud/S1/B.strm":  "http://bm.local/files/play/cd2/115/%E5%BD%B1%E7%89%87/S1/B.mkv\n",
 	} {
 		content, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(target)))
 		if err != nil {
@@ -341,10 +341,10 @@ func TestScanFullClearsStaleLocalStrm(t *testing.T) {
 	}
 	service := newStrmTestService(t, root, pan115, nil, values)
 	for target, content := range map[string]string{
-		"movies/A.mkv.strm":       "http://bm.local/files/play/115/legacy\n",
-		"movies/removed.mkv.strm": "http://bm.local/files/play/115/gone\n",
-		"movies/合集/old.mkv.strm":  "http://bm.local/files/play/115/gone\n",
-		"movies/poster.jpg":       "cover",
+		"movies/A.strm":       "http://bm.local/files/play/115/legacy\n",
+		"movies/removed.strm": "http://bm.local/files/play/115/gone\n",
+		"movies/合集/old.strm":  "http://bm.local/files/play/115/gone\n",
+		"movies/poster.jpg":   "cover",
 	} {
 		absolute := filepath.Join(root, filepath.FromSlash(target))
 		if err := os.MkdirAll(filepath.Dir(absolute), 0o755); err != nil {
@@ -362,11 +362,11 @@ func TestScanFullClearsStaleLocalStrm(t *testing.T) {
 	if result.Files != 1 || result.Deleted != 3 || result.Created != 1 || result.Failed != 0 {
 		t.Fatalf("全量生成统计不符: %+v", result)
 	}
-	content, err := os.ReadFile(filepath.Join(root, "movies", "A.mkv.strm"))
+	content, err := os.ReadFile(filepath.Join(root, "movies", "A.strm"))
 	if err != nil || string(content) != "http://bm.local/files/play/115/pc-1\n" {
 		t.Fatalf("本地 strm 未被清理重建: %q err=%v", string(content), err)
 	}
-	if _, err := os.Stat(filepath.Join(root, "movies", "removed.mkv.strm")); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(filepath.Join(root, "movies", "removed.strm")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("网盘已删除文件对应的本地 strm 应被清理")
 	}
 	if _, err := os.Stat(filepath.Join(root, "movies", "合集")); !errors.Is(err, os.ErrNotExist) {
@@ -391,7 +391,7 @@ func TestScanIncrementalKeepsExistingLocalStrm(t *testing.T) {
 		"STRM_PLAY_BASE": "http://bm.local",
 	}
 	service := newStrmTestService(t, root, pan115, nil, values)
-	existing := filepath.Join(root, "movies", "A.mkv.strm")
+	existing := filepath.Join(root, "movies", "A.strm")
 	if err := os.MkdirAll(filepath.Dir(existing), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -410,7 +410,7 @@ func TestScanIncrementalKeepsExistingLocalStrm(t *testing.T) {
 	if err != nil || string(content) != "http://bm.local/files/play/115/legacy\n" {
 		t.Fatalf("增量生成不应改写本地已有文件: %q err=%v", string(content), err)
 	}
-	if _, err := os.Stat(filepath.Join(root, "movies", "B.mkv.strm")); err != nil {
+	if _, err := os.Stat(filepath.Join(root, "movies", "B.strm")); err != nil {
 		t.Fatalf("缺失的 strm 应被补齐: %v", err)
 	}
 }
@@ -438,7 +438,7 @@ func TestScanMissingPickCode(t *testing.T) {
 	if !errors.Is(err, context.Canceled) || result.Files != 2 || result.Failed != 1 || result.Created != 1 || !strings.Contains(result.Mappings[0].Message, "pick_code") {
 		t.Fatalf("缺失提取码结果不符: %+v err=%v", result, err)
 	}
-	if _, err := os.Stat(filepath.Join(root, "movies", "missing.mkv.strm")); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(filepath.Join(root, "movies", "missing.strm")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("缺失提取码不得生成无效 STRM")
 	}
 }
@@ -447,7 +447,7 @@ func TestScanMissingPickCode(t *testing.T) {
 func TestScanUsesMappingFormats(t *testing.T) {
 	root := t.TempDir()
 	pan115 := &strmPan115Stub{pages: map[string]domain.Pan115FilePage{
-		"100": {Files: []domain.Pan115File{{ID: "f1", PickCode: "pc-1", Name: "movie.MKV"}, {ID: "f2", PickCode: "pc-2", Name: "movie.mp4"}}},
+		"100": {Files: []domain.Pan115File{{ID: "f1", PickCode: "pc-1", Name: "movie.MKV"}, {ID: "f2", PickCode: "pc-2", Name: "unselected.mp4"}}},
 	}}
 	values := map[string]string{
 		"STRM_PATHS":     strmTestMappings(t, []domain.StrmMapping{{Kind: domain.StrmKindPan115, ID: "100", Path: "/影片", LocalPath: "/movies", Formats: []string{"mkv"}}}),
@@ -458,10 +458,10 @@ func TestScanUsesMappingFormats(t *testing.T) {
 	if err != nil || result.Files != 1 || result.Created != 1 {
 		t.Fatalf("格式过滤结果不符: %+v（err=%v）", result, err)
 	}
-	if _, err := os.Stat(filepath.Join(root, "movies", "movie.MKV.strm")); err != nil {
+	if _, err := os.Stat(filepath.Join(root, "movies", "movie.strm")); err != nil {
 		t.Fatalf("选中格式未生成: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(root, "movies", "movie.mp4.strm")); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(filepath.Join(root, "movies", "unselected.strm")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("未选格式不应生成 strm")
 	}
 }
@@ -576,7 +576,7 @@ func TestCloudDriveDirectories(t *testing.T) {
 
 // TestWriteStrmFileIsIdempotent 保证内容一致时不触碰磁盘。
 func TestWriteStrmFileIsIdempotent(t *testing.T) {
-	target := filepath.Join(t.TempDir(), "nested", "A.mkv.strm")
+	target := filepath.Join(t.TempDir(), "nested", "A.strm")
 	created, changed, err := writeStrmFile(target, "http://bm.local/files/play/115/f1\n")
 	if err != nil || !created || !changed {
 		t.Fatalf("首次写入结果不符: %v %v %v", created, changed, err)
@@ -707,12 +707,12 @@ func TestScanSkipsExcludedDirectoriesAndSmallFiles(t *testing.T) {
 	if result.Files != 2 || result.Created != 2 || result.Failed != 0 {
 		t.Fatalf("过滤结果不符: %+v", result)
 	}
-	for _, target := range []string{"movies/A.mkv.strm", "movies/D.mkv.strm"} {
+	for _, target := range []string{"movies/A.strm", "movies/D.strm"} {
 		if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(target))); err != nil {
 			t.Fatalf("%s 应生成: %v", target, err)
 		}
 	}
-	for _, target := range []string{"movies/Sample/A.mkv.strm", "movies/B.trailer.mkv.strm", "movies/C.mkv.strm"} {
+	for _, target := range []string{"movies/Sample/A.strm", "movies/B.trailer.strm", "movies/C.strm"} {
 		if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(target))); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("%s 不应生成", target)
 		}
@@ -745,5 +745,59 @@ func TestWalkCloudDriveAppliesFilter(t *testing.T) {
 	}
 	if len(files) != 1 || files[0].Name != "A.mkv" || files[0].Directory != "" {
 		t.Fatalf("过滤结果不符: %+v", files)
+	}
+}
+
+// TestStrmNamesMatchSidecars 防止双后缀使本地海报、NFO 与 STRM 名称脱节。
+func TestStrmNamesMatchSidecars(t *testing.T) {
+	for _, name := range []string{"ABC-123.mp4", "ABC-123.MKV", "ABC-123.part1.mp4"} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			service := newStrmTestService(t, root, nil, nil, nil)
+			stem := "ABC-123"
+			if strings.Contains(name, "part1") {
+				stem = "ABC-123.part1"
+			}
+			for _, suffix := range []string{"-poster.jpg", ".nfo"} {
+				if err := os.WriteFile(filepath.Join(root, stem+suffix), []byte("sidecar"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			source := strmSourceFile{ID: "1", PickCode: "pc", Name: name}
+			for _, mode := range []domain.StrmGenerateMode{domain.StrmGenerateFull, domain.StrmGenerateIncremental} {
+				if _, err := service.generateStrmFile(context.Background(), root, root, "115", "https://media.example.com", mode, source); err != nil {
+					t.Fatal(err)
+				}
+			}
+			content, err := os.ReadFile(filepath.Join(root, stem+".strm"))
+			if err != nil || strings.TrimSpace(string(content)) != "https://media.example.com/files/play/115/pc" {
+				t.Fatalf("content=%q err=%v", content, err)
+			}
+			entries, err := os.ReadDir(root)
+			if err != nil || len(entries) != 3 {
+				t.Fatalf("entries=%v err=%v", entries, err)
+			}
+		})
+	}
+}
+
+// TestScanRejectsSameStemVideos 防止不同格式的视频规范化后覆盖同一路径。
+func TestScanRejectsSameStemVideos(t *testing.T) {
+	root := t.TempDir()
+	api := &strmPan115Stub{pages: map[string]domain.Pan115FilePage{"1": {Files: []domain.Pan115File{
+		{ID: "a", Name: "movie.mp4", PickCode: "a"}, {ID: "b", Name: "movie.mkv", PickCode: "b"},
+	}}}}
+	values := map[string]string{"STRM_PATHS": strmTestMappings(t, []domain.StrmMapping{{Kind: "115", ID: "1", Path: "/movies", LocalPath: "/movies"}})}
+	svc := newStrmTestService(t, root, api, nil, values)
+	result, err := svc.Scan(context.Background(), "https://media.example.com", domain.StrmGenerateFull)
+	if err == nil || !strings.Contains(err.Error(), "文件名冲突") {
+		t.Fatalf("expected collision, got %v", err)
+	}
+	if len(result.Mappings) != 1 || !strings.Contains(result.Mappings[0].Message, "文件名冲突") {
+		t.Fatalf("result=%+v", result)
+	}
+	data, err := os.ReadFile(filepath.Join(root, "movies", "movie.strm"))
+	if !errors.Is(err, os.ErrNotExist) && (err != nil || strings.TrimSpace(string(data)) != "https://media.example.com/files/play/115/a") {
+		t.Fatalf("data=%q err=%v", data, err)
 	}
 }

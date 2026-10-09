@@ -57,7 +57,7 @@ func TestStrmScanCooldownDoesNotStopWorkers(t *testing.T) {
 		}
 		waits++
 		for {
-			_, videoErr := os.Stat(filepath.Join(root, "out", "movie.mp4.strm"))
+			_, videoErr := os.Stat(filepath.Join(root, "out", "movie.strm"))
 			_, posterErr := os.Stat(filepath.Join(root, "out", "poster.jpg"))
 			if videoErr == nil && posterErr == nil {
 				return nil
@@ -344,7 +344,7 @@ func TestStrmGenerationRecoversWithoutStoppingDownloads(t *testing.T) {
 	for index := 0; index < 12; index++ {
 		name := fmt.Sprintf("movie%d.mp4", index)
 		files = append(files, domain.Pan115File{ID: name, PickCode: name, Name: name})
-		if err := os.MkdirAll(filepath.Join(root, "out", name+".strm"), 0755); err != nil {
+		if err := os.MkdirAll(filepath.Join(root, "out", fmt.Sprintf("movie%d.strm", index)), 0755); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -371,7 +371,7 @@ func TestStrmGenerationRecoversWithoutStoppingDownloads(t *testing.T) {
 			}
 		}
 		for index := 0; index < 12; index++ {
-			if err := os.Remove(filepath.Join(root, "out", fmt.Sprintf("movie%d.mp4.strm", index))); err != nil {
+			if err := os.Remove(filepath.Join(root, "out", fmt.Sprintf("movie%d.strm", index))); err != nil {
 				return err
 			}
 		}

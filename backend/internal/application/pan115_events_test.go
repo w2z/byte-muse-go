@@ -70,7 +70,7 @@ func TestPan115EventsGenerateRetryAndResume(t *testing.T) {
 	if err := worker.Poll(ctx); err != nil {
 		t.Fatal(err)
 	}
-	target := filepath.Join(root, "movies", "ABC-123.mkv.strm")
+	target := filepath.Join(root, "movies", "ABC-123.strm")
 	content, err := os.ReadFile(target)
 	if err != nil || string(content) != "https://media.example.com/files/play/115/pc-42\n" {
 		t.Fatalf("content=%q err=%v", content, err)
@@ -144,7 +144,7 @@ func TestPan115EventsBaselineAndEmbyRetry(t *testing.T) {
 	if repo.items[0].Value != baseline {
 		t.Fatal("failed refresh advanced cursor")
 	}
-	if _, err := os.Stat(filepath.Join(root, "movies", "film.mkv.strm")); err != nil {
+	if _, err := os.Stat(filepath.Join(root, "movies", "film.strm")); err != nil {
 		t.Fatal(err)
 	}
 	failRefresh = false
@@ -202,11 +202,11 @@ func TestPan115EventsRespectMappingRules(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			want := []string{"movies/accepted.mkv.strm", "movies/nested/nested.mkv.strm", "series/episode.mp4.strm"}
+			want := []string{"movies/accepted.strm", "movies/nested/nested.strm", "series/episode.strm"}
 			if !reflect.DeepEqual(actual, want) {
 				t.Fatalf("files=%v want=%v", actual, want)
 			}
-			target := filepath.Join(root, "movies", "accepted.mkv.strm")
+			target := filepath.Join(root, "movies", "accepted.strm")
 			old := time.Unix(1700000000, 0)
 			if err := os.Chtimes(target, old, old); err != nil {
 				t.Fatal(err)
@@ -263,7 +263,7 @@ func TestPan115EventsPaginationAndPersistenceFailure(t *testing.T) {
 	if source.calls != 4 {
 		t.Fatalf("pagination requests=%d", source.calls)
 	}
-	if _, err := os.Stat(filepath.Join(root, "movies", "film.mkv.strm")); err != nil {
+	if _, err := os.Stat(filepath.Join(root, "movies", "film.strm")); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(root, "cloud")); !os.IsNotExist(err) {
@@ -275,7 +275,7 @@ func TestPan115EventsPaginationAndPersistenceFailure(t *testing.T) {
 	if err := worker.Poll(ctx); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"film.mkv.strm", "renamed.mkv.strm"} {
+	for _, name := range []string{"film.strm", "renamed.strm"} {
 		if _, err := os.Stat(filepath.Join(root, "movies", name)); err != nil {
 			t.Fatal(err)
 		}

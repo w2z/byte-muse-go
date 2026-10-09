@@ -266,7 +266,7 @@ func TestStrmRetryPreservesFullGeneration(t *testing.T) {
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("%+v %v", result, err)
 	}
-	existing := filepath.Join(root, "movies", "SSIS-001.mp4.strm")
+	existing := filepath.Join(root, "movies", "SSIS-001.strm")
 	if err := os.WriteFile(existing, []byte("preserved"), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -281,7 +281,7 @@ func TestStrmRetryPreservesFullGeneration(t *testing.T) {
 	if string(raw) != "preserved" {
 		t.Fatal("rewrote completed file")
 	}
-	if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(path.Join("movies", "child", "SSIS-002.mp4.strm")))); err != nil {
+	if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(path.Join("movies", "child", "SSIS-002.strm")))); err != nil {
 		t.Fatal(err)
 	}
 }

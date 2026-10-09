@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,7 +17,12 @@ import (
 
 type strmGenerateOutcome struct{ created, changed, skipped bool }
 
-// generateStrmFile is the authoritative single-file writer for manual tasks and event synchronization.
+// strmVideoName 用 STRM 后缀替换源视频后缀，保留名称内的分段和版本标识，与海报和 NFO 同名。
+func strmVideoName(name string) string {
+	return strings.TrimSuffix(name, filepath.Ext(name)) + ".strm"
+}
+
+// generateStrmFile 统一手动与事件生成的命名和写入：替换视频后缀，播放地址仍使用原始网盘标识。
 func (s *StrmService) generateStrmFile(ctx context.Context, root, target, kind, base string, mode domain.StrmGenerateMode, file strmSourceFile) (strmGenerateOutcome, error) {
 	var outcome strmGenerateOutcome
 	done, err := taskUnitDone(ctx, "strm-file", target, file.Directory, file.ID)
@@ -30,7 +36,7 @@ func (s *StrmService) generateStrmFile(ctx context.Context, root, target, kind, 
 	if strings.ContainsAny(file.Name, `/\`) {
 		return outcome, errors.New("STRM 文件名包含路径分隔符")
 	}
-	absolute := filepath.Join(target, filepath.FromSlash(file.Directory), file.Name+".strm")
+	absolute := filepath.Join(target, filepath.FromSlash(file.Directory), strmVideoName(file.Name))
 	if !withinStrmRoot(root, absolute) {
 		return outcome, errors.New("STRM 文件路径超出根目录")
 	}
@@ -51,7 +57,20 @@ func (s *StrmService) generateStrmFile(ctx context.Context, root, target, kind, 
 			return outcome, strmCheckpointFailure(completeTaskUnit(ctx, "strm-file", target, file.Directory, file.ID))
 		}
 	}
-	outcome.created, outcome.changed, err = s.writeManagedStrm(ctx, file, absolute, strmPlayURL(base, kind, identifier)+"\n")
+	content := strmPlayURL(base, kind, identifier) + "\n"
+	// 单文件事件跨批执行，不能仅靠扫描内的冲突表。已有目标必须仍指向同一网盘文件；
+	// 允许同一文件更换访问域名，但拒绝覆盖其他源文件或无法确认归属的播放地址。
+	existing, readErr := os.ReadFile(absolute)
+	if readErr == nil {
+		previous, previousErr := url.Parse(strings.TrimSpace(string(existing)))
+		current, currentErr := url.Parse(strings.TrimSpace(content))
+		if previousErr != nil || currentErr != nil || previous.EscapedPath() != current.EscapedPath() || previous.RawQuery != current.RawQuery {
+			return outcome, fmt.Errorf("去除视频后缀后文件名冲突：%s", filepath.Base(absolute))
+		}
+	} else if !errors.Is(readErr, os.ErrNotExist) {
+		return outcome, fmt.Errorf("读取本地 strm 文件失败：%w", readErr)
+	}
+	outcome.created, outcome.changed, err = s.writeManagedStrm(ctx, file, absolute, content)
 	if err != nil {
 		return outcome, fmt.Errorf("写入 strm 文件失败：%w", err)
 	}
@@ -237,6 +256,8 @@ func (s *StrmService) scanMappings(ctx context.Context, root string, mappings []
 	start(generate, 1, 10, "generate", "生成 STRM")
 	start(download, strmDownloadWorkers, 20, "download", "下载")
 	var scanErr error
+	// 不同源文件去掉视频后缀后可能同名；入队前拒绝冲突，禁止后写覆盖或静默跳过。
+	destinations := make(map[string]string)
 	scanMessages := make([]string, len(mappings))
 	for index, scope := range scopes {
 		if scope.walk == nil {
@@ -261,13 +282,21 @@ func (s *StrmService) scanMappings(ctx context.Context, root string, mappings []
 				return err
 			}
 			operation, queue := "generate", generate
+			name := strmVideoName(file.Name)
 			if isStrmMedia(file.Name, formats) {
 				operation, queue = "download", download
+				name = file.Name
 			} else {
 				mutex.Lock()
 				entries[index].Files++
 				mutex.Unlock()
 			}
+			destination := strings.ToLower(filepath.Join(scope.target, filepath.FromSlash(file.Directory), name))
+			source := journalKey(mapping.Kind, file.ID, file.Directory, file.Name)
+			if previous, exists := destinations[destination]; exists && previous != source {
+				return fmt.Errorf("去除视频后缀后文件名冲突：%s", name)
+			}
+			destinations[destination] = source
 			trackScanFile(walkCtx, file, operation, "waiting")
 			return queue.push(strmWorkItem{Mapping: index, File: file})
 		})

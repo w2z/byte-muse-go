@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -91,7 +92,7 @@ func TestManagedEventsGenerateDeleteAndRetry(t *testing.T) {
 	if err != nil || result.Created != 1 || len(repo.items) != 1 {
 		t.Fatalf("generate=%+v records=%d err=%v", result, len(repo.items), err)
 	}
-	path := filepath.Join(service.root, "movies", "movie.mkv.strm")
+	path := filepath.Join(service.root, "movies", "movie.strm")
 	unknown := filepath.Join(service.root, "movies", "unknown.strm")
 	if err := os.WriteFile(unknown, []byte("external"), 0600); err != nil {
 		t.Fatal(err)
@@ -135,7 +136,7 @@ func TestManagedEventsProtectModifiedAndMovedDescendant(t *testing.T) {
 			if _, err := service.syncPan115Events(ctx, []domain.StrmMapping{mapping}, values[strmPlayBaseSettingKey], values, []pan115.LifeEvent{{Type: 2, FileID: "42"}}, false); err != nil {
 				t.Fatal(err)
 			}
-			path := filepath.Join(service.root, "movies", "folder", "movie.mkv.strm")
+			path := filepath.Join(service.root, "movies", "folder", "movie.strm")
 			if modified {
 				if err := os.WriteFile(path, []byte("user edited"), 0600); err != nil {
 					t.Fatal(err)
@@ -279,5 +280,36 @@ func TestManagedEventGenerationUsesOnlyChangedFile(t *testing.T) {
 	api.pages = nil
 	if result, err := service.syncPan115Events(context.Background(), []domain.StrmMapping{mapping}, values[strmPlayBaseSettingKey], values, []pan115.LifeEvent{{Type: 2, FileID: "42"}, {Type: 2, FileID: "42"}}, false); err != nil || result.Created != 1 || api.infoCalls != 1 {
 		t.Fatalf("result=%+v infoCalls=%d err=%v", result, api.infoCalls, err)
+	}
+}
+
+// TestManagedEventsRejectNameCollision 保护同批和跨批事件中已生成文件的播放地址与归属。
+func TestManagedEventsRejectNameCollision(t *testing.T) {
+	for _, sameBatch := range []bool{true, false} {
+		t.Run(fmt.Sprint(sameBatch), func(t *testing.T) {
+			svc, api, repo, mapping, values := managedFixture(t)
+			mapping.Formats = []string{"mkv", "mp4"}
+			api.infos["43"] = pan115.FileInfo{File: pan115.File{ID: "43", ParentID: "10", Name: "movie.mp4", PickCode: "pc43"}, Path: []pan115.Directory{{ID: "10", Name: "movies"}}}
+			events := []pan115.LifeEvent{{Type: 2, FileID: "42"}, {Type: 2, FileID: "43"}}
+			if !sameBatch {
+				if _, err := svc.syncPan115Events(context.Background(), []domain.StrmMapping{mapping}, values[strmPlayBaseSettingKey], values, events[:1], false); err != nil {
+					t.Fatal(err)
+				}
+				events = events[1:]
+			}
+			_, err := svc.syncPan115Events(context.Background(), []domain.StrmMapping{mapping}, values[strmPlayBaseSettingKey], values, events, false)
+			if err == nil || !strings.Contains(err.Error(), "文件名冲突") {
+				t.Fatalf("expected collision, got %v", err)
+			}
+			data, err := os.ReadFile(filepath.Join(svc.root, "movies", "movie.strm"))
+			if err != nil || !strings.HasSuffix(strings.TrimSpace(string(data)), "/pc42") {
+				t.Fatalf("content=%q err=%v", data, err)
+			}
+			for _, record := range repo.items {
+				if record.FileID != "42" {
+					t.Fatalf("owner changed: %+v", record)
+				}
+			}
+		})
 	}
 }
