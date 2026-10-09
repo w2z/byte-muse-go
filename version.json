@@ -1,16 +1,20 @@
 {
-  "version": "0.1.133",
-  "commit": "5ab331ab457343c46b128e224ca916f59de4d1ab",
-  "short_commit": "5ab331a",
-  "built_at": "2026-10-09T13:04:45Z",
+  "version": "0.1.134",
+  "commit": "70d5edf8c144cd68cc7f461990d4bebda37a6a93",
+  "short_commit": "70d5edf",
+  "built_at": "2026-10-09T13:15:06Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.133",
-    "sha-5ab331a",
+    "0.1.134",
+    "sha-70d5edf",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.134",
+      "message": "按未订阅影片范围禁用批量订阅入口"
+    },
     {
       "version": "0.1.133",
       "message": "为上新推荐和榜单添加VR筛选并联动批量订阅"
