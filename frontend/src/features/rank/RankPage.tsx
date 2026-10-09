@@ -1,3 +1,4 @@
+import { CatalogSubscriptionButton } from "../../shared/ui/CatalogSubscriptionButton";
 import { CatalogFilters, catalogFilterParams } from "../../shared/ui/CatalogFilters";
 import { Button, Grid, Radio } from "@arco-design/web-react";
 import { useQuery } from "@tanstack/react-query";
@@ -87,6 +88,7 @@ export function RankPage() {
 
   const currentSource = RANK_SOURCES.find((item) => item.value === source) ?? RANK_SOURCES[0];
 
+  const listPath = `/ranks?type=${period}&${catalogFilterParams(subscription, videoType).replace(/^&/, "")}`;
   const query = useQuery({
     queryKey: ["ranks", period, page, pageSize, subscription, videoType],
     queryFn: () => apiRequest<Page<Media>>(`/ranks?type=${period}&page=${page}&page_size=${pageSize}${catalogFilterParams(subscription, videoType)}`),
@@ -122,8 +124,7 @@ export function RankPage() {
   return (
     <section>
       <PageHeader title="榜单" />
-      <div className="page-toolbar">
-        <div className="rank-filter-bar filter-toolbar" role="search">
+      <div className="rank-filter-bar filter-toolbar" role="search">
           <Grid.Row gutter={[12, 12]} justify="start" align="center">
             <Grid.Col xs={24} sm={12} md={8} xl={4}>
               <div className="filter-field">
@@ -155,8 +156,8 @@ export function RankPage() {
             </Grid.Col>
           <CatalogFilters subscription={subscription} videoType={videoType} onSubscriptionChange={(value) => { setSubscription(value); setPage(1); }} onVideoTypeChange={(value) => { setVideoType(value); setPage(1); }} />
           <Grid.Col xs={24} sm={12} md={8} xl={4}><div className="filter-actions"><Button type="primary" onClick={() => { if (page === 1) void query.refetch(); else setPage(1); }}>搜索</Button><Button onClick={() => { if (!subscription && !videoType && page === 1) void query.refetch(); setSubscription(""); setVideoType(""); setPage(1); }}>重置</Button></div></Grid.Col>
+          <Grid.Col xs={24} sm={12} md={8} xl={4} className="catalog-subscription-column"><div className="catalog-subscription-actions"><CatalogSubscriptionButton items={items} total={total} listPath={listPath} disabled={query.isFetching || !!query.error} onComplete={() => setPage(1)} /></div></Grid.Col>
           </Grid.Row>
-        </div>
       </div>
       <MediaCardGrid
         items={items}

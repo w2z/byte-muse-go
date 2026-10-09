@@ -1,3 +1,4 @@
+import { CatalogSubscriptionButton } from "../../shared/ui/CatalogSubscriptionButton";
 import { Button, Grid } from "@arco-design/web-react";
 import { CatalogFilters, catalogFilterParams } from "../../shared/ui/CatalogFilters";
 import { useQuery } from "@tanstack/react-query";
@@ -20,6 +21,7 @@ export function RecommendPage() {
   const [videoType, setVideoType] = useState("");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
+  const listPath = `/codes/recommend?${catalogFilterParams(subscription, videoType).replace(/^&/, "")}`;
   const query = useQuery({
     queryKey: ["recommend", page, pageSize, subscription, videoType],
     queryFn: () =>
@@ -40,6 +42,7 @@ export function RecommendPage() {
       <div className="filter-toolbar" role="search"><Grid.Row gutter={[12, 12]} justify="start" align="center">
           <CatalogFilters subscription={subscription} videoType={videoType} onSubscriptionChange={(value) => { setSubscription(value); setPage(1); }} onVideoTypeChange={(value) => { setVideoType(value); setPage(1); }} />
           <Grid.Col xs={24} sm={12} md={8} xl={4}><div className="filter-actions"><Button type="primary" onClick={() => { if (page === 1) void query.refetch(); else setPage(1); }}>搜索</Button><Button onClick={() => { if (!subscription && !videoType && page === 1) void query.refetch(); setSubscription(""); setVideoType(""); setPage(1); }}>重置</Button></div></Grid.Col>
+          <Grid.Col xs={24} sm={12} md={8} xl={4} className="catalog-subscription-column"><div className="catalog-subscription-actions"><CatalogSubscriptionButton items={items} total={total} listPath={listPath} disabled={query.isFetching || !!query.error} onComplete={() => setPage(1)} /></div></Grid.Col>
       </Grid.Row></div>
       <MediaCardGrid
         items={items}

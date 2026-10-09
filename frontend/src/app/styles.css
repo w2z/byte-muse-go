@@ -376,6 +376,10 @@ button.code-card-still-cell:hover img { opacity: .85; }
 .toolbar-group { display: flex; min-width: 0; align-items: center; gap: 8px; }
 /* 列宽、间距和响应式断点由 Arco Grid 管理，表单仅保留底部留白。 */
 .filter-toolbar { min-width: 0; margin-bottom: 16px; }
+/* 批量订阅是独立业务操作，按用户要求靠右；筛选及搜索重置保留原有栅格和顺序。 */
+.catalog-subscription-column { margin-inline-start: auto; }
+.catalog-subscription-actions { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+.catalog-subscription-progress { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
 .filter-field, .filter-labeled { display: flex; flex-wrap: wrap; width: 100%; min-width: 0; align-items: center; gap: 8px; }
 .filter-label { flex: none; color: var(--ink-2); font-size: var(--control-font-size); line-height: 22px; white-space: nowrap; }
 .filter-labeled > :last-child, .filter-control { flex: 1 1 140px; width: 100%; min-width: 0; max-width: 100%; }

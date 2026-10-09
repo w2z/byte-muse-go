@@ -1,7 +1,8 @@
 import { Button, InputNumber, Popconfirm, Radio, Switch } from "@arco-design/web-react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { apiRequest, isApiError, newIdempotencyKey } from "../api/client";
+import { apiRequest, isApiError } from "../api/client";
+import { createMediaSubscription } from "../api/catalogSubscriptions";
 import type { Media, Subscription, SubscriptionMode } from "../api/types";
 import { useFeedbackMessage } from "./FeedbackMessage";
 import { AppDialog } from "./AppDialog";
@@ -52,11 +53,7 @@ export function MediaSubscriptionActions({ media }: MediaSubscriptionActionsProp
           body: JSON.stringify({ mode, filter, version: active.version }),
         });
       }
-      return apiRequest<Subscription>("/subscriptions", {
-        method: "POST",
-        headers: { "Idempotency-Key": newIdempotencyKey() },
-        body: JSON.stringify({ media_id: media.id, mode, filter }),
-      });
+      return createMediaSubscription(media.id, mode, filter);
     },
     onSuccess: async () => {
       setVisible(false);
