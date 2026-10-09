@@ -1,5 +1,5 @@
 import { CatalogFilters, catalogFilterParams } from "../../shared/ui/CatalogFilters";
-import { Button, Grid } from "@arco-design/web-react";
+import { Button, Grid, Radio } from "@arco-design/web-react";
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { apiRequest, type Page } from "../../shared/api/client";
@@ -126,33 +126,31 @@ export function RankPage() {
         <div className="rank-filter-bar filter-toolbar" role="search">
           <Grid.Row gutter={[12, 12]} justify="start" align="center">
             <Grid.Col xs={24} sm={12} md={8} xl={4}>
-              <div className="filter-field"><span className="filter-label">榜单来源</span><div className="rank-filter" role="group" aria-label="榜单来源">
-                {RANK_SOURCES.map((item) => (
-                  <button
-                    key={item.value}
-                    type="button"
-                    aria-pressed={item.value === source}
-                    onClick={() => changeSource(item.value)}
-                  >
-                    {item.label}
-                  </button>
-                ))}
-              </div>
+              <div className="filter-field">
+                <span className="filter-label">榜单来源</span>
+                <Radio.Group
+                  className="rank-filter"
+                  type="button"
+                  name="rank-source"
+                  aria-label="榜单来源"
+                  value={source}
+                  onChange={changeSource}
+                  options={RANK_SOURCES.map(({ value, label }) => ({ value, label }))}
+                />
               </div>
             </Grid.Col>
             <Grid.Col xs={24} sm={12} md={8} xl={4}>
-              <div className="filter-field"><span className="filter-label">榜单周期</span><div className="rank-filter" role="group" aria-label="榜单周期">
-                {currentSource.periods.map((item) => (
-                  <button
-                    key={item.value}
-                    type="button"
-                    aria-pressed={item.value === period}
-                    onClick={() => changePeriod(item.value)}
-                  >
-                    {item.label}
-                  </button>
-                ))}
-              </div>
+              <div className="filter-field">
+                <span className="filter-label">榜单周期</span>
+                <Radio.Group
+                  className="rank-filter"
+                  type="button"
+                  name="rank-period"
+                  aria-label="榜单周期"
+                  value={period}
+                  onChange={changePeriod}
+                  options={currentSource.periods}
+                />
               </div>
             </Grid.Col>
           <CatalogFilters subscription={subscription} videoType={videoType} onSubscriptionChange={(value) => { setSubscription(value); setPage(1); }} onVideoTypeChange={(value) => { setVideoType(value); setPage(1); }} />
