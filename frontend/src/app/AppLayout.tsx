@@ -1,6 +1,6 @@
-import { Breadcrumb, Button, Layout, Menu, Tooltip } from "@arco-design/web-react";
+import { Breadcrumb, Button, Drawer, Layout, Menu, Tooltip } from "@arco-design/web-react";
 import { IconCalendar, IconDashboard, IconFile, IconFire, IconList, IconMenuFold, IconMenuUnfold, IconMoon, IconSearch, IconSettings, IconStar, IconSun, IconTags, IconThunderbolt, IconUser, IconVideoCamera } from "@arco-design/web-react/icon";
-import { useLayoutEffect, useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { Outlet, useLocation, useMatches, useNavigate } from "react-router-dom";
 import { UNAUTHORIZED_EVENT, apiRequest } from "../shared/api/client";
@@ -46,7 +46,7 @@ function menuIcon(key: string) {
   return <IconFile />;
 }
 
-/** 登录后的管理布局：桌面侧栏可折叠；手机端默认隐藏，由顶栏的单个按钮切换完整菜单。 */
+/** 登录后的管理布局：桌面侧栏可折叠；手机端通过顶栏的单个按钮切换 Arco 抽屉菜单。 */
 export function AppLayout() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -57,6 +57,7 @@ export function AppLayout() {
   const [collapsed, setCollapsed] = useState(false);
   const [isMobile, setIsMobile] = useState(() => window.matchMedia("(max-width: 760px)").matches);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const mobileDrawerHost = useRef<HTMLDivElement>(null);
   const menuCollapsed = !isMobile && collapsed;
   useLayoutEffect(() => {
     const media = window.matchMedia("(max-width: 760px)");
@@ -108,6 +109,15 @@ export function AppLayout() {
     setMobileMenuOpen(false);
     navigate(key);
   };
+  // 桌面侧栏与手机抽屉复用同一导航，保持入口、选中态和跳转规则一致。
+  const navigation = (
+    <nav id="app-navigation" aria-label="主导航" className="side-nav">
+      {!menuCollapsed && <p className="nav-caption">通用</p>}
+      <Menu collapse={menuCollapsed} theme="light" selectedKeys={[selectedKey]} onClickMenuItem={navigateFromMenu}>{renderItems(contentItems)}</Menu>
+      {!menuCollapsed && <p className="nav-caption system-caption">系统</p>}
+      <Menu collapse={menuCollapsed} selectedKeys={[selectedKey]} onClickMenuItem={navigateFromMenu}>{renderItems(systemItems)}</Menu>
+    </nav>
+  );
   return (
     <Layout className="app-shell" onKeyDown={(event) => { if (event.key === "Escape") setMobileMenuOpen(false); }}>
       <Layout.Header className="app-header">
@@ -123,21 +133,34 @@ export function AppLayout() {
         </div>
       </Layout.Header>
       <Layout className="app-body">
-        <Layout.Sider className={mobileMenuOpen ? "app-sider app-sider--mobile-open" : "app-sider"} width={240} collapsedWidth={64} collapsed={menuCollapsed} collapsible trigger={null} onCollapse={setCollapsed}>
-          <nav id="app-navigation" aria-label="主导航" className="side-nav">
-            {!menuCollapsed && <p className="nav-caption">通用</p>}
-            <Menu collapse={menuCollapsed} theme="light" selectedKeys={[selectedKey]} onClickMenuItem={navigateFromMenu}>{renderItems(contentItems)}</Menu>
-            {!menuCollapsed && <p className="nav-caption system-caption">系统</p>}
-            <Menu collapse={menuCollapsed} selectedKeys={[selectedKey]} onClickMenuItem={navigateFromMenu}>{renderItems(systemItems)}</Menu>
-          </nav>
-          {!isMobile && <div className="sider-bottom">
+        {isMobile ? (
+          <div ref={mobileDrawerHost} className="mobile-navigation-host">
+            <Drawer
+              placement="left"
+              width={240}
+              title={null}
+              footer={null}
+              closable={false}
+              visible={mobileMenuOpen}
+              onCancel={() => setMobileMenuOpen(false)}
+              getPopupContainer={() => mobileDrawerHost.current!}
+              bodyStyle={{ padding: 0, display: "flex", flexDirection: "column", background: "var(--panel)" }}
+              // 保持顶栏切换按钮可用；遮罩、Esc 与退出动画由 Drawer 管理。
+              focusLock={false}
+            >
+              {navigation}
+            </Drawer>
+          </div>
+        ) : <Layout.Sider className="app-sider" width={240} collapsedWidth={64} collapsed={collapsed} collapsible trigger={null} onCollapse={setCollapsed}>
+          {navigation}
+          <div className="sider-bottom">
             <Tooltip content={collapseLabel} position={collapsed ? "right" : "top"}>
               <button type="button" className="sider-collapse" aria-label={collapseLabel} aria-expanded={!collapsed} onClick={() => setCollapsed(!collapsed)}>
                 {collapsed ? <IconMenuUnfold /> : <IconMenuFold />}
               </button>
             </Tooltip>
-          </div>}
-        </Layout.Sider>
+          </div>
+        </Layout.Sider>}
         <Layout className="app-main">
           <Layout.Content className={contentClassName}>
             <div className="app-content-scroll">
