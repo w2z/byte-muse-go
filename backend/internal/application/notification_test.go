@@ -190,7 +190,7 @@ func TestChannelEventEnabledRequiresTrueValue(t *testing.T) {
 	}
 }
 
-// TestNotificationMessageFormat 验证六行顺序、缺失值和多行内容，以及内部引用不能成为下载链接。
+// TestNotificationMessageFormat 验证标题置顶、字段顺序、缺失值和多行内容，以及内部引用不能成为下载链接。
 func TestNotificationMessageFormat(t *testing.T) {
 	for _, item := range []struct{ name, code, source, uri, description, want string }{
 		{"HTTP链接", "EXAMPLE-001", "bt", "https://example.com/download", "资源简介", "番号: EXAMPLE-001\n状态: 开始下载\n站点: 示例站点\n来源: BT\n下载链接: https://example.com/download\n描述: 资源简介"},
@@ -200,8 +200,8 @@ func TestNotificationMessageFormat(t *testing.T) {
 		{"凭据链接", "EXAMPLE-001", "bt", "https://user:secret@example.com/download", "资源简介", "番号: EXAMPLE-001\n状态: 开始下载\n站点: 示例站点\n来源: BT\n下载链接: 暂无\n描述: 资源简介"},
 	} {
 		t.Run(item.name, func(t *testing.T) {
-			message := NewNotificationMessage(item.code, "开始下载", "示例站点", item.source, item.uri, item.description, "")
-			if got := NotificationPlainText(message.Title, message.Text); got != item.want {
+			message := NewNotificationMessage(item.code, "影片标题", "开始下载", "示例站点", item.source, item.uri, item.description, "")
+			if got := NotificationPlainText(message.Title, message.Text); got != "标题: 影片标题\n"+item.want {
 				t.Fatalf("通知 = %q，期望 %q", got, item.want)
 			}
 		})

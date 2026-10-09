@@ -243,28 +243,29 @@ func notificationField(value string) string {
 	return value
 }
 
-// newSubscriptionNotificationMessage 生成订阅通知，仅包含番号、状态和影片描述。
+// newSubscriptionNotificationMessage 生成订阅通知，影片标题置顶，正文包含番号、状态和描述。
 // 订阅尚未选中下载资源，不显示站点、来源或下载链接。
-func newSubscriptionNotificationMessage(code, status, description, cover string) NotificationMessage {
+func newSubscriptionNotificationMessage(code, title, status, description, cover string) NotificationMessage {
 	return NotificationMessage{
-		Title:    "番号: " + notificationField(code),
-		Text:     "状态: " + notificationField(status) + "\n描述: " + notificationField(description),
+		Title:    "标题: " + notificationField(title),
+		Text:     "番号: " + notificationField(code) + "\n状态: " + notificationField(status) + "\n描述: " + notificationField(description),
 		CoverURL: cover,
 		Code:     strings.TrimSpace(code),
 	}
 }
 
-// NewNotificationMessage 统一生成六行下载通知，首行作为图文标题，其余作为正文。
+// NewNotificationMessage 统一生成七行下载通知，影片标题置顶，其余作为正文。
 // 缺失值显示暂无，多行描述压成一行；内部 PT 引用不是下载链接，不对外展示。
-func NewNotificationMessage(code, status, site, source, uri, description, cover string) NotificationMessage {
+func NewNotificationMessage(code, title, status, site, source, uri, description, cover string) NotificationMessage {
 	link := strings.TrimSpace(uri)
 	parsed, err := url.Parse(link)
 	if err != nil || parsed.User != nil || !((parsed.Scheme == "https" || parsed.Scheme == "http") && parsed.Host != "" || parsed.Scheme == "magnet") {
 		link = ""
 	}
 	return NotificationMessage{
-		Title: "番号: " + notificationField(code),
+		Title: "标题: " + notificationField(title),
 		Text: strings.Join([]string{
+			"番号: " + notificationField(code),
 			"状态: " + notificationField(status),
 			"站点: " + notificationField(site),
 			"来源: " + notificationField(strings.ToUpper(source)),

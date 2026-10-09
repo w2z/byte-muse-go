@@ -316,9 +316,9 @@ func notifyTransferTransitions(ctx context.Context, notifier application.Notifie
 	for _, item := range transitions {
 		switch item.Status {
 		case "completed":
-			notifier.Notify(ctx, application.NotificationDownloadComplete, application.NewNotificationMessage(item.Code, "已完成下载", item.Site, item.Kind, item.URI, item.Title, item.Cover))
+			notifier.Notify(ctx, application.NotificationDownloadComplete, application.NewNotificationMessage(item.Code, item.Title, "已完成下载", item.Site, item.Kind, item.URI, item.Title, item.Cover))
 		case "failed":
-			notifier.Notify(ctx, application.NotificationDownloadFailed, application.NewNotificationMessage(item.Code, "下载失败", item.Site, item.Kind, item.URI, item.Title+" 原因：下载器报告任务失败", item.Cover))
+			notifier.Notify(ctx, application.NotificationDownloadFailed, application.NewNotificationMessage(item.Code, item.Title, "下载失败", item.Site, item.Kind, item.URI, item.Title+" 原因：下载器报告任务失败", item.Cover))
 		}
 	}
 }

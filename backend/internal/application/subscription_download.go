@@ -94,7 +94,7 @@ func (s *SubscriptionDownloadService) notifyDownloadStart(ctx context.Context, p
 	if s.notifier == nil {
 		return
 	}
-	s.notifier.Notify(ctx, NotificationDownloadStart, NewNotificationMessage(pending.Code, "开始下载", pending.Site, pending.Kind, pending.URI, pending.Title, pending.Cover))
+	s.notifier.Notify(ctx, NotificationDownloadStart, NewNotificationMessage(pending.Code, pending.Title, "开始下载", pending.Site, pending.Kind, pending.URI, pending.Title, pending.Cover))
 }
 
 // notifyDownloadFailed 通知订阅下载任务失败；reason 与落库的失败原因保持一致。
@@ -107,7 +107,7 @@ func (s *SubscriptionDownloadService) notifyDownloadFailed(ctx context.Context, 
 		lines = append(lines, value)
 	}
 	lines = append(lines, "原因："+reason)
-	s.notifier.Notify(ctx, NotificationDownloadFailed, NewNotificationMessage(code, "下载失败", "", "", "", strings.Join(lines, " "), cover))
+	s.notifier.Notify(ctx, NotificationDownloadFailed, NewNotificationMessage(code, title, "下载失败", "", "", "", strings.Join(lines, " "), cover))
 }
 
 // finishScan 删除一次已领取的搜索队列项：搜索结束且不产生下载任务，也不推送通知。

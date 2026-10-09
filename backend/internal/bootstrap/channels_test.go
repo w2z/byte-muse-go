@@ -37,7 +37,7 @@ func (notifier *transitionNotifier) ChannelEventEnabled(context.Context, string,
 	return true
 }
 
-// TestTransferNotificationsUseResourceSnapshot 保证完成和失败事件复用六行模板并带上任务资源。
+// TestTransferNotificationsUseResourceSnapshot 保证完成和失败事件复用标题置顶模板并带上任务资源。
 func TestTransferNotificationsUseResourceSnapshot(t *testing.T) {
 	notifier := &transitionNotifier{}
 	for _, status := range []string{"downloading", "completed", "failed"} {
@@ -47,8 +47,8 @@ func TestTransferNotificationsUseResourceSnapshot(t *testing.T) {
 		t.Fatalf("通知事件 = %v", notifier.events)
 	}
 	for index, expected := range []string{
-		"番号: EXAMPLE-001\n状态: 已完成下载\n站点: 示例站点\n来源: BT\n下载链接: https://example.com/download\n描述: 资源简介",
-		"番号: EXAMPLE-001\n状态: 下载失败\n站点: 示例站点\n来源: BT\n下载链接: https://example.com/download\n描述: 资源简介 原因：下载器报告任务失败",
+		"标题: 资源简介\n番号: EXAMPLE-001\n状态: 已完成下载\n站点: 示例站点\n来源: BT\n下载链接: https://example.com/download\n描述: 资源简介",
+		"标题: 资源简介\n番号: EXAMPLE-001\n状态: 下载失败\n站点: 示例站点\n来源: BT\n下载链接: https://example.com/download\n描述: 资源简介 原因：下载器报告任务失败",
 	} {
 		message := notifier.messages[index]
 		if got := application.NotificationPlainText(message.Title, message.Text); got != expected {

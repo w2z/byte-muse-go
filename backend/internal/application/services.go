@@ -180,7 +180,7 @@ func (s *SubscriptionService) Create(ctx context.Context, command CreateSubscrip
 	return item, created, nil
 }
 
-// notifySubscribe 使用仓储返回的影片快照生成订阅通知：番号作为标题，译名优先的片名作为描述。
+// notifySubscribe 使用仓储返回的影片快照生成订阅通知：标题与描述优先使用译名，缺失时使用原标题。
 // 不展示尚未确定的下载资源信息，配图沿用影片封面。
 func (s *SubscriptionService) notifySubscribe(ctx context.Context, command CreateSubscriptionCommand, item domain.Subscription) {
 	if s.notifier == nil {
@@ -195,7 +195,7 @@ func (s *SubscriptionService) notifySubscribe(ctx context.Context, command Creat
 		cover = MediaCover(*item.Media)
 	}
 	// 番号取不到时不回退到内部 media_id：推送里出现用户无法对应的标识，比没有标识更糟。
-	s.notifier.Notify(ctx, NotificationSubscribe, newSubscriptionNotificationMessage(label, "已加入订阅列表", title, cover))
+	s.notifier.Notify(ctx, NotificationSubscribe, newSubscriptionNotificationMessage(label, title, "已加入订阅列表", title, cover))
 }
 
 // MediaDisplayTitle 返回影片的展示标题，优先使用译文；译名为空时回退原标题。
@@ -228,7 +228,7 @@ func (s *SubscriptionService) notifySubscribeFailed(ctx context.Context, command
 		return
 	}
 	label := strings.TrimSpace(command.Label)
-	s.notifier.Notify(ctx, NotificationSubscribeFailed, newSubscriptionNotificationMessage(label, "订阅失败", "原因："+cause.Error(), ""))
+	s.notifier.Notify(ctx, NotificationSubscribeFailed, newSubscriptionNotificationMessage(label, "", "订阅失败", "原因："+cause.Error(), ""))
 }
 
 // Cancel removes an active subscription; a repeated call returns ErrSubscriptionNotFound.
