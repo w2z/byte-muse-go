@@ -1,16 +1,20 @@
 {
-  "version": "0.1.141",
-  "commit": "00d1c2ef2aeb7561dd9431765c64acd889f259e8",
-  "short_commit": "00d1c2e",
-  "built_at": "2026-10-09T14:15:51Z",
+  "version": "0.1.142",
+  "commit": "4443ce17139dcd8d0443c9842f7c9fccb96b568b",
+  "short_commit": "4443ce1",
+  "built_at": "2026-10-09T14:17:47Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.141",
-    "sha-00d1c2e",
+    "0.1.142",
+    "sha-4443ce1",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.142",
+      "message": "防止爬虫增强警告框被压缩裁切"
+    },
     {
       "version": "0.1.141",
       "message": "将立即执行按钮改为主要按钮"
