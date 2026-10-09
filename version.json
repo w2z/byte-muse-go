@@ -1,16 +1,20 @@
 {
-  "version": "0.1.117",
-  "commit": "d8a9d18abd69dec6393e158f6b4ad0fccee08748",
-  "short_commit": "d8a9d18",
-  "built_at": "2026-10-09T08:03:06Z",
+  "version": "0.1.118",
+  "commit": "b8e2cc84f37f754fc0dadb65f3beb398341b4b4c",
+  "short_commit": "b8e2cc8",
+  "built_at": "2026-10-09T08:09:43Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.117",
-    "sha-d8a9d18",
+    "0.1.118",
+    "sha-b8e2cc8",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.118",
+      "message": "将升级步骤条改为横向等分排列"
+    },
     {
       "version": "0.1.117",
       "message": "修复筛选弹层背景并完善影片与下载器筛选"
