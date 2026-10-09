@@ -1,16 +1,20 @@
 {
-  "version": "0.1.121",
-  "commit": "958dbfdba3a31f9cb39a735ee5c8c2de539883a2",
-  "short_commit": "958dbfd",
-  "built_at": "2026-10-09T08:39:08Z",
+  "version": "0.1.122",
+  "commit": "5db9315be8226501d376b5570b6b8f57f1739eb7",
+  "short_commit": "5db9315",
+  "built_at": "2026-10-09T09:51:05Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.121",
-    "sha-958dbfd",
+    "0.1.122",
+    "sha-5db9315",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.122",
+      "message": "点击文件失败图标查看脱敏错误详情"
+    },
     {
       "version": "0.1.121",
       "message": "将进度弹窗设为视口六成并统一外层滚动"
