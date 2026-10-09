@@ -46,7 +46,7 @@ function menuIcon(key: string) {
   return <IconFile />;
 }
 
-/** 登录后的管理布局：顶栏通栏（logo + 主题/设置/退出），侧栏在顶栏下方，底部自带折叠按钮。 */
+/** 登录后的管理布局：桌面侧栏可折叠；手机端默认隐藏，由顶栏的单个按钮切换完整菜单。 */
 export function AppLayout() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -55,6 +55,21 @@ export function AppLayout() {
   const themeMode = useTheme((state) => state.mode);
   const toggleTheme = useTheme((state) => state.toggle);
   const [collapsed, setCollapsed] = useState(false);
+  const [isMobile, setIsMobile] = useState(() => window.matchMedia("(max-width: 760px)").matches);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const menuCollapsed = !isMobile && collapsed;
+  useLayoutEffect(() => {
+    const media = window.matchMedia("(max-width: 760px)");
+    const updateViewport = () => {
+      setIsMobile(media.matches);
+      setMobileMenuOpen(false);
+    };
+    media.addEventListener("change", updateViewport);
+    return () => media.removeEventListener("change", updateViewport);
+  }, []);
+  useLayoutEffect(() => {
+    setMobileMenuOpen(false);
+  }, [location.pathname]);
   const logout = useMutation({
     mutationFn: () => apiRequest<void>("/auth/logout", { method: "POST" }),
     onSettled: () => {
@@ -73,6 +88,7 @@ export function AppLayout() {
   const isDark = themeMode === "dark";
   const themeToggleLabel = isDark ? "切换为亮色模式" : "切换为暗色模式";
   const collapseLabel = collapsed ? "展开菜单" : "折叠菜单";
+  const mobileMenuLabel = mobileMenuOpen ? "关闭菜单" : "展开菜单";
   useLayoutEffect(() => {
     const handleUnauthorized = () => {
       clearSession();
@@ -87,10 +103,18 @@ export function AppLayout() {
     </Menu.Item>
   ));
   const goHome = () => navigate("/dashboard");
+  // 手机端点击当前菜单项也应收起，不能只依赖路由变化。
+  const navigateFromMenu = (key: string) => {
+    setMobileMenuOpen(false);
+    navigate(key);
+  };
   return (
-    <Layout className="app-shell">
+    <Layout className="app-shell" onKeyDown={(event) => { if (event.key === "Escape") setMobileMenuOpen(false); }}>
       <Layout.Header className="app-header">
-        <div className="brand-lockup" onClick={goHome} role="button" tabIndex={0} aria-label="返回看板" onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") goHome(); }}><span className="brand-mark">B<span>/</span>M</span><span className="brand-name">BYTEMUSE</span></div>
+        <div className="header-brand">
+          {isMobile && <Button className="icon-button" type="secondary" shape="circle" aria-label={mobileMenuLabel} aria-expanded={mobileMenuOpen} aria-controls="app-navigation" onClick={() => setMobileMenuOpen((open) => !open)}>{mobileMenuOpen ? <IconMenuFold /> : <IconMenuUnfold />}</Button>}
+          <div className="brand-lockup" onClick={goHome} role="button" tabIndex={0} aria-label="返回看板" onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") goHome(); }}><span className="brand-mark">B<span>/</span>M</span><span className="brand-name">BYTEMUSE</span></div>
+        </div>
         <div className="header-actions">
           <Tooltip content={themeToggleLabel}><Button className="icon-button" type="secondary" shape="circle" aria-label={themeToggleLabel} onClick={toggleTheme}>{isDark ? <IconSun /> : <IconMoon />}</Button></Tooltip>
           <Tooltip content="系统设置"><Button className="icon-button" type="secondary" shape="circle" aria-label="系统设置" onClick={() => navigate("/settings")}><IconSettings /></Button></Tooltip>
@@ -99,20 +123,20 @@ export function AppLayout() {
         </div>
       </Layout.Header>
       <Layout className="app-body">
-        <Layout.Sider className="app-sider" width={240} collapsedWidth={64} collapsed={collapsed} collapsible trigger={null} onCollapse={setCollapsed}>
-          <nav aria-label="主导航" className="side-nav">
-            {!collapsed && <p className="nav-caption">通用</p>}
-            <Menu collapse={collapsed} theme="light" selectedKeys={[selectedKey]} onClickMenuItem={(key) => navigate(key)}>{renderItems(contentItems)}</Menu>
-            {!collapsed && <p className="nav-caption system-caption">系统</p>}
-            <Menu collapse={collapsed} selectedKeys={[selectedKey]} onClickMenuItem={(key) => navigate(key)}>{renderItems(systemItems)}</Menu>
+        <Layout.Sider className={mobileMenuOpen ? "app-sider app-sider--mobile-open" : "app-sider"} width={240} collapsedWidth={64} collapsed={menuCollapsed} collapsible trigger={null} onCollapse={setCollapsed}>
+          <nav id="app-navigation" aria-label="主导航" className="side-nav">
+            {!menuCollapsed && <p className="nav-caption">通用</p>}
+            <Menu collapse={menuCollapsed} theme="light" selectedKeys={[selectedKey]} onClickMenuItem={navigateFromMenu}>{renderItems(contentItems)}</Menu>
+            {!menuCollapsed && <p className="nav-caption system-caption">系统</p>}
+            <Menu collapse={menuCollapsed} selectedKeys={[selectedKey]} onClickMenuItem={navigateFromMenu}>{renderItems(systemItems)}</Menu>
           </nav>
-          <div className="sider-bottom">
+          {!isMobile && <div className="sider-bottom">
             <Tooltip content={collapseLabel} position={collapsed ? "right" : "top"}>
               <button type="button" className="sider-collapse" aria-label={collapseLabel} aria-expanded={!collapsed} onClick={() => setCollapsed(!collapsed)}>
                 {collapsed ? <IconMenuUnfold /> : <IconMenuFold />}
               </button>
             </Tooltip>
-          </div>
+          </div>}
         </Layout.Sider>
         <Layout className="app-main">
           <Layout.Content className={contentClassName}>

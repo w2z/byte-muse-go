@@ -127,6 +127,7 @@ body button.arco-btn[class]:focus-visible { box-shadow: none; }
 .app-main { flex: 1 1 auto; width: 0; min-width: 0; min-height: 0; overflow: hidden; }
 /* 顶栏通栏：左 logo、右操作区，底部分隔线从最左贯通到最右。 */
 .app-header { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; height: 64px; padding: 0 28px; background: var(--panel); border-bottom: 1px solid var(--line); }
+.header-brand { display: flex; align-items: center; gap: 8px; height: 100%; }
 .header-actions { display: flex; align-items: center; gap: 8px; }
 .icon-button { color: var(--ink-2) !important; font-size: 16px !important; }
 /* 顶栏版本固定占位，按钮支持键盘操作；标签不设置可选中属性。 */
@@ -844,8 +845,12 @@ button.code-card-still-cell:hover img { opacity: .85; }
   .app-header { padding: 0 32px; }
 }
 @media (max-width: 760px) {
-  .app-sider { flex-basis: 0 !important; width: 0 !important; min-width: 0 !important; overflow: hidden; }
-  .app-header { height: 64px; padding: 0 19px; }
+  .app-body { position: relative; }
+  /* 移动菜单覆盖正文，不挤压内容；隐藏时同时退出键盘与辅助技术的导航范围。 */
+  .app-sider { position: absolute; z-index: 4; top: 0; left: 0; visibility: hidden; transform: translateX(-100%); }
+  .app-sider--mobile-open { visibility: visible; transform: translateX(0); box-shadow: 4px 0 12px rgb(0 0 0 / 12%); }
+  .app-header { height: 64px; padding: 0 12px; gap: 8px; }
+  .header-brand .brand-name { display: none; }
   .mobile-brand { display: block; }
   .app-content-scroll { padding: 16px 14px 24px; }
   .app-content--surface .page-container,
