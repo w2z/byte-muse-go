@@ -1,16 +1,20 @@
 {
-  "version": "0.1.143",
-  "commit": "5d4a2f8639c5df0bf7cfcfcc374778b5d0a260db",
-  "short_commit": "5d4a2f8",
-  "built_at": "2026-10-09T14:48:32Z",
+  "version": "0.1.144",
+  "commit": "730448186ce5cd95bdd000754ef3200b3a76587c",
+  "short_commit": "7304481",
+  "built_at": "2026-10-09T14:59:48Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.143",
-    "sha-5d4a2f8",
+    "0.1.144",
+    "sha-7304481",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.144",
+      "message": "添加资源站计数筛选和下载链接并保存自定义列宽"
+    },
     {
       "version": "0.1.143",
       "message": "去除视频扩展名并防止同名事件覆盖"
