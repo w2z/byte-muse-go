@@ -236,6 +236,9 @@ func (s *StrmService) downloadStrmMedia(ctx context.Context, root, target, kind 
 	if err := scanCheckpoint(ctx); err != nil {
 		return false, err
 	}
+	if err := s.recordManagedFileAt(ctx, file, filepath.Join(target, temporary), filepath.Join(target, relative)); err != nil {
+		return false, err
+	}
 	if err := dir.Rename(temporary, relative); err != nil {
 		return false, errors.New("保存媒体下载文件失败")
 	}

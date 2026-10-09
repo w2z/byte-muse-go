@@ -367,6 +367,7 @@ func (c *Commands) Serve(ctx context.Context) error {
 		return fmt.Errorf("create strm service: %w", err)
 	}
 	embyMediaService := application.NewEmbyMediaService(settingsValues(settingsService))
+	strmService.SetManagedFiles(database.NewStrmFileRepository(store.SQLDB(), database.Dialect(c.config.DatabaseDriver)), pan115Service.EventAccountID)
 	defer embyMediaService.Close()
 	if err := embyMediaService.Restore(ctx, database.NewScanTaskRepository(store.SQLDB(), database.Dialect(c.config.DatabaseDriver))); err != nil {
 		return fmt.Errorf("restore media refresh: %w", err)

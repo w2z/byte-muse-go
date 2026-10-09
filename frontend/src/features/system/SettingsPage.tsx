@@ -588,7 +588,7 @@ const groups: SettingGroup[] = [
         key: "PAN115_EVENT_ENABLE",
         label: "115事件监听",
         kind: "bool",
-        description: "保存后每 30 秒检查 115 文件变更，按上方映射目录、媒体格式、大小及排除规则生成或更新 STRM。未填写 Cookie 时不可开启，清空 Cookie 会自动关闭。",
+        description: "保存后每 30 秒检查 115 文件变更，按映射规则生成 STRM；删除事件核验后仅清理程序登记且未被修改的 STRM 和已下载附件，历史未知文件保留。未填写 Cookie 时不可开启，清空 Cookie 会自动关闭。",
       },
       {
         key: strmEmbyRefreshKey,

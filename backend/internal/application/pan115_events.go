@@ -50,7 +50,7 @@ type pan115EventCursor struct {
 }
 
 // Pan115EventService 合并生活事件触发 STRM 更新，串行执行并持久化成功游标。
-// 只增加或更新本地文件，不删除源文件或旧 STRM；失败批次可安全重试。
+// 生成复用映射规则；删除只清理已登记且核验通过的本地文件，不更改网盘。
 type Pan115EventService struct {
 	source     pan115LifeSource
 	strm       *StrmService
@@ -149,6 +149,7 @@ func (s *Pan115EventService) Poll(ctx context.Context) error {
 	}
 	next := cursor
 	dirty := false
+	var changes []pan115.LifeEvent
 	reached := false
 	previousID := int64(0)
 	for offset := 0; offset < 10000; {
@@ -182,8 +183,9 @@ func (s *Pan115EventService) Poll(ctx context.Context) error {
 				break
 			}
 			switch event.Type {
-			case 1, 2, 5, 6, 14, 17, 18, 20, 23, 24:
+			case 1, 2, 5, 6, 14, 17, 18, 20, 22, 23, 24:
 				dirty = true
+				changes = append(changes, event)
 			}
 		}
 		offset += len(page.Events)
@@ -201,11 +203,12 @@ func (s *Pan115EventService) Poll(ctx context.Context) error {
 		logging.Default.Error(logging.CategoryPan115Event, "115 事件超出历史窗口，执行映射补偿扫描")
 	}
 	if dirty {
-		result, err := s.strm.scanPan115EventMappings(ctx, active, base, values)
+		ctx = context.WithValue(ctx, managedAccountKey{}, userID)
+		result, err := s.strm.syncPan115Events(ctx, active, base, values, changes, !reached)
 		if err != nil {
 			return err
 		}
-		logging.Default.Info(logging.CategoryPan115Event, "115 事件已同步 STRM", "files", result.Files, "created", result.Created)
+		logging.Default.Info(logging.CategoryPan115Event, "115 事件已同步 STRM", "files", result.Files, "created", result.Created, "deleted", result.Deleted, "downloaded", result.Downloaded)
 	}
 	if err := ctx.Err(); err != nil {
 		return err
@@ -224,6 +227,11 @@ func (s *Pan115EventService) Poll(ctx context.Context) error {
 func (s *StrmService) scanPan115EventMappings(ctx context.Context, mappings []domain.StrmMapping, base string, values map[string]string) (domain.StrmScanResult, error) {
 	s.scanMu.Lock()
 	defer s.scanMu.Unlock()
+	return s.scanPan115EventMappingsLocked(ctx, mappings, base, values)
+}
+
+// scanPan115EventMappingsLocked 由持有扫描锁的事件消费者调用，只补生成、不推断删除。
+func (s *StrmService) scanPan115EventMappingsLocked(ctx context.Context, mappings []domain.StrmMapping, base string, values map[string]string) (domain.StrmScanResult, error) {
 	result := domain.StrmScanResult{}
 	downloadFormats, err := strmDownloadFormats(values)
 	if err != nil {

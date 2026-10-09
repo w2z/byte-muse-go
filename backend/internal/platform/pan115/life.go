@@ -10,11 +10,13 @@ import (
 	"strings"
 )
 
-// LifeEvent 是生活事件的稳定标识；数字使用 int64，避免大 ID 经浮点转换丢失精度。
+// LifeEvent 保留事件、文件和父目录标识；数字不经浮点转换，缺少文件标识时禁止删除。
 type LifeEvent struct {
 	ID        int64
 	Type      int
 	UpdatedAt int64
+	FileID    string
+	ParentID  string
 }
 
 // LifePage 是按事件 ID 倒序返回的生活事件页；Web 接口最多提供最近一万条。
@@ -94,6 +96,8 @@ func (c *Client) lifeEventsOnce(ctx context.Context, cookie string, offset, limi
 				ID        json.Number `json:"id"`
 				Type      json.Number `json:"type"`
 				UpdatedAt json.Number `json:"update_time"`
+				FileID    json.Number `json:"file_id"`
+				ParentID  json.Number `json:"parent_id"`
 			} `json:"list"`
 		} `json:"data"`
 	}
@@ -118,7 +122,7 @@ func (c *Client) lifeEventsOnce(ctx context.Context, cookie string, offset, limi
 		if idErr != nil || typeErr != nil || timeErr != nil || id <= 0 || timestamp <= 0 {
 			return LifePage{}, fmt.Errorf("115 事件字段无效")
 		}
-		page.Events = append(page.Events, LifeEvent{ID: id, Type: int(kind), UpdatedAt: timestamp})
+		page.Events = append(page.Events, LifeEvent{ID: id, Type: int(kind), UpdatedAt: timestamp, FileID: item.FileID.String(), ParentID: item.ParentID.String()})
 	}
 	return page, nil
 }

@@ -42,7 +42,17 @@ func MigrationPlan(dialect Dialect) []Migration {
 	default:
 		return nil
 	}
-	return append(plan, settingsMigration(dialect), activeSubscriptionMigration(dialect), defaultSettingsMigration(dialect), systemLogsMigration(dialect), logRetentionSettingMigration(dialect), cleanupCanceledSubscriptionsMigration(dialect), catalogQueryIndexesMigration(dialect), downloaderAndBypassSettingsMigration(dialect), collectionMigration(dialect), collectionQueueMigration(dialect), mediaTypeMigration(dialect), subscriptionDownloadMigration(dialect), downloadTransferMigration(dialect), ptSiteSettingsMigration(dialect), siteAuthSettingsMigration(dialect), tagSubscriptionMigration(dialect), bypassProxySettingMigration(dialect), actorSubscriptionMigration(dialect), translationModelSettingsMigration(dialect), notificationSettingsMigration(dialect), tagAliasMigration(dialect), pan115AccountMigration(dialect), pan115ScanPathsSettingMigration(dialect), strmSettingsMigration(dialect), downloadOriginMigration(dialect), dropUnusedJavdbHostSettingMigration(dialect), actorAliasesMigration(dialect), dropUnusedPhotoCacheSettingMigration(dialect), strmRootSettingMigration(dialect), subscriptionScanMigration(dialect), pan115CookieSettingMigration(dialect), scanTasksMigration(dialect), strmDownloadSettingsMigration(dialect), strmEmbyMediaSettingsMigration(dialect), cloudUploadMigration(dialect), taskCheckpointsMigration(dialect), downloadURLMigration(dialect))
+	return append(plan, settingsMigration(dialect), activeSubscriptionMigration(dialect), defaultSettingsMigration(dialect), systemLogsMigration(dialect), logRetentionSettingMigration(dialect), cleanupCanceledSubscriptionsMigration(dialect), catalogQueryIndexesMigration(dialect), downloaderAndBypassSettingsMigration(dialect), collectionMigration(dialect), collectionQueueMigration(dialect), mediaTypeMigration(dialect), subscriptionDownloadMigration(dialect), downloadTransferMigration(dialect), ptSiteSettingsMigration(dialect), siteAuthSettingsMigration(dialect), tagSubscriptionMigration(dialect), bypassProxySettingMigration(dialect), actorSubscriptionMigration(dialect), translationModelSettingsMigration(dialect), notificationSettingsMigration(dialect), tagAliasMigration(dialect), pan115AccountMigration(dialect), pan115ScanPathsSettingMigration(dialect), strmSettingsMigration(dialect), downloadOriginMigration(dialect), dropUnusedJavdbHostSettingMigration(dialect), actorAliasesMigration(dialect), dropUnusedPhotoCacheSettingMigration(dialect), strmRootSettingMigration(dialect), subscriptionScanMigration(dialect), pan115CookieSettingMigration(dialect), scanTasksMigration(dialect), strmDownloadSettingsMigration(dialect), strmEmbyMediaSettingsMigration(dialect), cloudUploadMigration(dialect), taskCheckpointsMigration(dialect), downloadURLMigration(dialect), strmFilesMigration(dialect))
+}
+
+// strmFilesMigration 新增受管文件归属，不回填历史文件；回退保留表即可。
+// 所有字段非空且无默认值：file_key 为本地路径摘要主键，scope 为账号与映射摘要，
+// file_id/parent_id 为网盘标识，ancestors 为祖先 ID JSON，relative_path 为根内相对路径，sha256 为写入内容摘要。
+func strmFilesMigration(dialect Dialect) Migration {
+	return Migration{Version: 42, Name: "strm_files", Statements: []string{
+		"CREATE TABLE strm_files (file_key VARCHAR(64) PRIMARY KEY, scope VARCHAR(64) NOT NULL, file_id VARCHAR(32) NOT NULL, parent_id VARCHAR(32) NOT NULL, ancestors TEXT NOT NULL, relative_path TEXT NOT NULL, sha256 VARCHAR(64) NOT NULL)",
+		"CREATE INDEX idx_strm_files_scope ON strm_files(scope)",
+	}}
 }
 
 // downloadURLMigration 保存提交前实际使用的下载链接快照，TEXT 可空、默认 NULL。

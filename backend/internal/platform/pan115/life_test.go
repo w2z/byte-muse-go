@@ -22,6 +22,9 @@ func TestLifeEventsProtocol(t *testing.T) {
 	if err != nil || page.Total != 65 || len(page.Events) != 1 || page.Events[0].ID != 9007199254740993 || page.Events[0].Type != 2 {
 		t.Fatalf("page=%+v err=%v", page, err)
 	}
+	if page.Events[0].FileID != "42" || page.Events[0].ParentID != "3" {
+		t.Fatalf("lost event file identity: %+v", page.Events[0])
+	}
 }
 
 func TestLifeEventsRejectInvalidResponse(t *testing.T) {

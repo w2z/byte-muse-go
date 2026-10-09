@@ -21,6 +21,7 @@ import (
 	"bytemuse/backend/internal/logging"
 	"bytemuse/backend/internal/platform/clouddrive"
 	"bytemuse/backend/internal/platform/pan115"
+	"bytemuse/backend/internal/ports"
 )
 
 var (
@@ -66,6 +67,8 @@ type strmCloudDriveAPI interface {
 // strmSourceFile 是待写入 strm 的一个网盘文件。
 // Directory 是从映射根目录到该文件所在目录的相对路径（以 / 分隔，根目录为空串）。
 type strmSourceFile struct {
+	ParentID  string
+	Ancestors []string
 	ID        string
 	PickCode  string
 	Name      string
@@ -151,6 +154,8 @@ type StrmService struct {
 	settings         func(context.Context) (map[string]string, error)
 	http             *http.Client
 	embyMediaEnqueue func(context.Context)
+	managedFiles     ports.StrmFileRepository
+	managedAccount   func(context.Context) (string, error)
 }
 
 // NewStrmService 组装固定使用 /strm 根目录的 strm 服务。
@@ -484,6 +489,11 @@ func strmMappingFailure(mapping domain.StrmMapping, err error) domain.StrmScanMa
 // 遍历中断（限流、网络失败或取消）只影响尚未扫描到的文件，已写入的 strm 保留，中断原因写入 message。
 func (s *StrmService) scanMapping(ctx context.Context, root string, mapping domain.StrmMapping, base string, mode domain.StrmGenerateMode, walk strmWalk, advance func(), downloadFormats []string) domain.StrmScanMapping {
 	entry := domain.StrmScanMapping{Kind: mapping.Kind, Path: mapping.Path, LocalPath: mapping.LocalPath}
+	ctx, trackingErr := s.managedContext(ctx, mapping, downloadFormats)
+	if trackingErr != nil {
+		entry.Message = trackingErr.Error()
+		return entry
+	}
 	target, _, err := resolveStrmPath(root, mapping.LocalPath)
 	cleanupKey := journalKey("cleanup", mapping.Kind, mapping.ID, mapping.LocalPath)
 	var cleaned bool
@@ -572,7 +582,7 @@ func (s *StrmService) scanMapping(ctx context.Context, root string, mapping doma
 				return completeTaskUnit(ctx, "strm-file", target, file.Directory, file.ID)
 			}
 		}
-		created, changed, writeErr := writeStrmFile(absolute, strmPlayURL(base, mapping.Kind, identifier)+"\n")
+		created, changed, writeErr := s.writeManagedStrm(ctx, file, absolute, strmPlayURL(base, mapping.Kind, identifier)+"\n")
 		switch {
 		case writeErr != nil:
 			entry.Failed++
@@ -611,8 +621,11 @@ type pan115FileAPI interface {
 // 每页固定读取 pan115FilePageLimit 条并按 HasMore 翻页，传给 visit 的 Directory 是相对扫描根目录的路径。
 // 生成 strm 与扫描入库共用这一份递归实现，避免两条链路的分页与格式过滤规则漂移。
 func walkPan115Files(ctx context.Context, api pan115FileAPI, rootID string, filter strmFileFilter, visit strmFileVisit) error {
+	var ancestors []string
 	var walk func(directoryID, relative string) error
 	walk = func(directoryID, relative string) error {
+		ancestors = append(ancestors, directoryID)
+		defer func() { ancestors = ancestors[:len(ancestors)-1] }()
 		for offset := 0; ; {
 			if err := scanCheckpoint(ctx); err != nil {
 				return err
@@ -652,7 +665,7 @@ func walkPan115Files(ctx context.Context, api pan115FileAPI, rootID string, filt
 				if !isStrmMedia(file.Name, filter.downloadFormats) {
 					reportScanDiscovery(ctx)
 				}
-				if err := visit(strmSourceFile{ID: file.ID, PickCode: file.PickCode, Name: file.Name, Directory: relative}); err != nil {
+				if err := visit(strmSourceFile{ID: file.ID, PickCode: file.PickCode, Name: file.Name, Directory: relative, ParentID: directoryID, Ancestors: append([]string(nil), ancestors...)}); err != nil {
 					return err
 				}
 			}
