@@ -13,11 +13,64 @@ import (
 	"time"
 )
 
+// DownloadSourceSite is one stored source category and its unfiltered task count.
+// Value is case-normalized; the empty value groups missing sources.
+type DownloadSourceSite struct {
+	Value string `json:"value"`
+	Label string `json:"label"`
+	Count int    `json:"count"`
+}
+
+// downloadSourceSiteValue shares normalization between category aggregation and filtering.
+func downloadSourceSiteValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSpace(*value))
+}
+
+// SourceSites lists every stored category, independent of pagination and active filters.
+// It reads persisted tasks only and never contacts a downloader or changes historical data.
+func (s *DownloadService) SourceSites(ctx context.Context) ([]DownloadSourceSite, error) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	page, err := s.repository.List(ctx, ports.DownloadListQuery{All: true})
+	if err != nil {
+		return nil, err
+	}
+	groups := map[string]DownloadSourceSite{}
+	for _, task := range page.Items {
+		value := downloadSourceSiteValue(task.SourceSite)
+		label := "未识别"
+		if value != "" {
+			label = strings.TrimSpace(*task.SourceSite)
+		}
+		group := groups[value]
+		if group.Count == 0 || label < group.Label {
+			group.Label = label
+		}
+		group.Value = value
+		group.Count++
+		groups[value] = group
+	}
+	items := make([]DownloadSourceSite, 0, len(groups))
+	for _, group := range groups {
+		items = append(items, group)
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].Value == "" || items[j].Value == "" {
+			return items[j].Value == "" && items[i].Value != ""
+		}
+		return items[i].Value < items[j].Value
+	})
+	return items, nil
+}
+
 // downloadColumnKinds is the authoritative allowlist for public table queries.
 var downloadColumnKinds = map[string]string{
-	"code": "text", "source_site": "text", "downloader": "enum", "transfer_status": "enum",
+	"code": "text", "source_site": "site", "downloader": "enum", "transfer_status": "enum",
 	"size_bytes": "number", "remaining_bytes": "number", "downloaded_bytes": "number", "download_speed": "number", "upload_speed": "number",
-	"save_path": "text", "share_ratio": "number", "seeding_seconds": "number", "seeding": "enum", "added_at": "time", "completed_at": "time", "error_message": "text",
+	"download_url": "text", "save_path": "text", "share_ratio": "number", "seeding_seconds": "number", "seeding": "enum", "added_at": "time", "completed_at": "time", "error_message": "text",
 }
 
 // validateDownloadColumns rejects unknown columns, invalid bounds and unsupported enum values.
@@ -27,11 +80,18 @@ func validateDownloadColumns(q ports.DownloadListQuery) error {
 	}
 	for key, values := range q.ColumnFilters {
 		kind := downloadColumnKinds[key]
-		if kind == "" || len(values) == 0 || len(values) > 16 {
+		if kind == "" || len(values) == 0 || kind != "site" && len(values) > 16 {
 			return ErrInvalidDownloadFilter
 		}
 		if kind == "text" && (len(values) != 1 || len(values[0]) > 512) {
 			return ErrInvalidDownloadFilter
+		}
+		if kind == "site" {
+			for _, value := range values {
+				if len(value) > 512 {
+					return ErrInvalidDownloadFilter
+				}
+			}
 		}
 		if kind == "enum" {
 			allowed := []string{"queued", "searching", "submitted", "downloading", "stalled", "checking", "metadata", "moving", "unknown", "paused", "stopped", "failed", "completed"}
@@ -185,9 +245,12 @@ func downloadValue(t domain.DownloadTask, key string) downloadColumnValue {
 	case "code":
 		return text(t.Code)
 	case "source_site":
-		return text(t.SourceSite)
+		value := downloadSourceSiteValue(t.SourceSite)
+		return downloadColumnValue{text: value, valid: value != ""}
 	case "downloader":
 		return text(t.Downloader)
+	case "download_url":
+		return text(t.DownloadURL)
 	case "error_message":
 		return text(t.ErrorMessage)
 	case "transfer_status":
@@ -238,6 +301,13 @@ func filterDownloadColumns(items []domain.DownloadTask, q ports.DownloadListQuer
 		for key, values := range q.ColumnFilters {
 			v := downloadValue(task, key)
 			kind := downloadColumnKinds[key]
+			if kind == "site" {
+				match = slices.ContainsFunc(values, func(value string) bool { return downloadSourceSiteValue(&value) == v.text })
+				if !match {
+					break
+				}
+				continue
+			}
 			if !v.valid {
 				match = false
 				break

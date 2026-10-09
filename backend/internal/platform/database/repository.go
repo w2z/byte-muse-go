@@ -687,7 +687,7 @@ func subscriptionColumns() string {
 }
 
 func downloadColumns() string {
-	return "id, media_id, status, external_id, error_message, created_at, updated_at, source_site, source_kind, downloader, info_hash, transfer_status, added_at, completed_at, (SELECT code FROM media WHERE media.id=download_tasks.media_id)"
+	return "id, media_id, status, external_id, error_message, created_at, updated_at, source_site, source_kind, downloader, info_hash, transfer_status, added_at, completed_at, (SELECT code FROM media WHERE media.id=download_tasks.media_id), download_url"
 }
 
 type rowScanner interface{ Scan(dest ...any) error }
@@ -881,7 +881,7 @@ func scanDownloadRows(rows *sql.Rows) ([]domain.DownloadTask, error) {
 		var item domain.DownloadTask
 		var externalID, errorMessage, sourceSite, sourceKind, downloader, infoHash, transferStatus, addedAt, completedAt any
 		var createdAt, updatedAt any
-		if err := rows.Scan(&item.ID, &item.MediaID, &item.Status, &externalID, &errorMessage, &createdAt, &updatedAt, &sourceSite, &sourceKind, &downloader, &infoHash, &transferStatus, &addedAt, &completedAt, &item.Code); err != nil {
+		if err := rows.Scan(&item.ID, &item.MediaID, &item.Status, &externalID, &errorMessage, &createdAt, &updatedAt, &sourceSite, &sourceKind, &downloader, &infoHash, &transferStatus, &addedAt, &completedAt, &item.Code, &item.DownloadURL); err != nil {
 			return nil, err
 		}
 		item.ExternalID, _ = valueToStringPtr(externalID)

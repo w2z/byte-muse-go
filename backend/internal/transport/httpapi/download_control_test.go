@@ -116,11 +116,34 @@ func TestDownloadControlHTTP(t *testing.T) {
 		exec("INSERT INTO download_tasks(id,media_id,subscription_id,status,transfer_status,downloader,info_hash,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)", "d1", "m1", "s1", status, transfer, "qbittorrent", hash, now, now)
 	}
 	insert("submitted", "downloading")
+	exec("UPDATE download_tasks SET download_url=? WHERE id=?", "https://example.test/download?id=123", "d1")
+	if w := request("GET", "/downloads/source-sites", false); w.Code != 401 {
+		t.Fatal("source categories missing auth guard")
+	}
+	w := request("GET", "/downloads/source-sites?page_size=1&transfer_status=failed", true)
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"value":"","label":"未识别","count":1`) {
+		t.Fatalf("source categories=%d %s", w.Code, w.Body.String())
+	}
+	for _, name := range []string{"Site A", "site a", "Site AB"} {
+		exec("INSERT INTO download_tasks(id,media_id,status,source_site,created_at,updated_at) VALUES(?,?,?,?,?,?)", name, "m1", "failed", name, now, now)
+	}
+	w = request("GET", "/downloads/source-sites?page_size=1", true)
+	var categories struct {
+		Items []application.DownloadSourceSite `json:"items"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &categories); err != nil || w.Code != 200 || len(categories.Items) != 3 || categories.Items[0].Count != 2 {
+		t.Fatalf("source categories=%d %s err=%v", w.Code, w.Body.String(), err)
+	}
+	w = request("GET", "/downloads?column_filters="+url.QueryEscape(`{"source_site":["SITE A",""]}`)+"&page_size=1", true)
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"total":3`) {
+		t.Fatalf("exact source filter=%d %s", w.Code, w.Body.String())
+	}
+	exec("DELETE FROM download_tasks WHERE id IN (?,?,?)", "Site A", "site a", "Site AB")
 	if w := request("POST", "/downloads/d1/stop", false); w.Code != 401 {
 		t.Fatal("missing auth guard")
 	}
-	w := request("GET", "/downloads", true)
-	if w.Code != 200 || !strings.Contains(w.Body.String(), `"code":"TEST-001"`) || !strings.Contains(w.Body.String(), `"stop"`) || strings.Contains(w.Body.String(), `"pause"`) {
+	w = request("GET", "/downloads", true)
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"download_url":"https://example.test/download?id=123"`) || !strings.Contains(w.Body.String(), `"code":"TEST-001"`) || !strings.Contains(w.Body.String(), `"stop"`) || strings.Contains(w.Body.String(), `"pause"`) {
 		t.Fatalf("list=%s", w.Body.String())
 	}
 	for _, status := range []string{"queued", "stalled", "checking", "metadata", "moving", "unknown"} {
@@ -138,6 +161,7 @@ func TestDownloadControlHTTP(t *testing.T) {
 	}
 	assertStatus("GET", "/downloads?transfer_status=invalid", 400)
 	assertStatus("GET", "/downloads?sort_by=code&sort_order=desc", 200)
+	assertStatus("GET", "/downloads?sort_by=download_url&sort_order=asc&column_filters="+url.QueryEscape(`{"download_url":["example.test"]}`), 200)
 	assertStatus("GET", "/downloads?sort_by=invalid", 400)
 	assertStatus("GET", "/downloads?column_filters="+url.QueryEscape(`{"source_site":["missing"]}`), 200)
 	w = request("GET", "/downloads?column_filters="+url.QueryEscape(`{"source_site":["missing"]}`), true)

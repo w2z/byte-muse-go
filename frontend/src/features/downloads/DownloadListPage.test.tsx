@@ -11,17 +11,46 @@ Object.defineProperty(window, "matchMedia", { writable: true, value: (query: str
 const requests: string[] = [];
 let responseItems: Record<string, unknown>[] = [];
 let detailError = false;
+let siteError = false;
+let siteItems = [{ value: "site", label: "Site", count: 27 }, { value: "", label: "未识别", count: 3 }];
 // 只替换网络请求：封面地址拼接沿用真实实现，抽屉里的封面才会走缓存入口。
 vi.mock("../../shared/api/client", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../shared/api/client")>()),
   apiRequest: (path: string) => {
     requests.push(path);
+    if (path === "/downloads/source-sites") return siteError ? Promise.reject(new Error("资源站加载失败")) : Promise.resolve({ items: siteItems });
     if (path.startsWith("/media/")) return detailError ? Promise.reject(new Error("影片加载失败")) : Promise.resolve({ id: "m1", code: "TEST-001", title: "影片详情标题", release_date: "2026-09-28", subscription_status: "active", display_status: "subscribed", preview_url: "https://example.test/trailer.mp4" });
     if (path === "/system/settings") return Promise.resolve({ values: { IMAGE_MODE: "INVISIBLE" } });
     return Promise.resolve({ items: responseItems, total: responseItems.length, page: 1, page_size: 15 });
   },
 }));
-afterEach(() => { cleanup(); requests.length = 0; responseItems = []; detailError = false; });
+afterEach(() => { cleanup(); localStorage.clear(); requests.length = 0; responseItems = []; detailError = false; siteError = false; siteItems = [{ value: "site", label: "Site", count: 27 }, { value: "", label: "未识别", count: 3 }]; });
+
+test("下载链接展示原值和缺失占位，移除错误列，所有列宽可调整并跨访问保存", async () => {
+  responseItems = [{ id: "url", code: "URL-1", download_url: "https://example.test/download?id=123", status: "failed" }, { id: "empty", download_url: null, status: "failed" }];
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const page = render(<QueryClientProvider client={client}><DownloadListPage /></QueryClientProvider>);
+  expect(await screen.findByText("https://example.test/download?id=123")).not.toBeNull();
+  expect(screen.getByRole("cell", { name: "-" })).not.toBeNull();
+  expect(screen.queryByRole("columnheader", { name: /^错误/ })).toBeNull();
+  expect(screen.getAllByRole("separator", { name: /列宽$/ })).toHaveLength(17);
+  const width = screen.getByRole("separator", { name: "完成做种（PT）列宽" });
+  expect(width.getAttribute("aria-valuenow")).toBe("190");
+  fireEvent.keyDown(width, { key: "ArrowRight" });
+  expect(width.getAttribute("aria-valuenow")).toBe("200");
+  expect(JSON.parse(localStorage.getItem("bytemuse.downloads.column-widths.v1")!).seeding).toBe(200);
+  page.unmount();
+  render(<QueryClientProvider client={client}><DownloadListPage /></QueryClientProvider>);
+  expect(screen.getByRole("separator", { name: "完成做种（PT）列宽" }).getAttribute("aria-valuenow")).toBe("200");
+});
+
+test("列宽存储损坏或越界时恢复默认，忽略旧字段", () => {
+  localStorage.setItem("bytemuse.downloads.column-widths.v1", JSON.stringify({ code: -1, seeding: 99999, error_message: 100 }));
+  const client = new QueryClient();
+  render(<QueryClientProvider client={client}><DownloadListPage /></QueryClientProvider>);
+  expect(screen.getByRole("separator", { name: "影片列宽" }).getAttribute("aria-valuenow")).toBe("150");
+  expect(screen.getByRole("separator", { name: "完成做种（PT）列宽" }).getAttribute("aria-valuenow")).toBe("190");
+});
 
 test("表头日期快捷范围使用 RFC3339，确认前不提交", async () => {
   const apply = vi.fn();
@@ -55,8 +84,10 @@ test("表头筛选组合与清除保留其他列，全部数据列可远程排�
   expect(screen.getByLabelText("影片筛选")).not.toBeNull();
   expect(container.querySelectorAll(".arco-table-sorter")).toHaveLength(16);
   fireEvent.click(screen.getByLabelText("资源站筛选"));
-  fireEvent.change(screen.getByLabelText("资源站关键词"), { target: { value: "site" } });
-  expect(requests).toHaveLength(1);
+  fireEvent.click(await screen.findByRole("checkbox", { name: "Site" }));
+  expect(screen.queryByLabelText("资源站关键词")).toBeNull();
+  expect(screen.getByLabelText("Site任务数").textContent).toBe("27");
+  expect(requests.filter((path) => path.startsWith("/downloads?"))).toHaveLength(1);
   fireEvent.click(screen.getByRole("button", { name: "确定" }));
   await waitFor(() => expect(screen.queryByLabelText("资源站筛选条件")).toBeNull());
   await waitFor(() => expect(decodeURIComponent(requests.at(-1)!)).toContain("source_site"));
@@ -73,6 +104,37 @@ test("表头筛选组合与清除保留其他列，全部数据列可远程排�
   expect(decodeURIComponent(requests.at(-1)!)).toContain("source_site");
   fireEvent.click(container.querySelector(".arco-table-sorter .arco-table-sorter-icon")!);
   await waitFor(() => expect(requests.at(-1)).toContain("sort_by=code"));
+});
+
+test("资源站保留所有分类和数量，未识别可单独筛选，多选取并集", async () => {
+  siteItems = [...siteItems, ...Array.from({ length: 20 }, (_, i) => ({ value: `extra-${i}`, label: `站点 ${i}`, count: i + 1 }))];
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(<QueryClientProvider client={client}><DownloadListPage /></QueryClientProvider>);
+  fireEvent.click(screen.getByLabelText("资源站筛选"));
+  fireEvent.click(await screen.findByRole("checkbox", { name: "未识别" }));
+  expect(screen.getAllByRole("checkbox")).toHaveLength(22);
+  expect(screen.getByLabelText("站点 19任务数").textContent).toBe("20");
+  fireEvent.click(screen.getByRole("button", { name: "确定" }));
+  await waitFor(() => expect(decodeURIComponent(requests.at(-1)!)).toContain(`"source_site":[""]`));
+  fireEvent.click(screen.getByLabelText("资源站筛选"));
+  fireEvent.click(await screen.findByRole("checkbox", { name: "Site" }));
+  fireEvent.click(screen.getByRole("button", { name: "确定" }));
+  await waitFor(() => expect(decodeURIComponent(requests.at(-1)!)).toContain(`"source_site":["","site"]`));
+  fireEvent.click(screen.getByLabelText("资源站筛选"));
+  fireEvent.click(screen.getByRole("button", { name: "清除" }));
+  await waitFor(() => expect(requests.filter((path) => path.startsWith("/downloads?")).at(-1)).not.toContain("column_filters"));
+});
+
+test("资源站加载失败显示重试，成功空数组显示空选项", async () => {
+  siteError = true;
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(<QueryClientProvider client={client}><DownloadListPage /></QueryClientProvider>);
+  fireEvent.click(screen.getByLabelText("资源站筛选"));
+  expect(await screen.findByText("资源站加载失败")).not.toBeNull();
+  expect((screen.getByRole("button", { name: "确定" }) as HTMLButtonElement).disabled).toBe(true);
+  siteError = false; siteItems = [];
+  fireEvent.click(screen.getByRole("button", { name: "重试" }));
+  expect(await screen.findByText("暂无可选项")).not.toBeNull();
 });
 
 test("影片输入与下载器多选组合提交，清除影片保留下载器", async () => {

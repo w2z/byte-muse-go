@@ -3,7 +3,7 @@ import { IconClose, IconDown, IconFilter } from "@arco-design/web-react/icon";
 import { DownloadColumnFilter, type DownloadFilterKind } from "./DownloadColumnFilter";
 import dayjs from "dayjs";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useRef, useState, type ThHTMLAttributes } from "react";
 import { apiRequest, type Page } from "../../shared/api/client";
 import type { DownloadAction, DownloadTask, Media } from "../../shared/api/types";
 import { CodeCard } from "../../shared/ui/CodeCard";
@@ -36,6 +36,42 @@ const downloaderOptions = [
   { value: "aria2", label: "aria2" }, { value: "thunder", label: "迅雷" },
   { value: "pan115", label: "115 网盘" }, { value: "clouddrive2", label: "CloudDrive2" },
 ];
+
+const columnWidthStorageKey = "bytemuse.downloads.column-widths.v1";
+const defaultColumnWidths: Record<string, number> = {
+  code: 150, source_site: 150, downloader: 150, transfer_status: 150, size_bytes: 110, remaining_bytes: 110, downloaded_bytes: 110,
+  download_speed: 120, upload_speed: 120, download_url: 280, save_path: 220, share_ratio: 130, seeding_seconds: 140, seeding: 190,
+  added_at: 180, completed_at: 180, actions: 200,
+};
+
+/** 只恢复已知列的有效宽度；存储不可用或内容损坏时使用默认布局。 */
+function readColumnWidths(): Record<string, number> {
+  const widths = { ...defaultColumnWidths };
+  try {
+    const saved: unknown = JSON.parse(localStorage.getItem(columnWidthStorageKey) ?? "{}");
+    if (saved && typeof saved === "object") for (const [field, width] of Object.entries(saved)) {
+      if (Object.hasOwn(widths, field) && typeof width === "number" && Number.isFinite(width) && width >= 80 && width <= 1200) widths[field] = width;
+    }
+  } catch { /* 浏览器禁用存储时仍可调整本次页面宽度。 */ }
+  return widths;
+}
+
+/** 使用 Arco 表头扩展点调整列宽；拖动不触发排序，结束后保存，方向键每次微调10px。 */
+function ResizableDownloadHeader({ children, resizeWidth, resizeLabel, onResizeWidth, ...props }: ThHTMLAttributes<HTMLTableCellElement> & {
+  resizeWidth?: number; resizeLabel?: string; onResizeWidth?: (width: number, persist: boolean) => void;
+}) {
+  const drag = useRef<{ x: number; width: number; current: number } | null>(null);
+  return <th {...props} style={{ ...props.style, position: props.style?.position ?? (props.style?.left != null || props.style?.right != null ? "sticky" : "relative") }}>{children}
+    {resizeWidth != null && <span className="download-column-resizer" role="separator" tabIndex={0} aria-orientation="vertical"
+      aria-label={resizeLabel + "列宽"} aria-valuenow={resizeWidth} aria-valuemin={80} aria-valuemax={1200}
+      onClick={(event) => event.stopPropagation()}
+      onPointerDown={(event) => { if (event.button !== 0) return; event.preventDefault(); event.stopPropagation(); drag.current = { x: event.clientX, width: resizeWidth, current: resizeWidth }; event.currentTarget.setPointerCapture(event.pointerId); }}
+      onPointerMove={(event) => { if (!drag.current) return; const width = Math.round(Math.min(1200, Math.max(80, drag.current.width + event.clientX - drag.current.x))); drag.current.current = width; onResizeWidth?.(width, false); }}
+      onLostPointerCapture={() => { if (drag.current) { onResizeWidth?.(drag.current.current, true); drag.current = null; } }}
+      onKeyDown={(event) => { if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return; event.preventDefault(); event.stopPropagation(); onResizeWidth?.(Math.min(1200, Math.max(80, resizeWidth + (event.key === "ArrowRight" ? 10 : -10))), true); }} />}
+  </th>;
+}
+const downloadTableComponents = { header: { th: ResizableDownloadHeader } };
 
 /** 字节数按 1024 自动换算，速度追加 /s；未知值保留占位，零不视为缺失。 */
 function formatBytes(value: number | null | undefined, speed = false): string {
@@ -133,6 +169,14 @@ function DownloadMediaDrawer({ mediaId, onClose }: { mediaId: string | null; onC
  * 数据来源 GET /downloads。
  */
 export function DownloadListPage() {
+  const [columnWidths, setColumnWidths] = useState(readColumnWidths);
+  const columnWidthsRef = useRef(columnWidths);
+  /** 拖动期间立即更新，结束时才写入本地，避免每次刷新列表重置。 */
+  function resizeColumn(field: string, width: number, persist: boolean) {
+    const next = { ...columnWidthsRef.current, [field]: width };
+    columnWidthsRef.current = next; setColumnWidths(next);
+    if (persist) try { localStorage.setItem(columnWidthStorageKey, JSON.stringify(next)); } catch { /* 本地存储不可用时保留当前会话布局。 */ }
+  }
   const queryClient = useQueryClient();
   const [selectedMediaId, setSelectedMediaId] = useState<string | null>(null);
   const [page, setPage] = useState(1);
@@ -142,6 +186,13 @@ export function DownloadListPage() {
   const [filterDrafts, setFilterDrafts] = useState<Record<string, string[]>>({});
   const [filterUnits, setFilterUnits] = useState<Record<string, number>>({});
   const [sorting, setSorting] = useState<{ field: string; direction?: "ascend" | "descend" }>({ field: "" });
+  // 分类单独读取全量已存任务，避免分页或其他条件截断选项和数量。
+  const sourceSites = useQuery({
+    queryKey: ["downloads", "source-sites"],
+    queryFn: ({ signal }) => apiRequest<{ items: { value: string; label: string; count: number }[] }>("/downloads/source-sites", { signal }),
+    enabled: openFilter === "source_site",
+    refetchInterval: 5000,
+  });
   const query = useQuery({
     refetchInterval: 5000,
     queryKey: ["downloads", page, pageSize, columnFilters, sorting],
@@ -183,7 +234,9 @@ export function DownloadListPage() {
           onDraftChange={(values) => setFilterDrafts((current) => ({ ...current, [field]: values }))}
           unitValue={filterUnits[field] ?? 1} onUnitChange={(unit) => setFilterUnits((current) => ({ ...current, [field]: unit }))}
           options={field === "transfer_status" ? Object.entries({ ...statusLabels, ...transferLabels }).map(([value, label]) => ({ value, label: <DownloadStatusBadge status={value} label={label} /> }))
-            : field === "seeding" ? seedingOptions : field === "downloader" ? downloaderOptions : undefined}
+            : field === "seeding" ? seedingOptions : field === "downloader" ? downloaderOptions : field === "source_site" ? sourceSites.data?.items : undefined}
+          loading={field === "source_site" && sourceSites.isLoading} error={field === "source_site" ? sourceSites.error : undefined}
+          onRetry={() => void sourceSites.refetch()}
           onApply={(values) => { applyColumn(field, values); setOpenFilter(null); }} /> } : {}),
     };
   }
@@ -201,17 +254,19 @@ export function DownloadListPage() {
             loading={query.isLoading}
             noDataElement={<div className="data-table-empty" role="status">暂无下载任务</div>}
             pagination={false}
-            scroll={{ x: 2500 }}
+            components={downloadTableComponents}
+            tableLayoutFixed
+            scroll={{ x: Object.values(columnWidths).reduce((sum, width) => sum + width, 0) }}
             onChange={(_, sorter, __, extra) => {
               if (extra.action !== "sort") return;
               const active = Array.isArray(sorter) ? sorter[0] : sorter;
               setSorting({ field: String(active?.field ?? ""), direction: active?.direction }); setPage(1);
             }}
-            columns={[
+            columns={([
               { ...column("code", "影片", "text"), title: "影片", width: 150, fixed: "left", render: (value: string | null, task: DownloadTask) => value && task.media_id
                 ? <Button type="text" className="code-cell" onClick={() => setSelectedMediaId(task.media_id)}>{value}</Button>
                 : <span className="code-cell">{value || "—"}</span> },
-              { ...column("source_site", "资源站", "text"), title: "资源站", width: 150, fixed: "left", render: (value: string | null) => value || "—" },
+              { ...column("source_site", "资源站", "enum"), title: "资源站", width: 150, fixed: "left", render: (value: string | null) => value || "—" },
               { ...column("downloader", "下载器", "enum"), title: "下载器", render: (value: string | null) => value || "—" },
               { ...column("transfer_status", "下载状态", "enum"), title: "下载状态", render: (_: unknown, task: DownloadTask) => <DownloadStatus task={task} /> },
               { ...column("size_bytes", "大小", "bytes"), title: "大小", width: 110, render: (_: unknown, task: DownloadTask) => formatBytes(task.metrics?.size_bytes) },
@@ -219,15 +274,20 @@ export function DownloadListPage() {
               { ...column("downloaded_bytes", "已下载", "bytes"), title: "已下载", width: 110, render: (_: unknown, task: DownloadTask) => formatBytes(task.metrics?.downloaded_bytes) },
               { ...column("download_speed", "下载速度", "bytes"), title: "下载速度", width: 120, render: (_: unknown, task: DownloadTask) => formatBytes(task.metrics?.download_speed, true) },
               { ...column("upload_speed", "上传速度", "bytes"), title: "上传速度", width: 120, render: (_: unknown, task: DownloadTask) => formatBytes(task.metrics?.upload_speed, true) },
+              { ...column("download_url", "下载链接", "text"), title: "下载链接", render: (value: string | null) => <span style={{ overflowWrap: "anywhere", userSelect: "text" }}>{value || "-"}</span> },
               { ...column("save_path", "保存路径", "text"), title: "保存路径", width: 220, render: (_: unknown, task: DownloadTask) => <span style={{ overflowWrap: "anywhere" }}>{task.metrics?.save_path || "—"}</span> },
               { ...column("share_ratio", "分享率", "number"), title: <span className="download-ratio">分享率</span>, width: 130, render: (_: unknown, task: DownloadTask) => <span className="download-ratio">{task.metrics?.share_ratio == null ? "—" : task.metrics.share_ratio.toFixed(2)}</span> },
               { ...column("seeding_seconds", "做种时间", "seconds"), title: "做种时间", width: 140, render: (_: unknown, task: DownloadTask) => formatSeedingTime(task.metrics?.seeding_seconds) },
-              { ...column("seeding", "完成做种（PT）", "enum"), title: "完成做种（PT）", width: 150, render: (_: unknown, task: DownloadTask) => <SeedingTag task={task} /> },
+              { ...column("seeding", "完成做种（PT）", "enum"), title: "完成做种（PT）", width: 190, render: (_: unknown, task: DownloadTask) => <SeedingTag task={task} /> },
               { ...column("added_at", "加入时间", "time"), title: "加入时间", render: (value: string | null) => value ? dayjs(value).format("YYYY-MM-DD HH:mm") : "—" },
               { ...column("completed_at", "完成时间", "time"), title: "完成时间", render: (value: string | null) => value ? dayjs(value).format("YYYY-MM-DD HH:mm") : "—" },
-              { ...column("error_message", "错误", "text"), title: "错误" },
               { title: "操作", key: "actions", width: 200, fixed: "right", render: (_: unknown, task: DownloadTask) => <DownloadActions task={task} onChanged={refreshAfterAction} /> },
-            ]}
+            ] as TableColumnProps<DownloadTask>[]).map((definition) => {
+              const field = String(definition.key);
+              return { ...definition, width: columnWidths[field], headerCellStyle: { whiteSpace: "nowrap" },
+                onHeaderCell: () => ({ resizeWidth: columnWidths[field], resizeLabel: field === "share_ratio" ? "分享率" : String(definition.title), onResizeWidth: (width: number, persist: boolean) => resizeColumn(field, width, persist) }),
+              };
+            })}
           />
           <ListPagination page={page} total={total} pageSize={pageSize} onChange={setPage} onPageSizeChange={changePageSize} />
       </ContentCard>

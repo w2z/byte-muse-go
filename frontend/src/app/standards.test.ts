@@ -70,7 +70,8 @@ describe("列表筛选栅格规范", () => {
         expect(source).toContain("sort_by");
         expect(source).toContain('column("code", "影片", "text")');
         expect(source).toContain('column("downloader", "下载器", "enum")');
-        for (const field of ["code", "source_site", "downloader", "transfer_status", "size_bytes", "remaining_bytes", "downloaded_bytes", "download_speed", "upload_speed", "save_path", "share_ratio", "seeding_seconds", "seeding", "added_at", "completed_at", "error_message"]) expect(source).toContain(`...column("${field}",`);
+        for (const field of ["code", "source_site", "downloader", "transfer_status", "size_bytes", "remaining_bytes", "downloaded_bytes", "download_speed", "upload_speed", "download_url", "save_path", "share_ratio", "seeding_seconds", "seeding", "added_at", "completed_at"]) expect(source).toContain(`...column("${field}",`);
+        expect(source).not.toContain('...column("error_message",');
       });
     } else if (required || filterPage) test(relative(src, path), () => expect(gridErrors(source)).toEqual([]));
   }

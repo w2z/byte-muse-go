@@ -89,6 +89,8 @@ export type Subscription = {
 };
 
 export type DownloadTask = {
+  /** 提交时保存的实际下载链接；缺失为 null，不用站点名称或资源标识代替。 */
+  download_url?: string | null;
   metrics?: DownloadMetrics | null;
   seeding?: { status: "completed" | "pending" | "unknown" | "not_required" | "not_applicable"; rule: string };
   id: string;

@@ -885,4 +885,9 @@ button.code-card-still-cell:hover img { opacity: .85; }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; } }
 
 .download-column-filter { padding: 12px; width: min(300px, calc(100vw - 32px)); color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 4px; box-shadow: 0 4px 16px rgba(0, 0, 0, .16); }
+.download-filter-options { max-height: min(360px, 50vh); overflow-y: auto; }
+.download-filter-option { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 4px 0; overflow-wrap: anywhere; }
+.download-filter-count { flex-shrink: 0; color: var(--color-text-3); font-variant-numeric: tabular-nums; }
+.download-column-resizer { position: absolute; inset-block: 0; right: 0; width: 6px; cursor: col-resize; touch-action: none; z-index: 1; }
+.download-column-resizer:hover, .download-column-resizer:focus-visible { background: rgb(var(--primary-6)); outline: none; }
 .download-ratio { white-space: nowrap; font-variant-numeric: tabular-nums; }

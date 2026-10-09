@@ -115,6 +115,7 @@ func New(dependencies Dependencies) http.Handler {
 		router.Post("/subscriptions/{subscriptionId}/cancel", cancelSubscription(dependencies.Subscriptions))
 		router.Post("/subscriptions/{subscriptionId}/download", enqueueSubscriptionDownload(dependencies.SubscriptionDownloads))
 		router.Get("/downloads", listDownloads(dependencies.Downloads))
+		router.Get("/downloads/source-sites", listDownloadSourceSites(dependencies.Downloads))
 		router.Post("/downloads/{taskId}/{action}", controlDownload(dependencies.Downloads))
 		router.Delete("/downloads/{taskId}", controlDownload(dependencies.Downloads))
 		router.Get("/system/settings", getSystemSettings(dependencies.Settings))

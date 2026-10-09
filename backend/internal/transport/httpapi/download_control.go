@@ -8,6 +8,22 @@ import (
 	"net/http"
 )
 
+// listDownloadSourceSites exposes all persisted source categories behind the downloads auth boundary.
+func listDownloadSourceSites(service *application.DownloadService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if service == nil {
+			writeError(w, 503, "service_unavailable", "下载任务服务未就绪")
+			return
+		}
+		items, err := service.SourceSites(r.Context())
+		if err != nil {
+			writeError(w, 500, "download_source_sites_failed", "读取资源站分类失败")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"items": items})
+	}
+}
+
 // controlDownload 提供鉴权任务控制入口；状态冲突和下载器结果不确定分别返回 409、502。
 func controlDownload(service *application.DownloadService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {

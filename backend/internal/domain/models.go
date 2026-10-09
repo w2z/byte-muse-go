@@ -165,6 +165,7 @@ type DownloadTask struct {
 	MediaID          string            `json:"media_id"`
 	SourceSite       *string           `json:"source_site"`
 	SourceKind       *string           `json:"source_kind"`
+	DownloadURL      *string           `json:"download_url"` // 提交时保存的下载链接；历史记录缺失时为空，不由资源站推测。
 	Downloader       *string           `json:"downloader"`
 	InfoHash         *string           `json:"info_hash"`
 	TransferStatus   *string           `json:"transfer_status"`

@@ -6,12 +6,39 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"testing"
 )
 
 type columnRepository struct {
 	items []domain.DownloadTask
 	all   bool
+}
+
+// TestDownloadSourceSites covers all stored categories, missing sources and exact multi-selection.
+func TestDownloadSourceSites(t *testing.T) {
+	r := &columnRepository{}
+	for i, site := range []string{"Site A", "Site A", "site a", "Site AB", "Other", ""} {
+		r.items = append(r.items, domain.DownloadTask{ID: fmt.Sprint(i), SourceSite: &site})
+	}
+	r.items = append(r.items, domain.DownloadTask{ID: "null"})
+	s := NewDownloadService(r)
+	sites, err := s.SourceSites(context.Background())
+	want := []DownloadSourceSite{{Value: "site a", Label: "Site A", Count: 3}, {Value: "site ab", Label: "Site AB", Count: 1}, {Value: "other", Label: "Other", Count: 1}, {Value: "", Label: "未识别", Count: 2}}
+	// Categories are ordered by label, with the missing-source category last.
+	want[0], want[1], want[2] = want[2], want[0], want[1]
+	if err != nil || !r.all || !reflect.DeepEqual(sites, want) {
+		t.Fatalf("sites=%+v err=%v all=%v", sites, err, r.all)
+	}
+	q := ports.DownloadListQuery{ColumnFilters: map[string][]string{"source_site": {"SITE A", ""}}}
+	p, err := s.ListFiltered(context.Background(), 2, 2, q)
+	if err != nil || p.Total != 5 || len(p.Items) != 2 || p.Items[0].ID != "2" || p.Items[1].ID != "5" {
+		t.Fatalf("page=%+v err=%v", p, err)
+	}
+	empty, err := NewDownloadService(&columnRepository{}).SourceSites(context.Background())
+	if err != nil || empty == nil || len(empty) != 0 {
+		t.Fatalf("empty=%+v err=%v", empty, err)
+	}
 }
 
 func (r *columnRepository) List(_ context.Context, q ports.DownloadListQuery) (domain.DownloadPage, error) {
