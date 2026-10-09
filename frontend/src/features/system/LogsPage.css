@@ -9,7 +9,7 @@
    进入收缩分支后按 basis 比例分配负空间，筛选栏和分页条会被一起压扁。
    basis 为 0 时初始主轴尺寸只有筛选栏、分隔线和分页条，剩余高度全部由日志流增长吃掉，
    正常视口下不会触发收缩，筛选栏稳定保持 72px。 */
-.logs-terminal { flex: 1 1 0; min-height: 0; margin: 20px 24px 0; overflow-y: scroll; overflow-x: auto; scrollbar-gutter: stable; background: rgba(0, 0, 0, .045); border-radius: var(--content-radius); font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
+.logs-terminal { flex: 1 1 0; min-height: 0; margin: 20px 24px 0; overflow-y: scroll; overflow-x: auto; scrollbar-gutter: stable; background: rgba(0, 0, 0, .045); border-radius: var(--content-radius); font-family: var(--app-font-family); }
 body[arco-theme="dark"] .logs-terminal { background: rgba(255, 255, 255, .05); }
 .logs-line { display: grid; grid-template-columns: 14px 164px 100px 74px minmax(0, 1fr); gap: 10px; align-items: center; min-height: 32px; padding: 5px 14px; border-bottom: 1px solid var(--line-soft); font-size: 13px; line-height: 20px; }
 .logs-line:last-child { border-bottom: 0; }
@@ -19,12 +19,12 @@ body[arco-theme="dark"] .logs-terminal { background: rgba(255, 255, 255, .05); }
 .logs-line--other .logs-dot { background: var(--muted); }
 .logs-time { color: var(--muted); font-size: 12px; }
 .logs-category { color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; }
-.logs-level { color: var(--mint); font-size: 11px; font-weight: 600; }
+.logs-level { color: var(--mint); font-size: 11px; font-weight: var(--app-font-weight); }
 .logs-line--error .logs-level { color: var(--danger); }
 .logs-line--warn .logs-level { color: var(--orange); }
 .logs-line--other .logs-level { color: var(--muted); }
 .logs-message { color: var(--ink-2); overflow-wrap: anywhere; white-space: normal; }
-.logs-empty, .logs-loading { display: grid; min-height: 220px; place-items: center; color: var(--muted); font-family: "PingFang SC", "Microsoft YaHei", sans-serif; }
+.logs-empty, .logs-loading { display: grid; min-height: 220px; place-items: center; color: var(--muted); font-family: var(--app-font-family); }
 .logs-loading { gap: 10px; grid-auto-flow: column; }
 .logs-loading-spinner { width: 16px; height: 16px; border: 2px solid var(--line); border-top-color: var(--mint); border-radius: 50%; animation: logs-spin .7s linear infinite; }
 @keyframes logs-spin { to { transform: rotate(360deg); } }

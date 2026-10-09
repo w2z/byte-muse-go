@@ -13,7 +13,7 @@
 
 .wp-card { width: 100%; }
 .wp-card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
-.wp-card-title { color: var(--ink); font-size: 16px; font-weight: 500; line-height: 24px; }
+.wp-card-title { color: var(--ink); font-size: 16px; font-weight: var(--app-font-weight); line-height: 24px; }
 .wp-divider { height: 1px; margin: 16px 0; background: var(--line); border: 0; }
 
 /* ===== Overview 卡：问候 → 统计项 → 实时动态 ===== */
@@ -22,12 +22,12 @@
 .wp-stat-icon { display: grid; flex: none; width: 54px; height: 54px; margin-right: 12px; place-items: center; color: var(--mint); background: var(--panel-deep); border-radius: 50%; font-size: 24px; }
 .wp-stats-divider { flex: none; width: 1px; height: 60px; background: var(--line); }
 .wp-stat-title { color: var(--ink); font-size: 12px; line-height: 20px; }
-.wp-stat-count { color: var(--ink); font-size: 22px; font-weight: 600; line-height: 30px; }
-.wp-stat-unit { margin-left: 8px; color: var(--muted); font-size: 12px; font-weight: 400; }
+.wp-stat-count { color: var(--ink); font-size: 22px; font-weight: var(--app-font-weight); line-height: 30px; }
+.wp-stat-unit { margin-left: 8px; color: var(--muted); font-size: 12px; font-weight: var(--app-font-weight); }
 
 .wp-subhead { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
-.wp-subhead-title { color: var(--ink); font-size: 16px; font-weight: 500; line-height: 24px; }
-.wp-subhead-note { margin-left: 4px; color: var(--muted); font-size: 12px; font-weight: 400; }
+.wp-subhead-title { color: var(--ink); font-size: 16px; font-weight: var(--app-font-weight); line-height: 24px; }
+.wp-subhead-note { margin-left: 4px; color: var(--muted); font-size: 12px; font-weight: var(--app-font-weight); }
 .wp-more { flex: none; color: var(--mint); font-size: 14px; text-decoration: none; }
 .wp-more:hover { color: var(--mint-deep); }
 
@@ -41,8 +41,8 @@
 .wp-snapshot { display: grid; gap: 18px; }
 .wp-snapshot-row { display: grid; gap: 8px; }
 .wp-snapshot-meta { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; color: var(--ink-2); font-size: 13px; }
-.wp-snapshot-meta strong { flex: none; color: var(--ink); font-size: 15px; font-weight: 600; }
-.wp-snapshot-meta small { margin-left: 5px; color: var(--muted); font-size: 12px; font-weight: 400; }
+.wp-snapshot-meta strong { flex: none; color: var(--ink); font-size: 15px; font-weight: var(--app-font-weight); }
+.wp-snapshot-meta small { margin-left: 5px; color: var(--muted); font-size: 12px; font-weight: var(--app-font-weight); }
 .wp-snapshot-progress { line-height: 1; }
 .wp-snapshot-progress .arco-progress-line { margin-right: 0; }
 .wp-snapshot-progress .arco-progress-line-outer { padding-right: 0; }
@@ -56,12 +56,12 @@
 .wp-shortcut-icon { display: grid; width: 32px; height: 32px; margin-bottom: 4px; place-items: center; color: var(--ink-2); background: var(--panel-deep); border-radius: 6px; font-size: 18px; transition: color .18s ease, background-color .18s ease; }
 .wp-shortcut:hover .wp-shortcut-icon { color: var(--mint); background: var(--accent-soft); }
 .wp-shortcut-title { font-size: 12px; line-height: 20px; text-align: center; }
-.wp-recent { margin-bottom: 16px; color: var(--ink); font-size: 16px; font-weight: 500; line-height: 24px; }
+.wp-recent { margin-bottom: 16px; color: var(--ink); font-size: 16px; font-weight: var(--app-font-weight); line-height: 24px; }
 
 /* ===== 服务入口卡 ===== */
 .wp-service { display: flex; flex-direction: column; gap: 12px; }
 .wp-service-item { display: block; padding: 4px; text-decoration: none; }
-.wp-service-item strong { display: block; color: var(--ink-2); font-size: 13px; font-weight: 500; }
+.wp-service-item strong { display: block; color: var(--ink-2); font-size: 13px; font-weight: var(--app-font-weight); }
 .wp-service-item span { display: block; margin-top: 2px; color: var(--muted); font-size: 12px; }
 .wp-service-item:hover strong { color: var(--mint); }
 

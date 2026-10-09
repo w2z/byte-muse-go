@@ -1,4 +1,5 @@
-import "@arco-design/web-react/dist/css/arco.css";
+import "misans/lib/Normal/MiSansVF.min.css";
+import "./app/theme.less";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";

@@ -13,7 +13,7 @@
 .task-name-cell strong {
   color: var(--ink);
   font-size: 14px;
-  font-weight: 600;
+  font-weight: var(--app-font-weight);
 }
 
 .task-name-cell span,
@@ -44,7 +44,7 @@
   background: var(--panel-deep);
   border: 1px solid var(--line-soft);
   border-radius: 2px;
-  font: 12px/1.4 "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font: var(--app-font-weight) 12px/1.4 var(--app-font-family);
 }
 
 .task-last-run--empty {

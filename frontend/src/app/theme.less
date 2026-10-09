@@ -1,0 +1,43 @@
+@import "@arco-design/web-react/dist/css/index.less";
+
+// 使用小米 MiSans 可变字体；字体文件随应用发布，350 对应真实可变字重。
+// 字体许可：https://hyperos.mi.com/font/zh/
+@font-family: "MiSans VF", "MiSans", sans-serif;
+@code-family: @font-family;
+@app-font-weight: 350;
+
+// 从 Arco 官方主题入口统一组件字重，覆盖表头、弹窗、选中项及提示。
+@font-weight-100: @app-font-weight;
+@font-weight-200: @app-font-weight;
+@font-weight-300: @app-font-weight;
+@font-weight-400: @app-font-weight;
+@font-weight-500: @app-font-weight;
+@font-weight-600: @app-font-weight;
+@font-weight-700: @app-font-weight;
+@font-weight-800: @app-font-weight;
+@font-weight-900: @app-font-weight;
+
+:root {
+  --app-font-family: @font-family;
+  --app-font-weight: @app-font-weight;
+}
+
+// 原生语义标签及 Arco 少量未使用主题变量的规则在公共主题中对齐。
+html, body, button, input, select, textarea, h1, h2, h3, h4, h5, h6, b, strong, th,
+.arco-calendar-panel .arco-calendar-week-list-item,
+.arco-panel-date-timepicker-title,
+.arco-steps-item:not(.arco-steps-item-active) .arco-steps-item-title,
+.arco-steps-mode-dot .arco-steps-item:not(.arco-steps-item-active) .arco-steps-item-title,
+.arco-transfer-view-header-unit {
+  font-weight: var(--app-font-weight);
+}
+pre, code, kbd, samp {
+  font-family: var(--app-font-family);
+}
+
+// 公共播放器的控件文字也遵循全站字体，不使用播放器自带的系统字体。
+.media-player.xgplayer,
+.media-player .xgplayer-time {
+  font-family: var(--app-font-family);
+  font-weight: var(--app-font-weight);
+}
