@@ -1,16 +1,20 @@
 {
-  "version": "0.1.144",
-  "commit": "730448186ce5cd95bdd000754ef3200b3a76587c",
-  "short_commit": "7304481",
-  "built_at": "2026-10-09T14:59:48Z",
+  "version": "0.1.145",
+  "commit": "e080ac2f3f5c8fad38e5543260da65ef102ec954",
+  "short_commit": "e080ac2",
+  "built_at": "2026-10-09T15:39:35Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.144",
-    "sha-7304481",
+    "0.1.145",
+    "sha-e080ac2",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.145",
+      "message": "统一全站使用 MiSans 字体和 350 字重"
+    },
     {
       "version": "0.1.144",
       "message": "添加资源站计数筛选和下载链接并保存自定义列宽"
