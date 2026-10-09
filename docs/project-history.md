@@ -515,3 +515,10 @@ ByteMuse 是自托管的 PT 订阅与媒体库编排工具。旧版能力包括�
 - 新增迁移 39：cloud_upload_records，record_key 为 SHA256 主键（VARCHAR(64)，非空、无默认值），state 为提交阶段（VARCHAR(16)，非空、无默认值，索引检索未完成替换）；snapshot 为上传阶段 JSON（TEXT；MySQL LONGTEXT，非空、无默认值）；由上传服务 Get/Save/PendingCommits 实际使用。
 - app_settings 新增 CLOUD_UPLOAD_PATHS=[]、CLOUD_UPLOAD_ENABLE=false、CLOUD_UPLOAD_CONFLICT=skip，原配置不覆盖。未操作原始 lady.db 或生产数据库。
 - SQLite 独立测试覆盖空库初始化、38 升级到 39、重复迁移与台账保留；MySQL/PostgreSQL 尚未实库验证。表仅追加，回退保留台账并关闭监控。
+
+
+### 2026-10-09 定时任务执行计划编辑
+
+- 七个定时任务增加编辑入口，PUT /tasks/{taskName}/schedule 复用设置校验、持久化和即时重排；新增 RELEASE_SCHEDULE_TIME、ACTOR_CATALOG_SCHEDULE_TIME、LOG_CLEANUP_SCHEDULE_TIME。缺失新配置保持旧默认时间，空串取消定时排期，仍可手动执行；启动补跑规则保留。
+- 沿用 app_settings，不变更表结构，不回填历史配置。SQLite 隔离测试验证七个任务保存、非法输入不写入、取消排期及重建服务后恢复，未修改线上任务或日志。
+- 后端全量 test/vet/build、前端规范检查、页面测试、类型检查及构建通过；真实隔离应用验证保存、非法 Cron、刷新保留、清空计划、取消以及五种规定宽度。修复手机隐藏侧栏后主内容宽度为零的问题。OpenAPI 与 Apifox 同步并回读；未部署 NAS。

@@ -12,6 +12,12 @@ import (
 	"bytemuse/backend/internal/scheduler"
 )
 
+const (
+	logCleanupSpec   = "0 0 * * *"
+	releaseTodaySpec = "0 3 * * *"
+	actorCatalogSpec = "0 4 * * *"
+)
+
 // TestLogCleanupClearsAllAges 验证任务不保留近期日志，空库可重跑且清理后仍可写入。
 func TestLogCleanupClearsAllAges(t *testing.T) {
 	ctx := context.Background()
@@ -53,9 +59,8 @@ func TestLogCleanupClearsAllAges(t *testing.T) {
 	}
 }
 
-// TestScheduleSpecsAlwaysIncludesLogCleanup 防止保存设置后的重排把固定的日志清理任务误停：
-// Apply 以“未出现在期望集合中即取消排期”为准，所以期望集合必须始终包含日志清理。
-func TestScheduleSpecsAlwaysIncludesLogCleanup(t *testing.T) {
+// TestScheduleSpecsPreservesDefaults 验证旧版本缺失配置时保留原有默认时间。
+func TestScheduleSpecsPreservesDefaults(t *testing.T) {
 	specs := scheduleSpecs(map[string]string{
 		"RANK_SCHEDULE_TIME":     "0 20 * * *",
 		"ACTOR_SCHEDULE_TIME":    "0 21 * * *",
@@ -63,7 +68,7 @@ func TestScheduleSpecsAlwaysIncludesLogCleanup(t *testing.T) {
 		"DOWNLOAD_SCHEDULE_TIME": " 0 22 * * * ",
 	})
 	if got := specs[logCleanupTaskName]; got != logCleanupSpec {
-		t.Fatalf("日志清理任务必须始终排期，得到 %q", got)
+		t.Fatalf("缺失配置时应保留默认排期，得到 %q", got)
 	}
 	if _, ok := specs["标签追新"]; ok {
 		t.Fatalf("空设置不应排期: %#v", specs)
@@ -76,18 +81,14 @@ func TestScheduleSpecsAlwaysIncludesLogCleanup(t *testing.T) {
 	}
 }
 
-// TestScheduleReconcileKeepsFixedJobs 端到端核对：按设置重排后，可配置任务取设置值，
-// 固定上新和日志清理任务保持排期，未配置的任务不排期。
-func TestScheduleReconcileKeepsFixedJobs(t *testing.T) {
+// TestScheduleReconcileKeepsDefaults 验证重排使用设置值，并保留旧固定任务的默认计划。
+func TestScheduleReconcileKeepsDefaults(t *testing.T) {
 	jobs := configuredJobs()
 	for _, job := range jobs {
 		if job.Spec != "" {
 			t.Fatalf("可配置任务不应带静态表达式: %s=%q", job.Name, job.Spec)
 		}
 	}
-	jobs = append(jobs, scheduler.Job{Name: "同步上新", Spec: releaseTodaySpec, Run: func(context.Context) scheduler.JobResult { return nil }})
-	jobs = append(jobs, scheduler.Job{Name: logCleanupTaskName, Spec: logCleanupSpec, Run: func(context.Context) scheduler.JobResult { return nil }})
-	jobs = append(jobs, scheduler.Job{Name: "同步演员目录", Run: func(context.Context) scheduler.JobResult { return nil }})
 	manager, err := scheduler.New(jobs)
 	if err != nil {
 		t.Fatal(err)

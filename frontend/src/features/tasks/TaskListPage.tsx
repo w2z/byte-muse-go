@@ -1,13 +1,14 @@
-import { Button, Table } from "@arco-design/web-react";
-import { IconPlayArrow } from "@arco-design/web-react/icon";
+import { Button, Input, Space, Table } from "@arco-design/web-react";
+import { IconEdit, IconPlayArrow } from "@arco-design/web-react/icon";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { apiRequest, type Page } from "../../shared/api/client";
 import type { ScheduledTask } from "../../shared/api/types";
 import { useFeedbackMessage } from "../../shared/ui/FeedbackMessage";
 import { ContentCard } from "../../shared/ui/ContentCard";
 import { PageHeader } from "../../shared/ui/PageHeader";
 import { PageState } from "../../shared/ui/PageState";
+import { AppDialog } from "../../shared/ui/AppDialog";
 import "./TaskListPage.css";
 
 const CRON_FIELD_LABELS = ["分钟", "小时", "日期", "月份", "星期"] as const;
@@ -41,6 +42,7 @@ function formatCronNumber(value: string, index: number): string {
 
 /** 将标准五段式 Cron 转成可读中文；遇到非标准表达式保留原文，避免误导。 */
 export function describeCron(cron: string): string {
+  if (!cron.trim()) return "已暂停定时执行";
   const fields = cron.trim().split(/\s+/);
   if (fields.length !== 5) return `Cron：${cron}`;
   const [minute, hour, day, month, weekday] = fields;
@@ -59,9 +61,24 @@ function formatLastRun(value: string | null): string {
   return date.toLocaleString("zh-CN", { hour12: false });
 }
 
+/** 展示定时任务，支持手动执行及持久化编辑计划；保存计划不会触发任务。 */
 export function TaskListPage() {
   const queryClient = useQueryClient();
   const [message, messageHolder] = useFeedbackMessage();
+  const [editing, setEditing] = useState<ScheduledTask | null>(null);
+  const [cron, setCron] = useState("");
+  const scheduleMutation = useMutation({
+    mutationFn: (value: { name: string; cron: string }) => apiRequest<ScheduledTask>(
+      "/tasks/" + encodeURIComponent(value.name) + "/schedule",
+      { method: "PUT", body: JSON.stringify({ cron: value.cron.trim() }) },
+    ),
+    onSuccess: () => {
+      setEditing(null);
+      message.success("执行计划已保存并生效");
+      void queryClient.invalidateQueries({ queryKey: ["scheduled-tasks"] });
+      void queryClient.invalidateQueries({ queryKey: ["system-settings"] });
+    },
+  });
   const query = useQuery({
     queryKey: ["scheduled-tasks"],
     queryFn: () => apiRequest<Page<ScheduledTask>>("/tasks?all=true"),
@@ -94,7 +111,7 @@ export function TaskListPage() {
               {
                 title: "任务名称",
                 dataIndex: "name",
-                width: "24%",
+                width: "22%",
                 render: (name: string, task: ScheduledTask) => (
                   <div className="task-name-cell">
                     <strong>{name}</strong>
@@ -105,7 +122,7 @@ export function TaskListPage() {
               {
                 title: "执行计划",
                 dataIndex: "cron",
-                width: "36%",
+                width: "30%",
                 render: (value: string) => (
                   <div className="task-cron-cell">
                     <span>{describeCron(value)}</span>
@@ -121,8 +138,14 @@ export function TaskListPage() {
               },
               {
                 title: "操作",
-                width: "17%",
+                width: "25%",
                 render: (_: unknown, task: ScheduledTask) => (
+                  <Space wrap>
+                  <Button icon={<IconEdit />} onClick={() => {
+                    scheduleMutation.reset();
+                    setCron(task.cron);
+                    setEditing(task);
+                  }}>编辑</Button>
                   <Button
                     type="secondary"
                     icon={<IconPlayArrow />}
@@ -132,12 +155,30 @@ export function TaskListPage() {
                   >
                     立即执行
                   </Button>
+                  </Space>
                 ),
               },
             ]}
           />
         </ContentCard>
       </PageState>
+      <AppDialog visible={editing !== null} title="编辑执行计划" onClose={() => {
+        if (!scheduleMutation.isPending) setEditing(null);
+      }} footer={<>
+        <Button disabled={scheduleMutation.isPending} onClick={() => setEditing(null)}>取消</Button>
+        <Button type="primary" loading={scheduleMutation.isPending} onClick={() => {
+          if (editing && !scheduleMutation.isPending) scheduleMutation.mutate({ name: editing.name, cron });
+        }}>保存</Button>
+      </>}>
+        <p>{editing?.name}</p>
+        <label htmlFor="task-schedule-cron">执行计划（Cron）</label>
+        <Input id="task-schedule-cron" value={cron} disabled={scheduleMutation.isPending}
+          onChange={setCron} placeholder="例如：0 0 * * *" />
+        <p>按服务端时区执行，依次填写：分钟 小时 日期 月份 星期。例如 0 0 * * * 表示每天零点。</p>
+        <p>清空后暂停定时执行，仍可手动执行。保存立即生效，不影响当前正在执行的任务。</p>
+        <p>服务启动时，除清理系统日志外的任务仍按原有规则补跑一次。</p>
+        {scheduleMutation.error && <p role="alert">{scheduleMutation.error.message}</p>}
+      </AppDialog>
       {messageHolder}
     </section>
   );

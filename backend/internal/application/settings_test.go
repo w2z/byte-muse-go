@@ -50,7 +50,7 @@ func TestSettingsScheduleTimeValidation(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	keys := []string{"RANK_SCHEDULE_TIME", "ACTOR_SCHEDULE_TIME", "TAG_SCHEDULE_TIME", "DOWNLOAD_SCHEDULE_TIME"}
+	keys := []string{"RANK_SCHEDULE_TIME", "ACTOR_SCHEDULE_TIME", "TAG_SCHEDULE_TIME", "DOWNLOAD_SCHEDULE_TIME", "RELEASE_SCHEDULE_TIME", "ACTOR_CATALOG_SCHEDULE_TIME", "LOG_CLEANUP_SCHEDULE_TIME"}
 	for _, key := range keys {
 		for _, valid := range []string{"0 20 * * *", "30 21 * * *", "@daily", ""} {
 			if _, err := svc.Update(ctx, map[string]string{key: valid}); err != nil {

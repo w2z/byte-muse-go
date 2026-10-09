@@ -8,6 +8,7 @@ import (
 	"log"
 	"strconv"
 	"strings"
+	"sync"
 
 	"bytemuse/backend/internal/domain"
 	"bytemuse/backend/internal/platform/pan115"
@@ -208,16 +209,19 @@ var writableSettings = map[string]settingSpec{
 	"MAIN_SITE":    {kind: settingEnum, allowed: mainSites},
 
 	// 定时任务
-	"RANK_PAGE":              {kind: settingInt},
-	"RANK_TYPE":              {kind: settingEnum, allowed: rankTypes},
-	"BRAND_TYPE":             {kind: settingText},
-	"RANK_SCHEDULE_TIME":     {kind: settingCron},
-	"ACTOR_SCHEDULE_TIME":    {kind: settingCron},
-	"TAG_SCHEDULE_TIME":      {kind: settingCron},
-	"DOWNLOAD_SCHEDULE_TIME": {kind: settingCron},
-	"MAX_ACTOR":              {kind: settingInt},
-	"TAG_MAX_SUB_PER_RUN":    {kind: settingInt},
-	"PT_SEARCH_INTERVAL":     {kind: settingInt},
+	"RANK_PAGE":                   {kind: settingInt},
+	"RANK_TYPE":                   {kind: settingEnum, allowed: rankTypes},
+	"BRAND_TYPE":                  {kind: settingText},
+	"RANK_SCHEDULE_TIME":          {kind: settingCron},
+	"ACTOR_SCHEDULE_TIME":         {kind: settingCron},
+	"TAG_SCHEDULE_TIME":           {kind: settingCron},
+	"DOWNLOAD_SCHEDULE_TIME":      {kind: settingCron},
+	"RELEASE_SCHEDULE_TIME":       {kind: settingCron},
+	"ACTOR_CATALOG_SCHEDULE_TIME": {kind: settingCron},
+	"LOG_CLEANUP_SCHEDULE_TIME":   {kind: settingCron},
+	"MAX_ACTOR":                   {kind: settingInt},
+	"TAG_MAX_SUB_PER_RUN":         {kind: settingInt},
+	"PT_SEARCH_INTERVAL":          {kind: settingInt},
 
 	// 翻译
 	"BAIDU_APP_ID":       {kind: settingText},
@@ -252,6 +256,7 @@ var writableSettings = map[string]settingSpec{
 
 // SettingsService validates the bounded setting set and encrypts secret values before persistence.
 type SettingsService struct {
+	updateMu        sync.Mutex // 串行保存及重排，避免旧快照覆盖新计划。
 	repository      ports.SettingsRepository
 	databaseDriver  string
 	secrets         *secretCipher
@@ -321,6 +326,8 @@ func (s *SettingsService) Get(ctx context.Context) (domain.SystemSettings, error
 // Update validates and atomically persists supplied values. Blank values clear the corresponding setting,
 // including encrypted secrets, so an administrator can intentionally remove a credential from the settings page.
 func (s *SettingsService) Update(ctx context.Context, values map[string]string) (domain.SystemSettings, error) {
+	s.updateMu.Lock()
+	defer s.updateMu.Unlock()
 	items := make([]ports.StoredSetting, 0, len(values))
 	for key, value := range values {
 		spec, ok := writableSettings[key]

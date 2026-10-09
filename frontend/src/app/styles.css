@@ -69,7 +69,8 @@ body button.arco-btn[class]:focus-visible { box-shadow: none; }
 
 /* 顶栏通栏、侧栏在其下方，整体固定视口高度，只有内容区滚动。 */
 .app-shell { display: flex; flex-direction: column; height: 100vh; overflow: hidden; background: var(--page); }
-.app-body { display: flex; flex: 1 1 auto; width: 100%; min-height: 0; }
+/* 手机侧栏改为抽屉后仍保持横向布局，使 width:0 的主内容按剩余宽度伸展。 */
+.app-body { display: flex; flex-direction: row; flex: 1 1 auto; width: 100%; min-height: 0; }
 /* 首屏布局在数据请求完成前就占据稳定宽度，避免刷新时正文先回弹。 */
 /* 宽度由 Arco Layout.Sider 的内联 style 控制，不能用固定 flex-basis 覆盖，
    否则折叠时 Flex 布局会直接跳变，无法执行 Arco 自带的 width 过渡。 */

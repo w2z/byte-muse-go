@@ -469,10 +469,16 @@ func (c *Commands) Serve(ctx context.Context) error {
 			jobs[i].Run = actorHotAndFollowJob(actorCatalog, actorService, collectionService)
 		}
 	}
-	jobs = append(jobs, scheduler.Job{Name: "同步上新", Spec: releaseTodaySpec, Run: collectionReleaseTodayJob(collectionService)})
-	jobs = append(jobs, scheduler.Job{Name: "同步演员目录", Spec: actorCatalogSpec, Run: actorCatalogJob(actorCatalog, false)})
-	// 日志清理每天零点和手动执行时均清空全部日志。
-	jobs = append(jobs, scheduler.Job{Name: logCleanupTaskName, Spec: logCleanupSpec, Run: logCleanupJob(logging.Default)})
+	for i := range jobs {
+		switch jobs[i].Name {
+		case "同步上新":
+			jobs[i].Run = collectionReleaseTodayJob(collectionService)
+		case "同步演员目录":
+			jobs[i].Run = actorCatalogJob(actorCatalog, false)
+		case logCleanupTaskName:
+			jobs[i].Run = logCleanupJob(logging.Default)
+		}
+	}
 	manager, err := scheduler.New(jobs)
 	if err != nil {
 		return fmt.Errorf("create scheduler: %w", err)
@@ -646,14 +652,6 @@ func (c *Commands) Serve(ctx context.Context) error {
 	return runtimeapp.New(server, manager, c.config.ShutdownTimeout, logCleanupTaskName).Run(ctx)
 }
 
-// scheduleDefinitions 是设置键与调度任务名的唯一映射，注册、重排与说明都据此对齐。
-var scheduleDefinitions = []struct{ name, key string }{
-	{"同步榜单", "RANK_SCHEDULE_TIME"},
-	{"同步热门演员", "ACTOR_SCHEDULE_TIME"},
-	{"标签追新", "TAG_SCHEDULE_TIME"},
-	{"订阅下载", "DOWNLOAD_SCHEDULE_TIME"},
-}
-
 // logCleanupJob 清空执行时的全部日志；定时与手动入口共用，清理后的新日志正常保留。
 func logCleanupJob(logger *logging.Logger) func(context.Context) scheduler.JobResult {
 	return func(ctx context.Context) scheduler.JobResult {
@@ -666,14 +664,7 @@ func logCleanupJob(logger *logging.Logger) func(context.Context) scheduler.JobRe
 	}
 }
 
-// 日志清理是系统固定任务，表达式不来自设置。它必须始终出现在调度期望集合中，
-// 否则 Apply 会把它当作“未配置”而取消排期。
-const (
-	logCleanupTaskName = "清理系统日志"
-	logCleanupSpec     = "0 0 * * *"
-	releaseTodaySpec   = "0 3 * * *"
-	actorCatalogSpec   = "0 4 * * *"
-)
+const logCleanupTaskName = "清理系统日志"
 
 // configuredJobs registers every configurable cron task. Domain executors are added as their
 // integrations land; until then a trigger is still observable and never silently discarded.
@@ -681,9 +672,9 @@ const (
 // scheduler through scheduleSpecs plus Manager.Apply, so saving settings reschedules a task
 // immediately instead of on the next process start.
 func configuredJobs() []scheduler.Job {
-	jobs := make([]scheduler.Job, 0, len(scheduleDefinitions))
-	for _, definition := range scheduleDefinitions {
-		name := definition.name
+	jobs := make([]scheduler.Job, 0, len(application.ScheduleDefinitions()))
+	for _, definition := range application.ScheduleDefinitions() {
+		name := definition.Name
 		jobs = append(jobs, scheduler.Job{Name: name, Run: func(context.Context) scheduler.JobResult {
 			logging.Info(logging.CategoryOther, "定时任务已触发，业务执行器尚未接入", "task", name)
 			return nil
@@ -692,20 +683,9 @@ func configuredJobs() []scheduler.Job {
 	return jobs
 }
 
-// scheduleSpecs 返回调度器的完整期望排期：四个可配置任务取自设置（空值表示不排期），
-// 上新、演员目录和日志清理是固定任务，始终排期。Apply 以“未出现在 map 中即取消排期”为准，
-// 因此这里必须给出完整集合，不能只给可配置任务。
+// scheduleSpecs 共用应用层的完整期望计划，启动与保存设置使用同一规则。
 func scheduleSpecs(values map[string]string) map[string]string {
-	specs := make(map[string]string, len(scheduleDefinitions)+3)
-	for _, definition := range scheduleDefinitions {
-		if spec := strings.TrimSpace(values[definition.key]); spec != "" {
-			specs[definition.name] = spec
-		}
-	}
-	specs[logCleanupTaskName] = logCleanupSpec
-	specs["同步上新"] = releaseTodaySpec
-	specs["同步演员目录"] = actorCatalogSpec
-	return specs
+	return application.ScheduleSpecs(values)
 }
 
 func (c *Commands) openStore(ctx context.Context) (database.Store, error) {

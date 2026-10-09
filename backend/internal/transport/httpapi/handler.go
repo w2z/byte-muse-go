@@ -103,6 +103,7 @@ func New(dependencies Dependencies) http.Handler {
 		router.Get("/complex/search", searchCatalog(dependencies.CatalogQueries, dependencies.Tags))
 		router.Get("/tasks", listScheduledTasks(dependencies.Scheduler))
 		router.Post("/tasks/{taskName}/run", runScheduledTask(dependencies.Scheduler))
+		router.Put("/tasks/{taskName}/schedule", updateScheduledTask(dependencies.Scheduler, dependencies.Settings))
 		router.Get("/logs", listLogs(dependencies.Logs))
 		router.Delete("/logs", clearLogs(dependencies.Logs))
 		router.Get("/media/{mediaId}", getMedia(dependencies.Catalog))
@@ -780,6 +781,65 @@ func runScheduledTask(manager *scheduler.Manager) http.HandlerFunc {
 			return
 		}
 		writeJSON(response, http.StatusAccepted, map[string]string{"message": "任务已开始执行"})
+	}
+}
+
+// updateScheduledTask 只修改指定任务的计划，复用设置校验、持久化及即时重排，不启动任务。
+func updateScheduledTask(manager *scheduler.Manager, service *application.SettingsService) http.HandlerFunc {
+	return func(response http.ResponseWriter, request *http.Request) {
+		if manager == nil || service == nil {
+			writeError(response, http.StatusServiceUnavailable, "service_unavailable", "调度服务尚未就绪")
+			return
+		}
+		name, err := url.PathUnescape(chi.URLParam(request, "taskName"))
+		if err != nil || strings.TrimSpace(name) == "" {
+			writeError(response, http.StatusBadRequest, "invalid_task", "任务名称无效")
+			return
+		}
+		key := ""
+		for _, definition := range application.ScheduleDefinitions() {
+			if definition.Name == name {
+				key = definition.Key
+				break
+			}
+		}
+		found := false
+		for _, task := range manager.Tasks() {
+			if task.Name == name {
+				found = true
+				break
+			}
+		}
+		if key == "" || !found {
+			writeError(response, http.StatusNotFound, "task_not_found", "定时任务不存在")
+			return
+		}
+		var body struct {
+			Cron *string `json:"cron"`
+		}
+		if err := decodeJSON(response, request, &body); err != nil || body.Cron == nil {
+			writeError(response, http.StatusBadRequest, "invalid_request", "请提供执行计划 cron 字符串")
+			return
+		}
+		if _, err := service.Update(request.Context(), map[string]string{key: *body.Cron}); err != nil {
+			if errors.Is(err, application.ErrInvalidSetting) {
+				writeError(response, http.StatusBadRequest, "invalid_setting", settingErrorMessage(err))
+			} else {
+				writeApplicationError(response, err)
+			}
+			return
+		}
+		for _, task := range manager.Tasks() {
+			if task.Name != name {
+				continue
+			}
+			if task.Spec != strings.TrimSpace(*body.Cron) {
+				writeError(response, http.StatusServiceUnavailable, "schedule_not_applied", "计划已保存，但调度同步失败，请重试")
+				return
+			}
+			writeJSON(response, http.StatusOK, domain.ScheduledTask{Name: task.Name, Cron: task.Spec, LastRun: task.LastRun, Running: task.Running})
+			return
+		}
 	}
 }
 
