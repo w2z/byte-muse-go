@@ -1,16 +1,20 @@
 {
-  "version": "0.1.150",
-  "commit": "b6c8791cf6496623d8bf12ecd2b629359133bfe3",
-  "short_commit": "b6c8791",
-  "built_at": "2026-10-09T17:28:16Z",
+  "version": "0.1.151",
+  "commit": "5b013ba8c2cd238d022504ffbfaaf72e016af91d",
+  "short_commit": "5b013ba",
+  "built_at": "2026-10-09T17:47:10Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.150",
-    "sha-b6c8791",
+    "0.1.151",
+    "sha-5b013ba",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.151",
+      "message": "缩短超出 NAS 字节限制的视频文件名"
+    },
     {
       "version": "0.1.150",
       "message": "保留增量同名资源并适配进度弹框宽高"
