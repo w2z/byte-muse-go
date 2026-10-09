@@ -258,6 +258,7 @@ func (s *StrmService) scanMappings(ctx context.Context, root string, mappings []
 	var scanErr error
 	// 不同源文件去掉视频后缀后可能同名；入队前拒绝冲突，禁止后写覆盖或静默跳过。
 	destinations := make(map[string]string)
+	preservedDownloads := make(map[string]string)
 	scanMessages := make([]string, len(mappings))
 	for index, scope := range scopes {
 		if scope.walk == nil {
@@ -291,9 +292,21 @@ func (s *StrmService) scanMappings(ctx context.Context, root string, mappings []
 				entries[index].Files++
 				mutex.Unlock()
 			}
-			destination := strings.ToLower(filepath.Join(scope.target, filepath.FromSlash(file.Directory), name))
+			absolute := filepath.Join(scope.target, filepath.FromSlash(file.Directory), name)
+			destination := strings.ToLower(absolute)
 			source := journalKey(mapping.Kind, file.ID, file.Directory, file.Name)
-			if previous, exists := destinations[destination]; exists && previous != source {
+			previous, exists := destinations[destination]
+			if !exists && operation == "download" && mode != domain.StrmGenerateFull {
+				// 记录首次发现时已存在的附件，避免把本轮刚下载的文件当成可跳过的旧文件。
+				info, err := os.Lstat(absolute)
+				if err == nil && info.Mode().IsRegular() {
+					preservedDownloads[destination] = absolute
+				}
+			}
+			if exists && previous != source && preservedDownloads[destination] != absolute {
+				if operation == "download" {
+					return fmt.Errorf("网盘附件文件名冲突：%s", name)
+				}
 				return fmt.Errorf("去除视频后缀后文件名冲突：%s", name)
 			}
 			destinations[destination] = source

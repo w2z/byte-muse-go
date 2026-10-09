@@ -315,3 +315,59 @@ func TestStrmDownloadDoesNotUseNotificationDeadline(t *testing.T) {
 		t.Fatalf("传输被截断: %q %v", data, err)
 	}
 }
+
+// TestStrmDuplicateSidecarsPreserveExistingIncremental 验证网盘同名附件不会阻断已有本地附件的增量跳过，仍保护实际写入冲突。
+func TestStrmDuplicateSidecarsPreserveExistingIncremental(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		mode      domain.StrmGenerateMode
+		existing  bool
+		collision bool
+	}{
+		{"incremental-existing", domain.StrmGenerateIncremental, true, false},
+		{"incremental-missing", domain.StrmGenerateIncremental, false, true},
+		{"full-existing", domain.StrmGenerateFull, true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			if err := os.MkdirAll(filepath.Join(root, "out"), 0755); err != nil {
+				t.Fatal(err)
+			}
+			local := filepath.Join(root, "out", "movie.nfo")
+			if tc.existing {
+				if err := os.WriteFile(local, []byte("merged-local-metadata"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			api := &downloadPan115Stub{address: "http://download.test", strmPan115Stub: strmPan115Stub{pages: map[string]domain.Pan115FilePage{"root": {Files: []domain.Pan115File{
+				{ID: "nfo-a", PickCode: "nfo-a", Name: "movie.nfo"},
+				{ID: "nfo-b", PickCode: "nfo-b", Name: "movie.nfo"},
+				{ID: "video", PickCode: "video", Name: "movie.mp4"},
+			}}}}}
+			service := newStrmTestService(t, root, api, nil, map[string]string{strmDownloadEnableSettingKey: "true", strmPathsSettingKey: strmTestMappings(t, []domain.StrmMapping{{Kind: "115", ID: "root", Path: "/root", LocalPath: "/out"}})})
+			var requests atomic.Int32
+			service.http.Transport = embyRoundTripper(func(*http.Request) (*http.Response, error) {
+				requests.Add(1)
+				return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader("remote-nfo"))}, nil
+			})
+			result, err := service.Scan(context.Background(), "http://play.test", tc.mode)
+			if tc.collision {
+				if err == nil || !strings.Contains(err.Error(), "文件名冲突") {
+					t.Fatalf("expected collision: result=%+v err=%v", result, err)
+				}
+				return
+			}
+			if err != nil || result.Created != 1 || result.DownloadSkipped != 2 || requests.Load() != 0 {
+				t.Fatalf("result=%+v requests=%d err=%v", result, requests.Load(), err)
+			}
+			body, err := os.ReadFile(local)
+			if err != nil || string(body) != "merged-local-metadata" {
+				t.Fatalf("local=%q err=%v", body, err)
+			}
+			body, err = os.ReadFile(filepath.Join(root, "out", "movie.strm"))
+			if err != nil || strings.TrimSpace(string(body)) != "http://play.test/files/play/115/video" {
+				t.Fatalf("video=%q err=%v", body, err)
+			}
+		})
+	}
+}
