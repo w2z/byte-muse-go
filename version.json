@@ -1,16 +1,20 @@
 {
-  "version": "0.1.128",
-  "commit": "a23284c500ba88ba0014217af07cf285dd409b87",
-  "short_commit": "a23284c",
-  "built_at": "2026-10-09T12:00:26Z",
+  "version": "0.1.129",
+  "commit": "9fd4e3018fa6df7d394fa55aea837e056a377975",
+  "short_commit": "9fd4e30",
+  "built_at": "2026-10-09T12:24:47Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.128",
-    "sha-a23284c",
+    "0.1.129",
+    "sha-9fd4e30",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.129",
+      "message": "支持编辑全部定时任务执行计划并即时生效"
+    },
     {
       "version": "0.1.128",
       "message": "使用Arco抽屉展示手机菜单并恢复开关动画"
