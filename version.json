@@ -1,16 +1,20 @@
 {
-  "version": "0.1.115",
-  "commit": "0c1b34d983c18c2f860dbf922e435304b53e1663",
-  "short_commit": "0c1b34d",
-  "built_at": "2026-10-09T03:07:41Z",
+  "version": "0.1.116",
+  "commit": "9114e8a005f3e8ed66a1f5397982108de0887a8b",
+  "short_commit": "9114e8a",
+  "built_at": "2026-10-09T08:01:30Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.115",
-    "sha-0c1b34d",
+    "0.1.116",
+    "sha-9114e8a",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.116",
+      "message": "增加目录展开列表和文件下载进度"
+    },
     {
       "version": "0.1.115",
       "message": "使用步骤条展示升级阶段并清除完成后的残留进度"
