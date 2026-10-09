@@ -10,6 +10,23 @@ import { apiRequest, type ScanProgress } from "../../shared/api/client";
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
+it("生成进度目录旁的信息按钮打开可展开的文件进度表格", async () => {
+  const fetchMock = vi.fn(async (input: string) => {
+    const nested = String(input).includes("parent=root");
+    return Response.json({ available:true,total:1,items:nested ? [{id:"file",name:"poster.jpg",kind:"file",operation:"download",state:"processing",total:1,processed:0,failed:0,percent:50,bytes:512,size:1024}] : [{id:"root",name:"电影",kind:"directory",operation:"",state:"scanning",total:2,processed:1,failed:0,percent:50,bytes:0,size:0}] });
+  });
+  vi.stubGlobal("fetch",fetchMock);
+  const client = new QueryClient({defaultOptions:{queries:{retry:false}}});
+  render(<QueryClientProvider client={client}><ScanProgressDisplay label="生成" state="running" taskId="task-1" progress={{phase:"processing",processed:1,total:2,percent:50,current:"/电影"}} /></QueryClientProvider>);
+  expect(fetchMock).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button",{name:"查看 STRM 文件进度"}));
+  expect(await screen.findByText("电影")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button",{name:"展开目录 电影"}));
+  expect(await screen.findByText("poster.jpg")).toBeInTheDocument();
+  expect(screen.getByText("512 B / 1.0 KiB")).toBeInTheDocument();
+  expect(screen.getByText("下载附件")).toBeInTheDocument();
+});
+
 it.each(["failed", "interrupted", "canceled", "completed"] as const)("%s 的可恢复任务显示红色继续按钮且发送 retry", (state) => {
   const action = vi.fn();
   const task = { id: "retry-1", state, can_retry: true } as ScanTask<unknown>;

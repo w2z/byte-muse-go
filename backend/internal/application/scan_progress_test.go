@@ -2,12 +2,93 @@ package application
 
 import (
 	"context"
+	"io"
+	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"bytemuse/backend/internal/domain"
 )
+
+// TestScanFilesTrackActualGenerationAndDownload exercises the real walker and download writer.
+func TestScanFilesTrackActualGenerationAndDownload(t *testing.T) {
+	tree := newScanFileTree("integration")
+	ctx := context.WithValue(context.Background(), scanFileTreeKey{}, tree)
+	source := &downloadPan115Stub{address: "http://download.test", strmPan115Stub: strmPan115Stub{pages: map[string]domain.Pan115FilePage{
+		"root":  {Files: []domain.Pan115File{{ID: "child", Name: "子目录", IsDirectory: true}, {ID: "ignored", Name: "排除目录", IsDirectory: true}}},
+		"child": {Files: []domain.Pan115File{{ID: "video", Name: "movie.mp4", PickCode: "video"}, {ID: "poster", Name: "poster.jpg", PickCode: "poster"}}},
+	}}}
+	service := newStrmTestService(t, t.TempDir(), source, nil, map[string]string{"STRM_DOWNLOAD_ENABLE": "true", "STRM_PATHS": strmTestMappings(t, []domain.StrmMapping{{Kind: "115", ID: "root", Path: "/电影", LocalPath: "/movies", Exclude: []domain.StrmExcludeKeyword{{Mode: domain.StrmExcludeModeEquals, Value: "排除目录"}}}})})
+	service.http.Transport = embyRoundTripper(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: 200, ContentLength: 6, Body: io.NopCloser(strings.NewReader("poster"))}, nil
+	})
+	result, err := service.Scan(ctx, "http://play.test", domain.StrmGenerateFull)
+	if err != nil || result.Downloaded != 1 || result.Created != 1 {
+		t.Fatalf("%+v %v", result, err)
+	}
+	root := tree.page("", 1, 15).Items[0]
+	children := tree.page(root.ID, 1, 15)
+	if root.State != "completed" || root.Total != 2 || children.Total != 1 {
+		t.Fatalf("%+v %+v", root, children)
+	}
+	files := tree.page(children.Items[0].ID, 1, 15)
+	if files.Total != 2 || files.Items[1].Bytes != 6 || files.Items[1].Percent != 100 {
+		t.Fatalf("%+v", files)
+	}
+}
+
+// TestScanFileTreeProgress verifies nested aggregation, bytes, failures and directory discovery.
+func TestScanFileTreeProgress(t *testing.T) {
+	tree := newScanFileTree("task")
+	ctx := context.WithValue(context.Background(), scanFileTreeKey{}, tree)
+	ctx = withScanFileMapping(ctx, domain.StrmMapping{Kind: "115", ID: "1", Path: "/电影", LocalPath: "/movies"})
+	finishDirectory := scanFileDirectory(ctx, "子目录")
+	file := strmSourceFile{ID: "1", Name: "poster.jpg", Directory: "子目录"}
+	finish := startScanFile(ctx, file, "download")
+	reportScanFileBytes(ctx, file, 50, 100)
+	root := tree.page("", 1, 15).Items[0]
+	child := tree.page(root.ID, 1, 15).Items[0]
+	row := tree.page(child.ID, 1, 15).Items[0]
+	if root.Total != 1 || child.Percent != 0 || row.Percent != 50 || row.Bytes != 50 {
+		t.Fatalf("%+v %+v %+v", root, child, row)
+	}
+	finish("completed")
+	child = tree.page(root.ID, 1, 15).Items[0]
+	if child.State == "completed" || child.Processed != 1 {
+		t.Fatalf("premature completion: %+v", child)
+	}
+	finishDirectory(true)
+	child = tree.page(root.ID, 1, 15).Items[0]
+	if child.State != "completed" || child.Percent != 100 {
+		t.Fatalf("%+v", child)
+	}
+	var workers sync.WaitGroup
+	for index := 0; index < 5; index++ {
+		workers.Add(1)
+		go func() { defer workers.Done(); finish("completed") }()
+	}
+	workers.Wait()
+	if got := tree.page(root.ID, 1, 15).Items[0]; got.Processed != 1 {
+		t.Fatalf("duplicate completion: %+v", got)
+	}
+	if got := tree.page(child.ID, 2, 15); len(got.Items) != 0 || got.Total != 1 {
+		t.Fatalf("pagination: %+v", got)
+	}
+	finishSecond := startScanFile(ctx, strmSourceFile{ID: "2", Name: "second.jpg", Directory: "子目录"}, "download")
+	if got := tree.page(root.ID, 1, 15).Items[0]; got.State != "processing" || got.Percent != 50 {
+		t.Fatalf("pending download: %+v", got)
+	}
+	finishSecond("failed")
+	if got := tree.page(root.ID, 1, 15).Items[0]; got.State != "failed" || got.Failed != 1 {
+		t.Fatalf("failed download: %+v", got)
+	}
+	finishDirectory(false)
+	if got := tree.page(root.ID, 1, 15).Items[0]; got.State != "interrupted" {
+		t.Fatalf("interrupted discovery: %+v", got)
+	}
+}
 
 // TestScanProgressCountsFiles 验证进度使用全部目录的实际文件总数，并覆盖跳过文件与重复生成。
 func TestScanProgressCountsFiles(t *testing.T) {

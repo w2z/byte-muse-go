@@ -147,6 +147,7 @@ func New(dependencies Dependencies) http.Handler {
 		router.Get("/strm/clouddrive/directories", listStrmCloudDriveDirectories(dependencies.Strm))
 		router.Post("/strm/scan", scanStrm(dependencies.Strm, dependencies.ScanTasks))
 		router.Get("/strm/scan/task", scanTaskEndpoint(dependencies.ScanTasks, "strm", false))
+		router.Get("/strm/scan/tasks/{id}/files", scanFilesEndpoint(dependencies.ScanTasks))
 		router.Post("/strm/scan/tasks/{id}/control", scanTaskEndpoint(dependencies.ScanTasks, "strm", true))
 		router.Post("/strm/emby/media-info/refresh", refreshStrmMediaInfo(dependencies.EmbyMedia))
 		router.Get("/strm/emby/media-info/task", strmMediaInfoTask(dependencies.EmbyMedia))

@@ -553,7 +553,7 @@ export function StrmGenerateAction({ value }: { value: StrmMapping[] }) {
         </Button>
         <ScanTaskControls task={task} pending={controlsPending} onAction={control.mutate} error={control.error ?? queryError} />
       </div>
-      <ScanProgressDisplay state={task?.state} canRetry={task?.can_retry} label="生成" processingText="生成中，边扫描边写入" progress={progress} />
+      <ScanProgressDisplay state={task?.state} canRetry={task?.can_retry} taskId={task?.id} label="生成" processingText="生成中，边扫描边写入" progress={progress} />
       {scan.isError ? (
         <span className="settings-field-description">生成失败：{scan.error.message}</span>
       ) : scan.data ? (

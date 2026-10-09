@@ -65,12 +65,16 @@ type strmDownloadOutcome struct {
 type strmDownloadReader struct {
 	reader io.Reader
 	idle   *time.Timer
+	report func(int)
 }
 
 func (r strmDownloadReader) Read(buffer []byte) (int, error) {
 	n, err := r.reader.Read(buffer)
 	if n > 0 {
 		r.idle.Reset(strmRequestTimeout)
+		if r.report != nil {
+			r.report(n)
+		}
 	}
 	return n, err
 }
@@ -93,6 +97,7 @@ func (s *StrmService) newDownloadPool(ctx context.Context, root, target, kind st
 		go func() {
 			defer workers.Done()
 			for file := range p.jobs {
+				finishFile := startScanFile(ctx, file, "download")
 				skipped, err := taskUnitDone(ctx, "download", target, file.Directory, file.ID)
 				if err == nil && !skipped {
 					skipped, err = s.downloadStrmMedia(ctx, root, target, kind, file, mode)
@@ -100,6 +105,16 @@ func (s *StrmService) newDownloadPool(ctx context.Context, root, target, kind st
 						err = completeTaskUnit(ctx, "download", target, file.Directory, file.ID)
 					}
 				}
+				state := "completed"
+				if err != nil {
+					state = "failed"
+					if ctx.Err() != nil {
+						state = "interrupted"
+					}
+				} else if skipped {
+					state = "skipped"
+				}
+				finishFile(state)
 				p.results <- strmDownloadOutcome{skipped: skipped, err: err}
 			}
 		}()
@@ -119,11 +134,13 @@ func (p *strmDownloadPool) enqueue(ctx context.Context, file strmSourceFile) err
 			return ctx.Err()
 		}
 	}
+	finishFile := startScanFile(ctx, file, "download")
 	select {
 	case p.jobs <- file:
 		p.pending++
 		return nil
 	case <-ctx.Done():
+		finishFile("interrupted")
 		return ctx.Err()
 	}
 }
@@ -228,7 +245,12 @@ func (s *StrmService) downloadStrmMedia(ctx context.Context, root, target, kind 
 		return false, errors.New("创建媒体临时文件失败")
 	}
 	defer dir.Remove(temporary)
-	_, copyErr := io.Copy(output, strmDownloadReader{reader: response.Body, idle: idle})
+	var transferred int64
+	reportScanFileBytes(ctx, file, 0, response.ContentLength)
+	_, copyErr := io.Copy(output, strmDownloadReader{reader: response.Body, idle: idle, report: func(count int) {
+		transferred += int64(count)
+		reportScanFileBytes(ctx, file, transferred, response.ContentLength)
+	}})
 	closeErr := output.Close()
 	if copyErr != nil || closeErr != nil {
 		return false, errors.New("媒体下载未完整写入")

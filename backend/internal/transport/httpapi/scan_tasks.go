@@ -7,8 +7,36 @@ import (
 	"errors"
 	"github.com/go-chi/chi/v5"
 	"net/http"
+	"strconv"
 	"time"
 )
+
+// scanFilesEndpoint returns bounded direct children for the latest STRM execution.
+func scanFilesEndpoint(tasks *application.ScanTasks) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if tasks == nil {
+			writeError(w, 503, "service_unavailable", "后台任务服务尚未就绪")
+			return
+		}
+		page, size := 1, 15
+		for key, target := range map[string]*int{"page": &page, "page_size": &size} {
+			if raw := r.URL.Query().Get(key); raw != "" {
+				value, err := strconv.Atoi(raw)
+				if err != nil || value < 1 || (key == "page_size" && value > 200) || value > 10000000 {
+					writeError(w, 400, "invalid_request", "分页参数无效")
+					return
+				}
+				*target = value
+			}
+		}
+		result, err := tasks.Files(r.Context(), chi.URLParam(r, "id"), r.URL.Query().Get("parent"), page, size)
+		if err != nil {
+			writeScanTaskError(w, err)
+			return
+		}
+		writeJSON(w, 200, result)
+	}
+}
 
 // managedScan 复用持久化任务执行；Prefer: respond-async 立即返回 202，旧客户端仍可等待结果或进度流。
 // 无论客户端是否断连，后台任务均独立运行；任务控制只通过显式控制接口执行。

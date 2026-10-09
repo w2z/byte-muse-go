@@ -1,6 +1,7 @@
 import { Button, Progress } from "@arco-design/web-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, type ScanProgress } from "../../shared/api/client";
+import { StrmFileProgress } from "./StrmFileProgress";
 
 /** 服务端任务快照；刷新页面从数据库恢复，结果为空表示尚未完成。 */
 export type ScanTask<T> = {
@@ -75,8 +76,8 @@ export function ScanTaskControls({ task, pending, onAction, error }: {
  * 扫描与生成共用的进度展示：只在任务进行中显示进度条，结束后的结论由调用方的结果或失败文案表达。
  * 服务重启导致的中断不是进度而是状态提示，单独保留一句可操作说明。
  */
-export function ScanProgressDisplay({ progress, label, state, canRetry, processingText = "处理中" }: {
-  progress?: ScanProgress; label: string; state?: ScanTask<unknown>["state"]; canRetry?: boolean; processingText?: string;
+export function ScanProgressDisplay({ progress, label, state, canRetry, taskId, processingText = "处理中" }: {
+  progress?: ScanProgress; label: string; state?: ScanTask<unknown>["state"]; canRetry?: boolean; taskId?:string; processingText?: string;
 }) {
   if (state === "interrupted") return <span className="settings-field-description">服务重启，任务已中断，{canRetry ? "可继续失败的任务" : "请重新启动"}</span>;
   if (!progress || !isScanTaskActive(state)) return null;
@@ -92,7 +93,7 @@ export function ScanProgressDisplay({ progress, label, state, canRetry, processi
         formatText={(percent) => `${percent}% - ${progress.processed}/${progress.total}`}
         aria-label={`${label}进度条`}
       />
-      {progress.current ? <span className="settings-scan-progress-current settings-field-description">{progress.current}</span> : null}
+      {progress.current ? <div className="settings-scan-progress-location"><span className="settings-scan-progress-current settings-field-description">{progress.current}</span>{taskId ? <StrmFileProgress key={taskId} taskId={taskId} paused={state==="paused"} /> : null}</div> : null}
     </div>
   );
 }

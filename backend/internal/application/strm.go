@@ -488,6 +488,10 @@ func strmMappingFailure(mapping domain.StrmMapping, err error) domain.StrmScanMa
 // 三种方式共用同一套过滤、播放地址与失败计数规则；视频的成功、跳过和失败均计入已处理数，附件下载不计入。
 // 遍历中断（限流、网络失败或取消）只影响尚未扫描到的文件，已写入的 strm 保留，中断原因写入 message。
 func (s *StrmService) scanMapping(ctx context.Context, root string, mapping domain.StrmMapping, base string, mode domain.StrmGenerateMode, walk strmWalk, advance func(), downloadFormats []string) domain.StrmScanMapping {
+	ctx = withScanFileMapping(ctx, mapping)
+	finishMapping := scanFileDirectory(ctx, "")
+	discovered := false
+	defer func() { finishMapping(discovered) }()
 	entry := domain.StrmScanMapping{Kind: mapping.Kind, Path: mapping.Path, LocalPath: mapping.LocalPath}
 	ctx, trackingErr := s.managedContext(ctx, mapping, downloadFormats)
 	if trackingErr != nil {
@@ -529,13 +533,27 @@ func (s *StrmService) scanMapping(ctx context.Context, root string, mapping doma
 			}
 		})
 	}
-	walkErr := walk(ctx, func(file strmSourceFile) error {
+	walkErr := walk(ctx, func(file strmSourceFile) (fileErr error) {
 		if err := scanCheckpoint(ctx); err != nil {
 			return err
 		}
 		if downloads != nil && isStrmMedia(file.Name, downloadFormats) {
 			return downloads.enqueue(ctx, file)
 		}
+		finishFile := startScanFile(ctx, file, "generate")
+		failed, unchanged := entry.Failed, entry.Unchanged
+		defer func() {
+			state := "completed"
+			if fileErr != nil || entry.Failed > failed {
+				state = "failed"
+				if ctx.Err() != nil {
+					state = "interrupted"
+				}
+			} else if entry.Unchanged > unchanged {
+				state = "skipped"
+			}
+			finishFile(state)
+		}()
 		done, err := taskUnitDone(ctx, "strm-file", target, file.Directory, file.ID)
 		if err != nil {
 			return err
@@ -601,6 +619,7 @@ func (s *StrmService) scanMapping(ctx context.Context, root string, mapping doma
 	if downloads != nil {
 		downloads.finish()
 	}
+	discovered = walkErr == nil
 	if walkErr != nil {
 		// 中断原因放在最前：它解释了本次结果为何不完整，单文件提示保留在后。
 		if entry.Message == "" {
@@ -623,7 +642,9 @@ type pan115FileAPI interface {
 func walkPan115Files(ctx context.Context, api pan115FileAPI, rootID string, filter strmFileFilter, visit strmFileVisit) error {
 	var ancestors []string
 	var walk func(directoryID, relative string) error
-	walk = func(directoryID, relative string) error {
+	walk = func(directoryID, relative string) (walkErr error) {
+		finishDirectory := scanFileDirectory(ctx, relative)
+		defer func() { finishDirectory(walkErr == nil) }()
 		ancestors = append(ancestors, directoryID)
 		defer func() { ancestors = ancestors[:len(ancestors)-1] }()
 		for offset := 0; ; {
@@ -682,7 +703,9 @@ func walkPan115Files(ctx context.Context, api pan115FileAPI, rootID string, filt
 // CD2 的条目 ID 不保证可直接播放，这里统一用绝对路径作为播放标识。
 func (s *StrmService) walkCloudDrive(ctx context.Context, rootPath string, filter strmFileFilter, visit strmFileVisit) error {
 	var walk func(directory, relative string) error
-	walk = func(directory, relative string) error {
+	walk = func(directory, relative string) (walkErr error) {
+		finishDirectory := scanFileDirectory(ctx, relative)
+		defer func() { finishDirectory(walkErr == nil) }()
 		if err := scanCheckpoint(ctx); err != nil {
 			return err
 		}

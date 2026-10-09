@@ -6,6 +6,7 @@ import (
 	"bytemuse/backend/internal/platform/database"
 	"context"
 	"encoding/json"
+	"github.com/go-chi/chi/v5"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -52,6 +53,24 @@ func TestManagedScanDisconnectAndRestart(t *testing.T) {
 	if w.Code != 200 {
 		t.Fatal(w.Code)
 	}
+	filesRouter := chi.NewRouter()
+	filesRouter.Get("/strm/scan/tasks/{id}/files", scanFilesEndpoint(manager))
+	for _, testCase := range []struct {
+		path   string
+		status int
+	}{
+		{task.ID + "/files", 200},
+		{task.ID + "/files?page_size=201", 400},
+		{task.ID + "/files?page=0", 400},
+		{task.ID + "/files?page=abc", 400},
+		{"old-task/files", 409},
+	} {
+		recorder := httptest.NewRecorder()
+		filesRouter.ServeHTTP(recorder, httptest.NewRequest("GET", "/strm/scan/tasks/"+testCase.path, nil))
+		if recorder.Code != testCase.status {
+			t.Fatalf("files %s: %d %s", testCase.path, recorder.Code, recorder.Body.String())
+		}
+	}
 	manager.Close()
 	store.Close()
 	store, err = database.Open(ctx, cfg)
@@ -64,6 +83,10 @@ func TestManagedScanDisconnectAndRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer manager.Close()
+	page, err := manager.Files(ctx, task.ID, "", 1, 15)
+	if err != nil || page.Available || page.Items == nil {
+		t.Fatalf("restart files: %+v %v", page, err)
+	}
 	got, err := manager.Latest(ctx, "strm")
 	if err != nil || got.ID != task.ID || got.State != "interrupted" {
 		t.Fatalf("restart %+v %v", got, err)

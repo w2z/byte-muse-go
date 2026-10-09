@@ -36,6 +36,7 @@ type ScanTasks struct {
 	closed   bool
 	runners  map[string]func(context.Context, string) (any, error)
 	journals map[string]*taskJournal
+	files    *scanFileTree
 }
 
 // NewScanTasks 恢复上次运行遗留状态；必须在启动 HTTP 之前且每个服务进程仅调用一次。
@@ -162,6 +163,10 @@ func (s *ScanTasks) start(ctx context.Context, kind, mode, retryID string, run f
 		return nil, err
 	}
 	s.active[kind] = e
+	if kind == "strm" {
+		s.files = newScanFileTree(e.task.ID)
+		workerCtx = context.WithValue(workerCtx, scanFileTreeKey{}, s.files)
+	}
 	initial := e.task
 	logging.Info(scanTaskCategory(kind), scanTaskName(kind)+" 任务已开始", "task_id", e.task.ID, "mode", mode)
 	workerCtx = context.WithValue(workerCtx, scanCheckpointKey{}, func() error { return s.checkpoint(workerCtx, e) })
