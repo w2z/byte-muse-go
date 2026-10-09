@@ -1,16 +1,20 @@
 {
-  "version": "0.1.124",
-  "commit": "1175113a18eb3da7d17416c64a2637eebca1d48a",
-  "short_commit": "1175113",
-  "built_at": "2026-10-09T11:30:01Z",
+  "version": "0.1.125",
+  "commit": "9d55708a606c09ea30469bc2e5e13a87874c9212",
+  "short_commit": "9d55708",
+  "built_at": "2026-10-09T11:34:35Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.124",
-    "sha-1175113",
+    "0.1.125",
+    "sha-9d55708",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.125",
+      "message": "在推送消息顶部展示影片标题"
+    },
     {
       "version": "0.1.124",
       "message": "恢复步骤连接线并显示下载解压实际进度"
