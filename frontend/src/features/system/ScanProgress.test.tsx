@@ -25,6 +25,17 @@ it.each([["115 错误 20018：请求过于频繁", 0], ["写入失败", 1024], [
   expect(await screen.findByText(message)).toBeVisible();
 });
 
+it("按服务端顺序展示处理、等待、错误和成功，不在当前页重新排序", async () => {
+  vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: false, addListener: vi.fn(), removeListener: vi.fn() })));
+  vi.stubGlobal("fetch", vi.fn(async () => Response.json({ available: true, total: 4, items: ["processing", "waiting", "failed", "completed"].map(state => (
+    { id: state, name: `${state}.strm`, kind: "file", operation: "generate", state, error: "", total: 1, processed: 0, failed: state === "failed" ? 1 : 0, percent: 0, bytes: 0, size: 0 }
+  )) })));
+  render(<QueryClientProvider client={new QueryClient()}><StrmFileProgress taskId="order-task" paused={false} /></QueryClientProvider>);
+  fireEvent.click(screen.getByRole("button", { name: "查看 STRM 文件进度" }));
+  expect(await screen.findByText("等待处理")).toBeVisible();
+  expect(Array.from(document.querySelectorAll(".strm-file-name")).map(node => node.textContent)).toEqual(["processing.strm", "waiting.strm", "failed.strm", "completed.strm"]);
+});
+
 it("失败目录保留状态但不提供错误详情按钮", async () => {
   vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: false, addListener: vi.fn(), removeListener: vi.fn() })));
   vi.stubGlobal("fetch", vi.fn(async () => Response.json({ available: true, total: 1, items: [

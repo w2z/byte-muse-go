@@ -132,6 +132,11 @@ func scanFileIdentity(ctx context.Context, file strmSourceFile, operation string
 
 // startScanFile counts each file once and records its sanitized error; terminal updates are idempotent.
 func startScanFile(ctx context.Context, file strmSourceFile, operation string) func(string, error) {
+	return trackScanFile(ctx, file, operation, "processing")
+}
+
+// trackScanFile registers waiting work once; only a worker may promote it to processing.
+func trackScanFile(ctx context.Context, file strmSourceFile, operation, initialState string) func(string, error) {
 	tree, root, id := scanFileIdentity(ctx, file, operation)
 	if tree == nil {
 		return func(string, error) {}
@@ -143,10 +148,12 @@ func startScanFile(ctx context.Context, file strmSourceFile, operation string) f
 		if operation == "generate" {
 			name += ".strm"
 		}
-		tree.add(ScanFileRow{ID: id, Name: name, Kind: "file", Operation: operation, State: "processing", Total: 1, parent: parent})
+		tree.add(ScanFileRow{ID: id, Name: name, Kind: "file", Operation: operation, State: initialState, Total: 1, parent: parent})
 		for ancestor := parent; ancestor != ""; ancestor = tree.rows[ancestor].parent {
 			tree.rows[ancestor].Total++
 		}
+	} else if row := tree.rows[id]; row.Processed == 0 && initialState == "processing" {
+		row.State = "processing"
 	}
 	tree.mu.Unlock()
 	return func(state string, err error) {
@@ -186,7 +193,21 @@ func reportScanFileBytes(ctx context.Context, file strmSourceFile, bytes, size i
 	}
 }
 
-// page filters and stably puts completed rows last before slicing, including directory snapshots.
+// scanFilePriority is the single display order for files and computed directory snapshots.
+func scanFilePriority(state string) int {
+	switch state {
+	case "processing", "scanning":
+		return 0
+	case "failed", "interrupted":
+		return 2
+	case "completed", "skipped":
+		return 3
+	default:
+		return 1
+	}
+}
+
+// page stably orders processing, waiting, errors and successes before pagination at every level.
 func (tree *scanFileTree) page(parent string, page, size int, hideCompleted bool) ScanFilePage {
 	tree.mu.Lock()
 	ids := tree.children[parent]
@@ -216,7 +237,7 @@ func (tree *scanFileTree) page(parent string, page, size int, hideCompleted bool
 	}
 	tree.mu.Unlock()
 	sort.SliceStable(result.Items, func(first, second int) bool {
-		return result.Items[first].State != "completed" && result.Items[second].State == "completed"
+		return scanFilePriority(result.Items[first].State) < scanFilePriority(result.Items[second].State)
 	})
 	result.Total = len(result.Items)
 	start := result.Total

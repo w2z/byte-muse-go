@@ -12,7 +12,7 @@ type FileRow = {
 };
 type FilePage = { items: FileRow[]; total: number; available: boolean };
 const states: Record<string, string> = {
-  scanning: "扫描中", processing: "处理中", completed: "已完成",
+  scanning: "扫描中", processing: "处理中", waiting: "等待处理", completed: "已完成",
   skipped: "已跳过", failed: "失败", interrupted: "已中断",
 };
 

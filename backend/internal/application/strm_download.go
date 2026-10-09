@@ -125,16 +125,17 @@ func (s *StrmService) newDownloadPool(ctx context.Context, root, target, kind st
 
 // enqueue 在五项尚未完成时等待结果，使扫描不会无界积压下载或占用内存。
 func (p *strmDownloadPool) enqueue(ctx context.Context, file strmSourceFile) error {
+	finishFile := trackScanFile(ctx, file, "download", "waiting")
 	for p.pending >= strmDownloadWorkers {
 		select {
 		case result := <-p.results:
 			p.pending--
 			p.apply(result)
 		case <-ctx.Done():
+			finishFile("interrupted", ctx.Err())
 			return ctx.Err()
 		}
 	}
-	finishFile := startScanFile(ctx, file, "download")
 	select {
 	case p.jobs <- file:
 		p.pending++

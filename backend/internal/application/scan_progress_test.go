@@ -3,8 +3,10 @@ package application
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -132,6 +134,67 @@ func TestScanFileTreeProgress(t *testing.T) {
 	finishDirectory(false)
 	if got := tree.page(root.ID, 1, 15, false).Items[0]; got.State != "interrupted" {
 		t.Fatalf("interrupted discovery: %+v", got)
+	}
+}
+
+// TestScanFileWaitingLifecycle verifies queue admission, worker promotion, deduplication and cancellation.
+func TestScanFileWaitingLifecycle(t *testing.T) {
+	tree := newScanFileTree("waiting")
+	ctx := withScanFileMapping(context.WithValue(context.Background(), scanFileTreeKey{}, tree), domain.StrmMapping{Kind: "115", ID: "root", Path: "/movies"})
+	root := tree.page("", 1, 15, false).Items[0]
+	file := strmSourceFile{ID: "poster", Name: "poster.jpg"}
+	trackScanFile(ctx, file, "download", "waiting")
+	if got := tree.page(root.ID, 1, 15, false).Items[0]; got.State != "waiting" {
+		t.Fatalf("queued: %+v", got)
+	}
+	finish := startScanFile(ctx, file, "download")
+	trackScanFile(ctx, file, "download", "waiting")
+	if got := tree.page(root.ID, 1, 15, false).Items[0]; got.State != "processing" {
+		t.Fatalf("worker: %+v", got)
+	}
+	finish("completed", nil)
+	startScanFile(ctx, file, "download")
+	if got := tree.page("", 1, 15, false).Items[0]; got.Total != 1 || got.Processed != 1 {
+		t.Fatalf("duplicate: %+v", got)
+	}
+	for _, pending := range []int{0, strmDownloadWorkers} {
+		canceled, cancel := context.WithCancel(ctx)
+		cancel()
+		pool := &strmDownloadPool{pending: pending}
+		if err := pool.enqueue(canceled, strmSourceFile{ID: fmt.Sprint(pending), Name: "queued.jpg"}); !errors.Is(err, context.Canceled) {
+			t.Fatal(err)
+		}
+	}
+	for _, row := range tree.page(root.ID, 1, 15, false).Items {
+		if row.Name == "queued.jpg" && row.State != "interrupted" {
+			t.Fatalf("canceled: %+v", row)
+		}
+	}
+}
+
+// TestScanFileStatusOrdering verifies priority before pagination, stable ties and live transitions.
+func TestScanFileStatusOrdering(t *testing.T) {
+	tree := newScanFileTree("ordering")
+	for _, parent := range []string{"", "nested"} {
+		for _, state := range []string{"completed", "failed", "waiting", "processing", "interrupted", "skipped", "scanning", "processing"} {
+			id := fmt.Sprintf("%s-%d", parent, len(tree.rows))
+			tree.add(ScanFileRow{ID: id, parent: parent, Kind: "file", State: state})
+		}
+		var states []string
+		for page := 1; page <= 4; page++ {
+			for _, row := range tree.page(parent, page, 2, false).Items {
+				states = append(states, row.State)
+			}
+		}
+		want := []string{"processing", "scanning", "processing", "waiting", "failed", "interrupted", "completed", "skipped"}
+		if !reflect.DeepEqual(states, want) {
+			t.Fatalf("parent=%q got=%v want=%v", parent, states, want)
+		}
+		active := tree.page(parent, 1, 2, false).Items[0]
+		tree.rows[active.ID].State = "completed"
+		if got := tree.page(parent, 1, 2, true); got.Items[0].State != "scanning" || got.Total != 6 {
+			t.Fatalf("live transition: %+v", got)
+		}
 	}
 }
 
