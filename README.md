@@ -143,6 +143,38 @@ services:
       - HTTPS_PROXY=http://<代理主机>:<代理端口>
       - DOCKERMODE=true
 
+  # 可选 FlareSolverr：取消下方服务配置的注释后启用。
+  # 设置页：BYPASS_ENGINE=flaresolverr，BYPASS_URL=http://flareSolverr_byte_muse_go:8191。
+  # 需要代理时，在 ByteMuse 设置 PROXY 并开启 BYPASS_USE_PROXY，由请求传入代理。
+  # flareSolverr_byte_muse_go:
+  #   image: ghcr.io/flaresolverr/flaresolverr:v3.5.2
+  #   container_name: flareSolverr_byte_muse_go
+  #   restart: always
+  #   networks:
+  #     - bridge
+  #   ports:
+  #     - "8191:8191"
+  #   environment:
+  #     TZ: Asia/Shanghai
+  #     LOG_LEVEL: info
+  #     LOG_HTML: "false"
+
+  # 可选 Scrapling：这是独立 MCP 服务，当前 ByteMuse 未接入，不能直接作为 BYPASS_URL。
+  # 取消下方服务配置的注释并替换认证令牌后启用；MCP 路径为 /mcp。
+  # MCP 客户端使用 Authorization: Bearer <认证令牌>；抓取代理通过工具的 proxy 参数传入。
+  # scrapling_byte_muse_go:
+  #   image: ghcr.io/d4vinci/scrapling:0.4.15
+  #   container_name: scrapling_byte_muse_go
+  #   restart: always
+  #   networks:
+  #     - bridge
+  #   ports:
+  #     - "8001:8000"
+  #   command: ["mcp", "--http", "--host", "0.0.0.0", "--port", "8000"]
+  #   environment:
+  #     TZ: Asia/Shanghai
+  #     SCRAPLING_MCP_AUTH_TOKEN: 请替换为随机认证令牌
+
 networks:
   bridge:
     driver: bridge
@@ -221,6 +253,38 @@ services:
       - HTTP_PROXY=http://<代理主机>:<代理端口>
       - HTTPS_PROXY=http://<代理主机>:<代理端口>
       - DOCKERMODE=true
+
+  # 可选 FlareSolverr：取消下方服务配置的注释后启用。
+  # 设置页：BYPASS_ENGINE=flaresolverr，BYPASS_URL=http://flareSolverr_byte_muse_go:8191。
+  # 需要代理时，在 ByteMuse 设置 PROXY 并开启 BYPASS_USE_PROXY，由请求传入代理。
+  # flareSolverr_byte_muse_go:
+  #   image: ghcr.io/flaresolverr/flaresolverr:v3.5.2
+  #   container_name: flareSolverr_byte_muse_go
+  #   restart: always
+  #   networks:
+  #     - bridge
+  #   ports:
+  #     - "8191:8191"
+  #   environment:
+  #     TZ: Asia/Shanghai
+  #     LOG_LEVEL: info
+  #     LOG_HTML: "false"
+
+  # 可选 Scrapling：这是独立 MCP 服务，当前 ByteMuse 未接入，不能直接作为 BYPASS_URL。
+  # 取消下方服务配置的注释并替换认证令牌后启用；MCP 路径为 /mcp。
+  # MCP 客户端使用 Authorization: Bearer <认证令牌>；抓取代理通过工具的 proxy 参数传入。
+  # scrapling_byte_muse_go:
+  #   image: ghcr.io/d4vinci/scrapling:0.4.15
+  #   container_name: scrapling_byte_muse_go
+  #   restart: always
+  #   networks:
+  #     - bridge
+  #   ports:
+  #     - "8001:8000"
+  #   command: ["mcp", "--http", "--host", "0.0.0.0", "--port", "8000"]
+  #   environment:
+  #     TZ: Asia/Shanghai
+  #     SCRAPLING_MCP_AUTH_TOKEN: 请替换为随机认证令牌
 
 networks:
   bridge:
@@ -301,6 +365,38 @@ services:
       - HTTP_PROXY=http://<代理主机>:<代理端口>
       - HTTPS_PROXY=http://<代理主机>:<代理端口>
       - DOCKERMODE=true
+
+  # 可选 FlareSolverr：取消下方服务配置的注释后启用。
+  # 设置页：BYPASS_ENGINE=flaresolverr，BYPASS_URL=http://flareSolverr_byte_muse_go:8191。
+  # 需要代理时，在 ByteMuse 设置 PROXY 并开启 BYPASS_USE_PROXY，由请求传入代理。
+  # flareSolverr_byte_muse_go:
+  #   image: ghcr.io/flaresolverr/flaresolverr:v3.5.2
+  #   container_name: flareSolverr_byte_muse_go
+  #   restart: always
+  #   networks:
+  #     - bridge
+  #   ports:
+  #     - "8191:8191"
+  #   environment:
+  #     TZ: Asia/Shanghai
+  #     LOG_LEVEL: info
+  #     LOG_HTML: "false"
+
+  # 可选 Scrapling：这是独立 MCP 服务，当前 ByteMuse 未接入，不能直接作为 BYPASS_URL。
+  # 取消下方服务配置的注释并替换认证令牌后启用；MCP 路径为 /mcp。
+  # MCP 客户端使用 Authorization: Bearer <认证令牌>；抓取代理通过工具的 proxy 参数传入。
+  # scrapling_byte_muse_go:
+  #   image: ghcr.io/d4vinci/scrapling:0.4.15
+  #   container_name: scrapling_byte_muse_go
+  #   restart: always
+  #   networks:
+  #     - bridge
+  #   ports:
+  #     - "8001:8000"
+  #   command: ["mcp", "--http", "--host", "0.0.0.0", "--port", "8000"]
+  #   environment:
+  #     TZ: Asia/Shanghai
+  #     SCRAPLING_MCP_AUTH_TOKEN: 请替换为随机认证令牌
 
 networks:
   bridge:
