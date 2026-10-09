@@ -8,6 +8,7 @@ import type { SystemVersion } from "../../shared/api/types";
 import { VersionTag } from "./VersionTag";
 
 vi.mock("../../shared/api/client", () => ({ apiRequest: vi.fn() }));
+const UPGRADE_LABELS = ["开始下载文件", "开始解压文件", "正在升级", "正在重启"];
 
 beforeEach(() => vi.stubEnv("VITE_APP_VERSION", "0.1.21"));
 
@@ -135,17 +136,28 @@ it("更新请求未返回时立即显示本地版本，返回后再显示更新�
   expect(screen.queryByRole("link")).toBeNull();
 });
 
-it("升级按实际阶段完成步骤，失败保留进度且不标记当前步骤完成", async () => {
+it.each([false, true])("历史升级成功后不残留步骤，有更新=%s 时恢复版本信息", async (hasUpdate) => {
+  vi.mocked(apiRequest).mockImplementation((path) => Promise.resolve(path === "/system/upgrade"
+    ? { enabled: true, phase: "success", completed_steps: 4, target: base.current, error: "" }
+    : { ...base, latest: hasUpdate ? "0.1.22" : base.current, has_update: hasUpdate, changes: hasUpdate ? [{ version: "0.1.22", message: "修复版本检查" }] : [] }));
+  renderTag();
+  fireEvent.click(screen.getByRole("button", { name: "v0.1.21" }));
+  expect(await screen.findByText(hasUpdate ? "修复版本检查" : "当前已是最新版本")).toBeInTheDocument();
+  await waitFor(() => expect(apiRequest).toHaveBeenCalledWith("/system/upgrade"));
+  expect(screen.queryByRole("group", { name: "升级步骤" })).toBeNull();
+  expect(screen.queryByRole("progressbar", { name: "升级进度" })).toBeNull();
+  expect(screen.getByRole("button", { name: hasUpdate ? "立即升级" : "立即检查更新" })).toBeInTheDocument();
+});
+
+it("升级失败后收起步骤并保留失败原因", async () => {
   vi.mocked(apiRequest).mockImplementation((path) => Promise.resolve(path === "/system/upgrade"
     ? { enabled: true, phase: "failed", completed_steps: 2, target: "0.1.22", error: "安装失败" }
     : { ...base, latest: "0.1.22", has_update: true }));
   renderTag();
   fireEvent.click(screen.getByRole("button", { name: "v0.1.21" }));
   expect(await screen.findByText("安装失败")).toBeInTheDocument();
-  expect(screen.getByText("开始下载文件").closest("li")).toHaveClass("is-complete");
-  expect(screen.getByText("开始解压文件").closest("li")).toHaveClass("is-complete");
-  expect(screen.getByText("正在升级").closest("li")).not.toHaveClass("is-complete");
-  expect(screen.getByRole("progressbar", { name: "升级进度" })).toHaveAttribute("aria-valuenow", "50");
+  expect(screen.queryByRole("group", { name: "升级步骤" })).toBeNull();
+  expect(screen.queryByRole("progressbar", { name: "升级进度" })).toBeNull();
 });
 
 it("升级依次展示进度，断连不误判完成，目标就绪后刷新", async () => {
@@ -159,10 +171,14 @@ it("升级依次展示进度，断连不误判完成，目标就绪后刷新", a
   fireEvent.click(screen.getByRole("button", { name: "v0.1.21" }));
   fireEvent.click(await screen.findByRole("button", { name: "立即升级" }));
   await waitFor(() => expect(screen.getByRole("progressbar", { name: "升级进度" })).toHaveAttribute("aria-valuenow", "0"));
+  const steps = screen.getByRole("group", { name: "升级步骤" });
+  expect(steps.querySelector(".arco-steps")).not.toBeNull();
+  expect(steps.compareDocumentPosition(screen.getByRole("progressbar", { name: "升级进度" })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   for (const [index, phase] of ["extracting", "installing", "restarting"].entries()) {
     await act(async () => { client.setQueryData(["system", "upgrade"], { ...state, phase, completed_steps: index + 1 }); });
     await waitFor(() => expect(screen.getByRole("progressbar", { name: "升级进度" })).toHaveAttribute("aria-valuenow", String((index + 1) * 25)));
     expect(document.querySelectorAll(".version-upgrade-steps .is-complete")).toHaveLength(index + 1);
+    expect(screen.getByText(UPGRADE_LABELS[index + 1])).toHaveAttribute("aria-current", "step");
     expect(reload).not.toHaveBeenCalled();
   }
   vi.mocked(apiRequest).mockRejectedValueOnce(new Error("服务断开"));
@@ -171,6 +187,8 @@ it("升级依次展示进度，断连不误判完成，目标就绪后刷新", a
   expect(reload).not.toHaveBeenCalled();
   await act(async () => { client.setQueryData(["system", "upgrade"], { ...state, phase: "success", completed_steps: 4 }); });
   await waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
+  expect(screen.queryByRole("group", { name: "升级步骤" })).toBeNull();
+  expect(screen.queryByRole("progressbar", { name: "升级进度" })).toBeNull();
   vi.unstubAllGlobals();
   client.clear();
 });

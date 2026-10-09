@@ -150,8 +150,7 @@ body button.arco-btn[class]:focus-visible { box-shadow: none; }
 .version-dialog-changes { margin: 16px 0 0; padding-left: 24px; max-height: 240px; overflow-y: auto; line-height: 1.8; }
 .version-dialog-changes li { padding-left: 4px; margin-bottom: 8px; white-space: pre-wrap; }
 .version-upgrade-progress { margin-top: 24px; width: 100%; }
-.version-upgrade-steps { margin: 16px 0 0; padding-left: 24px; color: var(--ink); }
-.version-upgrade-steps li { padding: 4px 0; line-height: 1.6; }
+.version-upgrade-steps { margin-bottom: 16px; color: var(--ink); }
 .version-upgrade-steps .is-complete { color: var(--muted); text-decoration: line-through; }
 .version-upgrade-steps .is-current { color: var(--mint); font-weight: 600; }
 .version-dialog-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 16px; margin-top: 28px; }

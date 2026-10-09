@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Badge, Button, Modal, Progress, Tag } from "@arco-design/web-react";
+import { Badge, Button, Modal, Progress, Steps, Tag } from "@arco-design/web-react";
 import { IconGithub, IconSend } from "@arco-design/web-react/icon";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "../../shared/api/client";
@@ -57,7 +57,8 @@ export function VersionTag() {
   const busy = install.isPending || Boolean(waitingTarget);
   const phase = install.isPending ? "downloading" : upgrade.data?.phase ?? "idle";
   const completedSteps = install.isPending ? 0 : Math.min(4, Math.max(0, upgrade.data?.completed_steps ?? (phase === "success" ? 4 : ACTIVE_PHASES.indexOf(phase))));
-  const showProgress = busy || (Boolean(upgrade.data?.target) && phase !== "idle");
+  // 服务保留上次任务的终态；历史成功或失败不能让步骤常驻，断连等待期间仍保留进度。
+  const showProgress = (busy || ACTIVE_PHASES.includes(phase)) && phase !== "success" && phase !== "failed";
   const failure = install.error?.message || upgrade.data?.error || check.error?.message || data?.check_error || error?.message;
   const showChanges = hasUpdate && !busy && !checking && !failure && !waitExpired && Boolean(data?.changes?.length);
   const summary = waitExpired ? "等待服务恢复超时，请检查容器日志后刷新页面。" : busy ? (phase === "success" ? "升级完成，正在刷新页面…" : UPGRADE_STEPS[Math.min(completedSteps, 3)] + "…")
@@ -81,13 +82,16 @@ export function VersionTag() {
             <p className="version-dialog-label">当前版本</p>
             <strong className="version-dialog-number">{`v${version}`}</strong>
             {showProgress && <div className="version-upgrade-progress">
-              <div role="progressbar" aria-label="升级进度" aria-valuemin={0} aria-valuemax={100} aria-valuenow={completedSteps * 25}>
-                <div aria-hidden="true"><Progress percent={completedSteps * 25} status={phase === "failed" ? "error" : phase === "success" ? "success" : "normal"} /></div>
+              <div role="group" aria-label="升级步骤" className="version-upgrade-steps">
+                <Steps direction="vertical" size="small" current={completedSteps + 1}>
+                  {UPGRADE_STEPS.map((label, index) => <Steps.Step key={label}
+                    title={<span className={index < completedSteps ? "is-complete" : index === completedSteps ? "is-current" : undefined}
+                      aria-current={index === completedSteps ? "step" : undefined}>{label}</span>} />)}
+                </Steps>
               </div>
-              <ol className="version-upgrade-steps" aria-label="升级步骤">
-                {UPGRADE_STEPS.map((label, index) => <li key={label} className={index < completedSteps ? "is-complete" : index === completedSteps && busy ? "is-current" : undefined}
-                  aria-current={index === completedSteps && busy ? "step" : undefined}><span>{label}</span></li>)}
-              </ol>
+              <div role="progressbar" aria-label="升级进度" aria-valuemin={0} aria-valuemax={100} aria-valuenow={completedSteps * 25}>
+                <div aria-hidden="true"><Progress percent={completedSteps * 25} status="normal" /></div>
+              </div>
             </div>}
             <div role="status" aria-live="polite">
               {showChanges ? <ol className="version-dialog-changes" aria-label="更新内容" tabIndex={0}>
