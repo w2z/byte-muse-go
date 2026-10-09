@@ -1,4 +1,4 @@
-import { Button, Divider, Input, InputTag, Progress, Radio, Select, Switch, Tabs } from "@arco-design/web-react";
+import { Alert, Button, Divider, Input, InputTag, Progress, Radio, Select, Switch, Tabs } from "@arco-design/web-react";
 import { IconCheck, IconClose, IconLaunch, IconSave, IconUndo } from "@arco-design/web-react/icon";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Fragment, useEffect, useState, type ReactNode } from "react";
@@ -1637,6 +1637,10 @@ export function SettingsPage() {
               ))}
             </span>
           </div>
+          <Alert
+            type="warning"
+            content="大陆地区部署ByPass(cloudflarebypassforscraping) 会因为DNS污染(不会使用代理进行解析，即使配置了HTTP_PROXY)导致无法请求成功。大陆部署推荐使用 FlareSolverr"
+          />
         </div>
       );
     }
