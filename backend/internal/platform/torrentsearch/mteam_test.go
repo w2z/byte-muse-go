@@ -64,9 +64,12 @@ func TestMTeamDownloadFetchesTorrentAndComputesInfoHash(t *testing.T) {
 	}))
 	defer server.Close()
 	client := NewMTeamSearcher(server.Client(), server.URL, "test-key")
-	got, hash, e := client.Download(context.Background(), "mteam:123")
+	got, hash, downloadURL, e := client.Download(context.Background(), "mteam:123")
 	if e != nil {
 		t.Fatal(e)
+	}
+	if downloadURL != server.URL+"/download/123.torrent" {
+		t.Fatal("actual download URL missing")
 	}
 	if string(got) != string(torrent) || hash != "1ade8a1a581f338e4fce4ce784da3f7d03f81f3a" {
 		t.Fatalf("torrent hash=%s", hash)

@@ -196,18 +196,19 @@ func (s *NexusCookieSearcher) Search(ctx context.Context, code string) ([]Resour
 }
 
 // Download 只接收站点限定的数字 ID，不转发页面里的秘密下载 URL。
-func (s *NexusCookieSearcher) Download(ctx context.Context, reference string) ([]byte, string, error) {
+// 返回种子字节、Hash 及本次请求 URL；Cookie 只用于请求，不进入链接快照。
+func (s *NexusCookieSearcher) Download(ctx context.Context, reference string) ([]byte, string, string, error) {
 	id := strings.TrimPrefix(reference, s.prefix+":")
 	if id == reference || !ptfansID.MatchString(id) || strings.Trim(id, "0") == "" {
-		return nil, "", fmt.Errorf("invalid %s resource", s.site)
+		return nil, "", "", fmt.Errorf("invalid %s resource", s.site)
 	}
 	data, err := s.request(ctx, "/download.php?id="+id, 4<<20)
 	if err != nil {
-		return nil, "", err
+		return nil, "", "", err
 	}
 	hash, err := TorrentInfoHash(data)
 	if err != nil {
-		return nil, "", fmt.Errorf("%s 返回无效种子文件", s.site)
+		return nil, "", "", fmt.Errorf("%s 返回无效种子文件", s.site)
 	}
-	return data, hash, nil
+	return data, hash, s.origin + "/download.php?id=" + id, nil
 }

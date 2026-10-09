@@ -38,7 +38,7 @@ func TestPTFansSearchAndDownload(t *testing.T) {
 	if len(items) != 1 || items[0].URI != "ptfans:9432" || items[0].Seeders != 88 || !items[0].Free || !items[0].Chinese || !items[0].UHD || items[0].SizeMB < 4900 {
 		t.Fatalf("items=%#v", items)
 	}
-	got, hash, err := site.Download(context.Background(), items[0].URI)
+	got, hash, _, err := site.Download(context.Background(), items[0].URI)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +58,7 @@ func TestPTFansRejectsLoginAndForeignResource(t *testing.T) {
 	if _, err := site.Search(context.Background(), "FNS-249"); err == nil || !strings.Contains(err.Error(), "redirect") {
 		t.Fatalf("login err=%v", err)
 	}
-	if _, _, err := site.Download(context.Background(), "mteam:9432"); err == nil {
+	if _, _, _, err := site.Download(context.Background(), "mteam:9432"); err == nil {
 		t.Fatal("foreign reference accepted")
 	}
 }

@@ -34,7 +34,10 @@ func TestNexusKeyLiveOnlyFetch(t *testing.T) {
 			if len(items) == 0 {
 				t.Fatal("真实搜索无匹配，未进行下载验证")
 			}
-			data, hash, err := adapter.Download(context.Background(), items[0].URI)
+			data, hash, downloadURL, err := adapter.Download(context.Background(), items[0].URI)
+			if downloadURL == "" {
+				t.Fatal("actual URL missing")
+			}
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -99,7 +102,10 @@ func TestNexusKeySearchDownload(t *testing.T) {
 			if items[0].URI != site+":12" || items[0].SizeMB != 1 || items[0].Seeders != 8 || !items[0].Free || !items[0].Chinese || !items[0].UHD || items[1].Free {
 				t.Fatalf("wrong resources: %+v", items)
 			}
-			data, hash, err := adapter.Download(context.Background(), items[0].URI)
+			data, hash, downloadURL, err := adapter.Download(context.Background(), items[0].URI)
+			if downloadURL != srv.URL+"/download.php?id=12&passkey=fake-passkey" {
+				t.Fatal("actual URL missing")
+			}
 			if err != nil || len(data) == 0 || hash != "1ade8a1a581f338e4fce4ce784da3f7d03f81f3a" {
 				t.Fatalf("download hash=%s err=%v", hash, err)
 			}
@@ -146,7 +152,7 @@ func TestNexusKeyRejectsUnsafeDownloads(t *testing.T) {
 			calls++
 			fmt.Fprintf(w, `{"ret":0,"data":{"data":{"download_url":%q}}}`, link)
 		}))
-		_, _, err := NewNicePTKeySearcher(srv.Client(), srv.URL, "fake").Download(context.Background(), "nicept:12")
+		_, _, _, err := NewNicePTKeySearcher(srv.Client(), srv.URL, "fake").Download(context.Background(), "nicept:12")
 		srv.Close()
 		if err == nil || strings.Contains(err.Error(), "fake-secret") || calls != 1 {
 			t.Fatalf("calls=%d err=%v", calls, err)
@@ -167,7 +173,7 @@ func TestNexusKeyRejectsRedirectAndBadTorrent(t *testing.T) {
 				fmt.Fprint(w, "not a torrent")
 			}
 		}))
-		_, _, err := NewNicePTKeySearcher(srv.Client(), srv.URL, "fake").Download(context.Background(), "nicept:12")
+		_, _, _, err := NewNicePTKeySearcher(srv.Client(), srv.URL, "fake").Download(context.Background(), "nicept:12")
 		srv.Close()
 		if err == nil || strings.Contains(err.Error(), "fake-secret") {
 			t.Fatalf("unsafe/missing error: %v", err)

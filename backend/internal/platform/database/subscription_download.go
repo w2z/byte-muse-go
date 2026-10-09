@@ -218,6 +218,7 @@ func (r *SubscriptionDownloadRepository) FinishScan(ctx context.Context, a ports
 }
 
 // StartTask 用选中资源建立下载任务，是 download_tasks 的唯一写入入口。
+// 原始资源引用与实际下载链接一起在外部提交前落库，后续状态更新保留这份来源快照。
 // 任务先落库为 unknown 并持有短租约，提交结果由 FinishSubmission 或后续 ClaimPending 回查收敛；
 // 该订阅已有有效任务时返回 ErrSubscriptionTaskActive，订阅已失效时返回 ErrSubscriptionNotFound。
 func (r *SubscriptionDownloadRepository) StartTask(ctx context.Context, a ports.SubscriptionScanAttempt, c ports.ScanCandidate) (ports.PendingSubmission, error) {
@@ -242,8 +243,8 @@ func (r *SubscriptionDownloadRepository) StartTask(ctx context.Context, a ports.
 	}
 	now := time.Now().UTC()
 	p := ports.PendingSubmission{ID: newSortableID(), URI: c.URI, InfoHash: c.InfoHash, Downloader: c.Downloader, LeaseToken: newSortableID(), Code: a.Code, Title: a.Title, Site: c.Site, Kind: c.Kind, Cover: a.Cover}
-	insert := fmt.Sprintf("INSERT INTO download_tasks (id,media_id,subscription_id,status,source_site,source_kind,resource_uri,info_hash,downloader,filter_passed,lease_until,lease_token,created_at,updated_at,origin) VALUES (%s)", placeholders(r.dialect, 15, 1))
-	if _, e = tx.ExecContext(ctx, insert, p.ID, a.MediaID, a.SubscriptionID, domain.DownloadStatusUnknown, c.Site, c.Kind, c.URI, c.InfoHash, c.Downloader, c.FilterPassed, now.Add(2*time.Minute).UnixMilli(), p.LeaseToken, encodeTime(now, r.dialect), encodeTime(now, r.dialect), string(normalizeOrigin(a.Origin))); e != nil {
+	insert := fmt.Sprintf("INSERT INTO download_tasks (id,media_id,subscription_id,status,source_site,source_kind,resource_uri,info_hash,downloader,filter_passed,lease_until,lease_token,created_at,updated_at,origin,download_url) VALUES (%s)", placeholders(r.dialect, 16, 1))
+	if _, e = tx.ExecContext(ctx, insert, p.ID, a.MediaID, a.SubscriptionID, domain.DownloadStatusUnknown, c.Site, c.Kind, c.URI, c.InfoHash, c.Downloader, c.FilterPassed, now.Add(2*time.Minute).UnixMilli(), p.LeaseToken, encodeTime(now, r.dialect), encodeTime(now, r.dialect), string(normalizeOrigin(a.Origin)), sql.NullString{String: c.DownloadURL, Valid: c.DownloadURL != ""}); e != nil {
 		return ports.PendingSubmission{}, e
 	}
 	return p, tx.Commit()

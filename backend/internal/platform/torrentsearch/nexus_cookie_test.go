@@ -54,7 +54,7 @@ func TestCookieSitesPaginateAndDownload(t *testing.T) {
 			defer srv.Close()
 			var adapter interface {
 				Search(context.Context, string) ([]Resource, error)
-				Download(context.Context, string) ([]byte, string, error)
+				Download(context.Context, string) ([]byte, string, string, error)
 			} = NewNicePTSearcher(srv.Client(), srv.URL, "session=fake")
 			if site == "ptfans" {
 				adapter = NewPTFansSearcher(srv.Client(), srv.URL, "session=fake")
@@ -69,7 +69,10 @@ func TestCookieSitesPaginateAndDownload(t *testing.T) {
 			if items[0].URI != site+":12" || !items[0].Free || !items[0].Chinese || items[0].SizeMB != 2048 || items[0].Seeders != 8 {
 				t.Fatalf("resource=%+v", items[0])
 			}
-			_, hash, err := adapter.Download(context.Background(), items[0].URI)
+			_, hash, downloadURL, err := adapter.Download(context.Background(), items[0].URI)
+			if downloadURL != srv.URL+"/download.php?id=12" {
+				t.Fatal("actual URL missing")
+			}
 			if err != nil || hash == "" {
 				t.Fatalf("download %v", err)
 			}

@@ -106,42 +106,43 @@ func (s *MTeamSearcher) Search(ctx context.Context, code string) ([]Resource, er
 }
 
 // Download obtains a short-lived authenticated URL, reads the private torrent, and hashes its raw info dictionary.
-func (s *MTeamSearcher) Download(ctx context.Context, reference string) ([]byte, string, error) {
+// Returns bytes, info hash and the actual URL for internal task persistence; the URL can expire.
+func (s *MTeamSearcher) Download(ctx context.Context, reference string) ([]byte, string, string, error) {
 	id := strings.TrimPrefix(reference, "mteam:")
 	if reference == id || !mteamID.MatchString(id) {
-		return nil, "", fmt.Errorf("invalid M-Team resource")
+		return nil, "", "", fmt.Errorf("invalid M-Team resource")
 	}
 	if strings.TrimSpace(s.key) == "" {
-		return nil, "", fmt.Errorf("M-Team API key is not configured")
+		return nil, "", "", fmt.Errorf("M-Team API key is not configured")
 	}
 	req, e := http.NewRequestWithContext(ctx, http.MethodPost, s.origin+"/api/torrent/genDlToken?id="+id, nil)
 	if e != nil {
-		return nil, "", e
+		return nil, "", "", e
 	}
 	req.Header.Set("x-api-key", s.key)
 	req.Header.Set("User-Agent", "Mozilla/5.0 ByteMuse")
 	response, e := s.client.Do(req)
 	if e != nil {
-		return nil, "", fmt.Errorf("M-Team download token unavailable: %w", e)
+		return nil, "", "", fmt.Errorf("M-Team download token unavailable: %w", e)
 	}
 	body, e := io.ReadAll(io.LimitReader(response.Body, (64<<10)+1))
 	_ = response.Body.Close()
 	if e != nil {
-		return nil, "", e
+		return nil, "", "", e
 	}
 	if response.StatusCode != 200 || len(body) > 64<<10 {
-		return nil, "", fmt.Errorf("M-Team download token rejected")
+		return nil, "", "", fmt.Errorf("M-Team download token rejected")
 	}
 	var token struct {
 		Code json.RawMessage `json:"code"`
 		Data json.RawMessage `json:"data"`
 	}
 	if e = json.Unmarshal(body, &token); e != nil {
-		return nil, "", e
+		return nil, "", "", e
 	}
 	status := strings.Trim(string(token.Code), "\" ")
 	if status != "0" && status != "200" {
-		return nil, "", fmt.Errorf("M-Team download token rejected")
+		return nil, "", "", fmt.Errorf("M-Team download token rejected")
 	}
 	var rawURL string
 	if e = json.Unmarshal(token.Data, &rawURL); e != nil {
@@ -149,38 +150,38 @@ func (s *MTeamSearcher) Download(ctx context.Context, reference string) ([]byte,
 			URL string `json:"url"`
 		}
 		if json.Unmarshal(token.Data, &obj) != nil {
-			return nil, "", fmt.Errorf("M-Team download URL missing")
+			return nil, "", "", fmt.Errorf("M-Team download URL missing")
 		}
 		rawURL = obj.URL
 	}
 	target, e := url.Parse(rawURL)
 	origin, _ := url.Parse(s.origin)
 	if e != nil || target.Host != origin.Host || target.Scheme != origin.Scheme || target.User != nil || target.Fragment != "" {
-		return nil, "", fmt.Errorf("M-Team download URL host rejected")
+		return nil, "", "", fmt.Errorf("M-Team download URL host rejected")
 	}
 	get, e := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if e != nil {
-		return nil, "", e
+		return nil, "", "", e
 	}
 	get.Header.Set("User-Agent", "Mozilla/5.0 ByteMuse")
 	torrentResponse, e := s.client.Do(get)
 	if e != nil {
-		return nil, "", fmt.Errorf("M-Team torrent unavailable: %w", e)
+		return nil, "", "", fmt.Errorf("M-Team torrent unavailable: %w", e)
 	}
 	defer torrentResponse.Body.Close()
 	if torrentResponse.StatusCode != 200 {
-		return nil, "", fmt.Errorf("M-Team torrent HTTP %d", torrentResponse.StatusCode)
+		return nil, "", "", fmt.Errorf("M-Team torrent HTTP %d", torrentResponse.StatusCode)
 	}
 	torrent, e := io.ReadAll(io.LimitReader(torrentResponse.Body, (4<<20)+1))
 	if e != nil {
-		return nil, "", e
+		return nil, "", "", e
 	}
 	if len(torrent) > 4<<20 {
-		return nil, "", fmt.Errorf("M-Team torrent too large")
+		return nil, "", "", fmt.Errorf("M-Team torrent too large")
 	}
 	hash, e := TorrentInfoHash(torrent)
 	if e != nil {
-		return nil, "", e
+		return nil, "", "", e
 	}
-	return torrent, hash, nil
+	return torrent, hash, rawURL, nil
 }

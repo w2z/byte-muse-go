@@ -2,12 +2,73 @@ package database
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
+
+// TestDownloadURLMigration 验证旧任务保持 NULL、新值跨重启保留，空库及重复迁移一致。
+func TestDownloadURLMigration(t *testing.T) {
+	for _, upgrade := range []bool{false, true} {
+		t.Run(fmt.Sprint(upgrade), func(t *testing.T) {
+			ctx := context.Background()
+			path := filepath.Join(t.TempDir(), "download-url.db")
+			store, err := Open(ctx, Config{Dialect: DialectSQLite, SQLitePath: path})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = store.Close() }()
+			if upgrade {
+				if err = ensureMigrationTable(ctx, store.SQLDB(), DialectSQLite); err != nil {
+					t.Fatal(err)
+				}
+				for _, m := range MigrationPlan(DialectSQLite) {
+					if m.Version < 41 {
+						if err = applyMigration(ctx, store.SQLDB(), DialectSQLite, m); err != nil {
+							t.Fatal(err)
+						}
+					}
+				}
+			} else if err = store.Migrate(ctx); err != nil {
+				t.Fatal(err)
+			}
+			stamp := time.Now().UTC().Format(time.RFC3339Nano)
+			if _, err = store.SQLDB().ExecContext(ctx, "INSERT INTO media(id,code,title,subscription_status,library_status,created_at,updated_at) VALUES(?,?,?,?,?,?,?)", "m1", "TEST-001", "test", "none", "absent", stamp, stamp); err != nil {
+				t.Fatal(err)
+			}
+			if _, err = store.SQLDB().ExecContext(ctx, "INSERT INTO download_tasks(id,media_id,status,created_at,updated_at) VALUES(?,?,?,?,?)", "old", "m1", "submitted", stamp, stamp); err != nil {
+				t.Fatal(err)
+			}
+			if err = store.Migrate(ctx); err != nil {
+				t.Fatal(err)
+			}
+			var link sql.NullString
+			if err = store.SQLDB().QueryRowContext(ctx, "SELECT download_url FROM download_tasks WHERE id='old'").Scan(&link); err != nil || link.Valid {
+				t.Fatalf("historical value changed: %v", err)
+			}
+			const want = "https://example.test/download?id=123&token=test-only"
+			if _, err = store.SQLDB().ExecContext(ctx, "UPDATE download_tasks SET download_url=? WHERE id='old'", want); err != nil {
+				t.Fatal(err)
+			}
+			if err = store.Close(); err != nil {
+				t.Fatal(err)
+			}
+			store, err = Open(ctx, Config{Dialect: DialectSQLite, SQLitePath: path})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = store.Migrate(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if err = store.SQLDB().QueryRowContext(ctx, "SELECT download_url FROM download_tasks WHERE id='old'").Scan(&link); err != nil || !link.Valid || link.String != want {
+				t.Fatalf("saved URL lost: %v", err)
+			}
+		})
+	}
+}
 
 // TestStrmDownloadMigration 验证空库和旧库升级都登记默认值，重复执行不覆盖用户选择。
 func TestStrmDownloadMigration(t *testing.T) {

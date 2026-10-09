@@ -10,8 +10,8 @@ import (
 
 type privateMarker struct{ prefix string }
 
-func (p privateMarker) Download(_ context.Context, reference string) ([]byte, string, error) {
-	return []byte(reference), p.prefix, nil
+func (p privateMarker) Download(_ context.Context, reference string) ([]byte, string, string, error) {
+	return []byte(reference), p.prefix, "https://example.test/torrent", nil
 }
 
 func TestPrivateTorrentSourcesRouteByReference(t *testing.T) {
@@ -20,15 +20,15 @@ func TestPrivateTorrentSourcesRouteByReference(t *testing.T) {
 		"ptfans":   privateMarker{prefix: "ptfans-hash"},
 		"rousipro": privateMarker{prefix: "rousipro-hash"},
 	}}
-	got, hash, err := sources.Download(context.Background(), "ptfans:9432")
+	got, hash, _, err := sources.Download(context.Background(), "ptfans:9432")
 	if err != nil || string(got) != "ptfans:9432" || hash != "ptfans-hash" {
 		t.Fatalf("got=%q hash=%q err=%v", got, hash, err)
 	}
-	got, hash, err = sources.Download(context.Background(), "rousipro:4411")
+	got, hash, _, err = sources.Download(context.Background(), "rousipro:4411")
 	if err != nil || string(got) != "rousipro:4411" || hash != "rousipro-hash" {
 		t.Fatalf("got=%q hash=%q err=%v", got, hash, err)
 	}
-	if _, _, err = sources.Download(context.Background(), "rousi:9432"); !errors.Is(err, ErrUnknownPrivateTorrentSource) {
+	if _, _, _, err = sources.Download(context.Background(), "rousi:9432"); !errors.Is(err, ErrUnknownPrivateTorrentSource) {
 		t.Fatalf("unknown source err=%v", err)
 	}
 }

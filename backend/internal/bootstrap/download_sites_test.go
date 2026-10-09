@@ -59,7 +59,7 @@ func TestPTTimeAlwaysUsesCookie(t *testing.T) {
 	if len(sources) != 1 || private["pttime"] == nil {
 		t.Fatal("PTTime missing")
 	}
-	_, hash, err := private["pttime"].Download(context.Background(), "pttime:12")
+	_, hash, _, err := private["pttime"].Download(context.Background(), "pttime:12")
 	if err != nil || hash == "" || calls != 1 {
 		t.Fatalf("err=%v calls=%d", err, calls)
 	}

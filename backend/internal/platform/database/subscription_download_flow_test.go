@@ -45,9 +45,9 @@ func (flowPTSearcher) Search(context.Context, string) ([]torrentsearch.Resource,
 
 type flowPrivate struct{ downloads int }
 
-func (f *flowPrivate) Download(context.Context, string) ([]byte, string, error) {
+func (f *flowPrivate) Download(context.Context, string) ([]byte, string, string, error) {
 	f.downloads++
-	return []byte("d4:infod4:name4:testee"), "1ade8a1a581f338e4fce4ce784da3f7d03f81f3a", nil
+	return []byte("d4:infod4:name4:testee"), "1ade8a1a581f338e4fce4ce784da3f7d03f81f3a", "https://example.test/download/123.torrent?token=test-only", nil
 }
 
 type flowPTDownloader struct {
@@ -119,6 +119,10 @@ func TestSubscriptionDownloadFlowSubmitsOnceAndExposesSource(t *testing.T) {
 	if len(tasks.Items) != 1 || tasks.Items[0].Status != "submitted" || tasks.Items[0].SourceSite == nil || *tasks.Items[0].SourceSite != "Nyaa BT" {
 		t.Fatalf("task=%#v", tasks.Items)
 	}
+	var reference, downloadURL string
+	if e = s.SQLDB().QueryRowContext(ctx, "SELECT resource_uri,download_url FROM download_tasks WHERE id=?", tasks.Items[0].ID).Scan(&reference, &downloadURL); e != nil || reference != downloadURL || downloadURL == "" {
+		t.Fatalf("BT magnet was not preserved: %v", e)
+	}
 	if e = service.Process(ctx, 10); e != nil {
 		t.Fatal(e)
 	}
@@ -167,6 +171,13 @@ func TestPrivateTorrentFlowUploadsFileOnlyOnce(t *testing.T) {
 	}
 	if client.uploads != 1 || client.submitted != 0 || source.downloads != 1 {
 		t.Fatalf("uploads=%d magnets=%d downloads=%d", client.uploads, client.submitted, source.downloads)
+	}
+	var reference, downloadURL string
+	if e = s.SQLDB().QueryRowContext(ctx, "SELECT resource_uri,download_url FROM download_tasks WHERE media_id=?", "m1").Scan(&reference, &downloadURL); e != nil {
+		t.Fatal(e)
+	}
+	if reference != "mteam:123" || downloadURL != "https://example.test/download/123.torrent?token=test-only" {
+		t.Fatal("PT resource reference or actual download URL was not preserved")
 	}
 }
 

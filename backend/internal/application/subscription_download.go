@@ -41,9 +41,10 @@ func (m MultiResourceSearcher) Search(ctx context.Context, code string) ([]torre
 	return results, nil
 }
 
-// PrivateTorrentSource resolves a selected PT reference to authenticated .torrent bytes.
+// PrivateTorrentSource 返回种子字节、InfoHash、实际下载 URL 和错误。
+// URL 只用于任务内部快照，可能含临时凭据；资源引用仍用于通知和重新获取种子。
 type PrivateTorrentSource interface {
-	Download(context.Context, string) ([]byte, string, error)
+	Download(context.Context, string) ([]byte, string, string, error)
 }
 
 // ErrUnknownPrivateTorrentSource means a selected reference has no configured source adapter.
@@ -55,10 +56,10 @@ type PrivateTorrentSources struct {
 }
 
 // Download dispatches only exact source prefixes; no private URL is exposed to the downloader.
-func (p PrivateTorrentSources) Download(ctx context.Context, reference string) ([]byte, string, error) {
+func (p PrivateTorrentSources) Download(ctx context.Context, reference string) ([]byte, string, string, error) {
 	prefix, _, ok := strings.Cut(reference, ":")
 	if !ok || p.Sources[prefix] == nil {
-		return nil, "", ErrUnknownPrivateTorrentSource
+		return nil, "", "", ErrUnknownPrivateTorrentSource
 	}
 	return p.Sources[prefix].Download(ctx, reference)
 }
@@ -246,6 +247,7 @@ func (s *SubscriptionDownloadService) Process(ctx context.Context, limit int) er
 			s.failSearch(ctx, a, "默认下载器未配置")
 			continue
 		}
+		downloadURL := selected.URI
 		var torrentFile []byte
 		if selected.Kind == "pt" {
 			_, ok := downloaders[downloader].(TorrentFileDownloader)
@@ -254,14 +256,14 @@ func (s *SubscriptionDownloadService) Process(ctx context.Context, limit int) er
 				continue
 			}
 			var hash string
-			torrentFile, hash, e = private.Download(ctx, selected.URI)
+			torrentFile, hash, downloadURL, e = private.Download(ctx, selected.URI)
 			if e != nil {
 				s.failSearch(ctx, a, "PT 种子文件获取失败")
 				continue
 			}
 			selected.InfoHash = hash
 		}
-		p, e := s.tasks.StartTask(ctx, *a, ports.ScanCandidate{Site: selected.Site, Kind: selected.Kind, URI: selected.URI, InfoHash: selected.InfoHash, Downloader: downloader, FilterPassed: passed})
+		p, e := s.tasks.StartTask(ctx, *a, ports.ScanCandidate{Site: selected.Site, Kind: selected.Kind, URI: selected.URI, DownloadURL: downloadURL, InfoHash: selected.InfoHash, Downloader: downloader, FilterPassed: passed})
 		if errors.Is(e, ports.ErrSubscriptionTaskActive) || errors.Is(e, ports.ErrSubscriptionNotFound) {
 			// 已有有效任务或订阅已失效：本次搜索结束，不再建立重复任务。
 			s.finishScan(ctx, *a)

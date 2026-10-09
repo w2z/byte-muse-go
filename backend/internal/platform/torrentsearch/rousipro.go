@@ -129,32 +129,33 @@ func (s *RousiProSearcher) searchKey(ctx context.Context, code string) ([]Resour
 	return nil, fmt.Errorf("RousiPro 密钥搜索超过安全分页上限")
 }
 
-func (s *RousiProSearcher) downloadKey(ctx context.Context, id string) ([]byte, string, error) {
+// downloadKey 返回种子及同源能力链接，链接仅用于任务内部快照。
+func (s *RousiProSearcher) downloadKey(ctx context.Context, id string) ([]byte, string, string, error) {
 	var detail struct {
 		URL string `json:"download_url"`
 	}
 	if err := s.keyAPI(ctx, "/api/v1/torrents/"+id, &detail); err != nil {
-		return nil, "", err
+		return nil, "", "", err
 	}
 	base, _ := url.Parse(s.origin)
 	relative, err := url.Parse(detail.URL)
 	if err != nil || base == nil || detail.URL == "" {
-		return nil, "", fmt.Errorf("RousiPro 未返回下载能力链接")
+		return nil, "", "", fmt.Errorf("RousiPro 未返回下载能力链接")
 	}
 	target := base.ResolveReference(relative)
 	if target.Scheme != base.Scheme || target.Host != base.Host || target.User != nil || target.Fragment != "" || target.Path != "/api/compat/moviepilot/v1/torrents/"+id+"/download" || target.Query().Get("capability") == "" {
-		return nil, "", fmt.Errorf("RousiPro 拒绝无效或非本站下载地址")
+		return nil, "", "", fmt.Errorf("RousiPro 拒绝无效或非本站下载地址")
 	}
 	client := newNexusKeySearcher(s.client, s.origin, s.key, "RousiPro", "rousipro", "")
 	data, err := client.request(ctx, target.String(), false, 4<<20)
 	if err != nil {
-		return nil, "", err
+		return nil, "", "", err
 	}
 	hash, err := TorrentInfoHash(data)
 	if err != nil {
-		return nil, "", fmt.Errorf("RousiPro 返回无效种子文件")
+		return nil, "", "", fmt.Errorf("RousiPro 返回无效种子文件")
 	}
-	return data, hash, nil
+	return data, hash, target.String(), nil
 }
 
 func (s *RousiProSearcher) request(ctx context.Context, path string, maxBytes int64) ([]byte, string, error) {
@@ -264,24 +265,25 @@ func (s *RousiProSearcher) Search(ctx context.Context, code string) ([]Resource,
 }
 
 // Download accepts only a source-qualified numeric ID and validates downloaded torrent metainfo.
-func (s *RousiProSearcher) Download(ctx context.Context, reference string) ([]byte, string, error) {
+// Returns bytes, info hash and the actual download URL for internal persistence.
+func (s *RousiProSearcher) Download(ctx context.Context, reference string) ([]byte, string, string, error) {
 	id := strings.TrimPrefix(reference, "rousipro:")
 	if id == reference || !rousiproID.MatchString(id) || strings.Trim(id, "0") == "" {
-		return nil, "", fmt.Errorf("invalid RousiPro resource")
+		return nil, "", "", fmt.Errorf("invalid RousiPro resource")
 	}
 	if s.key != "" {
 		return s.downloadKey(ctx, id)
 	}
 	data, contentType, err := s.request(ctx, "/api/v1/torrents/"+id+"/download", 4<<20)
 	if err != nil {
-		return nil, "", err
+		return nil, "", "", err
 	}
 	if strings.Contains(strings.ToLower(contentType), "text/html") || strings.Contains(strings.ToLower(contentType), "application/json") {
-		return nil, "", fmt.Errorf("RousiPro torrent endpoint returned %s", contentType)
+		return nil, "", "", fmt.Errorf("RousiPro torrent endpoint returned %s", contentType)
 	}
 	hash, err := TorrentInfoHash(data)
 	if err != nil {
-		return nil, "", fmt.Errorf("invalid RousiPro torrent: %w", err)
+		return nil, "", "", fmt.Errorf("invalid RousiPro torrent: %w", err)
 	}
-	return data, hash, nil
+	return data, hash, s.origin + "/api/v1/torrents/" + id + "/download", nil
 }

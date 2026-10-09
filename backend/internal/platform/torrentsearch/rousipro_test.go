@@ -41,7 +41,10 @@ func TestRousiProKeySearchDownload(t *testing.T) {
 	if err != nil || len(items) != 1 || !items[0].Free || items[0].URI != "rousipro:12" {
 		t.Fatalf("items=%v err=%v", items, err)
 	}
-	_, hash, err := s.Download(context.Background(), items[0].URI)
+	_, hash, downloadURL, err := s.Download(context.Background(), items[0].URI)
+	if downloadURL != srv.URL+"/api/compat/moviepilot/v1/torrents/12/download?capability=fake-secret" {
+		t.Fatal("actual URL missing")
+	}
 	if err != nil || hash != "1ade8a1a581f338e4fce4ce784da3f7d03f81f3a" {
 		t.Fatalf("hash=%s err=%v", hash, err)
 	}
@@ -57,7 +60,7 @@ func TestRousiProKeyLiveOnlyFetch(t *testing.T) {
 	if err != nil || len(items) == 0 {
 		t.Fatalf("matches=%d err=%v", len(items), err)
 	}
-	data, hash, err := s.Download(context.Background(), items[0].URI)
+	data, hash, _, err := s.Download(context.Background(), items[0].URI)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +71,7 @@ func TestRousiProKeyRejectsFailuresAndUnsafeURLs(t *testing.T) {
 	for _, body := range []string{`{"code":1,"message":"fake-secret"}`, `{}`, `{"code":0,"data":{"download_url":"https://evil.invalid/?capability=fake-secret"}}`, `{"code":0,"data":{"download_url":"/api/compat/moviepilot/v1/torrents/13/download?capability=fake-secret"}}`} {
 		calls := 0
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls++; fmt.Fprint(w, body) }))
-		_, _, err := NewRousiProKeySearcher(srv.Client(), srv.URL, "fake-key").Download(context.Background(), "rousipro:12")
+		_, _, _, err := NewRousiProKeySearcher(srv.Client(), srv.URL, "fake-key").Download(context.Background(), "rousipro:12")
 		srv.Close()
 		if err == nil || strings.Contains(err.Error(), "fake-secret") || calls != 1 {
 			t.Fatalf("calls=%d err=%v", calls, err)
@@ -120,7 +123,7 @@ func TestRousiProSearchAndDownload(t *testing.T) {
 	if len(items) != 1 || items[0].Site != "RousiPro" || items[0].URI != "rousipro:4411" || items[0].Seeders != 7 || items[0].SizeMB < 3700 || !items[0].Free {
 		t.Fatalf("items=%#v", items)
 	}
-	got, hash, err := site.Download(context.Background(), items[0].URI)
+	got, hash, _, err := site.Download(context.Background(), items[0].URI)
 	if err != nil || string(got) != string(torrent) || hash != "1ade8a1a581f338e4fce4ce784da3f7d03f81f3a" {
 		t.Fatalf("download err=%v hash=%s", err, hash)
 	}
@@ -137,7 +140,7 @@ func TestRousiProRejectsLoginAndForeignReference(t *testing.T) {
 	if _, err := site.Search(context.Background(), "AVJI-123"); err == nil || !strings.Contains(err.Error(), "redirect") {
 		t.Fatalf("login err=%v", err)
 	}
-	if _, _, err := site.Download(context.Background(), "ptfans:4411"); err == nil {
+	if _, _, _, err := site.Download(context.Background(), "ptfans:4411"); err == nil {
 		t.Fatal("foreign reference accepted")
 	}
 }
@@ -151,7 +154,7 @@ func TestRousiProRejectsInvalidTorrentAndEmptyCookie(t *testing.T) {
 	if _, err := NewRousiProSearcher(server.Client(), server.URL, "").Search(context.Background(), "AVJI-123"); err == nil {
 		t.Fatal("empty cookie accepted")
 	}
-	if _, _, err := NewRousiProSearcher(server.Client(), server.URL, "session=demo").Download(context.Background(), "rousipro:4411"); err == nil {
+	if _, _, _, err := NewRousiProSearcher(server.Client(), server.URL, "session=demo").Download(context.Background(), "rousipro:4411"); err == nil {
 		t.Fatal("html accepted as torrent")
 	}
 }

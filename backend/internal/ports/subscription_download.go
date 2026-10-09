@@ -41,7 +41,9 @@ type SubscriptionScanAttempt struct {
 // ScanCandidate 是搜索选中并已解析完成的资源快照，是建立下载任务的唯一输入。
 type ScanCandidate struct {
 	Site, Kind, URI, InfoHash, Downloader string
-	FilterPassed                          bool
+	// DownloadURL 是实际下载链接快照；可能含临时凭据，只持久化，不用于日志或公开列表。
+	DownloadURL  string
+	FilterPassed bool
 }
 
 // PendingSubmission is a resource whose download-client outcome still requires reconciliation.

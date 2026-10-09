@@ -161,11 +161,11 @@ func (s *NexusKeySearcher) Search(ctx context.Context, code string) ([]Resource,
 	return nil, fmt.Errorf("%s 搜索超过安全分页上限", s.site)
 }
 
-// Download 即时获取个人下载地址，仅允许同源 download.php，地址不进入资源记录。
-func (s *NexusKeySearcher) Download(ctx context.Context, reference string) ([]byte, string, error) {
+// Download 即时获取个人下载地址，仅允许同源 download.php；返回 URL 供任务内部持久化。
+func (s *NexusKeySearcher) Download(ctx context.Context, reference string) ([]byte, string, string, error) {
 	id := strings.TrimPrefix(reference, s.prefix+":")
 	if id == reference || !ptfansID.MatchString(id) || strings.Trim(id, "0") == "" {
-		return nil, "", fmt.Errorf("invalid %s resource", s.site)
+		return nil, "", "", fmt.Errorf("invalid %s resource", s.site)
 	}
 	var detail struct {
 		Data struct {
@@ -173,24 +173,24 @@ func (s *NexusKeySearcher) Download(ctx context.Context, reference string) ([]by
 		} `json:"data"`
 	}
 	if err := s.api(ctx, "/api/v1/detail/"+id+"?include_fields%5Btorrent%5D=download_url", &detail); err != nil {
-		return nil, "", err
+		return nil, "", "", err
 	}
 	base, _ := url.Parse(s.origin)
 	relative, err := url.Parse(detail.Data.URL)
 	if err != nil || base == nil || detail.Data.URL == "" {
-		return nil, "", fmt.Errorf("%s 未返回有效下载地址", s.site)
+		return nil, "", "", fmt.Errorf("%s 未返回有效下载地址", s.site)
 	}
 	target := base.ResolveReference(relative)
 	if target.Scheme != base.Scheme || target.Host != base.Host || target.User != nil || target.Fragment != "" || target.Path != "/download.php" {
-		return nil, "", fmt.Errorf("%s 拒绝非本站下载地址", s.site)
+		return nil, "", "", fmt.Errorf("%s 拒绝非本站下载地址", s.site)
 	}
 	data, err := s.request(ctx, target.String(), false, 4<<20)
 	if err != nil {
-		return nil, "", err
+		return nil, "", "", err
 	}
 	hash, err := TorrentInfoHash(data)
 	if err != nil {
-		return nil, "", fmt.Errorf("%s 返回无效种子文件", s.site)
+		return nil, "", "", fmt.Errorf("%s 返回无效种子文件", s.site)
 	}
-	return data, hash, nil
+	return data, hash, target.String(), nil
 }
