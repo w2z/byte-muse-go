@@ -1639,6 +1639,7 @@ export function SettingsPage() {
           </div>
           <Alert
             type="warning"
+            style={{ flexShrink: 0 }}
             content="大陆地区部署ByPass(cloudflarebypassforscraping) 会因为DNS污染(不会使用代理进行解析，即使配置了HTTP_PROXY)导致无法请求成功。大陆部署推荐使用 FlareSolverr"
           />
         </div>
