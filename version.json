@@ -1,16 +1,20 @@
 {
-  "version": "0.1.148",
-  "commit": "7431a94113fa998e76efaa5f855fa2d991c88713",
-  "short_commit": "7431a94",
-  "built_at": "2026-10-09T17:00:33Z",
+  "version": "0.1.149",
+  "commit": "2f8449b7a8b8170f3c49a810e1582174195797d2",
+  "short_commit": "2f8449b",
+  "built_at": "2026-10-09T17:11:38Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.148",
-    "sha-7431a94",
+    "0.1.149",
+    "sha-2f8449b",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.149",
+      "message": "按当前步骤独立显示升级进度"
+    },
     {
       "version": "0.1.148",
       "message": "保留已有附件并修复增量扫描同名误判"
