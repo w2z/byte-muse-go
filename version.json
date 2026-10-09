@@ -1,16 +1,20 @@
 {
-  "version": "0.1.145",
-  "commit": "e080ac2f3f5c8fad38e5543260da65ef102ec954",
-  "short_commit": "e080ac2",
-  "built_at": "2026-10-09T15:39:35Z",
+  "version": "0.1.146",
+  "commit": "3d76db9a3867ac23caf7dde9f9c1fc55fc5ba9fb",
+  "short_commit": "3d76db9",
+  "built_at": "2026-10-09T15:43:29Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.145",
-    "sha-e080ac2",
+    "0.1.146",
+    "sha-3d76db9",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.146",
+      "message": "实时预览执行计划并阻止保存无效表达式"
+    },
     {
       "version": "0.1.145",
       "message": "统一全站使用 MiSans 字体和 350 字重"
