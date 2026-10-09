@@ -541,6 +541,7 @@ func (s *StrmService) scanMapping(ctx context.Context, root string, mapping doma
 			return downloads.enqueue(ctx, file)
 		}
 		finishFile := startScanFile(ctx, file, "generate")
+		var itemErr error
 		failed, unchanged := entry.Failed, entry.Unchanged
 		defer func() {
 			state := "completed"
@@ -552,7 +553,10 @@ func (s *StrmService) scanMapping(ctx context.Context, root string, mapping doma
 			} else if entry.Unchanged > unchanged {
 				state = "skipped"
 			}
-			finishFile(state)
+			if fileErr != nil {
+				itemErr = fileErr
+			}
+			finishFile(state, itemErr)
 		}()
 		done, err := taskUnitDone(ctx, "strm-file", target, file.Directory, file.ID)
 		if err != nil {
@@ -566,12 +570,14 @@ func (s *StrmService) scanMapping(ctx context.Context, root string, mapping doma
 		}
 		entry.Files++
 		if strings.ContainsAny(file.Name, `/\`) {
+			itemErr = errors.New("STRM 文件名包含路径分隔符")
 			entry.Failed++
 			advance()
 			return nil
 		}
 		absolute := filepath.Join(target, filepath.FromSlash(file.Directory), file.Name+".strm")
 		if !withinStrmRoot(root, absolute) {
+			itemErr = errors.New("STRM 文件路径超出根目录")
 			entry.Failed++
 			advance()
 			return nil
@@ -582,6 +588,7 @@ func (s *StrmService) scanMapping(ctx context.Context, root string, mapping doma
 			if identifier == "" {
 				entry.Failed++
 				entry.Message = "115 文件缺少 pick_code，无法生成播放链接"
+				itemErr = errors.New(entry.Message)
 				advance()
 				return nil
 			}
@@ -591,6 +598,7 @@ func (s *StrmService) scanMapping(ctx context.Context, root string, mapping doma
 			if statErr != nil {
 				entry.Failed++
 				entry.Message = "读取本地 strm 文件失败：" + statErr.Error()
+				itemErr = errors.New(entry.Message)
 				advance()
 				return nil
 			}
@@ -605,6 +613,7 @@ func (s *StrmService) scanMapping(ctx context.Context, root string, mapping doma
 		case writeErr != nil:
 			entry.Failed++
 			entry.Message = "写入 strm 文件失败：" + writeErr.Error()
+			itemErr = errors.New(entry.Message)
 		case created:
 			entry.Created++
 		case !changed:

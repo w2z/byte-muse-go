@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -16,6 +17,7 @@ type ScanFileRow struct {
 	Kind      string `json:"kind"`
 	Operation string `json:"operation"`
 	State     string `json:"state"`
+	Error     string `json:"error"` // 文件失败原因；目录及无错误时为空，返回前脱敏。
 	Total     int    `json:"total"`
 	Processed int    `json:"processed"`
 	Failed    int    `json:"failed"`
@@ -24,6 +26,23 @@ type ScanFileRow struct {
 	Size      int64  `json:"size"`
 	parent    string
 	closed    bool
+}
+
+var scanErrorURL = regexp.MustCompile(`(?i)https?://[^\s<>"']+`)
+var scanErrorSecret = regexp.MustCompile(`(?i)(authorization|cookie|set-cookie|token|access_token|refresh_token|password|secret|api_key|sign)["']?\s*[:=]\s*[^\r\n]+`)
+
+// scanFileError limits diagnostic text and removes URLs and credentials before exposing task details.
+func scanFileError(err error) string {
+	if err == nil {
+		return ""
+	}
+	message := scanErrorURL.ReplaceAllString(err.Error(), "[链接已隐藏]")
+	message = scanErrorSecret.ReplaceAllString(message, "$1=[已隐藏]")
+	characters := []rune(strings.TrimSpace(message))
+	if len(characters) > 2048 {
+		return string(characters[:2048]) + "…"
+	}
+	return string(characters)
 }
 
 // ScanFilePage contains only direct children; totals grow as traversal discovers files.
@@ -111,11 +130,11 @@ func scanFileIdentity(ctx context.Context, file strmSourceFile, operation string
 	return tree, root, journalKey(root, file.Directory, file.ID, file.Name, operation)
 }
 
-// startScanFile counts each discovered file once; terminal updates are idempotent.
-func startScanFile(ctx context.Context, file strmSourceFile, operation string) func(string) {
+// startScanFile counts each file once and records its sanitized error; terminal updates are idempotent.
+func startScanFile(ctx context.Context, file strmSourceFile, operation string) func(string, error) {
 	tree, root, id := scanFileIdentity(ctx, file, operation)
 	if tree == nil {
-		return func(string) {}
+		return func(string, error) {}
 	}
 	tree.mu.Lock()
 	if tree.rows[id] == nil {
@@ -130,7 +149,7 @@ func startScanFile(ctx context.Context, file strmSourceFile, operation string) f
 		}
 	}
 	tree.mu.Unlock()
-	return func(state string) {
+	return func(state string, err error) {
 		tree.mu.Lock()
 		defer tree.mu.Unlock()
 		row := tree.rows[id]
@@ -140,6 +159,7 @@ func startScanFile(ctx context.Context, file strmSourceFile, operation string) f
 		row.State, row.Processed = state, 1
 		if state == "failed" || state == "interrupted" {
 			row.Failed = 1
+			row.Error = scanFileError(err)
 		}
 		if state == "completed" || state == "skipped" {
 			row.Percent = 100

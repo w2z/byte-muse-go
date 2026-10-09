@@ -1,5 +1,5 @@
-import { Button, Grid, Modal, Progress, Switch, Table, Tag, Tooltip } from "@arco-design/web-react";
-import { IconDown, IconFile, IconFolder, IconInfoCircle, IconRight } from "@arco-design/web-react/icon";
+import { Button, Grid, Modal, Popover, Progress, Switch, Table, Tag, Tooltip } from "@arco-design/web-react";
+import { IconDown, IconExclamationCircleFill, IconFile, IconFolder, IconInfoCircle, IconRight } from "@arco-design/web-react/icon";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { apiRequest } from "../../shared/api/client";
@@ -7,7 +7,7 @@ import { DEFAULT_PAGE_SIZE, ListPagination } from "../../shared/ui/ListPaginatio
 
 type FileRow = {
   id: string; name: string; kind: "directory" | "file";
-  operation: "" | "generate" | "download"; state: string;
+  operation: "" | "generate" | "download"; state: string; error?: string;
   total: number; processed: number; failed: number; percent: number; bytes: number; size: number;
 };
 type FilePage = { items: FileRow[]; total: number; available: boolean };
@@ -22,12 +22,18 @@ function bytes(value: number) {
   return `${(value / 1024 ** unit).toFixed(unit ? 1 : 0)} ${["B", "KiB", "MiB", "GiB", "TiB"][unit]}`;
 }
 
-/** 下载总大小未知时只显示已传输字节，不推算百分比。 */
+/** 未知总大小不推算百分比；失败图标可点击查看后端错误，旧明细明确提示原因缺失。 */
 function FileProgress({ row }: { row: FileRow }) {
   const measurable = row.kind === "directory" || row.operation === "generate" || row.size > 0 || ["completed", "skipped"].includes(row.state);
   const failed = row.failed > 0 || ["failed", "interrupted"].includes(row.state);
+  const fileFailed = failed && row.kind === "file";
+  const errorInfo = fileFailed ? <Popover trigger="click" title="错误信息" getPopupContainer={() => document.body} content={
+    <div className="strm-file-error">{row.error?.trim() || "未记录具体错误，请查看任务日志。"}</div>
+  }>
+    <Button type="text" status="danger" shape="circle" icon={<IconExclamationCircleFill />} aria-label={`查看 ${row.name} 的错误信息`} />
+  </Popover> : null;
   return <div>
-    {measurable ? <Progress percent={row.percent} status={failed ? "error" : undefined} /> : <div>大小未知</div>}
+    {measurable ? <Progress percent={row.percent} status={failed ? "error" : undefined} formatText={fileFailed ? () => errorInfo : undefined} /> : <div>大小未知{errorInfo}</div>}
     {row.kind === "directory"
       ? <span>已处理 {row.processed} / 已发现 {row.total}{row.state === "scanning" ? "（扫描中）" : ""}</span>
       : row.operation === "download" ? <span>{bytes(row.bytes)} / {row.size > 0 ? bytes(row.size) : "未知大小"}</span> : null}

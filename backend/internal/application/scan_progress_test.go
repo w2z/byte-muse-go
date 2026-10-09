@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -10,7 +11,46 @@ import (
 	"time"
 
 	"bytemuse/backend/internal/domain"
+	"bytemuse/backend/internal/platform/pan115"
 )
+
+// TestScanFileErrors preserves per-file failures without exposing error details on directories.
+func TestScanFileErrors(t *testing.T) {
+	for _, scenario := range []string{"generate", "download"} {
+		t.Run(scenario, func(t *testing.T) {
+			tree := newScanFileTree("errors")
+			ctx := context.WithValue(context.Background(), scanFileTreeKey{}, tree)
+			files := []domain.Pan115File{{ID: "video", Name: "movie.mp4"}}
+			want := "115 文件缺少 pick_code"
+			if scenario == "download" {
+				files = []domain.Pan115File{{ID: "poster", Name: "poster.jpg", PickCode: "poster"}}
+				want = "115 错误 20018：请求过于频繁"
+			}
+			source := &strmPan115Stub{pages: map[string]domain.Pan115FilePage{"root": {Files: files}}, playErr: &pan115.APIError{Code: 20018, Message: "请求过于频繁"}}
+			service := newStrmTestService(t, t.TempDir(), source, nil, map[string]string{"STRM_DOWNLOAD_ENABLE": "true", "STRM_PATHS": strmTestMappings(t, []domain.StrmMapping{{Kind: "115", ID: "root", Path: "/电影", LocalPath: "/movies"}})})
+			_, _ = service.Scan(ctx, "http://play.test", domain.StrmGenerateFull)
+			root := tree.page("", 1, 15, false).Items[0]
+			child := tree.page(root.ID, 1, 15, false).Items[0]
+			if root.Error != "" || !strings.Contains(child.Error, want) {
+				t.Fatalf("root=%+v child=%+v", root, child)
+			}
+		})
+	}
+}
+
+// TestScanFileErrorRedaction keeps readable causes without signed URLs or credentials.
+func TestScanFileErrorRedaction(t *testing.T) {
+	message := scanFileError(errors.New("请求失败 https://download.test/file?sign=secret Authorization: Bearer secret Cookie: UID=secret"))
+	if strings.Contains(message, "secret") || strings.Contains(message, "https://") || !strings.Contains(message, "请求失败") {
+		t.Fatal(message)
+	}
+	if message := scanFileError(errors.New(`{"access_token":"secret"}`)); strings.Contains(message, "secret") {
+		t.Fatal(message)
+	}
+	if message := scanFileError(errors.New(strings.Repeat("错", 3000))); len([]rune(message)) != 2049 {
+		t.Fatal("error message must be bounded")
+	}
+}
 
 // TestScanFilesTrackActualGenerationAndDownload exercises the real walker and download writer.
 func TestScanFilesTrackActualGenerationAndDownload(t *testing.T) {
@@ -54,7 +94,7 @@ func TestScanFileTreeProgress(t *testing.T) {
 	if root.Total != 1 || child.Percent != 0 || row.Percent != 50 || row.Bytes != 50 {
 		t.Fatalf("%+v %+v %+v", root, child, row)
 	}
-	finish("completed")
+	finish("completed", nil)
 	child = tree.page(root.ID, 1, 15, false).Items[0]
 	if child.State == "completed" || child.Processed != 1 {
 		t.Fatalf("premature completion: %+v", child)
@@ -67,7 +107,7 @@ func TestScanFileTreeProgress(t *testing.T) {
 	var workers sync.WaitGroup
 	for index := 0; index < 5; index++ {
 		workers.Add(1)
-		go func() { defer workers.Done(); finish("completed") }()
+		go func() { defer workers.Done(); finish("completed", nil) }()
 	}
 	workers.Wait()
 	if got := tree.page(root.ID, 1, 15, false).Items[0]; got.Processed != 1 {
@@ -80,7 +120,12 @@ func TestScanFileTreeProgress(t *testing.T) {
 	if got := tree.page(root.ID, 1, 15, false).Items[0]; got.State != "processing" || got.Percent != 50 {
 		t.Fatalf("pending download: %+v", got)
 	}
-	finishSecond("failed")
+	finishSecond("failed", errors.New("下载失败"))
+	finishSecond("failed", errors.New("不得覆盖首次错误"))
+	failedFile := tree.page(child.ID, 1, 15, false).Items[0]
+	if failedFile.Error != "下载失败" {
+		t.Fatalf("lost original error: %+v", failedFile)
+	}
 	if got := tree.page(root.ID, 1, 15, false).Items[0]; got.State != "failed" || got.Failed != 1 {
 		t.Fatalf("failed download: %+v", got)
 	}

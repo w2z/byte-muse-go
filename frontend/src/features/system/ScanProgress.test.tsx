@@ -6,9 +6,36 @@ import { afterEach, expect, it, vi } from "vitest";
 import { Pan115LibraryScanAction } from "./Pan115ScanPathsField";
 import { ScanProgressDisplay, ScanTaskControls, type ScanTask } from "./ScanProgress";
 import { StrmGenerateAction } from "./StrmPathsField";
+import { StrmFileProgress } from "./StrmFileProgress";
 import { apiRequest, type ScanProgress } from "../../shared/api/client";
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+
+it.each([["115 错误 20018：请求过于频繁", 0], ["写入失败", 1024], ["", 0]] as const)("点击失败感叹号显示错误详情：%s", async (error, size) => {
+  vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: false, addListener: vi.fn(), removeListener: vi.fn() })));
+  vi.stubGlobal("fetch", vi.fn(async () => Response.json({ available: true, total: 1, items: [
+    { id: "failed-file", name: "poster.jpg", kind: "file", operation: "download", state: "failed", error, total: 1, processed: 1, failed: 1, percent: 0, bytes: 0, size },
+  ] })));
+  render(<QueryClientProvider client={new QueryClient()}><StrmFileProgress taskId="failed-task" paused={false} /></QueryClientProvider>);
+  fireEvent.click(screen.getByRole("button", { name: "查看 STRM 文件进度" }));
+  const button = await screen.findByRole("button", { name: "查看 poster.jpg 的错误信息" });
+  const message = error || "未记录具体错误，请查看任务日志。";
+  expect(screen.queryByText(message)).not.toBeInTheDocument();
+  fireEvent.click(button);
+  expect(await screen.findByText(message)).toBeVisible();
+});
+
+it("失败目录保留状态但不提供错误详情按钮", async () => {
+  vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: false, addListener: vi.fn(), removeListener: vi.fn() })));
+  vi.stubGlobal("fetch", vi.fn(async () => Response.json({ available: true, total: 1, items: [
+    { id: "root", name: "电影", kind: "directory", operation: "", state: "failed", error: "不展示目录原因", total: 1, processed: 1, failed: 1, percent: 100, bytes: 0, size: 0 },
+  ] })));
+  render(<QueryClientProvider client={new QueryClient()}><StrmFileProgress taskId="failed-task" paused={false} /></QueryClientProvider>);
+  fireEvent.click(screen.getByRole("button", { name: "查看 STRM 文件进度" }));
+  expect(await screen.findByText("电影")).toBeVisible();
+  expect(screen.queryByRole("button", { name: /的错误信息/ })).not.toBeInTheDocument();
+  expect(screen.queryByText("不展示目录原因")).not.toBeInTheDocument();
+});
 
 it("生成进度目录旁的信息按钮打开可展开的文件进度表格", async () => {
   vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: false, addListener: vi.fn(), removeListener: vi.fn() })));

@@ -732,6 +732,7 @@ button.code-card-still-cell:hover img { opacity: .85; }
 .settings-scan-progress-location { display: flex; align-items: center; gap: 4px; min-width: 0; }
 .strm-file-table { min-width: 600px; width: max-content; }
 .strm-file-name { display: inline-block; max-width: 320px; overflow-wrap: anywhere; }
+.strm-file-error { max-width: min(480px, calc(100vw - 64px)); white-space: pre-wrap; overflow-wrap: anywhere; }
 .strm-file-dialog-content { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 .strm-file-dialog-content > p { margin: 0; }
 .strm-file-filter { display: flex; align-items: center; gap: 8px; white-space: nowrap; }

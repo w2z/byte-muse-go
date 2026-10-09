@@ -18,6 +18,21 @@ import (
 	"bytemuse/backend/internal/domain"
 )
 
+// TestStrmDownloadResponseError checks API diagnostics, bounded reads and non-JSON fallbacks.
+func TestStrmDownloadResponseError(t *testing.T) {
+	for _, sample := range []struct{ body, want string }{
+		{`{"message":"请求过于频繁"}`, "媒体下载返回状态码 429：请求过于频繁"},
+		{`{"error":"连接失效"}`, "媒体下载返回状态码 429：连接失效"},
+		{`<html>secret</html>`, "媒体下载返回状态码 429"},
+		{strings.Repeat("a", 8193), "媒体下载返回状态码 429"},
+	} {
+		response := &http.Response{StatusCode: 429, Body: io.NopCloser(strings.NewReader(sample.body))}
+		if got := strmDownloadResponseError(response).Error(); got != sample.want {
+			t.Fatalf("got %q want %q", got, sample.want)
+		}
+	}
+}
+
 // downloadPan115Stub 将真实下载引向测试 HTTP 服务；并发解析不修改共享字段。
 type downloadPan115Stub struct {
 	strmPan115Stub

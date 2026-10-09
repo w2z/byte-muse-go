@@ -114,7 +114,7 @@ func (s *StrmService) newDownloadPool(ctx context.Context, root, target, kind st
 				} else if skipped {
 					state = "skipped"
 				}
-				finishFile(state)
+				finishFile(state, err)
 				p.results <- strmDownloadOutcome{skipped: skipped, err: err}
 			}
 		}()
@@ -140,7 +140,7 @@ func (p *strmDownloadPool) enqueue(ctx context.Context, file strmSourceFile) err
 		p.pending++
 		return nil
 	case <-ctx.Done():
-		finishFile("interrupted")
+		finishFile("interrupted", ctx.Err())
 		return ctx.Err()
 	}
 }
@@ -166,7 +166,7 @@ func (s *StrmService) downloadStrmMedia(ctx context.Context, root, target, kind 
 	}
 	base, err := os.OpenRoot(root)
 	if err != nil {
-		return false, errors.New("无法打开 STRM 根目录")
+		return false, fmt.Errorf("无法打开 STRM 根目录：%s", scanFileError(err))
 	}
 	defer base.Close()
 	mappingPath, err := filepath.Rel(root, target)
@@ -175,7 +175,7 @@ func (s *StrmService) downloadStrmMedia(ctx context.Context, root, target, kind 
 	}
 	dir, err := base.OpenRoot(mappingPath)
 	if err != nil {
-		return false, errors.New("无法打开下载目录")
+		return false, fmt.Errorf("无法打开下载目录：%s", scanFileError(err))
 	}
 	defer dir.Close()
 	info, err := dir.Lstat(relative)
@@ -187,7 +187,7 @@ func (s *StrmService) downloadStrmMedia(ctx context.Context, root, target, kind 
 			return true, nil
 		}
 	} else if !errors.Is(err, fs.ErrNotExist) {
-		return false, errors.New("无法检查下载目标")
+		return false, fmt.Errorf("无法检查下载目标：%s", scanFileError(err))
 	}
 	identifier := file.ID
 	if kind == domain.StrmKindPan115 {
@@ -198,7 +198,7 @@ func (s *StrmService) downloadStrmMedia(ctx context.Context, root, target, kind 
 	}
 	targetURL, err := s.PlayURL(pan115.WithFileDownload(ctx), kind, identifier, strmDownloadUserAgent)
 	if err != nil {
-		return false, errors.New("获取媒体下载地址失败，请检查网盘连接或限流状态")
+		return false, fmt.Errorf("获取媒体下载地址失败：%s", scanFileError(err))
 	}
 	address := targetURL.Redirect
 	if targetURL.Proxy != nil {
@@ -226,14 +226,14 @@ func (s *StrmService) downloadStrmMedia(ctx context.Context, root, target, kind 
 	client.Timeout = 0
 	response, err := client.Do(request)
 	if err != nil {
-		return false, errors.New("媒体下载请求失败")
+		return false, fmt.Errorf("媒体下载请求失败：%s", scanFileError(err))
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return false, fmt.Errorf("媒体下载返回状态码 %d", response.StatusCode)
+		return false, strmDownloadResponseError(response)
 	}
 	if err := dir.MkdirAll(filepath.Dir(relative), 0o755); err != nil {
-		return false, errors.New("创建媒体下载目录失败")
+		return false, fmt.Errorf("创建媒体下载目录失败：%s", scanFileError(err))
 	}
 	var random [16]byte
 	if _, err := rand.Read(random[:]); err != nil {
@@ -242,7 +242,7 @@ func (s *StrmService) downloadStrmMedia(ctx context.Context, root, target, kind 
 	temporary := filepath.Join(filepath.Dir(relative), fmt.Sprintf(".bytemuse-download-%x.part", random))
 	output, err := dir.OpenFile(temporary, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
 	if err != nil {
-		return false, errors.New("创建媒体临时文件失败")
+		return false, fmt.Errorf("创建媒体临时文件失败：%s", scanFileError(err))
 	}
 	defer dir.Remove(temporary)
 	var transferred int64
@@ -253,7 +253,7 @@ func (s *StrmService) downloadStrmMedia(ctx context.Context, root, target, kind 
 	}})
 	closeErr := output.Close()
 	if copyErr != nil || closeErr != nil {
-		return false, errors.New("媒体下载未完整写入")
+		return false, fmt.Errorf("媒体下载未完整写入：%s", scanFileError(errors.Join(copyErr, closeErr)))
 	}
 	if err := scanCheckpoint(ctx); err != nil {
 		return false, err
@@ -262,7 +262,26 @@ func (s *StrmService) downloadStrmMedia(ctx context.Context, root, target, kind 
 		return false, err
 	}
 	if err := dir.Rename(temporary, relative); err != nil {
-		return false, errors.New("保存媒体下载文件失败")
+		return false, fmt.Errorf("保存媒体下载文件失败：%s", scanFileError(err))
 	}
 	return false, nil
+}
+
+// strmDownloadResponseError keeps bounded JSON error messages, never raw HTML or arbitrary response data.
+func strmDownloadResponseError(response *http.Response) error {
+	message := fmt.Sprintf("媒体下载返回状态码 %d", response.StatusCode)
+	body, err := io.ReadAll(io.LimitReader(response.Body, 8193))
+	if err != nil || len(body) > 8192 {
+		return errors.New(message)
+	}
+	var payload map[string]json.RawMessage
+	if json.Unmarshal(body, &payload) == nil {
+		for _, key := range []string{"message", "msg", "error", "error_description"} {
+			var detail string
+			if json.Unmarshal(payload[key], &detail) == nil && strings.TrimSpace(detail) != "" {
+				return fmt.Errorf("%s：%s", message, scanFileError(errors.New(detail)))
+			}
+		}
+	}
+	return errors.New(message)
 }
