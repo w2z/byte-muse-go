@@ -1,16 +1,20 @@
 {
-  "version": "0.1.122",
-  "commit": "5db9315be8226501d376b5570b6b8f57f1739eb7",
-  "short_commit": "5db9315",
-  "built_at": "2026-10-09T09:51:05Z",
+  "version": "0.1.123",
+  "commit": "3c2ef1fd7c6435833b7586de2a798c1ddce3095b",
+  "short_commit": "3c2ef1f",
+  "built_at": "2026-10-09T10:02:01Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.122",
-    "sha-5db9315",
+    "0.1.123",
+    "sha-3c2ef1f",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.123",
+      "message": "按处理状态优先级排列文件进度"
+    },
     {
       "version": "0.1.122",
       "message": "点击文件失败图标查看脱敏错误详情"
