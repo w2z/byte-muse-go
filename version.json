@@ -1,16 +1,20 @@
 {
-  "version": "0.1.142",
-  "commit": "4443ce17139dcd8d0443c9842f7c9fccb96b568b",
-  "short_commit": "4443ce1",
-  "built_at": "2026-10-09T14:17:47Z",
+  "version": "0.1.143",
+  "commit": "5d4a2f8639c5df0bf7cfcfcc374778b5d0a260db",
+  "short_commit": "5d4a2f8",
+  "built_at": "2026-10-09T14:48:32Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.142",
-    "sha-4443ce1",
+    "0.1.143",
+    "sha-5d4a2f8",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.143",
+      "message": "去除视频扩展名并防止同名事件覆盖"
+    },
     {
       "version": "0.1.142",
       "message": "防止爬虫增强警告框被压缩裁切"
