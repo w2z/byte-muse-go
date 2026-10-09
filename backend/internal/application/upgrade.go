@@ -57,7 +57,7 @@ func (s *UpgradeService) Start(target string) (ports.UpgradeStatus, error) {
 	if ports.CompareVersions(s.versions.Current(), target) >= 0 {
 		return ports.UpgradeStatus{}, errors.New("升级目标必须高于当前版本")
 	}
-	s.state = ports.UpgradeStatus{Enabled: true, Phase: "downloading", Target: target}
+	s.state = ports.UpgradeStatus{Enabled: true, Phase: "downloading", Target: target, ProgressIndeterminate: true}
 	s.running = true
 	go s.run(target)
 	return s.state, nil
@@ -82,10 +82,13 @@ func (s *UpgradeService) run(target string) {
 	defer s.mu.Unlock()
 	if err != nil {
 		s.state.Phase = "failed"
+		s.state.ProgressIndeterminate = false
 		s.state.Error = err.Error()
 		s.running = false
 	} else {
 		s.state.Phase = "restarting"
 		s.state.CompletedSteps = 3
+		s.state.ProgressPercent = 75
+		s.state.ProgressIndeterminate = true
 	}
 }

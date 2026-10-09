@@ -35,6 +35,10 @@ type ReleaseSource interface {
 
 // UpgradeStatus 描述容器内升级任务；success 仅在新服务健康检查通过后写入。
 type UpgradeStatus struct {
+	// ProgressPercent 为按四阶段等权折算的实际进度，成功前不达到 100。
+	ProgressPercent int `json:"progress_percent"`
+	// ProgressIndeterminate 表示当前阶段尚无可计算总量，页面显示处理中而非伪造百分比。
+	ProgressIndeterminate bool `json:"progress_indeterminate"`
 	// CompletedSteps 为已完成的下载、解压、安装、重启步骤数，失败保留当前值。
 	CompletedSteps int    `json:"completed_steps"`
 	Enabled        bool   `json:"enabled"`

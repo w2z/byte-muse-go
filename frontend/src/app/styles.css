@@ -151,6 +151,8 @@ body button.arco-btn[class]:focus-visible { box-shadow: none; }
 .version-dialog-changes li { padding-left: 4px; margin-bottom: 8px; white-space: pre-wrap; }
 .version-upgrade-progress { margin-top: 24px; width: 100%; }
 .version-upgrade-steps { margin-bottom: 16px; color: var(--ink); }
+.version-upgrade-label { display: inline-block; max-width: 4em; white-space: normal; text-align: center; }
+@media (max-width: 575px) { .version-upgrade-label { max-width: 2em; } }
 .version-upgrade-steps .is-complete { color: var(--muted); text-decoration: line-through; }
 .version-upgrade-steps .is-current { color: var(--mint); font-weight: 600; }
 .version-dialog-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 16px; margin-top: 28px; }

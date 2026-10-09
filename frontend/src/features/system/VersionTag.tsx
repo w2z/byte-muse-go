@@ -8,7 +8,7 @@ import type { SystemUpgrade, SystemVersion } from "../../shared/api/types";
 const VERSION_KEY = ["system", "version"] as const;
 const UPGRADE_KEY = ["system", "upgrade"] as const;
 const ACTIVE_PHASES = ["downloading", "extracting", "installing", "restarting"];
-const UPGRADE_STEPS = ["开始下载文件", "开始解压文件", "正在升级", "正在重启"];
+const UPGRADE_STEPS = ["下载文件", "解压文件", "正在升级", "正在重启"];
 
 /** 本地版本立即显示；更新说明按服务端版本区间展示，升级断连继续等待，目标就绪后刷新。 */
 export function VersionTag() {
@@ -57,6 +57,8 @@ export function VersionTag() {
   const busy = install.isPending || Boolean(waitingTarget);
   const phase = install.isPending ? "downloading" : upgrade.data?.phase ?? "idle";
   const completedSteps = install.isPending ? 0 : Math.min(4, Math.max(0, upgrade.data?.completed_steps ?? (phase === "success" ? 4 : ACTIVE_PHASES.indexOf(phase))));
+  const percent = install.isPending ? 0 : Math.min(100, Math.max(completedSteps * 25, upgrade.data?.progress_percent ?? 0));
+  const indeterminate = install.isPending || upgrade.data?.progress_indeterminate === true;
   // 服务保留上次任务的终态；历史成功或失败不能让步骤常驻，断连等待期间仍保留进度。
   const showProgress = (busy || ACTIVE_PHASES.includes(phase)) && phase !== "success" && phase !== "failed";
   const failure = install.error?.message || upgrade.data?.error || check.error?.message || data?.check_error || error?.message;
@@ -83,15 +85,15 @@ export function VersionTag() {
             <strong className="version-dialog-number">{`v${version}`}</strong>
             {showProgress && <div className="version-upgrade-progress">
               <div role="group" aria-label="升级步骤" className="version-upgrade-steps">
-                <Steps direction="horizontal" size="small" lineless current={completedSteps + 1}>
+                <Steps direction="horizontal" size="small" current={completedSteps + 1}>
                   {UPGRADE_STEPS.map((label, index) => <Steps.Step key={label}
                     style={{ flex: 1, minWidth: 0, marginRight: 0, display: "flex", flexDirection: "column", alignItems: "center" }}
-                    title={<span style={{ display: "inline-block", maxWidth: "4em", whiteSpace: "normal", textAlign: "center" }} className={index < completedSteps ? "is-complete" : index === completedSteps ? "is-current" : undefined}
+                    title={<span className={`version-upgrade-label ${index < completedSteps ? "is-complete" : index === completedSteps ? "is-current" : ""}`}
                       aria-current={index === completedSteps ? "step" : undefined}>{label}</span>} />)}
                 </Steps>
               </div>
-              <div role="progressbar" aria-label="升级进度" aria-valuemin={0} aria-valuemax={100} aria-valuenow={completedSteps * 25}>
-                <div aria-hidden="true"><Progress percent={completedSteps * 25} status="normal" /></div>
+              <div role="progressbar" aria-label="升级进度" aria-valuemin={0} aria-valuemax={100} aria-valuenow={indeterminate ? undefined : percent} aria-valuetext={indeterminate ? "处理中" : `${percent}%`}>
+                <div aria-hidden="true"><Progress percent={percent} status="normal" animation formatText={indeterminate ? () => "处理中" : undefined} /></div>
               </div>
             </div>}
             <div role="status" aria-live="polite">

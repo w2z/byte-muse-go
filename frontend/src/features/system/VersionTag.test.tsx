@@ -8,7 +8,7 @@ import type { SystemVersion } from "../../shared/api/types";
 import { VersionTag } from "./VersionTag";
 
 vi.mock("../../shared/api/client", () => ({ apiRequest: vi.fn() }));
-const UPGRADE_LABELS = ["开始下载文件", "开始解压文件", "正在升级", "正在重启"];
+const UPGRADE_LABELS = ["下载文件", "解压文件", "正在升级", "正在重启"];
 
 beforeEach(() => vi.stubEnv("VITE_APP_VERSION", "0.1.21"));
 
@@ -30,6 +30,31 @@ function renderTag() {
 }
 
 const base: SystemVersion = { current: "0.1.21", latest: "0.1.21", has_update: false, release_url: "", checked_at: "2026-09-29T12:00:00Z", check_error: "" };
+
+it.each([["downloading", 0, 12], ["extracting", 1, 37], ["installing", 2, 66]] as const)("%s 显示服务端阶段内进度", async (phase, completed_steps, progress_percent) => {
+  vi.mocked(apiRequest).mockImplementation(path => Promise.resolve(path === "/system/upgrade"
+    ? { enabled: true, phase, completed_steps, progress_percent, target: "0.1.22", error: "" }
+    : { ...base, latest: "0.1.22", has_update: true }));
+  renderTag();
+  fireEvent.click(screen.getByRole("button", { name: "v0.1.21" }));
+  const progress = await screen.findByRole("progressbar", { name: "升级进度" });
+  expect(progress).toHaveAttribute("aria-valuenow", String(progress_percent));
+  expect(screen.getByText(`${progress_percent}%`)).toBeInTheDocument();
+  expect(screen.getByText("下载文件")).toBeInTheDocument();
+  expect(screen.getByText("解压文件")).toBeInTheDocument();
+  expect(document.querySelector(".arco-steps-lineless")).toBeNull();
+});
+
+it("未知文件大小时显示处理中，不误报零进度", async () => {
+  vi.mocked(apiRequest).mockImplementation(path => Promise.resolve(path === "/system/upgrade"
+    ? { enabled:true, phase:"downloading", completed_steps:0, progress_percent:0, progress_indeterminate:true, target:"0.1.22", error:"" }
+    : { ...base, latest:"0.1.22", has_update:true }));
+  renderTag();
+  fireEvent.click(screen.getByRole("button", { name:"v0.1.21" }));
+  const progress = await screen.findByRole("progressbar", { name:"升级进度" });
+  expect(progress).not.toHaveAttribute("aria-valuenow");
+  expect(screen.getByText("处理中")).toBeInTheDocument();
+});
 
 it("有更新时在状态位置按编号展示跨版本说明，按纯文本渲染", async () => {
   vi.mocked(apiRequest).mockImplementation((path) => Promise.resolve(path === "/system/upgrade"

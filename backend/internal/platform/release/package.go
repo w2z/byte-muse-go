@@ -26,6 +26,30 @@ var packageVersion = regexp.MustCompile(`^[0-9]+[.][0-9]+[.][0-9]+$`)
 
 const maxPackageBytes int64 = 256 << 20
 
+// progressReader 按实际读取的字节数报告进度；未知总量以非正数传递，不推算百分比。
+type progressReader struct {
+	reader      io.Reader
+	done, total int64
+	report      func(int64, int64)
+}
+
+func (r *progressReader) Read(buffer []byte) (int, error) {
+	n, err := r.reader.Read(buffer)
+	r.done += int64(n)
+	if n > 0 {
+		r.report(r.done, r.total)
+	}
+	return n, err
+}
+
+// progressCallback 允许不关注进度的内部校验调用省略回调。
+func progressCallback(reports []func(int64, int64)) func(int64, int64) {
+	if len(reports) > 0 && reports[0] != nil {
+		return reports[0]
+	}
+	return func(int64, int64) {}
+}
+
 // PackageInstaller 将升级包保存在 /data 的专用目录，不覆盖运行文件或用户配置。
 type PackageInstaller struct {
 	Root, Repo string
@@ -49,9 +73,14 @@ func (p *PackageInstaller) Status() ports.UpgradeStatus {
 	// 常驻的旧版启动器不写步骤数，依据其终态补齐协议字段。
 	if state.Phase == "restarting" {
 		state.CompletedSteps = 3
+		state.ProgressIndeterminate = true
 	}
 	if state.Phase == "success" {
 		state.CompletedSteps = 4
+		state.ProgressIndeterminate = false
+	}
+	if state.ProgressPercent < state.CompletedSteps*25 {
+		state.ProgressPercent = state.CompletedSteps * 25
 	}
 	return state
 }
@@ -67,6 +96,7 @@ func (p *PackageInstaller) Stage(ctx context.Context, version string, report fun
 	state := ports.UpgradeStatus{Enabled: true, Phase: "downloading", Target: version}
 	advance := func(phase string, completed int) error {
 		state.Phase, state.CompletedSteps = phase, completed
+		state.ProgressPercent, state.ProgressIndeterminate = completed*25, false
 		if err := writeRecord(p.Root, "status.json", state); err != nil {
 			return errors.New("无法保存升级状态")
 		}
@@ -75,12 +105,27 @@ func (p *PackageInstaller) Stage(ctx context.Context, version string, report fun
 		}
 		return nil
 	}
+	// 每个整数百分比最多报告一次；过程进度只更新内存，阶段边界才持久化，避免频繁写盘。
+	progress := func(done, total int64) {
+		percent := state.CompletedSteps * 25
+		if total > 0 {
+			percent += int(min(int64(24), done*25/total))
+		}
+		unknown := total <= 0
+		if percent != state.ProgressPercent || unknown != state.ProgressIndeterminate {
+			state.ProgressPercent, state.ProgressIndeterminate = percent, unknown
+			if report != nil {
+				report(state)
+			}
+		}
+	}
 	if err := advance("downloading", 0); err != nil {
 		return errors.New("无法保存升级状态")
 	}
 	defer func() {
 		if resultErr != nil {
 			state.Phase, state.Error = "failed", resultErr.Error()
+			state.ProgressIndeterminate = false
 			_ = writeRecord(p.Root, "status.json", state)
 		}
 	}()
@@ -92,14 +137,14 @@ func (p *PackageInstaller) Stage(ctx context.Context, version string, report fun
 	name := "bytemuse-linux-" + runtime.GOARCH + ".tar.gz"
 	base := "https://github.com/" + p.Repo + "/releases/download/v" + version + "/" + name
 	archive := filepath.Join(temp, "package.tgz")
-	if err := p.download(ctx, base, archive); err != nil {
+	if err := p.download(ctx, base, archive, progress); err != nil {
 		return err
 	}
 	candidate := filepath.Join(temp, "release")
 	if err := advance("extracting", 1); err != nil {
 		return err
 	}
-	if err := extractPackage(archive, candidate, version); err != nil {
+	if err := extractPackage(archive, candidate, version, progress); err != nil {
 		return err
 	}
 	binary, err := elf.Open(filepath.Join(candidate, "bytemuse"))
@@ -118,11 +163,13 @@ func (p *PackageInstaller) Stage(ctx context.Context, version string, report fun
 	if err := os.MkdirAll(releases, 0700); err != nil {
 		return errors.New("无法创建版本目录")
 	}
+	progress(1, 3)
 	// 目录使用随机名称，重试不会覆盖当前或历史运行版本。
 	dest := filepath.Join(releases, filepath.Base(temp))
 	if err := os.Rename(candidate, dest); err != nil {
 		return errors.New("无法保存升级包")
 	}
+	progress(2, 3)
 	request := Activation{Directory: filepath.Base(dest), Version: version}
 	if err := writeRecord(p.Root, "pending.json", request); err != nil {
 		_ = os.RemoveAll(dest)
@@ -133,13 +180,15 @@ func (p *PackageInstaller) Stage(ctx context.Context, version string, report fun
 
 // download 先直连 Release，失败后仅通过已配置代理重新下载摘要与完整包。
 // 不使用 jsDelivr（不支持 Release 附件），每次重新校验 SHA256，不复用失败的部分文件。
-func (p *PackageInstaller) download(ctx context.Context, base, archive string) error {
+func (p *PackageInstaller) download(ctx context.Context, base, archive string, reports ...func(int64, int64)) error {
+	report := progressCallback(reports)
 	client := p.Client
 	if client == nil {
 		client = directClient()
 		defer client.CloseIdleConnections()
 	}
 	attempt := func(client *http.Client) error {
+		report(0, 0)
 		attemptCtx, cancel := context.WithTimeout(ctx, 4*time.Minute)
 		defer cancel()
 		checksumCtx, cancelChecksum := context.WithTimeout(attemptCtx, requestTimeout)
@@ -152,7 +201,7 @@ func (p *PackageInstaller) download(ctx context.Context, base, archive string) e
 		if len(fields) == 0 || len(fields[0]) != 64 {
 			return errors.New("升级包摘要无效")
 		}
-		return downloadFile(attemptCtx, client, base, archive, fields[0])
+		return downloadFile(attemptCtx, client, base, archive, fields[0], report)
 	}
 	err := attempt(client)
 	if err == nil || ctx.Err() != nil || p.ProxyClient == nil {
@@ -219,7 +268,7 @@ func downloadBytes(ctx context.Context, client *http.Client, url string, limit i
 	return body, nil
 }
 
-func downloadFile(ctx context.Context, client *http.Client, url, destination, expected string) error {
+func downloadFile(ctx context.Context, client *http.Client, url, destination, expected string, reports ...func(int64, int64)) error {
 	resp, err := packageResponse(ctx, client, url)
 	if err != nil {
 		return err
@@ -230,7 +279,10 @@ func downloadFile(ctx context.Context, client *http.Client, url, destination, ex
 		return errors.New("升级包写入失败")
 	}
 	digest := sha256.New()
-	size, copyErr := io.Copy(io.MultiWriter(file, digest), io.LimitReader(resp.Body, maxPackageBytes+1))
+	report := progressCallback(reports)
+	report(0, resp.ContentLength)
+	counter := &progressReader{reader: io.LimitReader(resp.Body, maxPackageBytes+1), total: resp.ContentLength, report: report}
+	size, copyErr := io.Copy(io.MultiWriter(file, digest), counter)
 	closeErr := file.Close()
 	if copyErr != nil || closeErr != nil || size > maxPackageBytes {
 		return errors.New("升级包下载不完整或超出大小限制")
@@ -242,13 +294,19 @@ func downloadFile(ctx context.Context, client *http.Client, url, destination, ex
 }
 
 // extractPackage 拒绝所有链接、重复路径和目录穿越，限制解包体积并验证协议、版本及前后端完整性。
-func extractPackage(archive, destination, version string) error {
+func extractPackage(archive, destination, version string, reports ...func(int64, int64)) error {
 	file, err := os.Open(archive)
 	if err != nil {
 		return err
 	}
 	defer file.Close()
-	gz, err := gzip.NewReader(file)
+	info, err := file.Stat()
+	if err != nil {
+		return err
+	}
+	report := progressCallback(reports)
+	report(0, info.Size())
+	gz, err := gzip.NewReader(&progressReader{reader: file, total: info.Size(), report: report})
 	if err != nil {
 		return errors.New("升级包格式无效")
 	}

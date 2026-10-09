@@ -73,6 +73,34 @@ func TestPackageFallback(t *testing.T) {
 
 type packageTransport func(*http.Request) (*http.Response, error)
 
+// TestDownloadByteProgress 验证真实字节读取过程可见，未知总量不虚构总数。
+func TestDownloadByteProgress(t *testing.T) {
+	body := strings.Repeat("release", 20000)
+	for _, total := range []int64{int64(len(body)), -1} {
+		client := &http.Client{Transport: packageTransport(func(*http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body)), ContentLength: total, Header: make(http.Header)}, nil
+		})}
+		var values []int64
+		err := downloadFile(context.Background(), client, "https://github.com/w2z/byte-muse-go/package", filepath.Join(t.TempDir(), "package"), fmt.Sprintf("%x", sha256.Sum256([]byte(body))), func(done, size int64) {
+			if size != total {
+				t.Errorf("total=%d want=%d", size, total)
+			}
+			values = append(values, done)
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(values) < 3 || values[0] != 0 || values[len(values)-1] != int64(len(body)) {
+			t.Fatalf("values=%v", values)
+		}
+		for i := 1; i < len(values); i++ {
+			if values[i] <= values[i-1] {
+				t.Fatalf("进度未递增: %v", values)
+			}
+		}
+	}
+}
+
 func (f packageTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 // TestStageProgress 使用真实运行包完成暂存，验证阶段报告与持久化一致，且不会提前重启。
@@ -110,23 +138,32 @@ func TestStageProgress(t *testing.T) {
 	})
 	installer := &PackageInstaller{Root: t.TempDir(), Repo: "w2z/byte-muse-go", Client: &http.Client{Transport: transport}}
 	var phases []string
+	var intermediate bool
 	err = installer.Stage(context.Background(), "0.1.22", func(state ports.UpgradeStatus) {
-		if state.CompletedSteps != len(phases) {
-			t.Errorf("state=%+v", state)
+		if state.ProgressPercent > state.CompletedSteps*25 {
+			intermediate = true
 		}
-		if persisted := installer.Status(); persisted != state {
+		if state.ProgressPercent < state.CompletedSteps*25 || state.ProgressPercent >= (state.CompletedSteps+1)*25 {
+			t.Errorf("progress=%+v", state)
+		}
+		if persisted := installer.Status(); persisted.Phase != state.Phase || persisted.CompletedSteps != state.CompletedSteps {
 			t.Errorf("persisted=%+v state=%+v", persisted, state)
 		}
 		if _, err := os.Stat(filepath.Join(installer.Root, "pending.json")); !os.IsNotExist(err) {
 			t.Error("重启请求提前提交")
 		}
-		phases = append(phases, state.Phase)
+		if len(phases) == 0 || phases[len(phases)-1] != state.Phase {
+			phases = append(phases, state.Phase)
+		}
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if strings.Join(phases, ",") != "downloading,extracting,installing" {
 		t.Fatalf("phases=%v", phases)
+	}
+	if !intermediate {
+		t.Fatal("缺少阶段内部实际进度")
 	}
 	if _, err := readActivation(installer.Root, "pending.json"); err != nil {
 		t.Fatal(err)
