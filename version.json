@@ -1,16 +1,20 @@
 {
-  "version": "0.1.146",
-  "commit": "3d76db9a3867ac23caf7dde9f9c1fc55fc5ba9fb",
-  "short_commit": "3d76db9",
-  "built_at": "2026-10-09T15:43:29Z",
+  "version": "0.1.147",
+  "commit": "8cbf81facf73c778b4a83d6b56fc9b34f7f8c840",
+  "short_commit": "8cbf81f",
+  "built_at": "2026-10-09T16:51:28Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.146",
-    "sha-3d76db9",
+    "0.1.147",
+    "sha-8cbf81f",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.147",
+      "message": "将影片标题移至描述上方并添加TG复制按钮"
+    },
     {
       "version": "0.1.146",
       "message": "实时预览执行计划并阻止保存无效表达式"
