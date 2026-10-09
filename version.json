@@ -1,16 +1,20 @@
 {
-  "version": "0.1.127",
-  "commit": "1db5cfefc1f3a78bed5c3fe49832a72e4a914aa5",
-  "short_commit": "1db5cfe",
-  "built_at": "2026-10-09T11:57:55Z",
+  "version": "0.1.128",
+  "commit": "a23284c500ba88ba0014217af07cf285dd409b87",
+  "short_commit": "a23284c",
+  "built_at": "2026-10-09T12:00:26Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.127",
-    "sha-1db5cfe",
+    "0.1.128",
+    "sha-a23284c",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.128",
+      "message": "使用Arco抽屉展示手机菜单并恢复开关动画"
+    },
     {
       "version": "0.1.127",
       "message": "移除清理任务的日志保留天数限制"
