@@ -1,16 +1,20 @@
 {
-  "version": "0.1.131",
-  "commit": "0adb344498b236a29e6cb41196a9dcf449e13875",
-  "short_commit": "0adb344",
-  "built_at": "2026-10-09T12:29:17Z",
+  "version": "0.1.132",
+  "commit": "0e85c355fd7df96e17a10b54834963a17d6a5e39",
+  "short_commit": "0e85c35",
+  "built_at": "2026-10-09T12:38:11Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.131",
-    "sha-0adb344",
+    "0.1.132",
+    "sha-0e85c35",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.132",
+      "message": "为上新推荐和榜单添加一键批量订阅"
+    },
     {
       "version": "0.1.131",
       "message": "使用Arco按钮式单选框展示来源和周期"
