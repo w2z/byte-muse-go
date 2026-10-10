@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"bytemuse/backend/internal/domain"
 )
@@ -28,46 +27,41 @@ func (stub *refreshingDownloadStub) PlayURL(_ context.Context, _, userAgent stri
 	return fmt.Sprintf("http://download.test/%d?ua=%s", stub.calls, userAgent), nil
 }
 
-// TestStrmDownloadChecksLinkExpiry 验证过期直链不发起下载、刷新次数有界，缺失或非法时间戳不误拦截。
-func TestStrmDownloadChecksLinkExpiry(t *testing.T) {
-	expired := "http://download.test/stale?t=1"
-	fresh := fmt.Sprintf("http://download.test/fresh?t=%d", time.Now().Add(time.Hour).Unix())
+// TestStrmDownloadIgnoresLinkTimestamp 验证 t 参数不影响下载，原始地址不被修改，成功响应正常落盘。
+func TestStrmDownloadIgnoresLinkTimestamp(t *testing.T) {
 	for _, sample := range []struct {
-		name         string
-		links        []string
-		wantCalls    int
-		wantRequests int
-		wantSuccess  bool
+		name    string
+		address string
 	}{
-		{"refresh-before-request", []string{expired, fresh}, 2, 1, true},
-		{"fresh", []string{fresh}, 1, 1, true},
-		{"still-expired", []string{expired}, 2, 0, false},
-		{"missing-timestamp", []string{"http://download.test/fresh"}, 1, 1, true},
-		{"invalid-timestamp", []string{"http://download.test/fresh?t=unknown"}, 1, 1, true},
+		{"past", "http://download.test/file?t=1"},
+		{"zero", "http://download.test/file?t=0"},
+		{"future", "http://download.test/file?t=9999999999"},
+		{"missing", "http://download.test/file"},
+		{"invalid", "http://download.test/file?t=unknown"},
 	} {
 		t.Run(sample.name, func(t *testing.T) {
 			root := t.TempDir()
-			api := &refreshingDownloadStub{links: sample.links}
+			api := &refreshingDownloadStub{links: []string{sample.address}}
 			service := newStrmTestService(t, root, api, nil, nil)
 			requests := 0
 			service.http.Transport = embyRoundTripper(func(request *http.Request) (*http.Response, error) {
 				requests++
-				if request.URL.Path == "/stale" {
-					t.Error("expired URL must never reach download server")
+				if request.URL.String() != sample.address {
+					t.Errorf("下载地址被修改：%s", request.URL)
 				}
 				return &http.Response{StatusCode: 200, ContentLength: 7, Body: io.NopCloser(strings.NewReader("renewed"))}, nil
 			})
 			_, err := service.downloadStrmMedia(context.Background(), root, root, "115", strmSourceFile{Name: "poster.jpg", PickCode: "poster"}, domain.StrmGenerateFull)
-			if (err == nil) != sample.wantSuccess || api.calls != sample.wantCalls || requests != sample.wantRequests {
+			if err != nil || api.calls != 1 || requests != 1 {
 				t.Fatalf("err=%v resolve=%d requests=%d", err, api.calls, requests)
 			}
 			entries, readErr := os.ReadDir(root)
-			wantFiles := 0
-			if sample.wantSuccess {
-				wantFiles = 1
-			}
-			if readErr != nil || len(entries) != wantFiles {
+			if readErr != nil || len(entries) != 1 {
 				t.Fatalf("files=%v err=%v", entries, readErr)
+			}
+			body, readErr := os.ReadFile(filepath.Join(root, "poster.jpg"))
+			if readErr != nil || string(body) != "renewed" {
+				t.Fatalf("file=%q err=%v", body, readErr)
 			}
 		})
 	}

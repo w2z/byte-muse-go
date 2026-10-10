@@ -9,10 +9,8 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -75,7 +73,7 @@ func (r strmDownloadReader) Read(buffer []byte) (int, error) {
 	return n, err
 }
 
-// downloadStrmMedia 在 115 直链时间戳过期或下载端明确报告过期时立即重新取链一次；仍失败则交回任务级重试。
+// downloadStrmMedia 仅在下载端明确报告过期时立即重新取链一次，不根据直链参数预判有效期。
 // 每次尝试均检查暂停/取消、保持 UA 一致，并保留增量跳过和原子落盘语义。
 func (s *StrmService) downloadStrmMedia(ctx context.Context, root, target, kind string, file strmSourceFile, mode domain.StrmGenerateMode) (bool, error) {
 	skipped, err := s.downloadStrmMediaOnce(ctx, root, target, kind, file, mode)
@@ -137,15 +135,6 @@ func (s *StrmService) downloadStrmMediaOnce(ctx context.Context, root, target, k
 	address := targetURL.Redirect
 	if targetURL.Proxy != nil {
 		address = targetURL.Proxy.URL
-	}
-	if kind == domain.StrmKindPan115 {
-		parsed, parseErr := url.Parse(address)
-		if parseErr == nil {
-			expires, timestampErr := strconv.ParseInt(parsed.Query().Get("t"), 10, 64)
-			if timestampErr == nil && expires <= time.Now().Unix() {
-				return false, &strmExpiredDownloadError{error: errors.New("115 媒体下载链接已过期")}
-			}
-		}
 	}
 	downloadCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
