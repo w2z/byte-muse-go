@@ -113,7 +113,7 @@ func (s *StrmService) eventMappingWalk(mapping domain.StrmMapping, info pan115.F
 			return nil, false
 		}
 		return func(ctx context.Context, visit strmFileVisit) error {
-			return visit(strmSourceFile{ID: info.ID, PickCode: info.PickCode, Name: info.Name, Directory: relative, ParentID: info.ParentID, Ancestors: ancestors})
+			return visit(strmSourceFile{ID: info.ID, PickCode: info.PickCode, Name: info.Name, Directory: relative, ParentID: info.ParentID, Size: info.Size, SizeKnown: info.SizeKnown, Ancestors: ancestors})
 		}, true
 	}
 	if info.ID == mapping.ID {

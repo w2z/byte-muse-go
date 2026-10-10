@@ -23,7 +23,10 @@ type File struct {
 	Name        string
 	IsDirectory bool
 	Size        int64
-	PickCode    string
+	// SizeKnown 表示 115 是否回传了体积（fs 字段）。体积为 0 且已知才代表空文件；
+	// 字段缺失时体积按未知处理，不能据此判定文件为空。
+	SizeKnown bool
+	PickCode  string
 }
 
 // FilePage 是一页目录内容。
@@ -121,6 +124,7 @@ func buildFilePage(entries []fileEntryWire, path []Directory, total, offset, lim
 			Name:        item.Name,
 			IsDirectory: item.Category == "0",
 			Size:        size,
+			SizeKnown:   item.Size != "",
 			PickCode:    item.PickCode,
 		}
 	}

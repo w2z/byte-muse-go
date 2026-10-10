@@ -72,6 +72,9 @@ type strmSourceFile struct {
 	PickCode  string
 	Name      string
 	Directory string
+	// Size 是网盘回传的体积；SizeKnown 为 false 时 Size 只代表未知，不能判定文件为空。
+	Size      int64
+	SizeKnown bool
 }
 
 // strmFileFilter 是递归扫描网盘目录时的过滤条件：媒体格式、最小体积与排除关键字。
@@ -124,7 +127,7 @@ func (f strmFileFilter) skipName(name string) bool {
 }
 
 // acceptFile 判断一个文件是否应生成 strm：格式匹配、未命中排除关键字、体积不小于下限。
-// sizeBytes 为 0 表示网盘未返回体积，此时不按体积过滤，避免把整个目录误判成小文件而全部跳过。
+// sizeBytes <= 0 不按体积过滤：既可能是网盘未返回体积，也可能是真实的空文件（空文件由下载流程直接创建）。
 func (f strmFileFilter) acceptFile(name string, sizeBytes int64) bool {
 	if f.skipName(name) {
 		return false
@@ -544,7 +547,7 @@ func walkPan115Files(ctx context.Context, api pan115FileAPI, rootID string, filt
 				if !isStrmMedia(file.Name, filter.downloadFormats) {
 					reportScanDiscovery(ctx)
 				}
-				if err := visit(strmSourceFile{ID: file.ID, PickCode: file.PickCode, Name: file.Name, Directory: relative, ParentID: directoryID, Ancestors: append([]string(nil), ancestors...)}); err != nil {
+				if err := visit(strmSourceFile{ID: file.ID, PickCode: file.PickCode, Name: file.Name, Directory: relative, ParentID: directoryID, Size: file.Size, SizeKnown: file.SizeKnown, Ancestors: append([]string(nil), ancestors...)}); err != nil {
 					return err
 				}
 			}

@@ -118,6 +118,14 @@ func (s *StrmService) downloadStrmMediaOnce(ctx context.Context, root, target, k
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		return false, fmt.Errorf("无法检查下载目标：%s", scanFileError(err))
 	}
+	if file.SizeKnown && file.Size == 0 {
+		// 网盘空文件（0 字节）取下载直链会失败（115 返回 403 request expired），
+		// 这里按同名直接创建空文件并登记归属，避免反复下载报错且难以定位。
+		if err := s.createEmptyDownloadFile(ctx, dir, target, relative, file); err != nil {
+			return false, err
+		}
+		return false, nil
+	}
 	identifier := file.ID
 	if kind == domain.StrmKindPan115 {
 		identifier = strings.TrimSpace(file.PickCode)
@@ -201,6 +209,36 @@ func (s *StrmService) downloadStrmMediaOnce(ctx context.Context, root, target, k
 		return false, fmt.Errorf("保存媒体下载文件失败：%s", scanFileError(err))
 	}
 	return false, nil
+}
+
+// createEmptyDownloadFile 为网盘空文件（0 字节）在本地按同名原子创建空文件，并登记文件归属。
+// 空文件无法通过下载直链获取（115 对空文件取链返回 403 request expired），跳过网络请求可避免任务反复失败。
+func (s *StrmService) createEmptyDownloadFile(ctx context.Context, dir *os.Root, target, relative string, file strmSourceFile) error {
+	if err := dir.MkdirAll(filepath.Dir(relative), 0o755); err != nil {
+		return fmt.Errorf("创建空文件目录失败：%s", scanFileError(err))
+	}
+	var random [16]byte
+	if _, err := rand.Read(random[:]); err != nil {
+		return err
+	}
+	temporary := filepath.Join(filepath.Dir(relative), fmt.Sprintf(".bytemuse-empty-%x.part", random))
+	output, err := dir.OpenFile(temporary, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	if err != nil {
+		return fmt.Errorf("创建空文件失败：%s", scanFileError(err))
+	}
+	closeErr := output.Close()
+	if closeErr != nil {
+		dir.Remove(temporary)
+		return fmt.Errorf("创建空文件失败：%s", scanFileError(closeErr))
+	}
+	if err := s.recordManagedFileAt(ctx, file, filepath.Join(target, temporary), filepath.Join(target, relative)); err != nil {
+		dir.Remove(temporary)
+		return err
+	}
+	if err := dir.Rename(temporary, relative); err != nil {
+		return fmt.Errorf("保存空文件失败：%s", scanFileError(err))
+	}
+	return nil
 }
 
 // strmExpiredDownloadError 标记下载端明确返回的链接过期，不把普通鉴权拒绝或限流当作链接失效。

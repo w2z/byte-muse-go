@@ -390,3 +390,38 @@ func TestStrmDuplicateSidecarsPreserveExistingIncremental(t *testing.T) {
 		})
 	}
 }
+// TestStrmDownloadCreatesEmptyRemoteFile 验证网盘 0 字节附件不发起下载请求，直接按同名创建空文件。
+func TestStrmDownloadCreatesEmptyRemoteFile(t *testing.T) {
+	var requests atomic.Int32
+	api := &downloadPan115Stub{address: "http://download.test", strmPan115Stub: strmPan115Stub{pages: map[string]domain.Pan115FilePage{
+		"root": {Files: []domain.Pan115File{
+			{ID: "empty-nfo", PickCode: "empty-nfo", Name: "empty.nfo", Size: 0, SizeKnown: true},
+			{ID: "empty-jpg", PickCode: "empty-jpg", Name: "empty.jpg", Size: 0, SizeKnown: true},
+			{ID: "real-nfo", PickCode: "real-nfo", Name: "real.nfo", Size: 12, SizeKnown: true},
+		}},
+	}}}
+	root := t.TempDir()
+	service := newStrmTestService(t, root, api, nil, map[string]string{strmDownloadEnableSettingKey: "true", strmPathsSettingKey: strmTestMappings(t, []domain.StrmMapping{{Kind: "115", ID: "root", Path: "/root", LocalPath: "/out"}})})
+	service.http.Transport = embyRoundTripper(func(*http.Request) (*http.Response, error) {
+		requests.Add(1)
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("remote"))}, nil
+	})
+	ctx := context.WithValue(context.Background(), strmRetryKey{}, &strmRetryPolicy{wait: func(context.Context, string, error) error { return fmt.Errorf("下载失败，停止重试") }})
+	result, err := service.Scan(ctx, "http://play.test", domain.StrmGenerateFull)
+	if err != nil || result.Downloaded != 3 || result.DownloadFailed != 0 || result.Failed != 0 {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	if requests.Load() != 1 {
+		t.Fatalf("空文件不应发起下载请求: requests=%d", requests.Load())
+	}
+	for _, name := range []string{"empty.nfo", "empty.jpg"} {
+		info, statErr := os.Stat(filepath.Join(root, "out", name))
+		if statErr != nil || info.Size() != 0 {
+			t.Fatalf("%s 应为 0 字节本地文件: info=%v err=%v", name, info, statErr)
+		}
+	}
+	body, readErr := os.ReadFile(filepath.Join(root, "out", "real.nfo"))
+	if readErr != nil || string(body) != "remote" {
+		t.Fatalf("非空附件应正常下载: %q %v", body, readErr)
+	}
+}

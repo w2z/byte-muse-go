@@ -738,6 +738,7 @@ func pan115FilePageView(directoryID string, page pan115.FilePage) domain.Pan115F
 			Name:        file.Name,
 			IsDirectory: file.IsDirectory,
 			Size:        file.Size,
+			SizeKnown:   file.SizeKnown,
 			PickCode:    file.PickCode,
 		}
 	}

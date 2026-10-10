@@ -86,7 +86,9 @@ type Pan115File struct {
 	Name        string `json:"name"`
 	IsDirectory bool   `json:"is_directory"`
 	Size        int64  `json:"size"`
-	PickCode    string `json:"pick_code"`
+	// SizeKnown 表示网盘是否回传了体积；为 false 时 Size 为 0 只代表未知，不能判定文件为空。
+	SizeKnown bool   `json:"size_known"`
+	PickCode  string `json:"pick_code"`
 }
 
 // Pan115FilePage 是一页目录内容；Path 为从根目录到当前目录的完整路径。

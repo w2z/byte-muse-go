@@ -96,6 +96,7 @@ func (c *Client) Info(ctx context.Context, accessToken, fileID string) (FileInfo
 			Name:        wire.Name,
 			IsDirectory: wire.Category == "0",
 			Size:        size,
+			SizeKnown:   wire.Size != "",
 			PickCode:    wire.PickCode,
 		},
 		Path: make([]Directory, len(wire.Paths)),
