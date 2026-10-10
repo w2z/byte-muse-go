@@ -132,6 +132,7 @@ func (s *ScanTasks) start(ctx context.Context, kind, mode, retryID string, run f
 			return nil, ErrScanTaskConflict
 		}
 		e.task = *latest
+		workerCtx = context.WithValue(workerCtx, scanRecoveryKey{}, latest.Progress)
 		e.task.State, e.task.Error, e.task.CanRetry = "running", "", false
 		if latest.State == "paused" {
 			e.task.State = "paused"
@@ -351,6 +352,9 @@ func (s *ScanTasks) checkpoint(ctx context.Context, e *scanExecution) error {
 }
 
 type scanCheckpointKey struct{}
+
+// scanRecoveryKey 标识重启或失败续跑，携带重建断点期间应保留的进度。
+type scanRecoveryKey struct{}
 
 // scanCheckpoint 仅在后台任务上下文中等待暂停；同步调用沿用原有取消语义。
 func scanCheckpoint(ctx context.Context) error {

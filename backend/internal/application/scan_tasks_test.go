@@ -19,6 +19,121 @@ type memoryScanTasks struct {
 	items map[string]domain.ScanTask
 }
 
+// restartProgressRepository 记录真实 SQLite 快照，用于检查恢复期间是否曾将进度归零。
+type restartProgressRepository struct {
+	*database.ScanTaskRepository
+	mutex    sync.Mutex
+	progress []ScanProgress
+}
+
+func (repo *restartProgressRepository) Save(ctx context.Context, task domain.ScanTask) error {
+	repo.mutex.Lock()
+	repo.progress = append(repo.progress, task.Progress)
+	repo.mutex.Unlock()
+	return repo.ScanTaskRepository.Save(ctx, task)
+}
+
+// TestStrmRestartRestoresProgressAndPendingWork 通过关闭并重开 SQLite 验证旧断点恢复，不重复查询已保存页或写入完成文件。
+func TestStrmRestartRestoresProgressAndPendingWork(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	config := database.Config{Dialect: database.DialectSQLite, SQLitePath: filepath.Join(t.TempDir(), "restart-progress.db")}
+	store, err := database.Open(ctx, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	repo := database.NewScanTaskRepository(store.SQLDB(), database.DialectSQLite)
+	task := domain.ScanTask{ID: "restart-progress", Kind: "strm", Mode: "full", State: "paused", CanRetry: true, Progress: ScanProgress{Phase: "processing", Processed: 2, Total: 3, Percent: 66, Current: "/source"}}
+	if err := repo.Save(ctx, task); err != nil {
+		t.Fatal(err)
+	}
+	worker := journalContext(ctx, &taskJournal{repo: repo, id: task.ID})
+	mapping := domain.StrmMapping{Kind: "115", ID: "root", Path: "/source", LocalPath: "/movies"}
+	values := map[string]string{strmPathsSettingKey: strmTestMappings(t, []domain.StrmMapping{mapping}), strmPlayBaseSettingKey: "http://play.test"}
+	page := domain.Pan115FilePage{Files: []domain.Pan115File{
+		{ID: "done-first", Name: "first.mp4", PickCode: "first"},
+		{ID: "pending", Name: "pending.mp4", PickCode: "pending"},
+		{ID: "child", Name: "child", IsDirectory: true},
+		{ID: "done-last", Name: "last.mp4", PickCode: "last"},
+	}}
+	if err := saveTaskCheckpoint(worker, journalKey("115-page", "root", "0"), page); err != nil {
+		t.Fatal(err)
+	}
+	if err := saveTaskCheckpoint(worker, journalKey("cleanup", mapping.Kind, mapping.ID, mapping.LocalPath), true); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(root, "movies")
+	if err := os.MkdirAll(target, 0755); err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range []struct{ id, name string }{{"done-first", "first.strm"}, {"done-last", "last.strm"}} {
+		if err := completeTaskUnit(worker, "strm-file", target, "", file.id); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(target, file.name), []byte("preserved"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	store.Close()
+	store, err = database.Open(ctx, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	recorded := &restartProgressRepository{ScanTaskRepository: database.NewScanTaskRepository(store.SQLDB(), database.DialectSQLite)}
+	manager, err := NewScanTasks(ctx, recorded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	api := &retryStrmPan115Stub{}
+	api.list = func(_ context.Context, directory string, offset, limit int) (domain.Pan115FilePage, error) {
+		if directory != "child" || offset != 0 {
+			t.Errorf("重新请求已缓存目录: %s offset=%d", directory, offset)
+		}
+		snapshot, err := manager.Latest(ctx, "strm")
+		if err != nil || snapshot.Progress.Total != 3 || snapshot.Progress.Processed < 2 {
+			t.Errorf("请求未扫描目录前未恢复计数: %+v %v", snapshot, err)
+		}
+		return domain.Pan115FilePage{}, nil
+	}
+	service := newStrmTestService(t, root, api, nil, values)
+	manager.RegisterRunner("strm", func(worker context.Context, mode string) (any, error) {
+		return service.Scan(worker, "", domain.StrmGenerateMode(mode))
+	})
+	if err := manager.Recover(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Control(ctx, "strm", task.ID, "resume"); err != nil {
+		t.Fatal(err)
+	}
+	waitScanState(t, manager, "strm", "completed")
+	latest, _ := manager.Latest(ctx, "strm")
+	if latest.Progress.Total != 3 || latest.Progress.Processed != 3 {
+		t.Fatalf("最终计数不符: %+v", latest.Progress)
+	}
+	recorded.mutex.Lock()
+	defer recorded.mutex.Unlock()
+	for _, progress := range recorded.progress {
+		if progress.Total < 3 || progress.Processed < 2 {
+			t.Errorf("恢复期间计数回退: %+v", progress)
+		}
+	}
+	for _, name := range []string{"first.strm", "last.strm"} {
+		raw, err := os.ReadFile(filepath.Join(target, name))
+		if err != nil || string(raw) != "preserved" {
+			t.Errorf("已完成文件被改写: %s %v", name, err)
+		}
+	}
+	pending, err := filepath.Glob(filepath.Join(target, "pending*.strm"))
+	if err != nil || len(pending) != 1 {
+		t.Fatalf("未完成文件未生成: %v %v", pending, err)
+	}
+}
+
 // TestScanTasksCloseAndReopen verifies real persisted checkpoints survive closing and reopening the database.
 func TestScanTasksCloseAndReopen(t *testing.T) {
 	for _, paused := range []bool{false, true} {

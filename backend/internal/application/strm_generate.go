@@ -133,6 +133,7 @@ type strmMappingWork struct {
 
 // scanMappings uses one scanner and two task-wide disk queues; a stalled stage cannot block later mappings.
 // Full cleanup is checkpointed before admission so retries never delete successful output again.
+// 恢复先从缓存页重建计数和未完成队列，完成项不入队；正常遍历仅接纳尚未恢复的文件。
 func (s *StrmService) scanMappings(ctx context.Context, root string, mappings []domain.StrmMapping, base string, mode domain.StrmGenerateMode, formats []string, progress *strmPipelineProgress, walks ...strmWalk) ([]domain.StrmScanMapping, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -191,6 +192,53 @@ func (s *StrmService) scanMappings(ctx context.Context, root string, mappings []
 		scopes[index] = strmMappingWork{ctx: mappingCtx, target: target, walk: walk}
 	}
 	_, retry := ctx.Value(strmRetryKey{}).(*strmRetryPolicy)
+	restored := make(map[string]bool)
+	restoreKey := func(index int, file strmSourceFile) string {
+		return journalKey(fmt.Sprint(index), file.Directory, file.ID)
+	}
+	if _, recovering := ctx.Value(scanRecoveryKey{}).(ScanProgress); recovering && len(walks) == 0 {
+		for index, scope := range scopes {
+			if scope.walk == nil {
+				continue
+			}
+			cacheCtx := context.WithValue(scope.ctx, strmCachedWalkKey{}, true)
+			cacheCtx = withScanDiscovery(cacheCtx, func() {})
+			err := scope.walk(cacheCtx, func(file strmSourceFile) error {
+				operation, unit := "generate", "strm-file"
+				if isStrmMedia(file.Name, formats) {
+					operation, unit = "download", "download"
+				}
+				done, err := taskUnitDone(cacheCtx, unit, scope.target, file.Directory, file.ID)
+				if err != nil {
+					return err
+				}
+				state := "waiting"
+				if done {
+					state = "skipped"
+				}
+				if operation == "generate" {
+					entries[index].Files++
+					progress.total++
+					if done {
+						entries[index].Unchanged++
+						progress.processed++
+					}
+				} else if done {
+					entries[index].DownloadSkipped++
+				}
+				finish := trackScanFile(cacheCtx, file, operation, state)
+				restored[restoreKey(index, file)] = done
+				if done {
+					finish(state, nil)
+				}
+				return nil
+			})
+			if err != nil {
+				return entries, err
+			}
+		}
+		progress.update(false, false, "processing", "断点已恢复，继续处理未完成文件")
+	}
 	var mutex sync.Mutex
 	done := make(chan error, 2)
 	start := func(queue *strmWorkQueue, workers, threshold int, operation, label string) {
@@ -294,7 +342,7 @@ func (s *StrmService) scanMappings(ctx context.Context, root string, mappings []
 			cancel()
 			break
 		}
-		walkCtx := withScanDiscovery(scope.ctx, func() { progress.update(true, false, "processing", mapping.Path) })
+		walkCtx := withScanDiscovery(scope.ctx, func() {})
 		walkCtx = pan115.WithCooldownReporter(walkCtx, func(wait time.Duration) {
 			progress.update(false, false, "cooling", pan115CooldownNotice(mapping.Path, wait))
 		})
@@ -312,9 +360,15 @@ func (s *StrmService) scanMappings(ctx context.Context, root string, mappings []
 				operation, queue = "download", download
 				name = file.Name
 			} else {
-				mutex.Lock()
-				entries[index].Files++
-				mutex.Unlock()
+				if _, known := restored[restoreKey(index, file)]; !known {
+					progress.update(true, false, "processing", mapping.Path)
+					mutex.Lock()
+					entries[index].Files++
+					mutex.Unlock()
+				}
+			}
+			if restored[restoreKey(index, file)] {
+				return nil
 			}
 			absolute := filepath.Join(scope.target, filepath.FromSlash(file.Directory), name)
 			if operation == "generate" {

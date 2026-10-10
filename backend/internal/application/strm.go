@@ -289,7 +289,11 @@ func (s *StrmService) CloudDriveDirectories(ctx context.Context, directory strin
 // 增量保留本地文件、只补齐缺失项；两种方式共用同一套映射、过滤与写入规则。
 func (s *StrmService) Scan(ctx context.Context, playBase string, mode domain.StrmGenerateMode) (domain.StrmScanResult, error) {
 	logging.Info(logging.CategoryStrmGenerate, "生成 STRM 开始扫描", "mode", string(mode))
-	reportScanProgress(ctx, "waiting", 0, 0, "")
+	if previous, recovering := ctx.Value(scanRecoveryKey{}).(ScanProgress); recovering {
+		reportScanProgress(ctx, "waiting", previous.Processed, previous.Total, "正在恢复断点和待处理队列")
+	} else {
+		reportScanProgress(ctx, "waiting", 0, 0, "")
+	}
 	// 等待事件生成释放互斥时仍响应任务暂停和取消。
 	for !s.scanMu.TryLock() {
 		if err := scanCheckpoint(ctx); err != nil {
@@ -480,6 +484,9 @@ type pan115FileAPI interface {
 	Files(ctx context.Context, directoryID string, offset, limit int) (domain.Pan115FilePage, error)
 }
 
+// strmCachedWalkKey 限定恢复预遍历只读已保存目录页，缺页留给正常遍历，不访问网盘。
+type strmCachedWalkKey struct{}
+
 // walkPan115Files 递归遍历 115 媒体文件；保留 ID 供扫描入库，pick_code 供生成播放链接。
 // 每页固定读取 pan115FilePageLimit 条并按 HasMore 翻页，传给 visit 的 Directory 是相对扫描根目录的路径。
 // 生成 strm 与扫描入库共用这一份递归实现，避免两条链路的分页与格式过滤规则漂移。
@@ -502,6 +509,9 @@ func walkPan115Files(ctx context.Context, api pan115FileAPI, rootID string, filt
 				return err
 			}
 			if !found {
+				if cached, _ := ctx.Value(strmCachedWalkKey{}).(bool); cached {
+					return nil
+				}
 				err = retryStrmScan(ctx, func() error {
 					var requestErr error
 					page, requestErr = api.Files(ctx, directoryID, offset, strmListLimit)
@@ -564,6 +574,9 @@ func (s *StrmService) walkCloudDrive(ctx context.Context, rootPath string, filte
 			return err
 		}
 		if !found {
+			if cached, _ := ctx.Value(strmCachedWalkKey{}).(bool); cached {
+				return nil
+			}
 			err = retryStrmScan(ctx, func() error {
 				var requestErr error
 				entries, requestErr = s.cloud.ListSubFiles(ctx, directory)
