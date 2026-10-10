@@ -257,6 +257,7 @@ func (s *ScanTasks) Get(ctx context.Context, id string) (*domain.ScanTask, error
 }
 
 // Control 校验任务 ID 防止旧页面误操作新任务；重复暂停或取消具有幂等性。
+// 人工继续清除旧冷却提示，但不绕过请求限速或冷却；后续等待由执行器重新报告。
 func (s *ScanTasks) Control(ctx context.Context, kind, id, action string) (*domain.ScanTask, error) {
 	if action == "retry" {
 		return s.start(ctx, kind, "", id, nil)
@@ -279,6 +280,10 @@ func (s *ScanTasks) Control(ctx context.Context, kind, id, action string) (*doma
 			return nil, ErrScanTaskConflict
 		}
 		e.task.State = "running"
+		if e.task.Progress.Phase == "cooling" {
+			e.task.Progress.Phase = "processing"
+			e.task.Progress.Current = "正在恢复任务，等待执行结果"
+		}
 	case "cancel":
 		e.task.State = "canceling"
 	default:

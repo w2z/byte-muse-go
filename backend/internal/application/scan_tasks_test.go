@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -382,6 +383,134 @@ func TestScanTasksPauseResumeCancelAndIsolation(t *testing.T) {
 	}
 	service.Close()
 	waitScanState(t, service, "strm", "interrupted")
+}
+
+// TestScanTaskResumeClearsStaleCooldownProgress verifies manual resume does not keep showing an old 115 cooldown.
+func TestScanTaskResumeClearsStaleCooldownProgress(t *testing.T) {
+	ctx := context.Background()
+	repo := &memoryScanTasks{items: map[string]domain.ScanTask{}}
+	service, err := NewScanTasks(ctx, repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer service.Close()
+	entered := make(chan struct{})
+	continueRun := make(chan struct{})
+	task, err := service.Start(ctx, "strm", "incremental", func(worker context.Context) (any, error) {
+		reportScanProgress(worker, "cooling", 2, 5, "/影片")
+		close(entered)
+		<-continueRun
+		if err := scanCheckpoint(worker); err != nil {
+			return nil, err
+		}
+		<-worker.Done()
+		return nil, worker.Err()
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-entered
+	if _, err := service.Control(ctx, "strm", task.ID, "pause"); err != nil {
+		t.Fatal(err)
+	}
+	close(continueRun)
+	waitScanState(t, service, "strm", "paused")
+	resumed, err := service.Control(ctx, "strm", task.ID, "resume")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resumed.Progress.Phase == "cooling" {
+		t.Fatalf("继续后仍保留过期限流阶段: %+v", resumed.Progress)
+	}
+	if resumed.Progress.Phase != "processing" {
+		t.Fatalf("继续后阶段 = %q，期望 processing", resumed.Progress.Phase)
+	}
+	if resumed.Progress.Processed != 2 || resumed.Progress.Total != 5 || resumed.Progress.Percent != 40 || resumed.Progress.Current != "正在恢复任务，等待执行结果" {
+		t.Fatalf("恢复时丢失计数或残留旧提示: %+v", resumed.Progress)
+	}
+	if _, err := service.Control(ctx, "strm", task.ID, "cancel"); err != nil {
+		t.Fatal(err)
+	}
+	waitScanState(t, service, "strm", "canceled")
+}
+
+// TestScanTaskResumeAfterLongCooldownPause 验证暂停时间计入冷却，继续立即重试而非重新等待一分钟。
+func TestScanTaskResumeAfterLongCooldownPause(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx := context.Background()
+		manager, err := NewScanTasks(ctx, &memoryScanTasks{items: map[string]domain.ScanTask{}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer manager.Close()
+		attempts := 0
+		probe := make(chan struct{})
+		release := make(chan struct{})
+		task, err := manager.Start(ctx, "strm", "incremental", func(worker context.Context) (any, error) {
+			worker = context.WithValue(worker, strmRetryKey{}, &strmRetryPolicy{})
+			worker = context.WithValue(worker, strmRetryProgressKey{}, func() {
+				reportScanProgress(worker, "cooling", 2, 5, pan115CooldownNotice("/影片", time.Minute))
+			})
+			return nil, retryStrmScan(worker, func() error {
+				attempts++
+				if attempts == 1 {
+					return errors.New("已达到当前访问上限")
+				}
+				if attempts > 2 {
+					return nil
+				}
+				close(probe)
+				select {
+				case <-release:
+					return errors.New("已达到当前访问上限")
+				case <-worker.Done():
+					return worker.Err()
+				}
+			})
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		synctest.Wait()
+		if _, err := manager.Control(ctx, "strm", task.ID, "pause"); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(3 * time.Hour)
+		synctest.Wait()
+		paused, _ := manager.Latest(ctx, "strm")
+		if paused.State != "paused" || attempts != 1 {
+			t.Fatalf("paused=%+v attempts=%d", paused, attempts)
+		}
+		before := time.Now()
+		if _, err := manager.Control(ctx, "strm", task.ID, "resume"); err != nil {
+			t.Fatal(err)
+		}
+		synctest.Wait()
+		select {
+		case <-probe:
+		default:
+			t.Fatal("已过期冷却未立即重试")
+		}
+		if time.Since(before) != 0 || attempts != 2 {
+			t.Fatalf("elapsed=%s attempts=%d", time.Since(before), attempts)
+		}
+		resumed, _ := manager.Latest(ctx, "strm")
+		if resumed.Progress.Phase == "cooling" {
+			t.Fatal("探测请求仍显示旧限流")
+		}
+		close(release)
+		synctest.Wait()
+		relimited, _ := manager.Latest(ctx, "strm")
+		if relimited.Progress.Phase != "cooling" || attempts != 2 {
+			t.Fatalf("真实再次限流必须重新等待: %+v attempts=%d", relimited, attempts)
+		}
+		time.Sleep(time.Minute)
+		synctest.Wait()
+		finished, _ := manager.Latest(ctx, "strm")
+		if finished.State != "completed" || attempts != 3 {
+			t.Fatalf("%+v", finished)
+		}
+	})
 }
 
 func waitScanState(t *testing.T, s *ScanTasks, kind, state string) {
