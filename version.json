@@ -1,16 +1,20 @@
 {
-  "version": "0.1.159",
-  "commit": "0c4804bdd529f48e6210279bcd1e7534988a4072",
-  "short_commit": "0c4804b",
-  "built_at": "2026-10-10T09:59:22Z",
+  "version": "0.1.160",
+  "commit": "6aadd56cb7a57e36fb4d782fa59112be41dc3715",
+  "short_commit": "6aadd56",
+  "built_at": "2026-10-10T12:56:29Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.159",
-    "sha-0c4804b",
+    "0.1.160",
+    "sha-6aadd56",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.160",
+      "message": "核验媒体来源和下载器任务并跳过已满足订阅"
+    },
     {
       "version": "0.1.159",
       "message": "移除115直链t参数过期预判"
