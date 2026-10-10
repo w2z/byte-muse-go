@@ -7,12 +7,13 @@ import { apiRequest } from "../../shared/api/client";
 import { ReleaseTodayPage } from "../releases/ReleaseTodayPage";
 import { RecommendPage } from "../recommend/RecommendPage";
 import { RankPage } from "../rank/RankPage";
+import { AllFilmsPage } from "./AllFilmsPage";
 
 Object.defineProperty(window, "matchMedia", { writable: true, value: (query: string) => ({ matches: false, media: query, addListener() {}, removeListener() {} }) });
 vi.mock("../../shared/api/client", async (original) => ({ ...(await original<typeof import("../../shared/api/client")>()), apiRequest: vi.fn(async () => ({ items: [], total: 40, page: 1, page_size: 15 })) }));
 afterEach(() => { cleanup(); vi.clearAllMocks(); vi.mocked(apiRequest).mockImplementation(async () => ({ items: [], total: 40, page: 1, page_size: 15 }) as never); });
 
-test.each([["上新", ReleaseTodayPage, "/codes/release_today"], ["推荐", RecommendPage, "/codes/recommend"], ["榜单", RankPage, "/ranks?type=daily"]] as const)("%s 的组合筛选交给服务端并重置页码", async (_name, Component, endpoint) => {
+test.each([["所有影片", AllFilmsPage, "/media"], ["上新", ReleaseTodayPage, "/codes/release_today"], ["推荐", RecommendPage, "/codes/recommend"], ["榜单", RankPage, "/ranks?type=daily"]] as const)("%s 的组合筛选交给服务端并重置页码", async (_name, Component, endpoint) => {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(<QueryClientProvider client={client}><Component /></QueryClientProvider>);
   await waitFor(() => expect(apiRequest).toHaveBeenCalled());

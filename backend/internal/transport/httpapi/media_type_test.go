@@ -122,7 +122,7 @@ func TestCatalogViewFilters(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	for name, handler := range map[string]http.HandlerFunc{"rank": listRank(service), "release": listReleaseToday(service), "recommend": listRecommendations(service)} {
+	for name, handler := range map[string]http.HandlerFunc{"media": listMedia(application.NewCatalogService(store.Media())), "rank": listRank(service), "release": listReleaseToday(service), "recommend": listRecommendations(service)} {
 		for _, tc := range []struct {
 			query               string
 			total, size, status int

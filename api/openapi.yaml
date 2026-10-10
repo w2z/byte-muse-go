@@ -120,6 +120,7 @@ paths:
           schema:
             type: string
             enum: [censored, uncensored, uncensored_cracked, leaked, unknown]
+        - $ref: '#/components/parameters/VRFilter'
       responses:
         '200':
           description: 影片分页列表
@@ -146,7 +147,7 @@ paths:
                     created_at: '2026-09-28T00:00:00Z'
                     updated_at: '2026-09-28T00:00:00Z'
         '400':
-          description: video_type 不在允许范围时返回 invalid_video_type
+          description: video_type 不在允许范围时返回 invalid_video_type；vr 不在允许范围时返回 invalid_vr_filter
           content:
             application/json:
               example: {code: invalid_video_type, message: 影片类型无效}

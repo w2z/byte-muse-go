@@ -451,6 +451,7 @@ func listMedia(service *application.CatalogService) http.HandlerFunc {
 			DownloadStatus:     request.URL.Query().Get("download"),
 			LibraryStatus:      request.URL.Query().Get("library"),
 			VideoType:          request.URL.Query().Get("video_type"),
+			VR:                 request.URL.Query().Get("vr"),
 		})
 		if err != nil {
 			writeApplicationError(response, err)

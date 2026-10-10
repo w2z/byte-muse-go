@@ -25,10 +25,11 @@ export function AllFilmsPage() {
   const [download, setDownload] = useState<DownloadStatus | "">("");
   const [library, setLibrary] = useState<LibraryStatus | "">("");
   const [videoType, setVideoType] = useState<VideoType | "unknown" | "">("");
+  const [vr, setVR] = useState("");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
   const query = useQuery({
-    queryKey: ["media", "all", search, subscription, download, library, videoType, page, pageSize],
+    queryKey: ["media", "all", search, subscription, download, library, videoType, vr, page, pageSize],
     queryFn: () => {
       const params = new URLSearchParams({ page: String(page), page_size: String(pageSize) });
       if (search) params.set("search", search);
@@ -36,6 +37,7 @@ export function AllFilmsPage() {
       if (download) params.set("download", download);
       if (library) params.set("library", library);
       if (videoType) params.set("video_type", videoType);
+      if (vr) params.set("vr", vr);
       return apiRequest<Page<Media>>(`/media?${params.toString()}`);
     },
   });
@@ -60,6 +62,7 @@ export function AllFilmsPage() {
     setDownload("");
     setLibrary("");
     setVideoType("");
+    setVR("");
     setPage(1);
   };
   return (
@@ -70,7 +73,7 @@ export function AllFilmsPage() {
           <Grid.Col xs={24} sm={12} md={8} xl={4}>
             <div className="filter-labeled"><span className="filter-label">关键词</span><Input value={draft} onChange={setDraft} allowClear aria-label="搜索影片" placeholder="名称或番号" suffix={<IconSearch />} /></div>
           </Grid.Col>
-          <CatalogFilters subscription={subscription} videoType={videoType} onSubscriptionChange={(value) => changeFilter(setSubscription, value)} onVideoTypeChange={(value) => changeFilter(setVideoType, value)} />
+          <CatalogFilters subscription={subscription} videoType={videoType} vr={vr} onVRChange={(value) => changeFilter(setVR, value)} onSubscriptionChange={(value) => changeFilter(setSubscription, value)} onVideoTypeChange={(value) => changeFilter(setVideoType, value)} />
           <Grid.Col xs={24} sm={12} md={8} xl={4}>
             <div className="filter-labeled"><span className="filter-label">下载状态</span><Select aria-label="下载状态筛选" value={download} onChange={(value) => changeFilter(setDownload, value)} options={downloadOptions} /></div>
           </Grid.Col>
