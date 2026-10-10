@@ -31,6 +31,25 @@ function renderTag() {
 
 const base: SystemVersion = { current: "0.1.21", latest: "0.1.21", has_update: false, release_url: "", checked_at: "2026-09-29T12:00:00Z", check_error: "" };
 
+it.each([false, true])("重新检查替代历史升级错误，检查失败=%s", async (checkFailed) => {
+  const oldError = "发布版本已变化或检查失败，请重新检查更新";
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  vi.mocked(apiRequest).mockImplementation((path) => Promise.resolve(path === "/system/upgrade"
+    ? { enabled: true, phase: "failed", target: "0.1.22", error: oldError }
+    : path.includes("refresh") && checkFailed
+      ? { ...base, latest: "", check_error: "检查更新超时" }
+      : { ...base, latest: "0.1.22", has_update: true, changes: [{ version: "0.1.22", message: "修复更新" }] }));
+  render(<QueryClientProvider client={client}><VersionTag /></QueryClientProvider>);
+  fireEvent.click(screen.getByRole("button", { name: "v0.1.21" }));
+  expect(await screen.findByText(oldError)).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "重新检查更新" }));
+  expect(await screen.findByText(checkFailed ? "检查更新超时" : "修复更新")).toBeInTheDocument();
+  expect(screen.queryByText(oldError)).toBeNull();
+  await act(async () => { await client.refetchQueries({ queryKey: ["system", "upgrade"] }); });
+  expect(screen.queryByText(oldError)).toBeNull();
+  client.clear();
+});
+
 it.each([["downloading", 0, 12], ["extracting", 1, 37], ["installing", 2, 66]] as const)("%s 独立显示当前步骤百分比", async (phase, completed_steps, phase_progress_percent) => {
   vi.mocked(apiRequest).mockImplementation(path => Promise.resolve(path === "/system/upgrade"
     ? { enabled: true, phase, completed_steps, phase_progress_percent, progress_percent: 75, target: "0.1.22", error: "" }

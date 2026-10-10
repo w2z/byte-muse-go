@@ -3,11 +3,74 @@ package application
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	"bytemuse/backend/internal/ports"
 )
+
+// TestUpgradeVersionValidation 验证近期检查结果可复用，过期和不匹配结果不能绕过校验。
+func TestUpgradeVersionValidation(t *testing.T) {
+	for _, scenario := range []struct {
+		name        string
+		cached      string
+		age         time.Duration
+		latest      string
+		sourceError error
+		wantError   string
+		wantStage   bool
+	}{
+		{name: "复用刚确认的版本", cached: "0.1.22", sourceError: errors.New("检查更新超时"), wantStage: true},
+		{name: "过期重新检查并保留原因", cached: "0.1.22", age: 2 * time.Hour, sourceError: errors.New("检查更新超时"), wantError: "检查更新超时"},
+		{name: "首次检查失败", sourceError: errors.New("无法访问 GitHub 发布仓库"), wantError: "无法访问 GitHub 发布仓库"},
+		{name: "目标变化", latest: "0.1.23", wantError: "0.1.23"},
+		{name: "缓存目标不匹配", cached: "0.1.23", latest: "0.1.22", wantError: "0.1.23"},
+		{name: "过期后仍匹配", cached: "0.1.22", age: 2 * time.Hour, latest: "0.1.22", wantStage: true},
+		{name: "没有可用更新", latest: "0.1.21", wantError: "没有高于当前运行版本"},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			source := &stubReleaseSource{info: ports.ReleaseInfo{Version: scenario.cached}}
+			versions := NewVersionService("0.1.21", source)
+			if scenario.cached != "" {
+				if _, err := versions.Refresh(context.Background()); err != nil {
+					t.Fatal(err)
+				}
+				versions.cachedAt = versions.cachedAt.Add(-scenario.age)
+			}
+			source.info.Version, source.err = scenario.latest, scenario.sourceError
+			installer := &upgradeInstallerFake{start: make(chan struct{}), finish: make(chan struct{})}
+			close(installer.finish)
+			service := NewUpgradeService(context.Background(), versions, installer)
+			if _, err := service.Start("0.1.22"); err != nil {
+				t.Fatal(err)
+			}
+			deadline := time.Now().Add(time.Second)
+			for service.Status().Phase != "failed" && service.Status().Phase != "restarting" && time.Now().Before(deadline) {
+				time.Sleep(time.Millisecond)
+			}
+			state := service.Status()
+			if scenario.wantStage {
+				wantCalls := 1
+				if scenario.age > 0 {
+					wantCalls = 2
+				}
+				if state.Phase != "restarting" || source.calls != wantCalls {
+					t.Fatalf("state=%+v calls=%d", state, source.calls)
+				}
+			} else {
+				if state.Phase != "failed" || !strings.Contains(state.Error, scenario.wantError) {
+					t.Fatalf("state=%+v want=%s", state, scenario.wantError)
+				}
+				select {
+				case <-installer.start:
+					t.Fatal("校验失败不得进入安装器")
+				default:
+				}
+			}
+		})
+	}
+}
 
 type upgradeInstallerFake struct {
 	start  chan struct{}

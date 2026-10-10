@@ -10,11 +10,12 @@ const UPGRADE_KEY = ["system", "upgrade"] as const;
 const ACTIVE_PHASES = ["downloading", "extracting", "installing", "restarting"];
 const UPGRADE_STEPS = ["下载文件", "解压文件", "正在升级", "正在重启"];
 
-/** 本地版本立即显示；更新说明按服务端版本区间展示，升级断连继续等待，目标就绪后刷新。 */
+/** 显示版本与升级进度；手动检查替代旧失败提示，保留服务端状态并在目标就绪后刷新。 */
 export function VersionTag() {
   const [visible, setVisible] = useState(false);
   const [waitingTarget, setWaitingTarget] = useState("");
   const [waitExpired, setWaitExpired] = useState(false);
+  const [dismissedUpgradeError, setDismissedUpgradeError] = useState("");
   const client = useQueryClient();
   const { data, error, isFetching } = useQuery({
     queryKey: VERSION_KEY,
@@ -22,6 +23,10 @@ export function VersionTag() {
     staleTime: 60 * 60 * 1000,
   });
   const check = useMutation({
+    onMutate: () => {
+      install.reset();
+      setDismissedUpgradeError(JSON.stringify([upgrade.data?.target, upgrade.data?.error]));
+    },
     mutationFn: async () => {
       await client.cancelQueries({ queryKey: VERSION_KEY });
       return apiRequest<SystemVersion>("/system/version?refresh=true");
@@ -37,6 +42,7 @@ export function VersionTag() {
     refetchIntervalInBackground: true,
   });
   const install = useMutation({
+    onMutate: () => { check.reset(); setDismissedUpgradeError(""); },
     mutationFn: () => apiRequest<SystemUpgrade>("/system/upgrade", { method: "POST", body: JSON.stringify({ target: data?.latest }) }),
     onSuccess: (result) => { client.setQueryData(UPGRADE_KEY, result); setWaitingTarget(result.target); },
   });
@@ -63,7 +69,8 @@ export function VersionTag() {
   const indeterminate = install.isPending || phase === "restarting" || phasePercent == null || upgrade.data?.progress_indeterminate === true;
   // 服务保留上次任务的终态；历史成功或失败不能让步骤常驻，断连等待期间仍保留进度。
   const showProgress = (busy || ACTIVE_PHASES.includes(phase)) && phase !== "success" && phase !== "failed";
-  const failure = install.error?.message || upgrade.data?.error || check.error?.message || data?.check_error || error?.message;
+  const upgradeError = JSON.stringify([upgrade.data?.target, upgrade.data?.error]) === dismissedUpgradeError ? "" : upgrade.data?.error;
+  const failure = install.error?.message || check.error?.message || data?.check_error || error?.message || upgradeError;
   const showChanges = hasUpdate && !busy && !checking && !failure && !waitExpired && Boolean(data?.changes?.length);
   const summary = waitExpired ? "等待服务恢复超时，请检查容器日志后刷新页面。" : busy ? (phase === "success" ? "升级完成，正在刷新页面…" : UPGRADE_STEPS[Math.min(completedSteps, 3)] + "…")
     : checking ? "正在检查更新…" : failure ? failure : hasUpdate ? `新版本 ${data?.latest} 已发布`
@@ -108,9 +115,10 @@ export function VersionTag() {
           </div>
           <div className="version-dialog-actions">
             {hasUpdate ? <>
-              <Button type="primary" loading={busy} disabled={upgrade.data?.enabled === false} onClick={() => install.mutate()}>立即升级</Button>
+              <Button type="primary" loading={busy} disabled={checking || upgrade.data?.enabled === false} onClick={() => install.mutate()}>立即升级</Button>
+              {!busy && <Button loading={checking} onClick={() => check.mutate()}>重新检查更新</Button>}
               <Button type="text" onClick={() => setVisible(false)}>{busy ? "关闭" : "暂不升级"}</Button>
-            </> : <Button type="primary" loading={checking} onClick={() => check.mutate()}>立即检查更新</Button>}
+            </> : <Button type="primary" loading={checking} disabled={busy} onClick={() => check.mutate()}>立即检查更新</Button>}
           </div>
         </div>
       </Modal>

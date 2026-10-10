@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -43,7 +44,7 @@ func (s *UpgradeService) Status() ports.UpgradeStatus {
 	return s.installer.Status()
 }
 
-// Start 立即受理升级；后台重新确认目标为最新版本后下载，禁止客户端提交任意 URL 或降级版本。
+// Start 立即受理升级；后台校验目标与有效期内的服务端版本记录一致后下载，禁止任意 URL 或降级。
 func (s *UpgradeService) Start(target string) (ports.UpgradeStatus, error) {
 	if s == nil || s.installer == nil {
 		return ports.UpgradeStatus{}, ErrUpgradeUnavailable
@@ -63,13 +64,20 @@ func (s *UpgradeService) Start(target string) (ports.UpgradeStatus, error) {
 	return s.state, nil
 }
 
-// run 只在完整升级包验证成功后提交重启请求，错误保留旧进程继续运行。
+// run 复用检查更新的有效缓存，避免连续检查受网络抖动影响；包校验成功后才请求重启。
 func (s *UpgradeService) run(target string) {
 	ctx, cancel := context.WithTimeout(s.ctx, 10*time.Minute)
 	defer cancel()
-	status, err := s.versions.Refresh(ctx)
-	if err == nil && (status.CheckError != "" || !status.HasUpdate || status.Latest != target) {
-		err = errors.New("发布版本已变化或检查失败，请重新检查更新")
+	status, err := s.versions.Status(ctx)
+	if err == nil {
+		switch {
+		case status.CheckError != "":
+			err = fmt.Errorf("升级前检查更新失败：%s", status.CheckError)
+		case !status.HasUpdate:
+			err = errors.New("发布源没有高于当前运行版本的更新，请重新检查更新")
+		case status.Latest != target:
+			err = fmt.Errorf("发布版本已变化（目标 %s，最新 %s），请重新检查更新", target, status.Latest)
+		}
 	}
 	if err == nil {
 		err = s.installer.Stage(ctx, target, func(state ports.UpgradeStatus) {
