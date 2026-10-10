@@ -42,9 +42,9 @@ type ActionButton struct {
 	Data  string
 }
 
-// CopyTextButton 是通知消息上的复制按钮；不参与业务回调，只把指定文本复制到剪贴板。
+// CopyTextField 标记通知正文中可复制的字段值；Label 是字段名，Text 是该行的完整值。
 // 不支持该能力的渠道应忽略它并按普通通知发送，不能影响正文投递。
-type CopyTextButton struct {
+type CopyTextField struct {
 	Label string
 	Text  string
 }
@@ -96,10 +96,10 @@ type ChannelSender interface {
 	ReplaceButtons(ctx context.Context, chatID, messageID string, buttons []ActionButton) error
 }
 
-// NotificationSender 是支持通知专用交互控件的渠道发送器。
-// 普通对话仍使用 ChannelSender；通知调用方通过可选接口使用复制按钮等渠道能力。
+// NotificationSender 是支持通知正文格式的渠道发送器。
+// 普通对话仍使用 ChannelSender；通知调用方通过可选接口使用行内复制等渠道能力。
 type NotificationSender interface {
-	SendNotification(ctx context.Context, chatID, title, text, photoURL string, buttons []CopyTextButton) error
+	SendNotification(ctx context.Context, chatID, title, text, photoURL string, fields []CopyTextField) error
 }
 
 // ChannelResolver 按渠道名解析当前配置的发送器。

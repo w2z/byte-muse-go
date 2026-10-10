@@ -106,11 +106,11 @@ type Notifier interface {
 // Text 是通知正文；CoverURL 是可选封面，渠道按自身能力渲染，缺失时降级为纯文本。
 // Code 是影片番号，配置「外网访问地址」后用它把封面改写成本机缓存地址（文件名即番号）。
 type NotificationMessage struct {
-	Title       string
-	Text        string
-	CoverURL    string
-	Code        string
-	CopyButtons []ports.CopyTextButton
+	Title      string
+	Text       string
+	CoverURL   string
+	Code       string
+	CopyFields []ports.CopyTextField
 }
 
 // NotificationService 按设置中的渠道开关推送业务通知。
@@ -181,7 +181,7 @@ func sendNotification(ctx context.Context, sender ports.ChannelSender, target st
 	title := strings.TrimSpace(message.Title)
 	text := strings.TrimSpace(message.Text)
 	if enhanced, ok := sender.(ports.NotificationSender); ok {
-		return enhanced.SendNotification(ctx, target, title, text, message.CoverURL, message.CopyButtons)
+		return enhanced.SendNotification(ctx, target, title, text, message.CoverURL, message.CopyFields)
 	}
 	if cover := strings.TrimSpace(message.CoverURL); cover != "" {
 		return sender.SendPhoto(ctx, target, cover, title, text)
@@ -250,13 +250,13 @@ func notificationField(value string) string {
 // newSubscriptionNotificationMessage 生成订阅通知，频道标题使用番号，正文中的影片标题位于描述前。
 // 订阅尚未选中下载资源，不显示站点、来源或下载链接。
 func newSubscriptionNotificationMessage(code, title, status, description, cover string) NotificationMessage {
-	copyButtons := notificationCopyButtons(code, "")
+	copyFields := notificationCopyFields(code, "")
 	return NotificationMessage{
-		Title:       "番号: " + notificationField(code),
-		Text:        "状态: " + notificationField(status) + "\n标题: " + notificationField(title) + "\n描述: " + notificationField(description),
-		CoverURL:    cover,
-		Code:        strings.TrimSpace(code),
-		CopyButtons: copyButtons,
+		Title:      "番号: " + notificationField(code),
+		Text:       "状态: " + notificationField(status) + "\n标题: " + notificationField(title) + "\n描述: " + notificationField(description),
+		CoverURL:   cover,
+		Code:       strings.TrimSpace(code),
+		CopyFields: copyFields,
 	}
 }
 
@@ -278,22 +278,22 @@ func NewNotificationMessage(code, title, status, site, source, uri, description,
 			"标题: " + notificationField(title),
 			"描述: " + notificationField(description),
 		}, "\n"),
-		CoverURL:    cover,
-		Code:        strings.TrimSpace(code),
-		CopyButtons: notificationCopyButtons(code, link),
+		CoverURL:   cover,
+		Code:       strings.TrimSpace(code),
+		CopyFields: notificationCopyFields(code, link),
 	}
 }
 
-// notificationCopyButtons 生成通知可复制字段；下载链接仅在已验证为公开链接时提供。
-func notificationCopyButtons(code, link string) []ports.CopyTextButton {
-	buttons := make([]ports.CopyTextButton, 0, 2)
+// notificationCopyFields 生成通知可复制字段；下载链接仅在已验证为公开链接时提供。
+func notificationCopyFields(code, link string) []ports.CopyTextField {
+	fields := make([]ports.CopyTextField, 0, 2)
 	if normalized := strings.TrimSpace(code); normalized != "" {
-		buttons = append(buttons, ports.CopyTextButton{Label: "复制番号", Text: normalized})
+		fields = append(fields, ports.CopyTextField{Label: "番号", Text: notificationField(normalized)})
 	}
 	if normalized := strings.TrimSpace(link); normalized != "" {
-		buttons = append(buttons, ports.CopyTextButton{Label: "复制下载链接", Text: normalized})
+		fields = append(fields, ports.CopyTextField{Label: "下载链接", Text: notificationField(normalized)})
 	}
-	return buttons
+	return fields
 }
 
 // ChannelEventEnabled 实现 Notifier；设置不可读或键未声明时按关闭处理，不在未知状态下发消息。

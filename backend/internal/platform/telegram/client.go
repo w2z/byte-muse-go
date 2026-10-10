@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf16"
 	"unicode/utf8"
 
 	"bytemuse/backend/internal/logging"
@@ -114,19 +115,15 @@ func (c *Client) SendPhoto(ctx context.Context, chatID, photoURL, title, text st
 	return nil
 }
 
-// SendNotification 发送带可复制按钮的通知；按钮由 Telegram 原生 copy_text 控件处理。
-// 图片说明超限或图文发送失败时保留全文分片发送，复制按钮只附在最后一片。
-func (c *Client) SendNotification(ctx context.Context, chatID, title, text, photoURL string, buttons []ports.CopyTextButton) error {
+// SendNotification 用行内 code 实体标记通知字段，客户端可直接复制文字，不附加复制按钮。
+// 图片说明超限或发送失败时保留全文分片；实体偏移使用 Telegram 要求的 UTF-16 单位。
+func (c *Client) SendNotification(ctx context.Context, chatID, title, text, photoURL string, fields []ports.CopyTextField) error {
 	caption := composeCaption(title, text)
-	markup, hasCopyButtons := copyTextKeyboard(buttons)
+	entities := notificationEntities(caption, fields)
 	if strings.TrimSpace(photoURL) != "" && utf8.RuneCountInString(caption) <= maxCaptionRunes {
-		payload := map[string]any{
-			"chat_id": chatID,
-			"photo":   photoURL,
-			"caption": caption,
-		}
-		if hasCopyButtons {
-			payload["reply_markup"] = markup
+		payload := map[string]any{"chat_id": chatID, "photo": photoURL, "caption": caption}
+		if len(entities) > 0 {
+			payload["caption_entities"] = entities
 		}
 		c.applySpoiler(payload)
 		if _, err := c.postJSON(ctx, "sendPhoto", payload, defaultRequestTimeout); err == nil {
@@ -134,15 +131,32 @@ func (c *Client) SendNotification(ctx context.Context, chatID, title, text, phot
 			return nil
 		}
 	}
-	chunks := splitMessage(caption, maxMessageRunes)
-	for index, chunk := range chunks {
-		payload := map[string]any{"chat_id": chatID, "text": chunk}
-		if hasCopyButtons && index == len(chunks)-1 {
-			payload["reply_markup"] = markup
+	encoded := utf16.Encode([]rune(caption))
+	for start := 0; start < len(encoded); {
+		end := min(start+maxMessageRunes, len(encoded))
+		if end < len(encoded) && encoded[end-1] >= 0xD800 && encoded[end-1] <= 0xDBFF {
+			end--
+		}
+		for _, entity := range entities {
+			if entity.Offset > start && entity.Offset < end && entity.Offset+entity.Length > end && entity.Length <= maxMessageRunes {
+				end = entity.Offset
+			}
+		}
+		payload := map[string]any{"chat_id": chatID, "text": string(utf16.Decode(encoded[start:end]))}
+		var chunkEntities []messageEntity
+		for _, entity := range entities {
+			left, right := max(start, entity.Offset), min(end, entity.Offset+entity.Length)
+			if left < right {
+				chunkEntities = append(chunkEntities, messageEntity{Type: "code", Offset: left - start, Length: right - left})
+			}
+		}
+		if len(chunkEntities) > 0 {
+			payload["entities"] = chunkEntities
 		}
 		if _, err := c.postJSON(ctx, "sendMessage", payload, defaultRequestTimeout); err != nil {
 			return err
 		}
+		start = end
 	}
 	return nil
 }
@@ -233,21 +247,31 @@ func inlineKeyboard(buttons []ports.ActionButton) map[string]any {
 	return map[string]any{"inline_keyboard": rows}
 }
 
-// copyTextKeyboard 使用原生复制按钮；超过平台 256 字符上限的内容不生成按钮，不截断复制地址。
-func copyTextKeyboard(buttons []ports.CopyTextButton) (map[string]any, bool) {
-	row := make([]map[string]any, 0, len(buttons))
-	for _, button := range buttons {
-		label := strings.TrimSpace(button.Label)
-		text := strings.TrimSpace(button.Text)
-		if label == "" || text == "" || utf8.RuneCountInString(text) > 256 {
-			continue
+// messageEntity 使用 UTF-16 单位标记 Telegram 正文或图片说明中的格式范围。
+type messageEntity struct {
+	Type   string `json:"type"`
+	Offset int    `json:"offset"`
+	Length int    `json:"length"`
+}
+
+// notificationEntities 只标记完整匹配字段行的值，避免把标题或描述中的同名文本误设为可复制。
+func notificationEntities(text string, fields []ports.CopyTextField) []messageEntity {
+	var entities []messageEntity
+	offset := 0
+	for _, line := range strings.Split(text, "\n") {
+		for _, field := range fields {
+			if strings.TrimSpace(field.Label) == "" || strings.TrimSpace(field.Text) == "" {
+				continue
+			}
+			prefix := field.Label + ": "
+			if line == prefix+field.Text {
+				entities = append(entities, messageEntity{Type: "code", Offset: offset + len(utf16.Encode([]rune(prefix))), Length: len(utf16.Encode([]rune(field.Text)))})
+				break
+			}
 		}
-		row = append(row, map[string]any{
-			"text":      label,
-			"copy_text": map[string]string{"text": text},
-		})
+		offset += len(utf16.Encode([]rune(line))) + 1
 	}
-	return map[string]any{"inline_keyboard": [][]map[string]any{row}}, len(row) > 0
+	return entities
 }
 
 // SendChatAction 上报聊天状态（如 typing），用于长任务前的即时反馈；action 为空时回退 typing。

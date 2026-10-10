@@ -10,6 +10,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf16"
 	"unicode/utf8"
 
 	"bytemuse/backend/internal/ports"
@@ -245,50 +246,66 @@ func TestSendPhotoFallsBackToText(t *testing.T) {
 	}
 }
 
-func TestSendNotificationAddsCopyTextButtons(t *testing.T) {
-	var payloads []map[string]any
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var payload map[string]any
-		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-			t.Fatalf("decode payload: %v", err)
-		}
-		payloads = append(payloads, payload)
-		writeJSON(w, `{"ok":true,"result":{"message_id":1}}`)
-	}))
-	defer server.Close()
-
-	client := newTestClient(t, server.URL)
-	buttons := []ports.CopyTextButton{
-		{Label: "复制番号", Text: "EXAMPLE-001"},
-		{Label: "复制下载链接", Text: "https://example.com/download"},
-	}
-	if err := client.SendNotification(context.Background(), "1001", "番号: EXAMPLE-001", "状态: 已完成下载", "", buttons); err != nil {
-		t.Fatalf("SendNotification returned error: %v", err)
-	}
-	if len(payloads) != 1 || payloads[0]["text"] != "番号: EXAMPLE-001\n状态: 已完成下载" {
-		t.Fatalf("通知请求=%#v", payloads)
-	}
-	rows, ok := payloads[0]["reply_markup"].(map[string]any)
-	if !ok {
-		t.Fatalf("通知请求缺少 reply_markup=%#v", payloads[0])
-	}
-	keyboard, ok := rows["inline_keyboard"].([]any)
-	if !ok || len(keyboard) != 1 {
-		t.Fatalf("inline_keyboard=%#v", rows["inline_keyboard"])
-	}
-	buttonsJSON, ok := keyboard[0].([]any)
-	if !ok || len(buttonsJSON) != 2 {
-		t.Fatalf("通知按钮=%#v", keyboard[0])
-	}
-	for index, item := range buttonsJSON {
-		button, ok := item.(map[string]any)
-		if !ok {
-			t.Fatalf("按钮 %d=%#v", index, item)
-		}
-		copyText, ok := button["copy_text"].(map[string]any)
-		if !ok || copyText["text"] != buttons[index].Text || button["text"] != buttons[index].Label {
-			t.Fatalf("按钮 %d=%#v", index, button)
-		}
+// TestSendNotificationInlineCopy 验证文本、图片说明和图片失败回退均使用 code 实体而不是按钮。
+func TestSendNotificationInlineCopy(t *testing.T) {
+	for _, mode := range []string{"text", "photo", "fallback"} {
+		t.Run(mode, func(t *testing.T) {
+			fixture := &cardFixture{}
+			server := fixture.server(t, func(method string) string {
+				if mode == "fallback" && method == "sendPhoto" {
+					return "{\"ok\":false}"
+				}
+				return ""
+			})
+			defer server.Close()
+			client := newTestClient(t, server.URL)
+			client.spoiler = true
+			link := "magnet:?xt=urn:btih:abc&dn=<例>" + strings.Repeat("x", 257)
+			body := "状态: 🎬完成\n下载链接: " + link + "\n标题: 测试\n描述: EXAMPLE-001"
+			photo := ""
+			if mode != "text" {
+				photo = "https://example.com/a.jpg"
+			}
+			fields := []ports.CopyTextField{{Label: "番号", Text: "EXAMPLE-001"}, {Label: "下载链接", Text: link}}
+			if err := client.SendNotification(context.Background(), "1001", "番号: EXAMPLE-001", body, photo, fields); err != nil {
+				t.Fatal(err)
+			}
+			calls := fixture.snapshot()
+			wantCalls := 1
+			if mode == "fallback" {
+				wantCalls = 2
+			}
+			if len(calls) != wantCalls {
+				t.Fatalf("请求数量: %d", len(calls))
+			}
+			for _, call := range calls {
+				key, entityKey := "text", "entities"
+				if call.method == "sendPhoto" {
+					key, entityKey = "caption", "caption_entities"
+					if call.body["has_spoiler"] != true {
+						t.Fatal("封面防剧透丢失")
+					}
+				}
+				if call.body[key] != "番号: EXAMPLE-001\n"+body {
+					t.Fatalf("正文发生变化: %#v", call.body)
+				}
+				if _, exists := call.body["reply_markup"]; exists {
+					t.Fatal("通知不应包含复制按钮")
+				}
+				entities, ok := call.body[entityKey].([]any)
+				if !ok || len(entities) != 2 {
+					t.Fatalf("缺少两个行内 code 实体: %#v", call.body)
+				}
+				for index, raw := range entities {
+					entity := raw.(map[string]any)
+					encoded := utf16.Encode([]rune(call.body[key].(string)))
+					offset, length := int(entity["offset"].(float64)), int(entity["length"].(float64))
+					if entity["type"] != "code" || string(utf16.Decode(encoded[offset:offset+length])) != fields[index].Text {
+						t.Fatalf("实体范围错误: %#v", entity)
+					}
+				}
+			}
+		})
 	}
 }
 
@@ -318,33 +335,68 @@ func TestSendNotificationPreservesLongText(t *testing.T) {
 	}
 }
 
-// TestCopyTextKeyboardLength 验证复制内容超限时不截断地址、不发送非法按钮。
-func TestCopyTextKeyboardLength(t *testing.T) {
-	for _, length := range []int{256, 257} {
-		_, enabled := copyTextKeyboard([]ports.CopyTextButton{{Label: "复制下载链接", Text: strings.Repeat("字", length)}})
-		if enabled != (length == 256) {
-			t.Fatalf("复制长度 %d: enabled=%v", length, enabled)
+// TestSendNotificationChunkEntities 验证长链接整体移入下一片，超平台上限的字段分片后仍保留完整内容和正确实体。
+func TestSendNotificationChunkEntities(t *testing.T) {
+	for _, size := range []int{300, 5000} {
+		fixture := &cardFixture{}
+		server := fixture.server(t, nil)
+		defer server.Close()
+		client := newTestClient(t, server.URL)
+		link := "https://example.com/" + strings.Repeat("🎬", size)
+		body := strings.Repeat("字", 4000) + "\n下载链接: " + link + "\n描述: 完成"
+		fields := []ports.CopyTextField{{Label: "下载链接", Text: link}}
+		if err := client.SendNotification(context.Background(), "1001", "", body, "", fields); err != nil {
+			t.Fatal(err)
+		}
+		var combined, copied strings.Builder
+		entityCount := 0
+		for _, call := range fixture.snapshot() {
+			chunk := call.body["text"].(string)
+			encoded := utf16.Encode([]rune(chunk))
+			if len(encoded) > maxMessageRunes || strings.ContainsRune(chunk, '�') {
+				t.Fatal("消息分片超限或破坏表情")
+			}
+			combined.WriteString(chunk)
+			if _, ok := call.body["reply_markup"]; ok {
+				t.Fatal("不应发送复制按钮")
+			}
+			entities, _ := call.body["entities"].([]any)
+			for _, raw := range entities {
+				entity := raw.(map[string]any)
+				offset, length := int(entity["offset"].(float64)), int(entity["length"].(float64))
+				if entity["type"] != "code" || offset < 0 || offset+length > len(encoded) {
+					t.Fatalf("实体越界: %#v", entity)
+				}
+				copied.WriteString(string(utf16.Decode(encoded[offset : offset+length])))
+				entityCount++
+			}
+		}
+		if combined.String() != body || copied.String() != link {
+			t.Fatal("消息或可复制内容丢失")
+		}
+		if size == 300 && entityCount != 1 {
+			t.Fatal("可放入单条消息的链接不应拆分")
 		}
 	}
 }
 
-func TestSendNotificationOmitsEmptyCopyKeyboard(t *testing.T) {
-	var payload map[string]any
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-			t.Fatalf("decode payload: %v", err)
-		}
-		writeJSON(w, `{"ok":true,"result":{"message_id":1}}`)
-	}))
+func TestSendNotificationOmitsEmptyCopyFields(t *testing.T) {
+	fixture := &cardFixture{}
+	server := fixture.server(t, nil)
 	defer server.Close()
-
 	client := newTestClient(t, server.URL)
-	buttons := []ports.CopyTextButton{{Label: " ", Text: "EXAMPLE-001"}}
-	if err := client.SendNotification(context.Background(), "1001", "标题", "正文", "", buttons); err != nil {
-		t.Fatalf("SendNotification returned error: %v", err)
+	fields := []ports.CopyTextField{{Label: " ", Text: "EXAMPLE-001"}, {Label: "番号", Text: ""}, {Label: "番号", Text: "不匹配"}}
+	if err := client.SendNotification(context.Background(), "1001", "番号: 暂无", "描述: EXAMPLE-001", "", fields); err != nil {
+		t.Fatal(err)
 	}
-	if _, ok := payload["reply_markup"]; ok {
-		t.Fatalf("无有效复制按钮时不应发送 reply_markup=%#v", payload["reply_markup"])
+	calls := fixture.snapshot()
+	if len(calls) != 1 {
+		t.Fatalf("请求数量: %d", len(calls))
+	}
+	for _, key := range []string{"reply_markup", "entities", "parse_mode"} {
+		if _, ok := calls[0].body[key]; ok {
+			t.Fatalf("无有效可复制字段不应发送 %s", key)
+		}
 	}
 }
 

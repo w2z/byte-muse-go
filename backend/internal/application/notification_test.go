@@ -204,21 +204,21 @@ func TestNotificationMessageFormat(t *testing.T) {
 			if got := NotificationPlainText(message.Title, message.Text); got != item.want {
 				t.Fatalf("通知 = %q，期望 %q", got, item.want)
 			}
-			wantButtons := 0
+			wantFields := 0
 			if strings.TrimSpace(item.code) != "" {
-				wantButtons = 1
+				wantFields = 1
 			}
 			if item.uri == "https://example.com/download" || item.uri == "magnet:?xt=urn:btih:abc&dn=example" {
-				wantButtons = 2
+				wantFields = 2
 			}
-			if len(message.CopyButtons) != wantButtons {
-				t.Fatalf("通知复制按钮 = %#v，期望数量 %d", message.CopyButtons, wantButtons)
+			if len(message.CopyFields) != wantFields {
+				t.Fatalf("通知可复制字段 = %#v，期望数量 %d", message.CopyFields, wantFields)
 			}
-			if wantButtons > 0 && message.CopyButtons[0].Text != strings.TrimSpace(item.code) {
-				t.Fatalf("番号复制按钮 = %#v，期望 %q", message.CopyButtons[0], item.code)
+			if wantFields > 0 && message.CopyFields[0].Text != strings.TrimSpace(item.code) {
+				t.Fatalf("番号可复制字段 = %#v，期望 %q", message.CopyFields[0], item.code)
 			}
-			if wantButtons == 2 && message.CopyButtons[1].Text != item.uri {
-				t.Fatalf("下载链接复制按钮 = %#v，期望 %q", message.CopyButtons[1], item.uri)
+			if wantFields == 2 && message.CopyFields[1].Text != item.uri {
+				t.Fatalf("下载链接可复制字段 = %#v，期望 %q", message.CopyFields[1], item.uri)
 			}
 		})
 	}
@@ -351,5 +351,20 @@ func TestWechatCoverURLUsesWordPressProxyPath(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// TestSubscriptionNotificationCopyField 验证订阅正文顺序不变，仅番号值提供行内复制元数据。
+func TestSubscriptionNotificationCopyField(t *testing.T) {
+	message := newSubscriptionNotificationMessage(" EXAMPLE-001 ", "翻译标题", "订阅成功", "资源简介", "")
+	want := "番号: EXAMPLE-001\n状态: 订阅成功\n标题: 翻译标题\n描述: 资源简介"
+	if NotificationPlainText(message.Title, message.Text) != want {
+		t.Fatal("订阅字段顺序错误")
+	}
+	if len(message.CopyFields) != 1 || message.CopyFields[0].Label != "番号" || message.CopyFields[0].Text != "EXAMPLE-001" {
+		t.Fatalf("订阅复制字段错误: %#v", message.CopyFields)
+	}
+	if empty := newSubscriptionNotificationMessage(" ", "", "", "", ""); len(empty.CopyFields) != 0 {
+		t.Fatal("空番号不应提供可复制字段")
 	}
 }
