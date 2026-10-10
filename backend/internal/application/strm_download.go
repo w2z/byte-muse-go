@@ -129,6 +129,9 @@ func (s *StrmService) downloadStrmMediaOnce(ctx context.Context, root, target, k
 	}
 	targetURL, err := s.PlayURL(pan115.WithFileDownload(ctx), kind, identifier, strmDownloadUserAgent)
 	if err != nil {
+		if pan115.IsRateLimitError(err) {
+			return false, err
+		}
 		return false, fmt.Errorf("获取媒体下载地址失败：%s", scanFileError(err))
 	}
 	address := targetURL.Redirect
@@ -170,7 +173,11 @@ func (s *StrmService) downloadStrmMediaOnce(ctx context.Context, root, target, k
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
-		return false, strmDownloadResponseError(response)
+		downloadErr := strmDownloadResponseError(response)
+		if response.StatusCode == http.StatusTooManyRequests {
+			return false, &strmRateLimitedDownloadError{downloadErr}
+		}
+		return false, downloadErr
 	}
 	if err := dir.MkdirAll(filepath.Dir(relative), 0o755); err != nil {
 		return false, fmt.Errorf("创建媒体下载目录失败：%s", scanFileError(err))
@@ -210,6 +217,13 @@ func (s *StrmService) downloadStrmMediaOnce(ctx context.Context, root, target, k
 // strmExpiredDownloadError 标记下载端明确返回的链接过期，不把普通鉴权拒绝或限流当作链接失效。
 type strmExpiredDownloadError struct {
 	error
+}
+
+// strmRateLimitedDownloadError 保留下载端错误说明，同时向统一限流分类暴露 HTTP 429。
+type strmRateLimitedDownloadError struct{ error }
+
+func (err *strmRateLimitedDownloadError) Unwrap() error {
+	return &pan115.HTTPError{StatusCode: http.StatusTooManyRequests}
 }
 
 // strmDownloadResponseError 仅保留有界 JSON 错误信息，识别明确过期的 401/403 响应，不回显 HTML。

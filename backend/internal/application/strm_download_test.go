@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,9 +15,27 @@ import (
 	"time"
 
 	"bytemuse/backend/internal/platform/clouddrive"
+	"bytemuse/backend/internal/platform/pan115"
 
 	"bytemuse/backend/internal/domain"
 )
+
+// TestStrmDownloadRateLimitClassification 验证业务限流和 HTTP 429 保留类型，普通 403 不冒充限流。
+func TestStrmDownloadRateLimitClassification(t *testing.T) {
+	for _, sample := range []struct {
+		err  error
+		want bool
+	}{
+		{&pan115.APIError{Code: 406, Message: "已达到当前访问上限"}, true},
+		{&strmRateLimitedDownloadError{errors.New("媒体下载返回状态码 429")}, true},
+		{&strmExpiredDownloadError{errors.New("request expired")}, false},
+		{errors.New("媒体下载返回状态码 403"), false},
+	} {
+		if got := pan115.IsRateLimitError(sample.err); got != sample.want {
+			t.Fatalf("error=%v rateLimit=%v", sample.err, got)
+		}
+	}
+}
 
 // TestStrmDownloadResponseError checks API diagnostics, bounded reads and non-JSON fallbacks.
 func TestStrmDownloadResponseError(t *testing.T) {
@@ -64,7 +83,7 @@ func TestStrmProgressExcludesDownloads(t *testing.T) {
 				})
 				for attempt, mode := range []domain.StrmGenerateMode{domain.StrmGenerateFull, domain.StrmGenerateIncremental, domain.StrmGenerateFull} {
 					if attempt == 2 {
-						status = http.StatusBadGateway
+						status = http.StatusTooManyRequests
 					}
 					var progress ScanProgress
 					ctx := WithScanProgress(context.Background(), func(update ScanProgress) {

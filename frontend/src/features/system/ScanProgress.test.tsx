@@ -11,6 +11,13 @@ import { apiRequest, type ScanProgress } from "../../shared/api/client";
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
+it("普通下载冷却不误报为115限流", () => {
+  render(<ScanProgressDisplay label="生成" state="running" progress={{phase:"cooling",processed:1,total:1,percent:100,current:"下载暂停：链接已过期"}} />);
+  expect(screen.getByRole("status")).toHaveTextContent("等待重试");
+  expect(screen.queryByText("115 访问受限，等待恢复")).not.toBeInTheDocument();
+  expect(screen.getByText("下载暂停：链接已过期")).toBeVisible();
+});
+
 it.each([["115 错误 20018：请求过于频繁", 0], ["写入失败", 1024], ["", 0]] as const)("点击失败感叹号显示错误详情：%s", async (error, size) => {
   vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: false, addListener: vi.fn(), removeListener: vi.fn() })));
   vi.stubGlobal("fetch", vi.fn(async () => Response.json({ available: true, total: 1, items: [

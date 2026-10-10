@@ -22,6 +22,49 @@ type retryStrmPan115Stub struct {
 	list func(context.Context, string, int, int) (domain.Pan115FilePage, error)
 }
 
+// TestStrmFailedAttachmentFinishes 验证普通附件失败有界重试，后续文件继续，结果保留失败数。
+func TestStrmFailedAttachmentFinishes(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	root := t.TempDir()
+	api := &downloadPan115Stub{address: "http://download.test", strmPan115Stub: strmPan115Stub{pages: map[string]domain.Pan115FilePage{"root": {Files: []domain.Pan115File{
+		{ID: "bad", Name: "bad.jpg", PickCode: "bad"}, {ID: "good", Name: "good.jpg", PickCode: "good"},
+	}}}}}
+	service := newStrmTestService(t, root, api, nil, map[string]string{strmDownloadEnableSettingKey: "true", strmPathsSettingKey: strmTestMappings(t, []domain.StrmMapping{{Kind: "115", ID: "root", Path: "/root", LocalPath: "/out"}})})
+	var mutex sync.Mutex
+	calls := 0
+	service.http.Transport = embyRoundTripper(func(request *http.Request) (*http.Response, error) {
+		if request.URL.Path == "/bad" {
+			mutex.Lock()
+			calls++
+			mutex.Unlock()
+			return &http.Response{StatusCode: 403, Body: io.NopCloser(strings.NewReader(`{"message":"request expired"}`))}, nil
+		}
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader("good"))}, nil
+	})
+	ctx = context.WithValue(ctx, strmRetryKey{}, &strmRetryPolicy{wait: func(context.Context, string, error) error { return nil }})
+	result, err := service.Scan(ctx, "http://play.test", domain.StrmGenerateFull)
+	if err != nil || result.DownloadFailed != 1 || result.Downloaded != 1 || calls != 6 {
+		t.Fatalf("result=%+v calls=%d err=%v", result, calls, err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "out", "bad.jpg")); !os.IsNotExist(err) {
+		t.Fatalf("failed file unexpectedly written: %v", err)
+	}
+	if !scanResultFailed(result) {
+		t.Fatal("failed attachment must remain eligible for retry")
+	}
+	service.http.Transport = embyRoundTripper(func(request *http.Request) (*http.Response, error) {
+		if request.URL.Path != "/bad" {
+			t.Error("completed attachment downloaded again")
+		}
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader("recovered"))}, nil
+	})
+	result, err = service.Scan(ctx, "http://play.test", domain.StrmGenerateIncremental)
+	if err != nil || result.DownloadFailed != 0 || result.Downloaded != 1 || result.DownloadSkipped != 1 {
+		t.Fatalf("retry result=%+v err=%v", result, err)
+	}
+}
+
 func (stub *retryStrmPan115Stub) Files(ctx context.Context, directory string, offset, limit int) (domain.Pan115FilePage, error) {
 	return stub.list(ctx, directory, offset, limit)
 }

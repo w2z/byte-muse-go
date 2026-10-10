@@ -75,6 +75,7 @@ export function ScanTaskControls({ task, pending, onAction, error }: {
 /**
  * 扫描与生成共用的进度展示：只在任务进行中显示进度条，结束后的结论由调用方的结果或失败文案表达。
  * 服务重启导致的中断不是进度而是状态提示，单独保留一句可操作说明。
+ * cooling 也用于网络和文件失败，不推断为 115 限流；具体原因使用后端 current。
  */
 export function ScanProgressDisplay({ progress, label, state, canRetry, taskId, processingText = "处理中" }: {
   progress?: ScanProgress; label: string; state?: ScanTask<unknown>["state"]; canRetry?: boolean; taskId?:string; processingText?: string;
@@ -83,7 +84,7 @@ export function ScanProgressDisplay({ progress, label, state, canRetry, taskId, 
   if (!progress || !isScanTaskActive(state)) return null;
   const phase = state === "paused" ? "已暂停" : state === "pausing" ? "正在暂停" : state === "canceling" ? "正在取消"
     : progress.phase === "waiting" ? "等待处理" : progress.phase === "discovering" ? "扫描中，总数持续更新"
-      : progress.phase === "cooling" ? "115 访问受限，等待恢复" : progress.phase === "finalizing" || progress.phase === "completed" ? "正在汇总结果" : processingText;
+      : progress.phase === "cooling" ? "等待重试" : progress.phase === "finalizing" || progress.phase === "completed" ? "正在汇总结果" : processingText;
   return (
     <div className="settings-scan-progress" aria-label={`${label}处理进度`}>
       <span role="status">{phase}</span>

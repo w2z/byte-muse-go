@@ -173,6 +173,13 @@ type strmWorkResult struct {
 	err  error
 }
 
+// strmAttachmentError 是非限流附件错误，单项最多执行三轮，不触发整个下载阶段冷却。
+type strmAttachmentError struct{ error }
+
+func (err *strmAttachmentError) Unwrap() error { return err.error }
+
+type strmWaitCauseKey struct{}
+
 // strmCheckpointError stops the task when durable completion cannot be read or recorded.
 type strmCheckpointError struct{ error }
 
@@ -195,12 +202,13 @@ func runStrmStage(ctx context.Context, queue *strmWorkQueue, workers, threshold 
 	defer cancel()
 	inflight, failures := 0, 0
 	cooling, probe := false, false
+	var lastError error
 	for {
 		if err := scanCheckpoint(workerCtx); err != nil {
 			return err
 		}
 		if cooling && inflight == 0 {
-			if err := wait(workerCtx); err != nil {
+			if err := wait(context.WithValue(workerCtx, strmWaitCauseKey{}, lastError)); err != nil {
 				return err
 			}
 			cooling = false
@@ -246,7 +254,23 @@ func runStrmStage(ctx context.Context, queue *strmWorkQueue, workers, threshold 
 				if workerCtx.Err() != nil {
 					return workerCtx.Err()
 				}
+				var attachmentErr *strmAttachmentError
+				if errors.As(result.err, &attachmentErr) {
+					if retry && result.item.Attempts < 2 {
+						result.item.Attempts++
+						if err := queue.push(result.item); err != nil {
+							return err
+						}
+					} else {
+						logging.Error(logging.CategoryStrmGenerate, "附件下载失败，已停止本轮重试", "file", result.item.File.Name, "attempts", result.item.Attempts+1, "error", scanFileError(result.err))
+					}
+					if !cooling {
+						failures, probe = 0, false
+					}
+					continue
+				}
 				if retry {
+					lastError = result.err
 					result.item.Attempts++
 					if err := queue.push(result.item); err != nil {
 						return err

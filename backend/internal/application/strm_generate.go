@@ -263,6 +263,8 @@ func (s *StrmService) scanMappings(ctx context.Context, root string, mappings []
 						skipped, workErr = s.downloadStrmMedia(workCtx, root, scope.target, mapping.Kind, item.File, mode)
 						if workErr == nil {
 							workErr = strmCheckpointFailure(completeTaskUnit(workCtx, "download", scope.target, item.File.Directory, item.File.ID))
+						} else if !pan115.IsRateLimitError(workErr) && workCtx.Err() == nil {
+							workErr = &strmAttachmentError{workErr}
 						}
 					}
 				}
@@ -316,8 +318,13 @@ func (s *StrmService) scanMappings(ctx context.Context, root string, mappings []
 				}
 				return workErr
 			}, func(waitCtx context.Context) error {
-				progress.update(false, false, "cooling", label+"暂停，60 秒后单项重试")
-				return waitStrmRetry(waitCtx, label, nil)
+				cause, _ := waitCtx.Value(strmWaitCauseKey{}).(error)
+				message := label + "暂停，60 秒后单项重试"
+				if cause != nil {
+					message += "：" + scanFileError(cause)
+				}
+				progress.update(false, false, "cooling", message)
+				return waitStrmRetry(waitCtx, label, cause)
 			})
 			if stageErr != nil {
 				cancel()

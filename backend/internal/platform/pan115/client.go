@@ -321,7 +321,10 @@ func reportCooldown(ctx context.Context, wait time.Duration) {
 
 // isRateLimitError 判断错误是否表示 115 限流：HTTP 429、风控拦截的 405 阻断页，
 // 或限流业务错误码与提示文本。限流请求不会在 115 侧生效，因此可以安全重试且不受方法限制。
-func isRateLimitError(err error) bool {
+func isRateLimitError(err error) bool { return IsRateLimitError(err) }
+
+// IsRateLimitError 供任务执行器复用客户端的限流分类，避免把普通下载错误当成账号限流。
+func IsRateLimitError(err error) bool {
 	var httpErr *HTTPError
 	if errors.As(err, &httpErr) {
 		return httpErr.StatusCode == http.StatusTooManyRequests || httpErr.StatusCode == http.StatusMethodNotAllowed
