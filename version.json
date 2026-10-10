@@ -1,16 +1,20 @@
 {
-  "version": "0.1.156",
-  "commit": "92237fb6a1462484ecfecfcbc9d16d358061d2dc",
-  "short_commit": "92237fb",
-  "built_at": "2026-10-10T07:46:43Z",
+  "version": "0.1.157",
+  "commit": "ba65432719033eeb2ee95eab5ff3bfb278fcfa30",
+  "short_commit": "ba65432",
+  "built_at": "2026-10-10T08:33:44Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.156",
-    "sha-92237fb",
+    "0.1.157",
+    "sha-ba65432",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.157",
+      "message": "限制附件失败重试并纠正限流提示"
+    },
     {
       "version": "0.1.156",
       "message": "校验115直链过期时间并重新获取失效链接"
