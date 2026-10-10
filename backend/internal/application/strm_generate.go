@@ -337,7 +337,7 @@ func (s *StrmService) scanMappings(ctx context.Context, root string, mappings []
 				return fmt.Errorf("去除视频后缀后文件名冲突：%s", name)
 			}
 			destinations[destination] = source
-			trackScanFile(walkCtx, file, operation, "waiting")
+			trackScanFile(walkCtx, file, operation, "waiting", filepath.Base(absolute))
 			return queue.push(strmWorkItem{Mapping: index, File: file})
 		})
 		finish(walkErr == nil)

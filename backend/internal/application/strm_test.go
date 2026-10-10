@@ -843,9 +843,16 @@ func TestStrmIncrementalPreservesDuplicateVideos(t *testing.T) {
 				{ID: "a", PickCode: "a", Name: names[0]}, {ID: "b", PickCode: "b", Name: names[1]}, {ID: "next", PickCode: "next", Name: "next.mp4"},
 			}}}}
 			service := newStrmTestService(t, root, api, nil, map[string]string{strmPathsSettingKey: strmTestMappings(t, []domain.StrmMapping{{Kind: "115", ID: "root", Path: "/root", LocalPath: "/out"}})})
-			result, err := service.Scan(context.Background(), "https://media.example.com", domain.StrmGenerateIncremental)
+			tree := newScanFileTree("output-names")
+			ctx := context.WithValue(context.Background(), scanFileTreeKey{}, tree)
+			result, err := service.Scan(ctx, "https://media.example.com", domain.StrmGenerateIncremental)
 			if err != nil || result.Created != 1 || result.Unchanged != 2 {
 				t.Fatalf("result=%+v err=%v", result, err)
+			}
+			for _, row := range tree.page(tree.page("", 1, 15, false).Items[0].ID, 1, 15, false).Items {
+				if _, err := os.Stat(filepath.Join(target, row.Name)); err != nil {
+					t.Fatalf("记录名称未对应实际文件：%s: %v", row.Name, err)
+				}
 			}
 			for _, name := range outputs {
 				body, err := os.ReadFile(filepath.Join(target, name))

@@ -135,8 +135,8 @@ func startScanFile(ctx context.Context, file strmSourceFile, operation string) f
 	return trackScanFile(ctx, file, operation, "processing")
 }
 
-// trackScanFile registers waiting work once; only a worker may promote it to processing.
-func trackScanFile(ctx context.Context, file strmSourceFile, operation, initialState string) func(string, error) {
+// trackScanFile 注册文件进度并保留原始身份；扫描入队时提供实际输出名，重试不改写显示名称。
+func trackScanFile(ctx context.Context, file strmSourceFile, operation, initialState string, outputName ...string) func(string, error) {
 	tree, root, id := scanFileIdentity(ctx, file, operation)
 	if tree == nil {
 		return func(string, error) {}
@@ -146,7 +146,10 @@ func trackScanFile(ctx context.Context, file strmSourceFile, operation, initialS
 		parent := tree.directory(root, file.Directory)
 		name := file.Name
 		if operation == "generate" {
-			name += ".strm"
+			name = strmVideoName(file.Name)
+		}
+		if len(outputName) > 0 && outputName[0] != "" {
+			name = outputName[0]
 		}
 		tree.add(ScanFileRow{ID: id, Name: name, Kind: "file", Operation: operation, State: initialState, Total: 1, parent: parent})
 		for ancestor := parent; ancestor != ""; ancestor = tree.rows[ancestor].parent {
