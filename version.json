@@ -1,16 +1,28 @@
 {
-  "version": "0.1.153",
-  "commit": "dd91d23c4edd85c34210b01cfeca075f5b73ec19",
-  "short_commit": "dd91d23",
-  "built_at": "2026-10-10T05:14:09Z",
+  "version": "0.1.156",
+  "commit": "92237fb6a1462484ecfecfcbc9d16d358061d2dc",
+  "short_commit": "92237fb",
+  "built_at": "2026-10-10T07:46:43Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.153",
-    "sha-dd91d23",
+    "0.1.156",
+    "sha-92237fb",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.156",
+      "message": "校验115直链过期时间并重新获取失效链接"
+    },
+    {
+      "version": "0.1.155",
+      "message": "从持久化断点恢复计数并跳过已完成队列项"
+    },
+    {
+      "version": "0.1.154",
+      "message": "修复暂停后继续残留旧限流提示"
+    },
     {
       "version": "0.1.153",
       "message": "为所有影片添加VR筛选"
