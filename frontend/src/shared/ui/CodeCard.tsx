@@ -1,5 +1,6 @@
 import { Button, Card, Descriptions, Divider, Image, Space, Tag } from "@arco-design/web-react";
 import dayjs from "dayjs";
+import { Link } from "react-router-dom";
 import { IconCopy, IconImage, IconPlayArrow } from "@arco-design/web-react/icon";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState, type ReactNode } from "react";
@@ -51,7 +52,7 @@ type CodeCardProps = {
 /**
  * 所有番号页共用的媒体卡，统一大图、复制、状态、剧照和预告行为。
  *
- * 内容区版式对齐对标站卡片：番号行（大号粗体番号 + 复制 + 状态标签）→ 发售日期 → 页面级 meta → 标题 → 操作按钮，
+ * 内容区版式对齐对标站卡片：番号行（大号粗体番号 + 复制 + 状态标签）→ 发售日期 → 页面级 meta → 标题 → 演员标签 → 操作按钮，
  * 底部按钮右对齐。番号只从服务端字段取，卡片不做任何业务状态推导；订阅状态由 display_status 决定。
  */
 export function CodeCard({ media, meta, actions, onSelect, hideActions = false, hideStatus = false, variant = "card" }: CodeCardProps) {
@@ -87,6 +88,13 @@ export function CodeCard({ media, meta, actions, onSelect, hideActions = false, 
     ? <button type="button" className="code-card-title code-card-title-link" onClick={onSelect}>{title}</button>
     : <div className="code-card-title">{title}</div>;
   const details = media.details;
+  // 匹配由后端统一判定，保留采集原名；未匹配项不提供跳转。
+  const actors = media.actors ?? [];
+  const actorTags = actors.length > 0 ? <Space wrap size={4} aria-label="演员">{actors.map((actor) =>
+    actor.actor_name
+      ? <Link key={actor.name} to={"/search?actor=" + encodeURIComponent(actor.actor_name)} aria-label={"搜索演员 " + actor.name + " 的影片"}><Tag color="arcoblue">{actor.name}</Tag></Link>
+      : <Tag key={actor.name}>{actor.name}</Tag>
+  )}</Space> : null;
   const missing = "暂无";
   /** 保留零值和 false 的真实含义，不用真假判断替代缺失判断。 */
   const yesNo = (value: boolean | null | undefined) => value == null ? missing : value ? "是" : "否";
@@ -151,6 +159,7 @@ export function CodeCard({ media, meta, actions, onSelect, hideActions = false, 
           {media.release_date ? <span className="code-card-meta">发售日期: {media.release_date}</span> : null}
           {meta}
           {titleNode}
+          {actorTags}
           {!actionsHidden ? <div className="code-card-actions">
             {showImages && stills.length > 0 ? <Button icon={<IconImage />} onClick={() => openStills()}>剧照</Button> : null}
             {media.preview_url ? <Button icon={<IconPlayArrow />} onClick={() => setPreviewVisible(true)}>预告</Button> : null}
@@ -174,7 +183,7 @@ export function CodeCard({ media, meta, actions, onSelect, hideActions = false, 
         <Descriptions title="影片内容" column={1} layout="inline-horizontal" data={[
           { label: "标题", value: title || missing },
           { label: "原标题", value: media.title || missing },
-          { label: "演员", value: details?.actors?.join("、") || missing },
+          { label: "演员", value: actorTags || details?.actors?.join("、") || missing },
           { label: "简介", value: details?.plot || missing },
           { label: "标签", value: details?.tags?.join("、") || missing },
         ]} />

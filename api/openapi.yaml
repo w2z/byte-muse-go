@@ -266,7 +266,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/MediaPage'
-  /complex/search: {"get":{"operationId":"searchCatalog","summary":"综合搜索","parameters":[{"name":"tag","in":"query","description":"完整标签名称精确匹配；非空时优先于 q，结果由服务端分页，不触发外站采集","schema":{"type":"string"}},{"$ref":"#/components/parameters/Page"},{"$ref":"#/components/parameters/PageSize"},{"name":"q","in":"query","description":"按番号、原始标题或翻译标题搜索；空值返回全部数据库媒体","schema":{"type":"string","maxLength":100}},{"in":"cookie","name":"bytemuse_session","required":true,"description":"登录会话 Cookie","schema":{"type":"string"}}],"responses":{"200":{"description":"数据库搜索结果","content":{"application/json":{"schema":{"$ref":"#/components/schemas/MediaPage"},"example":{"page":1,"page_size":15,"total":0,"items":[]}}}}}}}
+  /complex/search: {"get":{"operationId":"searchCatalog","summary":"综合搜索","parameters":[{"name":"actor","in":"query","description":"数据库演员主名或唯一别名，精确查询该演员影片；非空时优先于 q，tag 优先于 actor；空值不启用演员筛选，未匹配返回空列表，不触发采集","schema":{"type":"string"}},{"name":"tag","in":"query","description":"完整标签名称精确匹配；非空时优先于 actor 和 q，结果由服务端分页，不触发外站采集","schema":{"type":"string"}},{"$ref":"#/components/parameters/Page"},{"$ref":"#/components/parameters/PageSize"},{"name":"q","in":"query","description":"按番号、原始标题或翻译标题搜索；空值返回全部数据库媒体","schema":{"type":"string","maxLength":100}},{"in":"cookie","name":"bytemuse_session","required":true,"description":"登录会话 Cookie","schema":{"type":"string"}}],"responses":{"200":{"description":"数据库搜索结果","content":{"application/json":{"schema":{"$ref":"#/components/schemas/MediaPage"},"example":{"page":1,"page_size":15,"total":0,"items":[]}}}}}}}
   /actors:
     get:
       operationId: listActors
@@ -1981,8 +1981,22 @@ components:
           type: string
     Media:
       type: object
-      required: [id, code, title, video_type, still_photos, subscription_status, library_status, display_status, created_at, updated_at]
+      required: [id, code, title, actors, video_type, still_photos, subscription_status, library_status, display_status, created_at, updated_at]
       properties:
+        actors:
+          type: array
+          description: 所有影片列表及详情共用的演员标签，按采集顺序去重；无演员资料返回空数组。主名精确匹配优先，别名仅唯一归属时匹配；未匹配和歧义项使用默认 Tag，匹配项使用 arcoblue 并按 actor_name 搜索影片。
+          items:
+            type: object
+            required: [name, actor_name]
+            properties:
+              name:
+                type: string
+                description: 采集到的演员原名，去除首尾空格
+              actor_name:
+                type: [string, 'null']
+                description: 匹配的数据库演员主名，作为搜索 actor 参数；未匹配或别名归属多个演员时为 null
+          example: [{name: 演员别名, actor_name: 演员甲}, {name: 未收录演员, actor_name: null}]
         details:
           description: 仅 GET /media/{mediaId} 返回；列表接口省略。
           $ref: '#/components/schemas/MediaDetails'

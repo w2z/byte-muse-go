@@ -577,6 +577,15 @@ func searchCatalog(service *application.CatalogQueryService, tags ...*applicatio
 			writeJSON(response, 200, result)
 			return
 		}
+		if actor := strings.TrimSpace(request.URL.Query().Get("actor")); actor != "" {
+			result, err := service.SearchActor(request.Context(), actor, page, pageSize)
+			if err != nil {
+				writeApplicationError(response, err)
+				return
+			}
+			writeJSON(response, http.StatusOK, result)
+			return
+		}
 		result, err := service.Search(request.Context(), request.URL.Query().Get("q"), page, pageSize)
 		if err != nil {
 			logging.Error(logging.CategorySubscription, "资源搜索失败")

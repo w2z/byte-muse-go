@@ -133,7 +133,7 @@ func (r *CatalogQueryRepository) Search(ctx context.Context, query string, limit
 		return domain.MediaPage{}, err
 	}
 	defer rows.Close()
-	items, err := scanMediaProjectionRows(rows)
+	items, err := scanMediaProjectionRows(ctx, r.db, r.dialect, rows)
 	if err != nil {
 		return domain.MediaPage{}, err
 	}
@@ -159,7 +159,7 @@ func (r *CatalogQueryRepository) Rank(ctx context.Context, rankType string, limi
 		return domain.MediaPage{}, err
 	}
 	defer rows.Close()
-	items, err := scanMediaProjectionRows(rows)
+	items, err := scanMediaProjectionRows(ctx, r.db, r.dialect, rows)
 	if err != nil {
 		return domain.MediaPage{}, err
 	}
@@ -185,7 +185,7 @@ func (r *CatalogQueryRepository) ReleaseToday(ctx context.Context, releaseDate s
 		return domain.MediaPage{}, err
 	}
 	defer rows.Close()
-	items, err := scanMediaProjectionRows(rows)
+	items, err := scanMediaProjectionRows(ctx, r.db, r.dialect, rows)
 	if err != nil {
 		return domain.MediaPage{}, err
 	}
@@ -267,7 +267,7 @@ func (r *CatalogQueryRepository) loadMediaProjectionBatch(ctx context.Context, i
 		return nil, err
 	}
 	defer rows.Close()
-	loaded, err := scanMediaProjectionRows(rows)
+	loaded, err := scanMediaProjectionRows(ctx, r.db, r.dialect, rows)
 	if err != nil {
 		return nil, err
 	}

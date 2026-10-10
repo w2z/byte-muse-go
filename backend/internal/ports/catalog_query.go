@@ -7,6 +7,8 @@ import (
 
 // CatalogQueryRepository exposes read-only search and ordered rank projections.
 type CatalogQueryRepository interface {
+	// SearchActor 按数据库演员身份匹配影片，不使用标题模糊匹配。
+	SearchActor(ctx context.Context, name string, limit, offset int) (domain.MediaPage, error)
 	Search(ctx context.Context, query string, limit, offset int) (domain.MediaPage, error)
 	Rank(ctx context.Context, rankType string, limit, offset int, filters MediaListQuery) (domain.MediaPage, error)
 	ReleaseToday(ctx context.Context, releaseDate string, limit, offset int, filters MediaListQuery) (domain.MediaPage, error)

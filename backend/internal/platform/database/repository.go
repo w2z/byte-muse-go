@@ -36,7 +36,7 @@ func (r *sqlMediaRepository) List(ctx context.Context, query ports.MediaListQuer
 		return domain.MediaPage{}, err
 	}
 	defer rows.Close()
-	items, err := scanMediaProjectionRows(rows)
+	items, err := scanMediaProjectionRows(ctx, r.exec, r.dialect, rows)
 	if err != nil {
 		return domain.MediaPage{}, err
 	}
@@ -119,6 +119,11 @@ func (r *sqlMediaRepository) Get(ctx context.Context, id string) (domain.Media, 
 		}
 	}
 	media.Details = details
+	items := []domain.Media{media}
+	if err := matchMediaActors(ctx, r.exec, r.dialect, items); err != nil {
+		return domain.Media{}, err
+	}
+	media = items[0]
 	return media, nil
 }
 
@@ -399,7 +404,7 @@ func (r *sqlSubscriptionRepository) attachMedia(ctx context.Context, items []dom
 		return err
 	}
 	defer rows.Close()
-	media, err := scanMediaProjectionRows(rows)
+	media, err := scanMediaProjectionRows(ctx, r.exec, r.dialect, rows)
 	if err != nil {
 		return err
 	}
@@ -656,7 +661,7 @@ func mediaColumns() string {
 
 func mediaProjectionColumns(alias string) string {
 	base := strings.Replace(prefixedMediaColumns(alias), alias+".subscription_status", "CASE WHEN s.id IS NOT NULL THEN 'active' ELSE "+alias+".subscription_status END", 1)
-	return base + ", " + alias + ".video_type, lm.banner_url, lm.preview_url, lm.still_photo, " +
+	return base + ", " + alias + ".video_type, lm.banner_url, lm.preview_url, lm.still_photo, lm.casts, " +
 		"s.id, s.media_id, s.status, s.mode, s.filter_json, s.created_at, s.updated_at, s.version, d.status"
 }
 
@@ -707,7 +712,9 @@ func scanMediaRows(rows *sql.Rows) ([]domain.Media, error) {
 	return items, rows.Err()
 }
 
-func scanMediaProjectionRows(rows *sql.Rows) ([]domain.Media, error) {
+// scanMediaProjectionRows 关闭主查询后批量解析演员，兼容单连接数据库与事务。
+func scanMediaProjectionRows(ctx context.Context, exec sqlExecutor, dialect Dialect, rows *sql.Rows) ([]domain.Media, error) {
+	defer rows.Close()
 	items := make([]domain.Media, 0)
 	for rows.Next() {
 		item, err := scanMediaProjection(rows)
@@ -716,7 +723,16 @@ func scanMediaProjectionRows(rows *sql.Rows) ([]domain.Media, error) {
 		}
 		items = append(items, item)
 	}
-	return items, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := matchMediaActors(ctx, exec, dialect, items); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 func scanMediaProjection(row rowScanner) (domain.Media, error) {
@@ -724,7 +740,7 @@ func scanMediaProjection(row rowScanner) (domain.Media, error) {
 	var translatedTitle, posterURL, releaseDate any
 	var duration sql.NullInt64
 	var createdAt, updatedAt any
-	var bannerURL, previewURL, stillPhoto sql.NullString
+	var bannerURL, previewURL, stillPhoto, casts sql.NullString
 	var subscriptionID, subscriptionMediaID, subscriptionStatus, subscriptionMode, filterJSON sql.NullString
 	var subscriptionCreatedAt, subscriptionUpdatedAt any
 	var subscriptionVersion sql.NullInt64
@@ -733,7 +749,7 @@ func scanMediaProjection(row rowScanner) (domain.Media, error) {
 		&item.ID, &item.Code, &item.Title, &translatedTitle, &posterURL, &releaseDate, &duration,
 		&item.SubscriptionStatus, &item.LibraryStatus, &createdAt, &updatedAt,
 		&item.VideoType,
-		&bannerURL, &previewURL, &stillPhoto,
+		&bannerURL, &previewURL, &stillPhoto, &casts,
 		&subscriptionID, &subscriptionMediaID, &subscriptionStatus, &subscriptionMode, &filterJSON,
 		&subscriptionCreatedAt, &subscriptionUpdatedAt, &subscriptionVersion, &downloadStatus,
 	); err != nil {
@@ -753,6 +769,14 @@ func scanMediaProjection(row rowScanner) (domain.Media, error) {
 		item.PreviewURL = stringPointer(previewURL.String)
 	}
 	item.StillPhotos = parseStillPhotos(stillPhoto.String)
+	item.Actors = make([]domain.MediaActor, 0)
+	seenActors := map[string]bool{}
+	for _, name := range splitRecommendationValues(casts.String) {
+		if !seenActors[name] {
+			item.Actors = append(item.Actors, domain.MediaActor{Name: name})
+			seenActors[name] = true
+		}
+	}
 	created, err := valueToTime(createdAt)
 	if err != nil {
 		return domain.Media{}, fmt.Errorf("created_at: %w", err)

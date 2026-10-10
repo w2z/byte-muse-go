@@ -8,6 +8,18 @@ import { afterEach, expect, it, vi } from "vitest";
 import { apiRequest, coverCacheURL } from "../api/client";
 import type { Media, SystemSettings } from "../api/types";
 import { CodeCard } from "./CodeCard";
+import { MemoryRouter } from "react-router-dom";
+
+it("演员标签保留原名，仅数据库匹配项提供蓝色搜索链接", () => {
+  const client = new QueryClient();
+  client.setQueryData(["system-settings"], settings("INVISIBLE"));
+  render(<MemoryRouter><QueryClientProvider client={client}><CodeCard media={{ ...media, actors: [
+    { name: "演员别名", actor_name: "演员甲" }, { name: "未收录演员", actor_name: null },
+  ] }} /></QueryClientProvider></MemoryRouter>);
+  expect(screen.getByRole("link", { name: "搜索演员 演员别名 的影片" })).toHaveAttribute("href", "/search?actor=%E6%BC%94%E5%91%98%E7%94%B2");
+  expect(screen.getByText("演员别名").closest(".arco-tag")).toHaveClass("arco-tag-arcoblue");
+  expect(screen.getByText("未收录演员").closest("a")).toBeNull();
+});
 
 // jsdom 未实现媒体查询，提供 Arco 响应式描述列表所需的浏览器接口。
 Object.defineProperty(window, "matchMedia", { writable: true, value: (query: string) => ({ matches: false, media: query, addListener() {}, removeListener() {} }) });

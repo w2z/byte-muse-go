@@ -18,6 +18,26 @@ type fakeCatalogQueryRepository struct {
 	lastRank string
 }
 
+// SearchActor 按已匹配的演员主名筛选，供目录仓储测试替身使用。
+func (r *fakeCatalogQueryRepository) SearchActor(_ context.Context, name string, limit, offset int) (domain.MediaPage, error) {
+	items := []domain.Media{}
+	for _, media := range r.media {
+		for _, actor := range media.Actors {
+			if actor.ActorName != nil && *actor.ActorName == name {
+				items = append(items, media)
+				break
+			}
+		}
+	}
+	total := len(items)
+	if offset >= total {
+		items = []domain.Media{}
+	} else {
+		items = items[offset:min(offset+limit, total)]
+	}
+	return domain.MediaPage{Items: items, Total: total}, nil
+}
+
 // Search 按番号或标题包含关键词匹配，行为对齐仓储的关键词语义。
 func (r *fakeCatalogQueryRepository) Search(_ context.Context, query string, limit, offset int) (domain.MediaPage, error) {
 	needle := strings.ToLower(strings.TrimSpace(query))

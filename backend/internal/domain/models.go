@@ -91,6 +91,7 @@ func ValidVideoType(value string) bool {
 
 // Media is the API-facing catalog representation.
 type Media struct {
+	Actors             []MediaActor       `json:"actors"`            // 列表和详情共用；无资料返回空数组。
 	Details            *MediaDetails      `json:"details,omitempty"` // 仅详情接口返回扩展资料。
 	ID                 string             `json:"id"`
 	Code               string             `json:"code"`
@@ -110,6 +111,12 @@ type Media struct {
 	DownloadStatus     *DownloadStatus    `json:"download_status"`
 	CreatedAt          time.Time          `json:"created_at"`
 	UpdatedAt          time.Time          `json:"updated_at"`
+}
+
+// MediaActor 保留采集原名；ActorName 是数据库演员主名，未匹配或别名有歧义时为 nil。
+type MediaActor struct {
+	Name      string  `json:"name"`
+	ActorName *string `json:"actor_name"`
 }
 
 // MediaDetails 展示已保存的影片资料；空指针表示未采集或无法可靠确认，不从当前设置推断历史信息。

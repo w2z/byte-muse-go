@@ -43,6 +43,26 @@ func (s *CatalogQueryService) Search(ctx context.Context, query string, page, pa
 	return Page[domain.Media]{Page: page, PageSize: pageSize, Total: result.Total, Items: items}, nil
 }
 
+// SearchActor 校验分页并查询演员影片；空演员名不会退化为全目录查询。
+func (s *CatalogQueryService) SearchActor(ctx context.Context, name string, page, pageSize int) (Page[domain.Media], error) {
+	if err := validatePagination(page, pageSize); err != nil {
+		return Page[domain.Media]{}, err
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return Page[domain.Media]{Page: page, PageSize: pageSize, Items: []domain.Media{}}, nil
+	}
+	result, err := s.repository.SearchActor(ctx, name, pageSize, (page-1)*pageSize)
+	if err != nil {
+		return Page[domain.Media]{}, fmt.Errorf("search actor: %w", err)
+	}
+	items := nonNil(result.Items)
+	for i := range items {
+		items[i] = applyMediaTranslation(ctx, items[i], s.translator, s.writer)
+	}
+	return Page[domain.Media]{Page: page, PageSize: pageSize, Total: result.Total, Items: items}, nil
+}
+
 // Rank returns one validated page in the exact order stored by the selected legacy rank snapshot.
 func (s *CatalogQueryService) Rank(ctx context.Context, rankType string, page, pageSize int, filters ports.MediaListQuery) (Page[domain.Media], error) {
 	if err := validateMediaFilters(&filters); err != nil {

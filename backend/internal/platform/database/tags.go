@@ -47,7 +47,7 @@ func (r *TagRepository) SearchMedia(ctx context.Context, name string, limit, off
 	if e != nil {
 		return domain.MediaPage{}, e
 	}
-	items, e := scanMediaProjectionRows(rows)
+	items, e := scanMediaProjectionRows(ctx, tx, r.dialect, rows)
 	rows.Close()
 	if e != nil {
 		return domain.MediaPage{}, e
