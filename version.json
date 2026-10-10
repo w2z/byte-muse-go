@@ -1,16 +1,20 @@
 {
-  "version": "0.1.162",
-  "commit": "9192086bdd258ac81ab9bf84b5ba879a6c9e4ad0",
-  "short_commit": "9192086",
-  "built_at": "2026-10-10T16:33:39Z",
+  "version": "0.1.163",
+  "commit": "06527d4c207798ca2987f227b5af939075a9ddb2",
+  "short_commit": "06527d4",
+  "built_at": "2026-10-10T17:07:40Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.162",
-    "sha-9192086",
+    "0.1.163",
+    "sha-06527d4",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.163",
+      "message": "网盘空文件跳过下载直链改为直接本地创建"
+    },
     {
       "version": "0.1.162",
       "message": "将Telegram复制按钮改为点击正文文字复制"
