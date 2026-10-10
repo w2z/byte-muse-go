@@ -1,16 +1,20 @@
 {
-  "version": "0.1.160",
-  "commit": "6aadd56cb7a57e36fb4d782fa59112be41dc3715",
-  "short_commit": "6aadd56",
-  "built_at": "2026-10-10T12:56:29Z",
+  "version": "0.1.161",
+  "commit": "c7cc64aa270d0e80d9874f0dbc502335dd90e7f8",
+  "short_commit": "c7cc64a",
+  "built_at": "2026-10-10T13:04:22Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.160",
-    "sha-6aadd56",
+    "0.1.161",
+    "sha-c7cc64a",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.161",
+      "message": "展示演员标签并支持按演员搜索影片"
+    },
     {
       "version": "0.1.160",
       "message": "核验媒体来源和下载器任务并跳过已满足订阅"
