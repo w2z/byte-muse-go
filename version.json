@@ -1,16 +1,20 @@
 {
-  "version": "0.1.161",
-  "commit": "c7cc64aa270d0e80d9874f0dbc502335dd90e7f8",
-  "short_commit": "c7cc64a",
-  "built_at": "2026-10-10T13:04:22Z",
+  "version": "0.1.162",
+  "commit": "9192086bdd258ac81ab9bf84b5ba879a6c9e4ad0",
+  "short_commit": "9192086",
+  "built_at": "2026-10-10T16:33:39Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.161",
-    "sha-c7cc64a",
+    "0.1.162",
+    "sha-9192086",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.162",
+      "message": "将Telegram复制按钮改为点击正文文字复制"
+    },
     {
       "version": "0.1.161",
       "message": "展示演员标签并支持按演员搜索影片"
