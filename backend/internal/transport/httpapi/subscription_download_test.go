@@ -71,4 +71,19 @@ func TestSubscriptionDownloadHTTP(t *testing.T) {
 			t.Fatalf("duplicate task %s != %s", body.TaskID, firstID)
 		}
 	}
+	// 下载器已完成、内部仍 submitted：手动请求不再声称已登记搜索。
+	if _, err = store.SQLDB().ExecContext(ctx, "INSERT INTO download_tasks(id,media_id,status,transfer_status,created_at,updated_at) VALUES('done','m1','submitted','completed',?,?)", now, now); err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, path, nil)
+	request.AddCookie(login.Result().Cookies()[0])
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "subscription_satisfied") {
+		t.Fatalf("completed status=%d body=%s", response.Code, response.Body.String())
+	}
+	var queued int
+	if err = store.SQLDB().QueryRow("SELECT COUNT(*) FROM subscription_scans").Scan(&queued); err != nil || queued != 0 {
+		t.Fatalf("remaining scans=%d err=%v", queued, err)
+	}
 }

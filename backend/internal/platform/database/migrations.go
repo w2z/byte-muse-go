@@ -14,6 +14,44 @@ type Migration struct {
 	Statements []string
 }
 
+// subscriptionPresenceMigration 新增来源和订阅满足台账，不回填历史数据，回退保留表即可。
+// 所有字段非空、无默认值：source_key 为来源摘要；kind 为来源类型；scope 为账号身份；
+// location 为文件路径/父目录/服务器地址；item_id 为源文件标识；空 scope 表示历史身份未知。
+// completed_at 为 UTC RFC3339Nano，reason 为 library/download，无满足记录表示仍需检查。
+func subscriptionPresenceMigration(dialect Dialect) Migration {
+	statements := []string{
+		"CREATE TABLE IF NOT EXISTS media_library_sources (media_id VARCHAR(64) NOT NULL, source_key VARCHAR(64) NOT NULL, kind VARCHAR(16) NOT NULL, scope TEXT NOT NULL, location TEXT NOT NULL, item_id TEXT NOT NULL, PRIMARY KEY(media_id,source_key))",
+		"CREATE TABLE IF NOT EXISTS subscription_completions (subscription_id VARCHAR(64) NOT NULL PRIMARY KEY, reason VARCHAR(16) NOT NULL CHECK(reason IN ('library','download')), completed_at VARCHAR(40) NOT NULL, FOREIGN KEY(subscription_id) REFERENCES subscriptions(id) ON DELETE CASCADE)",
+	}
+	comments := []struct{ table, column, description string }{
+		{"media_library_sources", "media_id", "影片标识"}, {"media_library_sources", "source_key", "来源身份摘要"},
+		{"media_library_sources", "kind", "来源类型：local/115/cd2/emby/plex/jellyfin"}, {"media_library_sources", "scope", "账号或服务器身份，空串表示历史身份未知"},
+		{"media_library_sources", "location", "本地路径、网盘父目录或服务器地址，不含凭据"}, {"media_library_sources", "item_id", "源文件或媒体条目标识，本地文件可为空"},
+		{"subscription_completions", "subscription_id", "已满足的订阅标识"}, {"subscription_completions", "reason", "满足原因：library 来源存在，download 下载成功"},
+		{"subscription_completions", "completed_at", "首次确认满足的 UTC 时间，RFC3339Nano"},
+	}
+	if dialect == DialectPostgres {
+		for _, c := range comments {
+			statements = append(statements, "COMMENT ON COLUMN "+c.table+"."+c.column+" IS '"+c.description+"'")
+		}
+	}
+	if dialect == DialectMySQL {
+		for i, statement := range statements {
+			for _, c := range comments {
+				if !strings.Contains(statement, "CREATE TABLE IF NOT EXISTS "+c.table+" ") {
+					continue
+				}
+				for _, typ := range []string{"VARCHAR(64)", "VARCHAR(16)", "VARCHAR(40)", "TEXT"} {
+					needle := c.column + " " + typ + " NOT NULL"
+					statement = strings.ReplaceAll(statement, needle, needle+" COMMENT '"+c.description+"'")
+				}
+			}
+			statements[i] = statement
+		}
+	}
+	return Migration{Version: 43, Name: "subscription_presence", Statements: statements}
+}
+
 // scanTasksMigration 新增任务台账，不改历史媒体与文件。所有字段非空且由服务显式赋值，无默认值。
 // id 为随机任务标识，kind 为 library/strm，state 为执行状态，snapshot 为完整 JSON 快照，
 // created_at 为 UTC RFC3339Nano；JSON 内空 result 表示尚无最终结果，空 error 表示没有错误。
@@ -42,7 +80,7 @@ func MigrationPlan(dialect Dialect) []Migration {
 	default:
 		return nil
 	}
-	return append(plan, settingsMigration(dialect), activeSubscriptionMigration(dialect), defaultSettingsMigration(dialect), systemLogsMigration(dialect), logRetentionSettingMigration(dialect), cleanupCanceledSubscriptionsMigration(dialect), catalogQueryIndexesMigration(dialect), downloaderAndBypassSettingsMigration(dialect), collectionMigration(dialect), collectionQueueMigration(dialect), mediaTypeMigration(dialect), subscriptionDownloadMigration(dialect), downloadTransferMigration(dialect), ptSiteSettingsMigration(dialect), siteAuthSettingsMigration(dialect), tagSubscriptionMigration(dialect), bypassProxySettingMigration(dialect), actorSubscriptionMigration(dialect), translationModelSettingsMigration(dialect), notificationSettingsMigration(dialect), tagAliasMigration(dialect), pan115AccountMigration(dialect), pan115ScanPathsSettingMigration(dialect), strmSettingsMigration(dialect), downloadOriginMigration(dialect), dropUnusedJavdbHostSettingMigration(dialect), actorAliasesMigration(dialect), dropUnusedPhotoCacheSettingMigration(dialect), strmRootSettingMigration(dialect), subscriptionScanMigration(dialect), pan115CookieSettingMigration(dialect), scanTasksMigration(dialect), strmDownloadSettingsMigration(dialect), strmEmbyMediaSettingsMigration(dialect), cloudUploadMigration(dialect), taskCheckpointsMigration(dialect), downloadURLMigration(dialect), strmFilesMigration(dialect))
+	return append(plan, settingsMigration(dialect), activeSubscriptionMigration(dialect), defaultSettingsMigration(dialect), systemLogsMigration(dialect), logRetentionSettingMigration(dialect), cleanupCanceledSubscriptionsMigration(dialect), catalogQueryIndexesMigration(dialect), downloaderAndBypassSettingsMigration(dialect), collectionMigration(dialect), collectionQueueMigration(dialect), mediaTypeMigration(dialect), subscriptionDownloadMigration(dialect), downloadTransferMigration(dialect), ptSiteSettingsMigration(dialect), siteAuthSettingsMigration(dialect), tagSubscriptionMigration(dialect), bypassProxySettingMigration(dialect), actorSubscriptionMigration(dialect), translationModelSettingsMigration(dialect), notificationSettingsMigration(dialect), tagAliasMigration(dialect), pan115AccountMigration(dialect), pan115ScanPathsSettingMigration(dialect), strmSettingsMigration(dialect), downloadOriginMigration(dialect), dropUnusedJavdbHostSettingMigration(dialect), actorAliasesMigration(dialect), dropUnusedPhotoCacheSettingMigration(dialect), strmRootSettingMigration(dialect), subscriptionScanMigration(dialect), pan115CookieSettingMigration(dialect), scanTasksMigration(dialect), strmDownloadSettingsMigration(dialect), strmEmbyMediaSettingsMigration(dialect), cloudUploadMigration(dialect), taskCheckpointsMigration(dialect), downloadURLMigration(dialect), strmFilesMigration(dialect), subscriptionPresenceMigration(dialect))
 }
 
 // strmFilesMigration 新增受管文件归属，不回填历史文件；回退保留表即可。

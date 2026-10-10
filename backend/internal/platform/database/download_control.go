@@ -63,6 +63,14 @@ func (r *SubscriptionDownloadRepository) FinishControl(ctx context.Context, id, 
 	if action == "retry_search" {
 		return r.retrySearch(ctx, id, token)
 	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err = r.reconcileCompletionsTx(ctx, tx); err != nil {
+		return err
+	}
 	var query string
 	var args []any
 	switch action {
@@ -76,7 +84,7 @@ func (r *SubscriptionDownloadRepository) FinishControl(ctx context.Context, id, 
 		query = fmt.Sprintf("UPDATE download_tasks SET transfer_status=%s,error_message=NULL,lease_until=NULL,lease_token=NULL,updated_at=%s WHERE id=%s AND lease_token=%s", placeholder(r.dialect, 1), placeholder(r.dialect, 2), placeholder(r.dialect, 3), placeholder(r.dialect, 4))
 		args = []any{state.Status, encodeTime(time.Now().UTC(), r.dialect), id, token}
 	}
-	result, err := r.db.ExecContext(ctx, query, args...)
+	result, err := tx.ExecContext(ctx, query, args...)
 	if err != nil {
 		return err
 	}
@@ -87,7 +95,10 @@ func (r *SubscriptionDownloadRepository) FinishControl(ctx context.Context, id, 
 	if n != 1 {
 		return ports.ErrDownloadConflict
 	}
-	return nil
+	if err = r.reconcileCompletionsTx(ctx, tx); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // retrySearch 把「没找到资源」的失败任务换成一次新的资源搜索：删除任务行，登记搜索队列。

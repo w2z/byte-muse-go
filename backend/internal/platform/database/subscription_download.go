@@ -67,6 +67,9 @@ func (r *SubscriptionDownloadRepository) SaveTransferStates(ctx context.Context,
 			transitions = append(transitions, ports.TransferTransition{TaskID: taskID, Code: code, Title: title, Cover: cover, Status: state.Status, Site: site, Kind: kind, URI: uri})
 		}
 	}
+	if err = r.reconcileCompletionsTx(ctx, tx); err != nil {
+		return nil, err
+	}
 	if err = tx.Commit(); err != nil {
 		return nil, err
 	}
@@ -74,13 +77,16 @@ func (r *SubscriptionDownloadRepository) SaveTransferStates(ctx context.Context,
 }
 
 // activeTaskFilter 是「订阅已有有效任务」的唯一判定条件，与 idx_download_tasks_active_subscription 的取值集合一致。
-const activeTaskFilter = "subscription_id=%s AND status IN ('queued','searching','unknown','submitted','downloading','completed')"
+const activeTaskFilter = "media_id=(SELECT media_id FROM subscriptions WHERE id=%s) AND status IN ('queued','searching','unknown','submitted','downloading','completed')"
 
 // EnqueueScan 为一条有效订阅登记一次资源搜索，返回本次请求对应的持久化标识。
 // 该订阅已有进行中的下载任务时不再登记搜索，直接返回该任务标识：搜索的目的就是建立下载任务，
 // 重复登记只会多打一次资源站；已有待执行搜索时只把发起方升级为 user，避免用户显式请求
 // 被定时任务先登记的搜索吸收而失去失败通知。
 func (r *SubscriptionDownloadRepository) EnqueueScan(ctx context.Context, subscriptionID string, origin ports.DownloadOrigin) (string, error) {
+	if err := r.reconcileCompletions(ctx); err != nil {
+		return "", err
+	}
 	id, _, e := r.enqueueScan(ctx, subscriptionID, origin)
 	return id, e
 }
@@ -100,6 +106,13 @@ func (r *SubscriptionDownloadRepository) enqueueScan(ctx context.Context, subscr
 		return "", false, e
 	}
 	var taskID string
+	var satisfied int
+	if e = tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM subscriptions s WHERE s.id="+placeholder(r.dialect, 1)+" AND ("+completedSubscriptionSQL+" OR "+satisfiedMediaSQL+")", subscriptionID).Scan(&satisfied); e != nil {
+		return "", false, e
+	}
+	if satisfied > 0 {
+		return "", false, ports.ErrSubscriptionSatisfied
+	}
 	e = tx.QueryRowContext(ctx, fmt.Sprintf("SELECT id FROM download_tasks WHERE "+activeTaskFilter+" ORDER BY created_at DESC LIMIT 1", placeholder(r.dialect, 1)), subscriptionID).Scan(&taskID)
 	if e == nil {
 		return taskID, false, tx.Commit()
@@ -141,7 +154,10 @@ func normalizeOrigin(origin ports.DownloadOrigin) ports.DownloadOrigin {
 // EnqueueActiveScans schedules every active subscription without duplicating unfinished work.
 // 批量扫描统一按 schedule 来源落库：它的失败是正常状态，不推送通知。
 func (r *SubscriptionDownloadRepository) EnqueueActiveScans(ctx context.Context) (int, error) {
-	rows, e := r.db.QueryContext(ctx, "SELECT id FROM subscriptions WHERE status='active' ORDER BY id")
+	if err := r.reconcileCompletions(ctx); err != nil {
+		return 0, err
+	}
+	rows, e := r.db.QueryContext(ctx, "SELECT s.id FROM subscriptions s WHERE s.status='active' AND NOT "+completedSubscriptionSQL+" AND NOT "+satisfiedMediaSQL+" ORDER BY s.id")
 	if e != nil {
 		return 0, e
 	}
@@ -163,6 +179,9 @@ func (r *SubscriptionDownloadRepository) EnqueueActiveScans(ctx context.Context)
 	count := 0
 	for _, id := range ids {
 		_, created, e := r.enqueueScan(ctx, id, ports.DownloadOriginSchedule)
+		if errors.Is(e, ports.ErrSubscriptionSatisfied) {
+			continue
+		}
 		if e != nil {
 			return count, e
 		}
@@ -181,10 +200,10 @@ func (r *SubscriptionDownloadRepository) ClaimScan(ctx context.Context, now time
 		return nil, e
 	}
 	defer tx.Rollback()
-	query := fmt.Sprintf("SELECT sc.id,sc.subscription_id,s.media_id,m.code,COALESCE(NULLIF(m.translated_title,''),m.title,''),"+mediaCoverColumn("m")+",s.mode,s.filter_json,sc.origin FROM subscription_scans sc JOIN subscriptions s ON s.id=sc.subscription_id AND s.status='active' JOIN media m ON m.id=s.media_id "+mediaCoverJoin("m")+" WHERE (sc.status='queued' OR (sc.status='searching' AND sc.lease_until<%s)) ORDER BY sc.created_at,sc.id LIMIT 1", placeholder(r.dialect, 1))
+	query := fmt.Sprintf("SELECT sc.id,sc.subscription_id,s.media_id,m.code,COALESCE(NULLIF(m.translated_title,''),m.title,''),"+mediaCoverColumn("m")+",s.mode,s.filter_json,sc.origin,m.library_status FROM subscription_scans sc JOIN subscriptions s ON s.id=sc.subscription_id AND s.status='active' JOIN media m ON m.id=s.media_id "+mediaCoverJoin("m")+" WHERE NOT "+completedSubscriptionSQL+" AND NOT "+satisfiedMediaSQL+" AND (sc.status='queued' OR (sc.status='searching' AND sc.lease_until<%s)) ORDER BY sc.created_at,sc.id LIMIT 1", placeholder(r.dialect, 1))
 	var a ports.SubscriptionScanAttempt
-	var filterJSON string
-	e = tx.QueryRowContext(ctx, query, now.UnixMilli()).Scan(&a.ID, &a.SubscriptionID, &a.MediaID, &a.Code, &a.Title, &a.Cover, &a.Mode, &filterJSON, &a.Origin)
+	var filterJSON, libraryStatus string
+	e = tx.QueryRowContext(ctx, query, now.UnixMilli()).Scan(&a.ID, &a.SubscriptionID, &a.MediaID, &a.Code, &a.Title, &a.Cover, &a.Mode, &filterJSON, &a.Origin, &libraryStatus)
 	if errors.Is(e, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -194,6 +213,7 @@ func (r *SubscriptionDownloadRepository) ClaimScan(ctx context.Context, now time
 	if e = unmarshalFilter(filterJSON, &a.Filter); e != nil {
 		return nil, e
 	}
+	a.LibraryPresent = libraryStatus == "present"
 	a.LeaseToken = newSortableID()
 	update := fmt.Sprintf("UPDATE subscription_scans SET status='searching',lease_until=%s,lease_token=%s,updated_at=%s WHERE id=%s AND (status='queued' OR (status='searching' AND lease_until<%s))", placeholder(r.dialect, 1), placeholder(r.dialect, 2), placeholder(r.dialect, 3), placeholder(r.dialect, 4), placeholder(r.dialect, 5))
 	result, e := tx.ExecContext(ctx, update, now.Add(2*time.Minute).UnixMilli(), a.LeaseToken, encodeTime(now, r.dialect), a.ID, now.UnixMilli())
@@ -228,11 +248,19 @@ func (r *SubscriptionDownloadRepository) StartTask(ctx context.Context, a ports.
 	}
 	defer tx.Rollback()
 	var active int
-	if e = tx.QueryRowContext(ctx, fmt.Sprintf("SELECT COUNT(*) FROM subscriptions WHERE id=%s AND status='active'", placeholder(r.dialect, 1)), a.SubscriptionID).Scan(&active); e != nil {
+	if e = tx.QueryRowContext(ctx, fmt.Sprintf("SELECT COUNT(*) FROM subscriptions s WHERE s.id=%s AND s.status='active' AND NOT "+completedSubscriptionSQL+" AND NOT "+satisfiedMediaSQL+"", placeholder(r.dialect, 1)), a.SubscriptionID).Scan(&active); e != nil {
 		return ports.PendingSubmission{}, e
 	}
 	if active == 0 {
 		return ports.PendingSubmission{}, ports.ErrSubscriptionNotFound
+	}
+	// 长时间来源检查可能被其他 worker 接管；仅当前搜索租约可以提交资源。
+	var owned int
+	if e = tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM subscription_scans WHERE id="+placeholder(r.dialect, 1)+" AND lease_token="+placeholder(r.dialect, 2), a.ID, a.LeaseToken).Scan(&owned); e != nil {
+		return ports.PendingSubmission{}, e
+	}
+	if owned == 0 {
+		return ports.PendingSubmission{}, ports.ErrSubscriptionTaskActive
 	}
 	var existing int
 	if e = tx.QueryRowContext(ctx, fmt.Sprintf("SELECT COUNT(*) FROM download_tasks WHERE "+activeTaskFilter, placeholder(r.dialect, 1)), a.SubscriptionID).Scan(&existing); e != nil {

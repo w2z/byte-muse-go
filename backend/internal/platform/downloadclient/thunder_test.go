@@ -102,3 +102,27 @@ func TestThunderRejectsUnconfiguredAndInvalidMagnet(t *testing.T) {
 		t.Fatal("non-magnet must fail")
 	}
 }
+
+// TestThunderObserveCompletionAndMalformed 验证完成状态与异常列表不会混为缺失。
+func TestThunderObserveCompletionAndMalformed(t *testing.T) {
+	for _, body := range []string{`{}`, `{"tasks":null}`, `{"tasks":[],"next_page_token":"next"}`, `{"tasks":[{"info_hash":"hash","phase":"PHASE_TYPE_COMPLETE"}]}`} {
+		t.Run(body, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == thunderAPIPrefix+"/" {
+					w.Write([]byte(`<script>function uiauth(options) { return "pan-auth-value"; }</script>`))
+				} else {
+					w.Write([]byte(body))
+				}
+			}))
+			defer server.Close()
+			state, err := NewThunder(server.URL, "folder", "token", server.Client()).Observe(context.Background(), "hash")
+			if body == `{"tasks":[{"info_hash":"hash","phase":"PHASE_TYPE_COMPLETE"}]}` {
+				if err != nil || state == nil || state.Status != "completed" {
+					t.Fatalf("state=%v err=%v", state, err)
+				}
+			} else if err == nil {
+				t.Fatal("incomplete list must remain unknown")
+			}
+		})
+	}
+}

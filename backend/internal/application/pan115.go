@@ -640,27 +640,37 @@ type pan115Downloader struct {
 }
 
 // HasHash 在最近的离线任务页中查找信息哈希。115 没有按哈希精确查询的接口，
-// 因此回查范围限定在最近若干页，找不到即视为尚未受理。
+// 回查范围限定在最近若干页；未遍历完整列表时返回未知，不能把旧任务当作不存在。
 func (d pan115Downloader) HasHash(ctx context.Context, hash string) (bool, error) {
+	state, err := d.Observe(ctx, hash)
+	return state != nil, err
+}
+
+// Observe 按 115 离线状态 2 识别完成，保留分页不完整的未知结果。
+func (d pan115Downloader) Observe(ctx context.Context, hash string) (*ports.TransferState, error) {
 	hash = strings.ToLower(strings.TrimSpace(hash))
 	if hash == "" {
-		return false, nil
+		return nil, nil
 	}
 	for page := 1; page <= pan115OfflineScanPages; page++ {
 		result, err := d.service.OfflineTasks(ctx, page)
 		if err != nil {
-			return false, err
+			return nil, err
 		}
 		for _, task := range result.Tasks {
 			if strings.ToLower(strings.TrimSpace(task.Hash)) == hash {
-				return true, nil
+				status := "downloading"
+				if task.Status == 2 {
+					status = "completed"
+				}
+				return &ports.TransferState{Hash: hash, Status: status}, nil
 			}
 		}
 		if page >= result.PageCount {
-			break
+			return nil, nil
 		}
 	}
-	return false, nil
+	return nil, fmt.Errorf("115 离线任务查询范围不完整")
 }
 
 // Submit 提交磁力到 115 离线下载；115 报告同一磁力已存在时视为提交成功。

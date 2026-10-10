@@ -116,6 +116,17 @@ func (s *Pan115LibraryService) Scan(ctx context.Context) (domain.Pan115LibrarySc
 // 每累计 libraryMarkBatchSize 部影片提交一次；遍历失败保留已提交结果，原因写入 Message。
 func (s *Pan115LibraryService) scanDirectory(ctx context.Context, directory pan115ScanPath, walk strmWalk, advance func()) domain.Pan115LibraryDirectoryResult {
 	entry := domain.Pan115LibraryDirectoryResult{ID: directory.ID, Path: directory.Path}
+	accountID := ""
+	if identity, ok := s.pan115.(interface {
+		EventAccountID(context.Context) (string, error)
+	}); ok {
+		var err error
+		accountID, err = identity.EventAccountID(ctx)
+		if err != nil {
+			entry.Message = "读取扫描来源账号失败"
+			return entry
+		}
+	}
 	seen := make(map[string]bool)
 	committed := make(map[string]bool)
 	pending := make([]ports.LibraryMediaItem, 0, libraryMarkBatchSize)
@@ -165,9 +176,19 @@ func (s *Pan115LibraryService) scanDirectory(ctx context.Context, directory pan1
 			return completeTaskUnit(ctx, "library-file", directory.ID, file.Directory, file.ID)
 		}
 		if seen[code] {
+			source := ports.LibrarySource{Kind: "115", Scope: accountID, Location: file.ParentID, ItemID: file.ID}
 			if committed[code] {
+				if _, err := s.library.MarkLibraryPresent(ctx, []ports.LibraryMediaItem{{Code: code, Source: &source}}); err != nil {
+					return err
+				}
 				advance()
 				return completeTaskUnit(ctx, "library-file", directory.ID, file.Directory, file.ID)
+			}
+			for i := range pending {
+				if pending[i].Code == code {
+					pending[i].Sources = append(pending[i].Sources, source)
+					break
+				}
 			}
 			pendingFiles = append(pendingFiles, file)
 			advance()
@@ -177,6 +198,7 @@ func (s *Pan115LibraryService) scanDirectory(ctx context.Context, directory pan1
 		// 标题兜底用去掉扩展名的文件名；真正的标题由采集链路补齐，这里不覆盖已有值。
 		title := strings.TrimSpace(strings.TrimSuffix(file.Name, filepath.Ext(file.Name)))
 		pending = append(pending, ports.LibraryMediaItem{
+			Source:    &ports.LibrarySource{Kind: "115", Scope: accountID, Location: file.ParentID, ItemID: file.ID},
 			Code:      code,
 			Title:     title,
 			VideoType: domain.ClassifyVideoType(code, title, nil),

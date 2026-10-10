@@ -151,3 +151,18 @@ func TestQbittorrentUploadsPrivateTorrentFile(t *testing.T) {
 		t.Fatalf("uploaded=%q", received)
 	}
 }
+
+// TestQbittorrentNullListIsUnknown 不把服务端无效空响应当作任务已删除。
+func TestQbittorrentNullListIsUnknown(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v2/auth/login" {
+			w.Write([]byte("Ok."))
+		} else {
+			w.Write([]byte("null"))
+		}
+	}))
+	defer server.Close()
+	if _, err := NewQbittorrent(server.URL, "user", "pass", "", "", server.Client()).HasHash(context.Background(), "hash"); err == nil {
+		t.Fatal("null must remain unknown")
+	}
+}

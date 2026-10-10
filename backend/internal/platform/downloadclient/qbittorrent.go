@@ -211,6 +211,9 @@ func (c *Qbittorrent) HasHash(ctx context.Context, hash string) (bool, error) {
 	if e = json.Unmarshal(raw, &items); e != nil {
 		return false, e
 	}
+	if items == nil {
+		return false, fmt.Errorf("qBittorrent 任务列表响应无效")
+	}
 	for _, item := range items {
 		if strings.EqualFold(item.Hash, hash) {
 			return true, nil

@@ -77,13 +77,58 @@ type MagnetDownloader interface {
 
 // SubscriptionDownloadService coordinates durable search and safe submission.
 type SubscriptionDownloadService struct {
-	tasks          ports.SubscriptionDownloadRepository
-	searcher       ResourceSearcher
-	private        PrivateTorrentSource
-	downloaders    map[string]MagnetDownloader
-	settings       func(context.Context) (map[string]string, error)
-	runtimeFactory func(map[string]string) (ResourceSearcher, PrivateTorrentSource, map[string]MagnetDownloader)
-	notifier       Notifier
+	processing      chan struct{}
+	presence        LibraryPresenceChecker
+	presenceFactory func(map[string]string) LibraryPresenceChecker
+	tasks           ports.SubscriptionDownloadRepository
+	searcher        ResourceSearcher
+	private         PrivateTorrentSource
+	downloaders     map[string]MagnetDownloader
+	settings        func(context.Context) (map[string]string, error)
+	runtimeFactory  func(map[string]string) (ResourceSearcher, PrivateTorrentSource, map[string]MagnetDownloader)
+	notifier        Notifier
+}
+
+// LibraryPresenceChecker 实时核验已入库影片；nil 来源且无错误表示所有可核验来源明确不存在。
+type LibraryPresenceChecker interface {
+	Check(context.Context, string, []ports.LibrarySource) (*ports.LibrarySource, error)
+}
+
+// SetLibraryPresenceChecker 注入来源检查；未装配时已入库影片保守等待，不重新下载。
+func (s *SubscriptionDownloadService) SetLibraryPresenceChecker(checker LibraryPresenceChecker) {
+	s.presence = checker
+}
+
+// SetLibraryPresenceFactory 每批读取最新配置，不在并发任务间共享可变核验缓存。
+func (s *SubscriptionDownloadService) SetLibraryPresenceFactory(factory func(map[string]string) LibraryPresenceChecker) {
+	s.presenceFactory = factory
+}
+
+// verifyLibrary 在搜索前确认来源；只在明确存在时持久化满足事实，错误留待下次任务核验。
+func (s *SubscriptionDownloadService) verifyLibrary(ctx context.Context, a ports.SubscriptionScanAttempt) (bool, error) {
+	if !a.LibraryPresent {
+		return false, nil
+	}
+	repository, ok := s.tasks.(ports.SubscriptionPresenceRepository)
+	if !ok || s.presence == nil {
+		return true, fmt.Errorf("媒体来源核验尚未就绪")
+	}
+	sources, err := repository.LibrarySources(ctx, a.MediaID)
+	if err != nil {
+		return true, err
+	}
+	source, err := s.presence.Check(ctx, a.Code, sources)
+	if err != nil {
+		return true, err
+	}
+	if source == nil {
+		return false, nil
+	}
+	if err = repository.CompleteScan(ctx, a, "library", source); err != nil {
+		return true, err
+	}
+	logging.Info(logging.CategoryDownload, "来源文件仍存在，订阅不再搜索或下载", "code", a.Code, "source", source.Kind)
+	return true, nil
 }
 
 // SetNotifier 注入业务通知出口；未注入时下载流程不发送任何通知。
@@ -153,13 +198,16 @@ func (s *SubscriptionDownloadService) SetPrivateTorrentSource(source PrivateTorr
 
 // NewSubscriptionDownloadService injects live settings so changes take effect without a restart.
 func NewSubscriptionDownloadService(tasks ports.SubscriptionDownloadRepository, searcher ResourceSearcher, downloaders map[string]MagnetDownloader, settings func(context.Context) (map[string]string, error)) *SubscriptionDownloadService {
-	return &SubscriptionDownloadService{tasks: tasks, searcher: searcher, downloaders: downloaders, settings: settings}
+	return &SubscriptionDownloadService{tasks: tasks, searcher: searcher, downloaders: downloaders, settings: settings, processing: make(chan struct{}, 1)}
 }
 
 // Enqueue 为一条有效订阅登记一次资源搜索，返回本次请求对应的持久化标识。
 // 该订阅已有进行中的下载任务时直接返回该任务标识；已有待执行搜索时只升级发起方，不重复入队。
 // origin 是这次搜索的发起方，决定搜索失败后是否推送通知。
 func (s *SubscriptionDownloadService) Enqueue(ctx context.Context, id string, origin ports.DownloadOrigin) (string, error) {
+	if err := s.checkActiveTransfers(ctx, id); err != nil {
+		return "", err
+	}
 	return s.tasks.EnqueueScan(ctx, id, origin)
 }
 
@@ -167,6 +215,9 @@ func (s *SubscriptionDownloadService) Enqueue(ctx context.Context, id string, or
 // 批量扫描的来源固定为 schedule：没找到资源属于正常状态，不能为每条订阅推送失败通知。
 // 只有用户针对具体番号显式发起的 Enqueue 才按 user 来源推送。
 func (s *SubscriptionDownloadService) RunActiveScans(ctx context.Context) (int, error) {
+	if err := s.checkActiveTransfers(ctx, ""); err != nil {
+		return 0, err
+	}
 	n, e := s.tasks.EnqueueActiveScans(ctx)
 	if e != nil {
 		return n, e
@@ -176,9 +227,21 @@ func (s *SubscriptionDownloadService) RunActiveScans(ctx context.Context) (int, 
 
 // Process handles a bounded batch, always reconciling ambiguous external submissions first.
 func (s *SubscriptionDownloadService) Process(ctx context.Context, limit int) error {
+	// 调度与后台轮询共享执行锁，来源全量核验期间不重复领取同一批过期租约。
+	select {
+	case s.processing <- struct{}{}:
+		defer func() { <-s.processing }()
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 	settings, searcher, private, downloaders, e := s.runtime(ctx)
 	if e != nil {
 		return e
+	}
+	if s.presenceFactory != nil {
+		batch := *s
+		batch.presence = s.presenceFactory(settings)
+		s = &batch
 	}
 	for range limit {
 		p, e := s.tasks.ClaimPending(ctx, time.Now())
@@ -214,6 +277,28 @@ func (s *SubscriptionDownloadService) Process(ctx context.Context, limit int) er
 		}
 		if a == nil {
 			break
+		}
+		if err := s.checkActiveTransfers(ctx, a.SubscriptionID); err != nil {
+			return err
+		}
+		if repo, ok := s.tasks.(ports.SubscriptionTransferPresenceRepository); ok {
+			active, err := repo.ActiveTransfers(ctx, a.SubscriptionID)
+			if err != nil {
+				return err
+			}
+			if len(active) > 0 {
+				s.finishScan(ctx, *a)
+				continue
+			}
+		}
+		skip, checkErr := s.verifyLibrary(ctx, *a)
+		if checkErr != nil {
+			s.finishScan(ctx, *a)
+			logging.Error(logging.CategoryDownload, "媒体来源未能核实，本次跳过搜索和下载", "code", a.Code, "reason", scanFileError(checkErr))
+			continue
+		}
+		if skip {
+			continue
 		}
 		items, e := searcher.Search(ctx, a.Code)
 		if e != nil {
@@ -294,6 +379,59 @@ func (s *SubscriptionDownloadService) Process(ctx context.Context, limit int) er
 				return e
 			}
 			s.notifyDownloadStart(ctx, p)
+		}
+	}
+	return nil
+}
+
+// checkActiveTransfers 在登记搜索前回查下载器；错误、缺少身份和不完整查询均保留任务以防重复下载。
+func (s *SubscriptionDownloadService) checkActiveTransfers(ctx context.Context, subscriptionID string) error {
+	repo, ok := s.tasks.(ports.SubscriptionTransferPresenceRepository)
+	if !ok {
+		return nil
+	}
+	items, err := repo.ActiveTransfers(ctx, subscriptionID)
+	if err != nil {
+		return err
+	}
+	if len(items) == 0 {
+		return nil
+	}
+	_, _, _, clients, err := s.runtime(ctx)
+	if err != nil {
+		return err
+	}
+	for _, item := range items {
+		client := clients[item.Downloader]
+		if client == nil || item.InfoHash == "" {
+			continue
+		}
+		var found bool
+		var err error
+		if observer, ok := client.(interface {
+			Observe(context.Context, string) (*ports.TransferState, error)
+		}); ok {
+			var state *ports.TransferState
+			state, err = observer.Observe(ctx, item.InfoHash)
+			found = state != nil
+			if err == nil && state != nil && state.Status == "completed" {
+				if err = repo.MarkTransferCompleted(ctx, item); err != nil {
+					return err
+				}
+				continue
+			}
+		} else {
+			found, err = client.HasHash(ctx, item.InfoHash)
+		}
+		if err != nil {
+			logging.Error(logging.CategoryDownload, "下载器任务未能核实，本次保留任务并跳过搜索", "task_id", item.ID)
+			continue
+		}
+		if found {
+			continue
+		}
+		if err = repo.MarkTransferMissing(ctx, item); err != nil {
+			return err
 		}
 	}
 	return nil

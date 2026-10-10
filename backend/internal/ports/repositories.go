@@ -60,6 +60,9 @@ type MediaTranslationWriter interface {
 
 // LibraryMediaItem 是一个待登记为「已在媒体库」的影片；Code 必须是归一化番号，Title 为空时调用方已兜底。
 type LibraryMediaItem struct {
+	// Source 为当前扫描实际读到的来源；nil 表示旧调用方未提供来源。
+	Source    *LibrarySource
+	Sources   []LibrarySource // 同番号的分卷或多份文件全部保留，任意一份存在即可满足。
 	Code      string
 	Title     string
 	VideoType string

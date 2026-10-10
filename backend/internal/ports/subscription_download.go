@@ -22,9 +22,14 @@ const (
 // ErrSubscriptionTaskActive 表示该订阅已有进行中的下载任务，本次搜索不再需要建立任务。
 var ErrSubscriptionTaskActive = errors.New("该订阅已有进行中的下载任务")
 
+// ErrSubscriptionSatisfied 表示已核实来源存在或已有成功下载，本订阅不再执行资源搜索。
+var ErrSubscriptionSatisfied = errors.New("影片已完成，已跳过搜索和下载")
+
 // SubscriptionScanAttempt 是一次已领取的订阅资源搜索，带订阅规则与影片快照。
 // 搜索没有选中资源时不产生下载任务，本次搜索结束，等待下一次排期重新搜索。
 type SubscriptionScanAttempt struct {
+	// LibraryPresent 表示历史入库完成，需要实时核验来源才能跳过。
+	LibraryPresent              bool
 	ID, SubscriptionID, MediaID string
 	Code                        string
 	// Title 是关联影片标题（优先译文），仅用于通知文案。

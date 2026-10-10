@@ -447,8 +447,8 @@ func TestPan115HasHashScansBoundedOfflinePages(t *testing.T) {
 	miss := &pan115ClientStub{offline: pan115.OfflinePage{PageCount: 9, Tasks: []pan115.OfflineTask{{Hash: "OTHER"}}}}
 	service = newPan115TestService(t, pan115BoundAccounts(t, secret), miss, pan115TestSettings(""), secret)
 	found, err = service.Downloader("").HasHash(context.Background(), "abc")
-	if err != nil || found {
-		t.Fatalf("未命中结果 = %v err=%v", found, err)
+	if err == nil || found {
+		t.Fatalf("不完整回查应返回未知 = %v err=%v", found, err)
 	}
 	if len(miss.offlinePages) != pan115OfflineScanPages {
 		t.Fatalf("回查页数 = %v，期望 %d 页上限", miss.offlinePages, pan115OfflineScanPages)
@@ -617,5 +617,18 @@ func TestPan115CancelCookieLoginForgetsSession(t *testing.T) {
 	service.CancelCookieLogin(session.SessionID)
 	if _, err := service.CookieLoginStatus(context.Background(), session.SessionID); !errors.Is(err, ErrPan115LoginUnknown) {
 		t.Fatalf("取消后查询错误 = %v", err)
+	}
+}
+
+// TestPan115ObserveCompleted 保留下载完成事实而非只返回任务存在。
+func TestPan115ObserveCompleted(t *testing.T) {
+	client := &pan115ClientStub{offline: pan115.OfflinePage{PageCount: 1, Tasks: []pan115.OfflineTask{{Hash: "abc", Status: 2, Progress: 100}}}}
+	secret := strings.Repeat("x", 32)
+	service := newPan115TestService(t, pan115BoundAccounts(t, secret), client, pan115TestSettings(""), secret)
+	state, err := service.Downloader("").(interface {
+		Observe(context.Context, string) (*ports.TransferState, error)
+	}).Observe(context.Background(), "abc")
+	if err != nil || state == nil || state.Status != "completed" {
+		t.Fatalf("state=%v err=%v", state, err)
 	}
 }

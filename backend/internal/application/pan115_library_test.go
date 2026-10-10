@@ -93,8 +93,11 @@ func TestLibraryRetryDeduplicatesCommittedCode(t *testing.T) {
 	ctx := journalContext(context.Background(), &taskJournal{id: "duplicates"})
 	for attempt := 0; attempt < 2; attempt++ {
 		result, err := service.Scan(ctx)
-		if err != nil || scanResultFailed(result) || len(writer.batches) != 1 {
+		if err != nil || scanResultFailed(result) || len(writer.batches) != 2 {
 			t.Fatalf("attempt=%d result=%+v err=%v batches=%v", attempt, result, err, writer.batches)
+		}
+		if len(writer.batches[1]) != 1 || writer.batches[1][0].Code != "SSIS-00001" || writer.batches[1][0].Source == nil || writer.batches[1][0].Source.ItemID != "duplicate" {
+			t.Fatal("duplicate file source was lost")
 		}
 	}
 }

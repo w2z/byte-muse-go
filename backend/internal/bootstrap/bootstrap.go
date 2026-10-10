@@ -424,6 +424,9 @@ func (c *Commands) Serve(ctx context.Context) error {
 		})
 	downloadRepository := database.NewSubscriptionDownloadRepository(store.SQLDB(), database.Dialect(c.config.DatabaseDriver))
 	downloadService := application.NewSubscriptionDownloadService(downloadRepository, nil, nil, settingsValues(settingsService))
+	downloadService.SetLibraryPresenceFactory(func(values map[string]string) application.LibraryPresenceChecker {
+		return application.NewLibraryPresenceService(pan115Service, application.NewCloudDriveSettings(settingsValues(settingsService)), values, nil)
+	})
 	downloadService.SetNotifier(notifier)
 	javdbResources := &javdbResourceSearcher{load: settingsValues(settingsService)}
 	downloadService.SetRuntimeFactory(func(values map[string]string) (application.ResourceSearcher, application.PrivateTorrentSource, map[string]application.MagnetDownloader) {

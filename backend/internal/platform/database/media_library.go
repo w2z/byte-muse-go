@@ -66,6 +66,16 @@ func (r *sqlMediaLibraryRepository) MarkLibraryPresent(ctx context.Context, item
 		if err != nil {
 			return 0, fmt.Errorf("mark media library %q: %w", code, err)
 		}
+		if item.Source != nil {
+			if err = saveLibrarySource(ctx, tx, r.dialect, id, *item.Source); err != nil {
+				return 0, err
+			}
+		}
+		for _, source := range item.Sources {
+			if err = saveLibrarySource(ctx, tx, r.dialect, id, source); err != nil {
+				return 0, err
+			}
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf("commit media library mark: %w", err)

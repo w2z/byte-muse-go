@@ -133,7 +133,7 @@ func (c *Client) OfflineTasks(ctx context.Context, accessToken string, page int)
 	if err != nil {
 		return OfflinePage{}, err
 	}
-	if data == nil {
+	if data == nil || data.Tasks == nil {
 		return OfflinePage{}, fmt.Errorf("115 离线任务响应缺少数据段")
 	}
 	result := OfflinePage{PageCount: data.PageCount, Tasks: make([]OfflineTask, len(data.Tasks))}

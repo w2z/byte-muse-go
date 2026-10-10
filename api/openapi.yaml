@@ -415,7 +415,7 @@ paths:
     post:
       operationId: enqueueSubscriptionDownload
       summary: 为活动订阅登记一次资源搜索
-      description: 为活动订阅登记一次资源搜索，由后台搜索 PT（已接入馒头）和 Nyaa BT（sukebei.nyaa.si）资源；只有选中资源才会建立下载任务。搜索没找到资源属于正常结果，不建立下载任务，等下一次排期重新搜索。重复请求返回同一标识；202 只表示已受理搜索，不代表已找到资源或下载器已受理。需要登录。
+      description: 为活动订阅登记一次资源搜索，只有选中资源才建立下载任务。搜索前对已入库影片核验记录来源（本地、115、CloudDrive2、Emby、Plex、Jellyfin）；确认存在后持久化完成记录，后续不再搜索或下载。来源离线、权限错误或历史来源无法核实时本轮跳过，等待后续核验。实际下载成功（任务 status 或 transfer_status 为 completed）的同影片订阅也永久跳过；submitted 本身不代表完成。下载中任务按保存的下载器和信息哈希回查：仍存在或暂时无法核实时跳过搜索和提交，只有确认不存在才释放旧任务并重新搜索；同影片历史订阅的任务也参与去重。已确认完成的订阅返回 409 subscription_satisfied。其余重复请求返回同一标识；202 仅表示搜索已受理。需要登录。
       parameters:
         - $ref: '#/components/parameters/SubscriptionId'
       responses:
@@ -432,6 +432,24 @@ paths:
                     description: 本次请求的持久化标识；已有下载任务时为该任务 ID（可在 GET /downloads 查询），否则为搜索队列 ID，搜索有结果后会建立新的下载任务
               example:
                 task_id: ABCDEFGHIJKLMNOPQRSTUVWXYZ
+        '409':
+          description: 影片已完成，不再登记搜索或下载，订阅保留
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [code, message]
+                properties:
+                  code:
+                    type: string
+                    enum: [subscription_satisfied]
+                    description: 已核验来源存在或已确认下载成功
+                  message:
+                    type: string
+                    description: 中文跳过原因
+              example:
+                code: subscription_satisfied
+                message: 影片已完成，已跳过搜索和下载
         '404':
           $ref: '#/components/responses/NotFound'
   /subscriptions/{subscriptionId}:

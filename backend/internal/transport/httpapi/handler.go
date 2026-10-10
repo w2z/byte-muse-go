@@ -994,6 +994,8 @@ func writeApplicationError(response http.ResponseWriter, err error) {
 		writeError(response, http.StatusConflict, "conflict", "幂等键已用于不同请求")
 	case errors.Is(err, ports.ErrActiveSubscriptionExists):
 		writeError(response, http.StatusConflict, "already_subscribed", "该番号已订阅，未重复添加；卡片状态可查看本地文件是否存在")
+	case errors.Is(err, ports.ErrSubscriptionSatisfied):
+		writeError(response, http.StatusConflict, "subscription_satisfied", "影片已完成，已跳过搜索和下载")
 	case errors.Is(err, ports.ErrVersionConflict):
 		writeError(response, http.StatusConflict, "conflict", "订阅已被其他操作更新，请刷新后重试")
 	case errors.Is(err, ports.ErrSubscriptionInactive):

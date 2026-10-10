@@ -1,6 +1,7 @@
 package downloadclient
 
 import (
+	"bytemuse/backend/internal/ports"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -109,6 +110,7 @@ func (c *Thunder) panAuth(ctx context.Context) (string, error) {
 }
 
 type thunderTask struct {
+	Phase  string `json:"phase"`
 	Params struct {
 		Target string `json:"target"`
 		URL    string `json:"url"`
@@ -128,14 +130,20 @@ func (c *Thunder) listTasks(ctx context.Context, taskType string) ([]thunderTask
 		return nil, err
 	}
 	var payload struct {
-		Error string        `json:"error"`
-		Tasks []thunderTask `json:"tasks"`
+		Error         string        `json:"error"`
+		Tasks         []thunderTask `json:"tasks"`
+		NextPageToken string        `json:"next_page_token"`
+		HasMore       bool          `json:"has_more"`
+		Total         int           `json:"total"`
 	}
 	if err = json.Unmarshal(raw, &payload); err != nil {
 		return nil, fmt.Errorf("迅雷任务列表解析失败: %w", err)
 	}
 	if payload.Error != "" {
 		return nil, fmt.Errorf("迅雷任务列表返回错误")
+	}
+	if payload.Tasks == nil || payload.NextPageToken != "" || payload.HasMore || payload.Total > len(payload.Tasks) {
+		return nil, fmt.Errorf("迅雷任务列表不完整，无法确认任务缺失")
 	}
 	return payload.Tasks, nil
 }
@@ -193,26 +201,32 @@ func (c *Thunder) resolve(ctx context.Context, magnet string) (string, []thunder
 
 // HasHash 通过任务列表按 info hash 回查，避免把同一磁力重复提交到网盘。
 func (c *Thunder) HasHash(ctx context.Context, hash string) (bool, error) {
+	state, err := c.Observe(ctx, hash)
+	return state != nil, err
+}
+
+// Observe 保留离线任务完成事实；未知状态仍视为存在，列表不完整返回错误。
+func (c *Thunder) Observe(ctx context.Context, hash string) (*ports.TransferState, error) {
 	if err := c.configured(); err != nil {
-		return false, err
+		return nil, err
 	}
-	hash = strings.TrimSpace(hash)
-	if hash == "" {
-		return false, fmt.Errorf("无效的任务 hash")
+	if strings.TrimSpace(hash) == "" {
+		return nil, fmt.Errorf("无效的任务 hash")
 	}
 	tasks, err := c.listTasks(ctx, "user#download-url")
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 	for _, task := range tasks {
-		if strings.EqualFold(strings.TrimSpace(task.InfoHash), hash) {
-			return true, nil
-		}
-		if strings.Contains(strings.ToLower(task.Params.URL), strings.ToLower(hash)) {
-			return true, nil
+		if strings.EqualFold(strings.TrimSpace(task.InfoHash), hash) || strings.Contains(strings.ToLower(task.Params.URL), strings.ToLower(hash)) {
+			status := "downloading"
+			if task.Phase == "PHASE_TYPE_COMPLETE" {
+				status = "completed"
+			}
+			return &ports.TransferState{Hash: hash, Status: status}, nil
 		}
 	}
-	return false, nil
+	return nil, nil
 }
 
 // Submit 解析磁力、挑选大于 1GB 的文件并创建一次下载任务；结果由调用方回查确认。

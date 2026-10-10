@@ -67,6 +67,9 @@ func (c *Qbittorrent) Observe(ctx context.Context, hash string) (*ports.Transfer
 	if err = json.Unmarshal(raw, &items); err != nil {
 		return nil, err
 	}
+	if items == nil {
+		return nil, fmt.Errorf("qBittorrent 任务列表响应无效")
+	}
 	for _, item := range items {
 		if strings.EqualFold(item.Hash, hash) {
 			result := &ports.TransferState{Hash: strings.ToLower(hash), Status: transferStatus(item.State, item.Progress, item.CompletionOn)}
