@@ -9,8 +9,10 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -73,9 +75,19 @@ func (r strmDownloadReader) Read(buffer []byte) (int, error) {
 	return n, err
 }
 
-// downloadStrmMedia 复用网盘直链解析，保持 UA/请求头一致，通过受限根目录原子落盘。
-// 增量和事件同步保留已有文件；全量用完整新文件替换，失败始终保留旧文件。
+// downloadStrmMedia 在 115 直链时间戳过期或下载端明确报告过期时立即重新取链一次；仍失败则交回任务级重试。
+// 每次尝试均检查暂停/取消、保持 UA 一致，并保留增量跳过和原子落盘语义。
 func (s *StrmService) downloadStrmMedia(ctx context.Context, root, target, kind string, file strmSourceFile, mode domain.StrmGenerateMode) (bool, error) {
+	skipped, err := s.downloadStrmMediaOnce(ctx, root, target, kind, file, mode)
+	var expired *strmExpiredDownloadError
+	if !errors.As(err, &expired) {
+		return skipped, err
+	}
+	return s.downloadStrmMediaOnce(ctx, root, target, kind, file, mode)
+}
+
+// downloadStrmMediaOnce 每次重新解析直链，失败关闭响应和超时计时器，不覆盖已有本地文件。
+func (s *StrmService) downloadStrmMediaOnce(ctx context.Context, root, target, kind string, file strmSourceFile, mode domain.StrmGenerateMode) (bool, error) {
 	if err := scanCheckpoint(ctx); err != nil {
 		return false, err
 	}
@@ -122,6 +134,15 @@ func (s *StrmService) downloadStrmMedia(ctx context.Context, root, target, kind 
 	address := targetURL.Redirect
 	if targetURL.Proxy != nil {
 		address = targetURL.Proxy.URL
+	}
+	if kind == domain.StrmKindPan115 {
+		parsed, parseErr := url.Parse(address)
+		if parseErr == nil {
+			expires, timestampErr := strconv.ParseInt(parsed.Query().Get("t"), 10, 64)
+			if timestampErr == nil && expires <= time.Now().Unix() {
+				return false, &strmExpiredDownloadError{error: errors.New("115 媒体下载链接已过期")}
+			}
+		}
 	}
 	downloadCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -186,7 +207,12 @@ func (s *StrmService) downloadStrmMedia(ctx context.Context, root, target, kind 
 	return false, nil
 }
 
-// strmDownloadResponseError keeps bounded JSON error messages, never raw HTML or arbitrary response data.
+// strmExpiredDownloadError 标记下载端明确返回的链接过期，不把普通鉴权拒绝或限流当作链接失效。
+type strmExpiredDownloadError struct {
+	error
+}
+
+// strmDownloadResponseError 仅保留有界 JSON 错误信息，识别明确过期的 401/403 响应，不回显 HTML。
 func strmDownloadResponseError(response *http.Response) error {
 	message := fmt.Sprintf("媒体下载返回状态码 %d", response.StatusCode)
 	body, err := io.ReadAll(io.LimitReader(response.Body, 8193))
@@ -198,7 +224,14 @@ func strmDownloadResponseError(response *http.Response) error {
 		for _, key := range []string{"message", "msg", "error", "error_description"} {
 			var detail string
 			if json.Unmarshal(payload[key], &detail) == nil && strings.TrimSpace(detail) != "" {
-				return fmt.Errorf("%s：%s", message, scanFileError(errors.New(detail)))
+				downloadErr := fmt.Errorf("%s：%s", message, scanFileError(errors.New(detail)))
+				if response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden {
+					switch strings.ToLower(strings.TrimSpace(detail)) {
+					case "request expired", "request has expired", "url expired", "link expired", "下载链接已过期", "下载链接已失效":
+						return &strmExpiredDownloadError{error: downloadErr}
+					}
+				}
+				return downloadErr
 			}
 		}
 	}
