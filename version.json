@@ -1,16 +1,20 @@
 {
-  "version": "0.1.157",
-  "commit": "ba65432719033eeb2ee95eab5ff3bfb278fcfa30",
-  "short_commit": "ba65432",
-  "built_at": "2026-10-10T08:33:44Z",
+  "version": "0.1.158",
+  "commit": "3aeb044007c905a5575467b198e4bb96e8cc4028",
+  "short_commit": "3aeb044",
+  "built_at": "2026-10-10T09:13:33Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.157",
-    "sha-ba65432",
+    "0.1.158",
+    "sha-3aeb044",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.158",
+      "message": "复用已检查版本并清除历史失败提示"
+    },
     {
       "version": "0.1.157",
       "message": "限制附件失败重试并纠正限流提示"
