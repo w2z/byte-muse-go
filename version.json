@@ -1,16 +1,20 @@
 {
-  "version": "0.1.152",
-  "commit": "57ead9f9161f57ea7237647499883fc08e9bcab9",
-  "short_commit": "57ead9f",
-  "built_at": "2026-10-10T00:16:10Z",
+  "version": "0.1.153",
+  "commit": "dd91d23c4edd85c34210b01cfeca075f5b73ec19",
+  "short_commit": "dd91d23",
+  "built_at": "2026-10-10T05:14:09Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.152",
-    "sha-57ead9f",
+    "0.1.153",
+    "sha-dd91d23",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.153",
+      "message": "为所有影片添加VR筛选"
+    },
     {
       "version": "0.1.152",
       "message": "在生成记录中显示实际输出文件名"
