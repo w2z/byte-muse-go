@@ -1,16 +1,20 @@
 {
-  "version": "0.1.158",
-  "commit": "3aeb044007c905a5575467b198e4bb96e8cc4028",
-  "short_commit": "3aeb044",
-  "built_at": "2026-10-10T09:13:33Z",
+  "version": "0.1.159",
+  "commit": "0c4804bdd529f48e6210279bcd1e7534988a4072",
+  "short_commit": "0c4804b",
+  "built_at": "2026-10-10T09:59:22Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.158",
-    "sha-3aeb044",
+    "0.1.159",
+    "sha-0c4804b",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.159",
+      "message": "移除115直链t参数过期预判"
+    },
     {
       "version": "0.1.158",
       "message": "复用已检查版本并清除历史失败提示"
