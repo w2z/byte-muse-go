@@ -1,16 +1,20 @@
 {
-  "version": "0.1.163",
-  "commit": "06527d4c207798ca2987f227b5af939075a9ddb2",
-  "short_commit": "06527d4",
-  "built_at": "2026-10-10T17:07:40Z",
+  "version": "0.1.164",
+  "commit": "4a61b04c52edd5b686ba3e199b7eaa8e398f0273",
+  "short_commit": "4a61b04",
+  "built_at": "2026-10-12T14:01:41Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.163",
-    "sha-06527d4",
+    "0.1.164",
+    "sha-4a61b04",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.164",
+      "message": "采集 JavLibrary 想要榜并延长 Cloudflare 挑战等待"
+    },
     {
       "version": "0.1.163",
       "message": "网盘空文件跳过下载直链改为直接本地创建"
