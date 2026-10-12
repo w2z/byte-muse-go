@@ -51,7 +51,7 @@ func TestBypassBoundaries(t *testing.T) {
 					Cmd, URL   string
 					MaxTimeout int
 				}
-				if json.NewDecoder(r.Body).Decode(&payload) != nil || payload.Cmd != "request.get" || payload.URL != "https://javdb.com/" || payload.MaxTimeout != 45000 {
+				if json.NewDecoder(r.Body).Decode(&payload) != nil || payload.Cmd != "request.get" || payload.URL != "https://javdb.com/" || payload.MaxTimeout != int(bypassSolveTimeout/time.Millisecond) {
 					t.Errorf("payload=%+v", payload)
 				}
 				w.Write([]byte(tc.result))
@@ -279,7 +279,7 @@ func TestLiveEnhancedCollection(t *testing.T) {
 		{Source: "supjav", Kind: "search", Query: "TEST", Page: 1},
 	} {
 		t.Run(req.Source, func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), 85*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 			defer cancel()
 			var b ports.CollectionBatch
 			var err error

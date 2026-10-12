@@ -26,12 +26,7 @@ type RankSource = {
   defaultPeriod: string;
 };
 
-/**
- * JavDB 热门榜的三个周期。
- *
- * 依据对标站榜单页编译产物 assets/Rank-BMeKi9W2.js：来源为 javdb 时渲染三个分段按钮
- * 日榜 / 周榜 / 月榜，点击后把 type 置为 daily / weekly / monthly 并发起 GET /ranks?type=。
- */
+/** JavDB 热门榜的三个周期，value 即服务端 rank_entries.rank_type。 */
 const JAVDB_PERIODS: RankPeriod[] = [
   { value: "daily", label: "日榜" },
   { value: "weekly", label: "周榜" },
@@ -39,42 +34,31 @@ const JAVDB_PERIODS: RankPeriod[] = [
 ];
 
 /**
- * JavLibrary 想要榜的五个周期。
+ * JavLibrary 想要榜只有一个榜单键，没有可切换的周期。
  *
- * 同样依据对标站编译产物：来源为 javlib 时分段按钮的取值就是 "1" 到 "5"，页面直接把它们
- * 作为 type 发出，所以这里保持原始取值，不翻译成别的语义。
+ * 服务端 ports.CollectionRankKey 对非 javdb 来源返回“来源:周期”，JavLibrary 的 rank_type 就是
+ * javlibrary:wanted；这里直接使用该键，页面不再提供 1~5 之类的分段选项。
  */
-const JAVLIB_PERIODS: RankPeriod[] = [
-  { value: "1", label: "1" },
-  { value: "2", label: "2" },
-  { value: "3", label: "3" },
-  { value: "4", label: "4" },
-  { value: "5", label: "5" },
-];
+const JAVLIB_PERIODS: RankPeriod[] = [{ value: "javlibrary:wanted", label: "想要榜" }];
 
 /** 榜单来源与各来源下的周期，顺序与对标站一致。 */
 const RANK_SOURCES: RankSource[] = [
   { value: "javdb", label: "JavDB 热门榜", periods: JAVDB_PERIODS, defaultPeriod: "daily" },
-  { value: "javlib", label: "JavLibrary 想要榜", periods: JAVLIB_PERIODS, defaultPeriod: "1" },
+  { value: "javlib", label: "JavLibrary 想要榜", periods: JAVLIB_PERIODS, defaultPeriod: "javlibrary:wanted" },
 ];
 
 /**
  * 榜单页。
  *
- * 布局依据对标站的榜单页编译产物 assets/Rank-BMeKi9W2.js：
- * 页面标题一行，标题下方是一条筛选条（榜单来源 + 榜单周期），再往下是响应式番号卡片网格，
- * 列数 grid-cols-1 / sm:2 / md:3 / lg:5，即 MediaCardGrid 的 columns="wide"（1024px 提前到 5 列），
+ * 页面标题一行，标题下方是一条筛选条（榜单来源 + 订阅状态/影片类型/VR + 搜索/重置），
+ * 再往下是响应式番号卡片网格，即 MediaCardGrid 的 columns="wide"（1024px 提前到 5 列），
  * 名次由页面通过 renderMeta 注入，页面不自行实现卡片样式与分页条。
  *
- * rank_type 取值依据（不靠猜测）：
- * - 服务端 backend/internal/application/catalog_queries.go 的 Rank 只做 TrimSpace，空串回落成 "monthly"，
- *   没有任何白名单或取值范围校验。
- * - 仓储 backend/internal/platform/database/catalog_queries.go 的 Rank 用 `WHERE r.rank_type = ?`
- *   直接等值匹配 rank_entries.rank_type，取到什么完全由旧库 cache 表 namespace='rank' 的 key 决定。
- * - 旧库 未加密代码/最终源码/lady.db 中该表的 key 实际为 daily / weekly / monthly / 1 / 2 / 3 / 4 / 5
- *   （另有 actors 和若干厂牌 key），因此 daily、weekly、monthly、1~5 都是服务端真实支持的取值。
- * - HTTP 层 backend/internal/transport/httpapi/handler.go 的 listRank 也只透传 type，没有枚举排行榜类型的接口，
- *   所以前端无法动态拉取选项，只能使用上述旧库中已确认存在的取值。
+ * 只有来源存在多个周期时才渲染“榜单周期”分段按钮；JavLibrary 想要榜只有单一榜单键，
+ * 直接在一个页面里分页展示，不再按 1~5 分段。
+ *
+ * rank_type 取值：来源 value 只是前端分组，周期 value 才是服务端 rank_type。
+ * JavDB 为 daily / weekly / monthly，JavLibrary 为 javlibrary:wanted（后端 ports.CollectionRankKey）。
  *
  * 订阅状态、类型和 VR 在服务端过滤后分页；筛选后的序号不表示原榜单名次。
  */
@@ -141,20 +125,22 @@ export function RankPage() {
                 />
               </div>
             </Grid.Col>
-            <Grid.Col xs={24} sm={12} md={8} xl={4}>
-              <div className="filter-field">
-                <span className="filter-label">榜单周期</span>
-                <Radio.Group
-                  className="rank-filter"
-                  type="button"
-                  name="rank-period"
-                  aria-label="榜单周期"
-                  value={period}
-                  onChange={changePeriod}
-                  options={currentSource.periods}
-                />
-              </div>
-            </Grid.Col>
+            {currentSource.periods.length > 1 && (
+              <Grid.Col xs={24} sm={12} md={8} xl={4}>
+                <div className="filter-field">
+                  <span className="filter-label">榜单周期</span>
+                  <Radio.Group
+                    className="rank-filter"
+                    type="button"
+                    name="rank-period"
+                    aria-label="榜单周期"
+                    value={period}
+                    onChange={changePeriod}
+                    options={currentSource.periods}
+                  />
+                </div>
+              </Grid.Col>
+            )}
           <CatalogFilters vr={vr} onVRChange={(value) => { setVR(value); setPage(1); }} subscription={subscription} videoType={videoType} onSubscriptionChange={(value) => { setSubscription(value); setPage(1); }} onVideoTypeChange={(value) => { setVideoType(value); setPage(1); }} />
           <Grid.Col xs={24} sm={12} md={8} xl={4}><div className="filter-actions"><Button type="primary" onClick={() => { if (page === 1) void query.refetch(); else setPage(1); }}>搜索</Button><Button onClick={() => { if (!subscription && !videoType && !vr && page === 1) void query.refetch(); setSubscription(""); setVideoType(""); setVR(""); setPage(1); }}>重置</Button></div></Grid.Col>
           <Grid.Col xs={24} sm={12} md={8} xl={4} className="catalog-subscription-column"><div className="catalog-subscription-actions"><CatalogSubscriptionButton items={items} total={total} listPath={listPath} disabled={query.isFetching || !!query.error} onComplete={() => setPage(1)} /></div></Grid.Col>

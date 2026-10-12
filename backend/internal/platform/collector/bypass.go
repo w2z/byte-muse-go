@@ -21,6 +21,10 @@ import (
 // passiveCFScript 只排除已知后台检测脚本路径；同页真实挑战标记仍然生效。
 var passiveCFScript = regexp.MustCompile(`/cdn-cgi/challenge-platform/(?:[a-z]/[a-z]/)?scripts/jsd/[a-z0-9._/-]+`)
 
+// bypassSolveTimeout 是等待增强服务破解 Cloudflare 挑战的上限。
+// JavLibrary 的托管挑战实测需要数分钟，此前 45 秒等短超时必然被判为失败。
+const bypassSolveTimeout = 6 * time.Minute
+
 // bypassClient 仅连接管理员配置的增强服务，不保存返回 Cookie，不透传源站凭据。
 type bypassClient struct {
 	http             *http.Client
@@ -48,7 +52,7 @@ func (c *Client) ConfigureBypass(engine, endpoint string, useProxy bool) {
 	if useProxy {
 		proxy = c.proxy
 	}
-	c.bypass = &bypassClient{engine: engine, endpoint: endpoint, proxy: proxy, http: &http.Client{Transport: transport, Timeout: 55 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
+	c.bypass = &bypassClient{engine: engine, endpoint: endpoint, proxy: proxy, http: &http.Client{Transport: transport, Timeout: bypassSolveTimeout + 30*time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
 }
 
 // classifyPage 区分限流、CF、登录及普通拒绝；导航栏登录链接不能当作登录墙。
@@ -99,7 +103,7 @@ func classifyPage(status int, headers http.Header, finalURL string, body []byte)
 
 // get 对已确认的 CF 验证最多调用一次增强；增强结果再次分类后才交给解析器。
 func (b *bypassClient) get(ctx context.Context, target string) (body []byte, resultErr error) {
-	ctx, cancel := context.WithTimeout(ctx, 55*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, bypassSolveTimeout+30*time.Second)
 	defer cancel()
 	u, err := url.Parse(target)
 	if err != nil || !allowedURL(u) {
@@ -115,7 +119,7 @@ func (b *bypassClient) get(ctx context.Context, target string) (body []byte, res
 		if !strings.HasSuffix(endpoint.Path, "/v1") {
 			endpoint.Path += "/v1"
 		}
-		command := map[string]any{"cmd": "request.get", "url": target, "maxTimeout": 45000}
+		command := map[string]any{"cmd": "request.get", "url": target, "maxTimeout": int(bypassSolveTimeout / time.Millisecond)}
 		if b.proxy != "" {
 			proxyURL, parseErr := url.Parse(b.proxy)
 			if parseErr != nil || proxyURL.Host == "" {

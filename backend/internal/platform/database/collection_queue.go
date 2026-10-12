@@ -124,7 +124,8 @@ func (r *CollectionRepository) insertWork(ctx context.Context, tx *sql.Tx, run, 
 	return e
 }
 
-// Claim 原子比较并交换领取令牌，过期任务可恢复；阶段执行有 90 秒超时，租约为 2 分钟。
+// Claim 原子比较并交换领取令牌，过期任务可恢复；租约必须长于阶段执行上限，
+// 页面阶段含数分钟的 Cloudflare 挑战等待，其余阶段仍为 2 分钟。
 func (r *CollectionRepository) Claim(ctx context.Context, kind string, now time.Time) (*ports.CollectionWork, error) {
 	var w ports.CollectionWork
 	var req string
@@ -141,7 +142,11 @@ func (r *CollectionRepository) Claim(ctx context.Context, kind string, now time.
 	}
 	w.Token = collectionID()
 	w.Attempt = attempts + 1
-	result, e := r.db.ExecContext(ctx, r.q(`UPDATE collection_work SET state='running',token=?,attempts=attempts+1,lease_until_ms=? WHERE id=? AND attempts=? AND ((state='queued' AND available_ms<=?) OR (state='running' AND lease_until_ms<=?))`), w.Token, now.Add(2*time.Minute).UnixMilli(), w.ID, attempts, now.UnixMilli(), now.UnixMilli())
+	lease := 2 * time.Minute
+	if kind == "page" {
+		lease = 10 * time.Minute
+	}
+	result, e := r.db.ExecContext(ctx, r.q(`UPDATE collection_work SET state='running',token=?,attempts=attempts+1,lease_until_ms=? WHERE id=? AND attempts=? AND ((state='queued' AND available_ms<=?) OR (state='running' AND lease_until_ms<=?))`), w.Token, now.Add(lease).UnixMilli(), w.ID, attempts, now.UnixMilli(), now.UnixMilli())
 	if e != nil {
 		return nil, e
 	}

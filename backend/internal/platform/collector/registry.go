@@ -15,9 +15,17 @@ type Registry struct{ fetch Fetcher }
 // NewRegistry 建立首批可调用来源，不声明尚未实现的站点能力。
 func NewRegistry(fetch Fetcher) *Registry { return &Registry{fetch: fetch} }
 
-// JavDBRankPeriods 返回已实现的有码榜周期，供请求校验和全榜调度共同使用。
-// 每次返回独立切片；源站其他分类及专题榜尚未接入，不在此声明。
-func JavDBRankPeriods() []string { return ports.CollectionRankPeriods("javdb") }
+// RankSources 返回已接入榜单的来源，供全榜调度统一入队；每次返回独立切片。
+// 来源自身的周期仍以 ports.CollectionRankPeriods 为唯一权威，不在此重复声明。
+func RankSources() []string {
+	var out []string
+	for _, source := range ports.CollectionSources() {
+		if slices.Contains(source.Kinds, "rank") {
+			out = append(out, source.ID)
+		}
+	}
+	return out
+}
 
 // Sources 返回各站点已接入的查询类型。
 func (r *Registry) Sources() []ports.CollectionSource {

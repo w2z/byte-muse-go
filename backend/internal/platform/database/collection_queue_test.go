@@ -27,7 +27,8 @@ func TestQueueLeaseRecoveryRejectsStaleWorker(t *testing.T) {
 	if e != nil || old == nil {
 		t.Fatal(e)
 	}
-	current, e := q.Claim(ctx, "page", time.Now().Add(3*time.Minute))
+	// 页面阶段租约为 10 分钟，超过租约后才允许其他 worker 重新领取。
+	current, e := q.Claim(ctx, "page", time.Now().Add(11*time.Minute))
 	if e != nil || current == nil {
 		t.Fatal(e)
 	}

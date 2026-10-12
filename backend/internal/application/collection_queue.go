@@ -72,13 +72,22 @@ func (s *CollectionService) Work(ctx context.Context) {
 	wg.Wait()
 }
 
+// collectionStageTimeout 按阶段给出单次有界执行上限。
+// 页面阶段可能包含数分钟的 Cloudflare 挑战等待，其余阶段仍保持 90 秒。
+func collectionStageTimeout(kind string) time.Duration {
+	if kind == "page" {
+		return 7 * time.Minute
+	}
+	return 90 * time.Second
+}
+
 // ProcessOne 处理一个已领取阶段任务；网络调用在事务外，单次有界，失败可恢复。
 func (s *CollectionService) ProcessOne(ctx context.Context, kind string, now time.Time) (bool, error) {
 	w, e := s.queue.Claim(ctx, kind, now)
 	if e != nil || w == nil {
 		return false, e
 	}
-	jobCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
+	jobCtx, cancel := context.WithTimeout(ctx, collectionStageTimeout(w.Kind))
 	defer cancel()
 	switch w.Kind {
 	case "page":

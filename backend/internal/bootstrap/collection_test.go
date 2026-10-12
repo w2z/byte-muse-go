@@ -42,7 +42,8 @@ func TestCollectionReleaseTodayJobEnqueuesAVBaseDate(t *testing.T) {
 	}
 }
 
-// TestCollectionRankJobIgnoresSubscriptionSelection 防止订阅筛选造成漏采或空配置不采。
+// TestCollectionRankJobIgnoresSubscriptionSelection 防止订阅筛选造成漏采或空配置不采，
+// 并覆盖 JavDB 与 JavLibrary 两个榜单来源。
 func TestCollectionRankJobIgnoresSubscriptionSelection(t *testing.T) {
 	for _, selection := range []string{"", "daily", "daily,weekly,monthly"} {
 		t.Run(selection, func(t *testing.T) {
@@ -61,7 +62,7 @@ func TestCollectionRankJobIgnoresSubscriptionSelection(t *testing.T) {
 			}
 			service := application.NewQueuedCollectionService(collector.NewRegistry(nil), database.NewCollectionRepository(store.SQLDB(), database.DialectSQLite), nil)
 			result := collectionRankJob(service)(ctx)
-			if result["success"] != true || result["enqueued_ranks"] != 3 || result["enqueue_failed"] != 0 {
+			if result["success"] != true || result["enqueued_ranks"] != 4 || result["enqueue_failed"] != 0 {
 				t.Fatalf("unexpected enqueue result: %#v", result)
 			}
 			rows, err := store.SQLDB().Query(`SELECT r.period FROM collection_runs r JOIN collection_work w ON w.run_id=r.id WHERE r.source='javdb' AND r.kind='rank' AND w.kind='page' AND w.page_number=1 AND w.state='queued' ORDER BY r.period`)
@@ -82,6 +83,11 @@ func TestCollectionRankJobIgnoresSubscriptionSelection(t *testing.T) {
 			}
 			if !reflect.DeepEqual(periods, []string{"daily", "monthly", "weekly"}) {
 				t.Fatalf("queued periods: %v", periods)
+			}
+			// JavLibrary 想要榜同样纳入全榜调度，rank_type 使用命名空间键。
+			var javlibraryPeriod string
+			if err = store.SQLDB().QueryRow(`SELECT r.period FROM collection_runs r JOIN collection_work w ON w.run_id=r.id WHERE r.source='javlibrary' AND r.kind='rank' AND w.kind='page' AND w.page_number=1 AND w.state='queued'`).Scan(&javlibraryPeriod); err != nil || javlibraryPeriod != "javlibrary:wanted" {
+				t.Fatalf("javlibrary rank: %q, %v", javlibraryPeriod, err)
 			}
 		})
 	}
@@ -104,7 +110,7 @@ func TestCollectionRankJobContinuesAfterEnqueueFailure(t *testing.T) {
 	}
 	service := application.NewQueuedCollectionService(collector.NewRegistry(nil), database.NewCollectionRepository(store.SQLDB(), database.DialectSQLite), nil)
 	result := collectionRankJob(service)(ctx)
-	if result["success"] != false || result["enqueued_ranks"] != 2 || result["enqueue_failed"] != 1 {
+	if result["success"] != false || result["enqueued_ranks"] != 3 || result["enqueue_failed"] != 1 {
 		t.Fatalf("unexpected partial result: %#v", result)
 	}
 	var count int

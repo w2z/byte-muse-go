@@ -176,10 +176,10 @@ paths:
         - $ref: '#/components/parameters/PageSize'
         - name: type
           in: query
-          description: 榜单类型；省略时使用 monthly
+          description: 榜单类型；省略时使用 monthly。JavDB 热门榜为 daily/weekly/monthly，JavLibrary 想要榜为 javlibrary:wanted（服务端按来源命名空间区分榜单）。
           schema:
             type: string
-            enum: [daily, weekly, monthly]
+            enum: [daily, weekly, monthly, "javlibrary:wanted"]
             default: monthly
         - name: subscription
           in: query
