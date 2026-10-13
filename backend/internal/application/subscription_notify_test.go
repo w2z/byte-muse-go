@@ -3,10 +3,13 @@ package application
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"bytemuse/backend/internal/domain"
+	"bytemuse/backend/internal/platform/downloadclient"
 	"bytemuse/backend/internal/ports"
 )
 
@@ -15,6 +18,45 @@ type stubSubscriptionRepository struct {
 	item    domain.Subscription
 	created bool
 	err     error
+}
+
+// TestDownloadStartReadsActualSavePath 验证通知使用任务目录而非默认配置，路径读取失败仍发送通知。
+func TestDownloadStartReadsActualSavePath(t *testing.T) {
+	for _, mode := range []string{"actual", "missing", "error"} {
+		t.Run(mode, func(t *testing.T) {
+			const hash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				if request.URL.Path == "/api/v2/auth/login" {
+					writer.Write([]byte("Ok."))
+					return
+				}
+				if request.URL.Path != "/api/v2/torrents/info" || request.URL.Query().Get("hashes") != hash {
+					t.Errorf("查询了错误任务: %s", request.URL)
+				}
+				if mode == "error" {
+					writer.WriteHeader(http.StatusServiceUnavailable)
+					return
+				}
+				body := "[{\"hash\":\"" + hash + "\"}]"
+				if mode == "actual" {
+					body = "[{\"hash\":\"" + hash + "\",\"save_path\":\"/downloads/影片  🎬\"}]"
+				}
+				writer.Write([]byte(body))
+			}))
+			defer server.Close()
+			client := downloadclient.NewQbittorrent(server.URL, "user", "pass", "/wrong-default", "", server.Client())
+			notifier := &captureNotifier{}
+			service := &SubscriptionDownloadService{notifier: notifier}
+			service.notifyDownloadStart(context.Background(), ports.PendingSubmission{InfoHash: hash, Code: "TEST-001"}, client)
+			wantPath := "暂无"
+			if mode == "actual" {
+				wantPath = "/downloads/影片  🎬"
+			}
+			if len(notifier.events) != 1 || !strings.Contains(notifier.events[0], "下载链接: 暂无\n保存路径: "+wantPath+"|") {
+				t.Fatalf("保存路径或降级通知错误: %v", notifier.events)
+			}
+		})
+	}
 }
 
 func (r *stubSubscriptionRepository) Create(context.Context, ports.CreateSubscription) (domain.Subscription, bool, error) {
@@ -104,12 +146,12 @@ func TestDownloadNotificationsCarryTitleAndCover(t *testing.T) {
 	ctx := context.Background()
 	cover := "https://img.example/banner.jpg"
 
-	service.notifyDownloadStart(ctx, ports.PendingSubmission{Code: "SSIS-001", Title: "标题", Site: "站点A", Kind: "bt", URI: "https://example.com/download", Cover: cover})
+	service.notifyDownloadStart(ctx, ports.PendingSubmission{Code: "SSIS-001", Title: "标题", Site: "站点A", Kind: "bt", URI: "https://example.com/download", Cover: cover}, nil)
 	service.notifyDownloadFailed(ctx, "SSIS-001", "标题", cover, "资源站搜索失败")
 
 	want := []string{
-		string(NotificationDownloadStart) + "|番号: SSIS-001|状态: 开始下载\n站点: 站点A\n来源: BT\n下载链接: https://example.com/download\n标题: 标题\n描述: 标题|" + cover,
-		string(NotificationDownloadFailed) + "|番号: SSIS-001|状态: 下载失败\n站点: 暂无\n来源: 暂无\n下载链接: 暂无\n标题: 标题\n描述: 标题 原因：资源站搜索失败|" + cover,
+		string(NotificationDownloadStart) + "|番号: SSIS-001|状态: 开始下载\n标题: 标题\n描述: 标题\n站点: 站点A\n来源: BT\n下载链接: https://example.com/download\n保存路径: 暂无|" + cover,
+		string(NotificationDownloadFailed) + "|番号: SSIS-001|状态: 下载失败\n标题: 标题\n描述: 标题 原因：资源站搜索失败\n站点: 暂无\n来源: 暂无\n下载链接: 暂无\n保存路径: 暂无|" + cover,
 	}
 	if len(notifier.events) != len(want) {
 		t.Fatalf("下载通知数量 = %v", notifier.events)

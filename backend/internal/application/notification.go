@@ -250,7 +250,7 @@ func notificationField(value string) string {
 // newSubscriptionNotificationMessage 生成订阅通知，频道标题使用番号，正文中的影片标题位于描述前。
 // 订阅尚未选中下载资源，不显示站点、来源或下载链接。
 func newSubscriptionNotificationMessage(code, title, status, description, cover string) NotificationMessage {
-	copyFields := notificationCopyFields(code, "")
+	copyFields := notificationCopyFields(code, "", "")
 	return NotificationMessage{
 		Title:      "番号: " + notificationField(code),
 		Text:       "状态: " + notificationField(status) + "\n标题: " + notificationField(title) + "\n描述: " + notificationField(description),
@@ -260,9 +260,9 @@ func newSubscriptionNotificationMessage(code, title, status, description, cover 
 	}
 }
 
-// NewNotificationMessage 统一生成七行下载通知，频道标题使用番号，正文中的影片标题位于描述前。
+// NewNotificationMessage 统一生成八行下载通知，标题和描述紧随状态，保存路径紧随下载链接。
 // 缺失值显示暂无，多行描述压成一行；内部 PT 引用不是下载链接，不对外展示。
-func NewNotificationMessage(code, title, status, site, source, uri, description, cover string) NotificationMessage {
+func NewNotificationMessage(code, title, status, site, source, uri, savePath, description, cover string) NotificationMessage {
 	link := strings.TrimSpace(uri)
 	parsed, err := url.Parse(link)
 	if err != nil || parsed.User != nil || !((parsed.Scheme == "https" || parsed.Scheme == "http") && parsed.Host != "" || parsed.Scheme == "magnet") {
@@ -272,28 +272,40 @@ func NewNotificationMessage(code, title, status, site, source, uri, description,
 		Title: "番号: " + notificationField(code),
 		Text: strings.Join([]string{
 			"状态: " + notificationField(status),
+			"标题: " + notificationField(title),
+			"描述: " + notificationField(description),
 			"站点: " + notificationField(site),
 			"来源: " + notificationField(strings.ToUpper(source)),
 			"下载链接: " + notificationField(link),
-			"标题: " + notificationField(title),
-			"描述: " + notificationField(description),
+			"保存路径: " + notificationPath(savePath),
 		}, "\n"),
 		CoverURL:   cover,
 		Code:       strings.TrimSpace(code),
-		CopyFields: notificationCopyFields(code, link),
+		CopyFields: notificationCopyFields(code, link, savePath),
 	}
 }
 
 // notificationCopyFields 生成通知可复制字段；下载链接仅在已验证为公开链接时提供。
-func notificationCopyFields(code, link string) []ports.CopyTextField {
-	fields := make([]ports.CopyTextField, 0, 2)
+func notificationCopyFields(code, link, savePath string) []ports.CopyTextField {
+	fields := make([]ports.CopyTextField, 0, 3)
 	if normalized := strings.TrimSpace(code); normalized != "" {
 		fields = append(fields, ports.CopyTextField{Label: "番号", Text: notificationField(normalized)})
 	}
 	if normalized := strings.TrimSpace(link); normalized != "" {
 		fields = append(fields, ports.CopyTextField{Label: "下载链接", Text: notificationField(normalized)})
 	}
+	if savePath != "" {
+		fields = append(fields, ports.CopyTextField{Label: "保存路径", Text: savePath})
+	}
 	return fields
+}
+
+// notificationPath 保留路径中的空格与分隔符，避免复制后指向不同目录；仅空串显示暂无。
+func notificationPath(value string) string {
+	if value == "" {
+		return "暂无"
+	}
+	return value
 }
 
 // ChannelEventEnabled 实现 Notifier；设置不可读或键未声明时按关闭处理，不在未知状态下发消息。

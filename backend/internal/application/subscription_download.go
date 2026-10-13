@@ -134,12 +134,22 @@ func (s *SubscriptionDownloadService) verifyLibrary(ctx context.Context, a ports
 // SetNotifier 注入业务通知出口；未注入时下载流程不发送任何通知。
 func (s *SubscriptionDownloadService) SetNotifier(notifier Notifier) { s.notifier = notifier }
 
-// notifyDownloadStart 从已提交任务快照生成通知，首次提交与恢复回查使用同一格式。
-func (s *SubscriptionDownloadService) notifyDownloadStart(ctx context.Context, pending ports.PendingSubmission) {
+// notifyDownloadStart 从已提交任务快照生成通知，并尽力读取实际保存目录；读取失败不影响通知或提交结果。
+// 首次提交与恢复回查使用同一格式，不用可能已经变更的默认目录冒充任务路径。
+func (s *SubscriptionDownloadService) notifyDownloadStart(ctx context.Context, pending ports.PendingSubmission, client MagnetDownloader) {
 	if s.notifier == nil {
 		return
 	}
-	s.notifier.Notify(ctx, NotificationDownloadStart, NewNotificationMessage(pending.Code, pending.Title, "开始下载", pending.Site, pending.Kind, pending.URI, pending.Title, pending.Cover))
+	savePath := ""
+	if reader, ok := client.(ports.DownloadMetricsReader); ok {
+		metrics, err := reader.ReadMetrics(ctx, []string{pending.InfoHash})
+		if err != nil {
+			logging.Error(logging.CategoryNotification, "读取下载保存路径失败，通知仍将发送", "task_id", pending.ID)
+		} else if metric := metrics[strings.ToLower(pending.InfoHash)]; metric != nil && metric.SavePath != nil {
+			savePath = *metric.SavePath
+		}
+	}
+	s.notifier.Notify(ctx, NotificationDownloadStart, NewNotificationMessage(pending.Code, pending.Title, "开始下载", pending.Site, pending.Kind, pending.URI, savePath, pending.Title, pending.Cover))
 }
 
 // notifyDownloadFailed 通知订阅下载任务失败；reason 与落库的失败原因保持一致。
@@ -152,7 +162,7 @@ func (s *SubscriptionDownloadService) notifyDownloadFailed(ctx context.Context, 
 		lines = append(lines, value)
 	}
 	lines = append(lines, "原因："+reason)
-	s.notifier.Notify(ctx, NotificationDownloadFailed, NewNotificationMessage(code, title, "下载失败", "", "", "", strings.Join(lines, " "), cover))
+	s.notifier.Notify(ctx, NotificationDownloadFailed, NewNotificationMessage(code, title, "下载失败", "", "", "", "", strings.Join(lines, " "), cover))
 }
 
 // finishScan 删除一次已领取的搜索队列项：搜索结束且不产生下载任务，也不推送通知。
@@ -265,7 +275,7 @@ func (s *SubscriptionDownloadService) Process(ctx context.Context, limit int) er
 			if e = s.tasks.FinishSubmission(ctx, *p, true, ""); e != nil {
 				return e
 			}
-			s.notifyDownloadStart(ctx, *p)
+			s.notifyDownloadStart(ctx, *p, client)
 		} else {
 			_ = s.tasks.ReleasePending(ctx, *p, "未发现资源，需人工确认后重试")
 		}
@@ -378,7 +388,7 @@ func (s *SubscriptionDownloadService) Process(ctx context.Context, limit int) er
 			if e = s.tasks.FinishSubmission(ctx, p, true, ""); e != nil {
 				return e
 			}
-			s.notifyDownloadStart(ctx, p)
+			s.notifyDownloadStart(ctx, p, client)
 		}
 	}
 	return nil

@@ -23,6 +23,8 @@ type Qbittorrent struct {
 
 // TransferState is a read-only snapshot of one torrent in the downloader.
 type TransferState struct {
+	// SavePath 是任务实际保存目录，而非客户端默认设置。
+	SavePath    string
 	Hash        string
 	Status      string
 	AddedAt     *time.Time
@@ -46,6 +48,7 @@ func (c *Qbittorrent) ListTransferStates(ctx context.Context) ([]TransferState, 
 		}
 		var values []struct {
 			Hash         string  `json:"hash"`
+			SavePath     string  `json:"save_path"`
 			State        string  `json:"state"`
 			Progress     float64 `json:"progress"`
 			AddedOn      int64   `json:"added_on"`
@@ -61,7 +64,7 @@ func (c *Qbittorrent) ListTransferStates(ctx context.Context) ([]TransferState, 
 				continue
 			}
 			seen[hash] = true
-			item := TransferState{Hash: hash, Status: transferStatus(value.State, value.Progress, value.CompletionOn)}
+			item := TransferState{SavePath: value.SavePath, Hash: hash, Status: transferStatus(value.State, value.Progress, value.CompletionOn)}
 			if value.AddedOn > 0 {
 				at := time.Unix(value.AddedOn, 0).UTC()
 				item.AddedAt = &at

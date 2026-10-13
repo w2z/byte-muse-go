@@ -2,12 +2,35 @@ package downloadclient
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
 )
+
+// TestTransferStatesCarryActualSavePath 验证状态同步保留实际保存目录，不使用配置目录或内容文件路径。
+func TestTransferStatesCarryActualSavePath(t *testing.T) {
+	for _, savePath := range []string{"/downloads/影片  🎬", ""} {
+		server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			if request.URL.Path == "/api/v2/auth/login" {
+				writer.Write([]byte("Ok."))
+				return
+			}
+			if request.URL.Path != "/api/v2/torrents/info" {
+				t.Errorf("错误接口: %s", request.URL.Path)
+			}
+			json.NewEncoder(writer).Encode([]map[string]any{{"hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "state": "uploading", "save_path": savePath, "content_path": "/downloads/影片/video.mp4"}})
+		}))
+		client := NewQbittorrent(server.URL, "user", "pass", "/wrong-default", "", server.Client())
+		states, err := client.ListTransferStates(context.Background())
+		server.Close()
+		if err != nil || len(states) != 1 || states[0].SavePath != savePath {
+			t.Fatalf("任务快照: %+v, err=%v", states, err)
+		}
+	}
+}
 
 // TestQbittorrentAcceptsNoContentLogin 覆盖 qBittorrent 5.x 登录返回 204 空响应的情况：
 // 旧实现只接受 200 + "Ok."，会让状态同步和提交全部失败。

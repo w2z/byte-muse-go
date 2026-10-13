@@ -40,7 +40,7 @@ func TestSaveTransferStatesReportsOnlyTerminalTransitions(t *testing.T) {
 		status string
 		want   int
 	}{{"downloading", 0}, {"completed", 1}, {"completed", 0}, {"failed", 1}, {"failed", 0}} {
-		transitions, e := repo.SaveTransferStates(ctx, []ports.TransferState{{Hash: hash, Status: step.status, ObservedAt: observed}})
+		transitions, e := repo.SaveTransferStates(ctx, []ports.TransferState{{Hash: hash, Status: step.status, SavePath: "/downloads/" + step.status, ObservedAt: observed}})
 		if e != nil {
 			t.Fatal(e)
 		}
@@ -52,6 +52,9 @@ func TestSaveTransferStatesReportsOnlyTerminalTransitions(t *testing.T) {
 		}
 		if transitions[0].TaskID != "d1" || transitions[0].Code != "SSIS-001" || transitions[0].Title != "原标题" || transitions[0].Status != step.status || transitions[0].Cover != "https://img.example/banner.jpg" {
 			t.Fatalf("跃迁内容 = %+v", transitions[0])
+		}
+		if transitions[0].SavePath != "/downloads/"+step.status {
+			t.Fatalf("终态路径未沿用当前快照: %+v", transitions[0])
 		}
 		if transitions[0].Site != "示例站点" || transitions[0].Kind != "bt" || transitions[0].URI != "magnet:?xt=urn:btih:"+hash {
 			t.Fatalf("终态通知缺失资源快照: %+v", transitions[0])

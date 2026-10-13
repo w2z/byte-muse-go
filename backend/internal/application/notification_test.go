@@ -193,14 +193,14 @@ func TestChannelEventEnabledRequiresTrueValue(t *testing.T) {
 // TestNotificationMessageFormat 验证标题紧邻描述、字段顺序、缺失值和多行内容，以及内部引用不能成为下载链接。
 func TestNotificationMessageFormat(t *testing.T) {
 	for _, item := range []struct{ name, code, source, uri, description, want string }{
-		{"HTTP链接", "EXAMPLE-001", "bt", "https://example.com/download", "资源简介", "番号: EXAMPLE-001\n状态: 开始下载\n站点: 示例站点\n来源: BT\n下载链接: https://example.com/download\n标题: 影片标题\n描述: 资源简介"},
-		{"磁力链接", "EXAMPLE-001", "bt", "magnet:?xt=urn:btih:abc&dn=example", "第一行\r\n第二行", "番号: EXAMPLE-001\n状态: 开始下载\n站点: 示例站点\n来源: BT\n下载链接: magnet:?xt=urn:btih:abc&dn=example\n标题: 影片标题\n描述: 第一行 第二行"},
-		{"PT内部引用", "EXAMPLE-001", "pt", "mteam:123", "资源简介", "番号: EXAMPLE-001\n状态: 开始下载\n站点: 示例站点\n来源: PT\n下载链接: 暂无\n标题: 影片标题\n描述: 资源简介"},
-		{"空值", " ", "", "", "", "番号: 暂无\n状态: 开始下载\n站点: 示例站点\n来源: 暂无\n下载链接: 暂无\n标题: 影片标题\n描述: 暂无"},
-		{"凭据链接", "EXAMPLE-001", "bt", "https://user:secret@example.com/download", "资源简介", "番号: EXAMPLE-001\n状态: 开始下载\n站点: 示例站点\n来源: BT\n下载链接: 暂无\n标题: 影片标题\n描述: 资源简介"},
+		{"HTTP链接", "EXAMPLE-001", "bt", "https://example.com/download", "资源简介", "番号: EXAMPLE-001\n状态: 开始下载\n标题: 影片标题\n描述: 资源简介\n站点: 示例站点\n来源: BT\n下载链接: https://example.com/download\n保存路径: 暂无"},
+		{"磁力链接", "EXAMPLE-001", "bt", "magnet:?xt=urn:btih:abc&dn=example", "第一行\r\n第二行", "番号: EXAMPLE-001\n状态: 开始下载\n标题: 影片标题\n描述: 第一行 第二行\n站点: 示例站点\n来源: BT\n下载链接: magnet:?xt=urn:btih:abc&dn=example\n保存路径: 暂无"},
+		{"PT内部引用", "EXAMPLE-001", "pt", "mteam:123", "资源简介", "番号: EXAMPLE-001\n状态: 开始下载\n标题: 影片标题\n描述: 资源简介\n站点: 示例站点\n来源: PT\n下载链接: 暂无\n保存路径: 暂无"},
+		{"空值", " ", "", "", "", "番号: 暂无\n状态: 开始下载\n标题: 影片标题\n描述: 暂无\n站点: 示例站点\n来源: 暂无\n下载链接: 暂无\n保存路径: 暂无"},
+		{"凭据链接", "EXAMPLE-001", "bt", "https://user:secret@example.com/download", "资源简介", "番号: EXAMPLE-001\n状态: 开始下载\n标题: 影片标题\n描述: 资源简介\n站点: 示例站点\n来源: BT\n下载链接: 暂无\n保存路径: 暂无"},
 	} {
 		t.Run(item.name, func(t *testing.T) {
-			message := NewNotificationMessage(item.code, "影片标题", "开始下载", "示例站点", item.source, item.uri, item.description, "")
+			message := NewNotificationMessage(item.code, "影片标题", "开始下载", "示例站点", item.source, item.uri, "", item.description, "")
 			if got := NotificationPlainText(message.Title, message.Text); got != item.want {
 				t.Fatalf("通知 = %q，期望 %q", got, item.want)
 			}
@@ -221,6 +221,31 @@ func TestNotificationMessageFormat(t *testing.T) {
 				t.Fatalf("下载链接可复制字段 = %#v，期望 %q", message.CopyFields[1], item.uri)
 			}
 		})
+	}
+}
+
+// TestNotificationSavePathCopy 保证保存目录按原文展示和复制，不压缩路径中有意义的空白。
+func TestNotificationSavePathCopy(t *testing.T) {
+	for _, savePath := range []string{"/downloads/影片  🎬", `D:\下载\影片  目录`, ""} {
+		message := NewNotificationMessage("TEST-001", "标题", "开始下载", "站点", "bt", "https://example.com/a", savePath, "描述", "")
+		wantPath := savePath
+		if savePath == "" {
+			wantPath = "暂无"
+		}
+		want := "状态: 开始下载\n标题: 标题\n描述: 描述\n站点: 站点\n来源: BT\n下载链接: https://example.com/a\n保存路径: " + wantPath
+		if message.Text != want {
+			t.Fatalf("正文: %q", message.Text)
+		}
+		wantFields := 3
+		if savePath == "" {
+			wantFields = 2
+		}
+		if len(message.CopyFields) != wantFields {
+			t.Fatalf("复制字段: %#v", message.CopyFields)
+		}
+		if savePath != "" && (message.CopyFields[2].Label != "保存路径" || message.CopyFields[2].Text != savePath) {
+			t.Fatal("路径复制内容被修改")
+		}
 	}
 }
 

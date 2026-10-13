@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"bytemuse/backend/internal/application"
+	"bytemuse/backend/internal/domain"
 	"bytemuse/backend/internal/platform/torrentsearch"
 	"bytemuse/backend/internal/ports"
 )
@@ -65,6 +66,17 @@ func (f *flowPTDownloader) SubmitTorrent(_ context.Context, data []byte) error {
 }
 
 func (f *flowDownloader) HasHash(context.Context, string) (bool, error) { return f.existing, nil }
+
+// ReadMetrics 为提交和恢复回查提供外部任务的实际目录夹具。
+func (f *flowDownloader) ReadMetrics(_ context.Context, hashes []string) (map[string]*domain.DownloadMetrics, error) {
+	result := make(map[string]*domain.DownloadMetrics)
+	for _, hash := range hashes {
+		savePath := "/downloads/影片  🎬"
+		result[hash] = &domain.DownloadMetrics{SavePath: &savePath}
+	}
+	return result, nil
+}
+
 func (f *flowDownloader) Submit(context.Context, string) error {
 	f.submitted++
 	f.existing = true
@@ -133,8 +145,17 @@ func TestSubscriptionDownloadFlowSubmitsOnceAndExposesSource(t *testing.T) {
 		t.Fatalf("通知数量 = %d，期望 1", len(notifier.messages))
 	}
 	message := notifier.messages[0]
-	if got := application.NotificationPlainText(message.Title, message.Text); got != "番号: SSIS-001\n状态: 开始下载\n站点: Nyaa BT\n来源: BT\n下载链接: magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567\n标题: film\n描述: film" {
+	if got := application.NotificationPlainText(message.Title, message.Text); got != "番号: SSIS-001\n状态: 开始下载\n标题: film\n描述: film\n站点: Nyaa BT\n来源: BT\n下载链接: magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567\n保存路径: /downloads/影片  🎬" {
 		t.Fatalf("下载通知 = %q", got)
+	}
+	if _, e = s.SQLDB().ExecContext(ctx, "UPDATE download_tasks SET status='unknown',lease_token=NULL,lease_until=NULL WHERE id=?", tasks.Items[0].ID); e != nil {
+		t.Fatal(e)
+	}
+	if e = service.Process(ctx, 10); e != nil {
+		t.Fatal(e)
+	}
+	if len(notifier.messages) != 2 || notifier.messages[1].Text != message.Text || client.submitted != 1 {
+		t.Fatal("恢复回查丢失路径或重复提交")
 	}
 }
 

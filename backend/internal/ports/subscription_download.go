@@ -60,6 +60,8 @@ type PendingSubmission struct {
 
 // TransferState is a downloader-observed transport snapshot keyed by info hash.
 type TransferState struct {
+	// SavePath 是下载器实际返回的保存目录，空值表示未知。
+	SavePath             string
 	Hash, Status         string
 	AddedAt, CompletedAt *time.Time
 	ObservedAt           time.Time // 拉取快照前的时间，用于拒绝控制操作之前的过期响应。
@@ -68,6 +70,8 @@ type TransferState struct {
 // TransferTransition 是一次传输状态跃迁：只报告首次进入终态（completed / failed）的任务。
 // 下载器每次轮询都会重复上报同一状态，通知必须依赖这里做去重。
 type TransferTransition struct {
+	// SavePath 来自触发终态的下载器快照，不使用当前默认配置推测。
+	SavePath string
 	// Site/Kind/URI 来自任务已有资源快照，用于终态通知。
 	Site, Kind, URI string
 	TaskID          string

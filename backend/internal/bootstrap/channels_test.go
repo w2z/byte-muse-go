@@ -37,20 +37,23 @@ func (notifier *transitionNotifier) ChannelEventEnabled(context.Context, string,
 	return true
 }
 
-// TestTransferNotificationsUseResourceSnapshot 保证完成和失败事件复用标题置顶模板并带上任务资源。
+// TestTransferNotificationsUseResourceSnapshot 保证终态通知按约定顺序展示任务资源及实际保存目录。
 func TestTransferNotificationsUseResourceSnapshot(t *testing.T) {
 	notifier := &transitionNotifier{}
 	for _, status := range []string{"downloading", "completed", "failed"} {
-		notifyTransferTransitions(context.Background(), notifier, []ports.TransferTransition{{Code: "EXAMPLE-001", Title: "资源简介", Site: "示例站点", Kind: "bt", URI: "https://example.com/download", Status: status}})
+		notifyTransferTransitions(context.Background(), notifier, []ports.TransferTransition{{Code: "EXAMPLE-001", Title: "资源简介", Site: "示例站点", Kind: "bt", URI: "https://example.com/download", Status: status, SavePath: "/downloads/已完成  🎬"}})
 	}
 	if len(notifier.messages) != 2 || notifier.events[0] != application.NotificationDownloadComplete || notifier.events[1] != application.NotificationDownloadFailed {
 		t.Fatalf("通知事件 = %v", notifier.events)
 	}
 	for index, expected := range []string{
-		"番号: EXAMPLE-001\n状态: 已完成下载\n站点: 示例站点\n来源: BT\n下载链接: https://example.com/download\n标题: 资源简介\n描述: 资源简介",
-		"番号: EXAMPLE-001\n状态: 下载失败\n站点: 示例站点\n来源: BT\n下载链接: https://example.com/download\n标题: 资源简介\n描述: 资源简介 原因：下载器报告任务失败",
+		"番号: EXAMPLE-001\n状态: 已完成下载\n标题: 资源简介\n描述: 资源简介\n站点: 示例站点\n来源: BT\n下载链接: https://example.com/download\n保存路径: /downloads/已完成  🎬",
+		"番号: EXAMPLE-001\n状态: 下载失败\n标题: 资源简介\n描述: 资源简介 原因：下载器报告任务失败\n站点: 示例站点\n来源: BT\n下载链接: https://example.com/download\n保存路径: /downloads/已完成  🎬",
 	} {
 		message := notifier.messages[index]
+		if len(message.CopyFields) != 3 || message.CopyFields[2].Label != "保存路径" || message.CopyFields[2].Text != "/downloads/已完成  🎬" {
+			t.Fatalf("终态缺少路径复制: %#v", message.CopyFields)
+		}
 		if got := application.NotificationPlainText(message.Title, message.Text); got != expected {
 			t.Fatalf("通知 = %q，期望 %q", got, expected)
 		}

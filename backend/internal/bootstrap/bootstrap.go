@@ -315,9 +315,9 @@ func notifyTransferTransitions(ctx context.Context, notifier application.Notifie
 	for _, item := range transitions {
 		switch item.Status {
 		case "completed":
-			notifier.Notify(ctx, application.NotificationDownloadComplete, application.NewNotificationMessage(item.Code, item.Title, "已完成下载", item.Site, item.Kind, item.URI, item.Title, item.Cover))
+			notifier.Notify(ctx, application.NotificationDownloadComplete, application.NewNotificationMessage(item.Code, item.Title, "已完成下载", item.Site, item.Kind, item.URI, item.SavePath, item.Title, item.Cover))
 		case "failed":
-			notifier.Notify(ctx, application.NotificationDownloadFailed, application.NewNotificationMessage(item.Code, item.Title, "下载失败", item.Site, item.Kind, item.URI, item.Title+" 原因：下载器报告任务失败", item.Cover))
+			notifier.Notify(ctx, application.NotificationDownloadFailed, application.NewNotificationMessage(item.Code, item.Title, "下载失败", item.Site, item.Kind, item.URI, item.SavePath, item.Title+" 原因：下载器报告任务失败", item.Cover))
 		}
 	}
 }
@@ -530,7 +530,7 @@ func (c *Commands) Serve(ctx context.Context) error {
 		}
 		updates := make([]ports.TransferState, 0, len(states))
 		for _, state := range states {
-			updates = append(updates, ports.TransferState{Hash: state.Hash, Status: state.Status, AddedAt: state.AddedAt, CompletedAt: state.CompletedAt, ObservedAt: observedAt})
+			updates = append(updates, ports.TransferState{Hash: state.Hash, Status: state.Status, AddedAt: state.AddedAt, CompletedAt: state.CompletedAt, SavePath: state.SavePath, ObservedAt: observedAt})
 		}
 		transitions, err := downloadRepository.SaveTransferStates(syncCtx, updates)
 		if err != nil {

@@ -64,7 +64,7 @@ func (r *SubscriptionDownloadRepository) SaveTransferStates(ctx context.Context,
 			continue
 		}
 		if state.Status == "completed" || state.Status == "failed" {
-			transitions = append(transitions, ports.TransferTransition{TaskID: taskID, Code: code, Title: title, Cover: cover, Status: state.Status, Site: site, Kind: kind, URI: uri})
+			transitions = append(transitions, ports.TransferTransition{TaskID: taskID, Code: code, Title: title, Cover: cover, Status: state.Status, Site: site, Kind: kind, URI: uri, SavePath: state.SavePath})
 		}
 	}
 	if err = r.reconcileCompletionsTx(ctx, tx); err != nil {

@@ -261,12 +261,13 @@ func TestSendNotificationInlineCopy(t *testing.T) {
 			client := newTestClient(t, server.URL)
 			client.spoiler = true
 			link := "magnet:?xt=urn:btih:abc&dn=<例>" + strings.Repeat("x", 257)
-			body := "状态: 🎬完成\n下载链接: " + link + "\n标题: 测试\n描述: EXAMPLE-001"
+			savePath := "/downloads/影片  🎬 [01]&<test>"
+			body := "状态: 🎬完成\n标题: 测试\n描述: EXAMPLE-001\n下载链接: " + link + "\n保存路径: " + savePath
 			photo := ""
 			if mode != "text" {
 				photo = "https://example.com/a.jpg"
 			}
-			fields := []ports.CopyTextField{{Label: "番号", Text: "EXAMPLE-001"}, {Label: "下载链接", Text: link}}
+			fields := []ports.CopyTextField{{Label: "番号", Text: "EXAMPLE-001"}, {Label: "下载链接", Text: link}, {Label: "保存路径", Text: savePath}}
 			if err := client.SendNotification(context.Background(), "1001", "番号: EXAMPLE-001", body, photo, fields); err != nil {
 				t.Fatal(err)
 			}
@@ -293,8 +294,8 @@ func TestSendNotificationInlineCopy(t *testing.T) {
 					t.Fatal("通知不应包含复制按钮")
 				}
 				entities, ok := call.body[entityKey].([]any)
-				if !ok || len(entities) != 2 {
-					t.Fatalf("缺少两个行内 code 实体: %#v", call.body)
+				if !ok || len(entities) != 3 {
+					t.Fatalf("缺少三个行内 code 实体: %#v", call.body)
 				}
 				for index, raw := range entities {
 					entity := raw.(map[string]any)
