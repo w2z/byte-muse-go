@@ -1,16 +1,20 @@
 {
-  "version": "0.1.165",
-  "commit": "f8dd4dc7d94f865768fcc2f64965857e048ec2d0",
-  "short_commit": "f8dd4dc",
-  "built_at": "2026-10-13T15:16:56Z",
+  "version": "0.1.166",
+  "commit": "c74086f9313a8e18785aa0fd81c940b754bec6f5",
+  "short_commit": "c74086f",
+  "built_at": "2026-10-19T07:51:09Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.165",
-    "sha-f8dd4dc",
+    "0.1.166",
+    "sha-c74086f",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.166",
+      "message": "补全渠道番号远程查询并修复订阅卡片操作"
+    },
     {
       "version": "0.1.165",
       "message": "展示可复制保存路径并将标题描述移至状态下方"
