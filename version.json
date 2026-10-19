@@ -1,16 +1,20 @@
 {
-  "version": "0.1.166",
-  "commit": "c74086f9313a8e18785aa0fd81c940b754bec6f5",
-  "short_commit": "c74086f",
-  "built_at": "2026-10-19T07:51:09Z",
+  "version": "0.1.167",
+  "commit": "5b1511c5f6f253ac4ccbca4743d937dc109e25fd",
+  "short_commit": "5b1511c",
+  "built_at": "2026-10-19T14:00:46Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.166",
-    "sha-c74086f",
+    "0.1.167",
+    "sha-5b1511c",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.167",
+      "message": "完善设置页移动导航与分组草稿保护"
+    },
     {
       "version": "0.1.166",
       "message": "补全渠道番号远程查询并修复订阅卡片操作"
