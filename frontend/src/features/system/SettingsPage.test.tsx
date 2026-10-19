@@ -2,7 +2,7 @@
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SettingsPage } from "./SettingsPage";
@@ -31,6 +31,110 @@ function renderSettings() {
 }
 
 describe("设置页字段布局", () => {
+  it("switches mobile selectors and desktop tabs without losing the selected group or draft", async () => {
+    const original = window.matchMedia;
+    const listeners = new Set<() => void>();
+    let mobile = true;
+    window.matchMedia = vi.fn().mockImplementation(() => ({
+      get matches() { return mobile; }, media: "(max-width: 760px)",
+      addEventListener: (_: string, fn: () => void) => listeners.add(fn),
+      removeEventListener: (_: string, fn: () => void) => listeners.delete(fn),
+    }));
+    try {
+      const user = userEvent.setup();
+      renderSettings();
+      const category = await screen.findByRole("combobox", { name: "设置类别" });
+      expect(screen.queryByRole("tab", { name: "站点设置" })).not.toBeInTheDocument();
+      await user.click(category);
+      const playerOption = await screen.findByText("播放器设置", { selector: ".arco-select-option" });
+      await waitFor(() => expect(getComputedStyle(playerOption).pointerEvents).not.toBe("none"));
+      await user.click(playerOption);
+      fireEvent.change(screen.getByLabelText("EMBY地址"), { target: { value: "retained-mobile-draft" } });
+      act(() => { mobile = false; listeners.forEach((fn) => fn()); });
+      expect(screen.getByRole("tab", { name: "播放器设置" })).toHaveAttribute("aria-selected", "true");
+      expect(screen.getByLabelText("EMBY地址")).toHaveValue("retained-mobile-draft");
+      act(() => { mobile = true; listeners.forEach((fn) => fn()); });
+      expect(screen.getByRole("combobox", { name: "设置分组" })).toHaveTextContent("Emby");
+      expect(screen.getByLabelText("EMBY地址")).toHaveValue("retained-mobile-draft");
+    } finally { cleanup(); window.matchMedia = original; }
+  });
+  it("preserves other groups on reset and save, including edits made during the request", async () => {
+    const user = userEvent.setup();
+    let finish!: (value: unknown) => void;
+    const values = { EMBY_URL: "original", PLEX_URL: "plex-original" };
+    vi.mocked(apiRequest).mockImplementation(async (_path, options) => {
+      if (options?.method === "PUT") return new Promise((resolve) => { finish = resolve; });
+      return { database_driver: "sqlite", values, configured: {} };
+    });
+    renderSettings();
+    await user.click(await screen.findByRole("tab", { name: "播放器设置" }));
+    fireEvent.change(screen.getByLabelText("EMBY地址"), { target: { value: "emby-draft" } });
+    await user.click(screen.getByRole("tab", { name: "Plex" }));
+    fireEvent.change(screen.getByLabelText("PLEX地址"), { target: { value: "plex-draft" } });
+    await user.click(screen.getByRole("button", { name: "重置" }));
+    expect(screen.getByLabelText("PLEX地址")).toHaveValue("plex-original");
+    await user.click(screen.getByRole("tab", { name: "Emby" }));
+    expect(screen.getByLabelText("EMBY地址")).toHaveValue("emby-draft");
+    await user.click(screen.getByRole("button", { name: "保存设置" }));
+    await waitFor(() => expect(finish).toBeDefined());
+    fireEvent.change(screen.getByLabelText("EMBY地址"), { target: { value: "newer-edit" } });
+    await user.click(screen.getByRole("tab", { name: "Plex" }));
+    fireEvent.change(screen.getByLabelText("PLEX地址"), { target: { value: "unsaved-other-group" } });
+    finish({ database_driver: "sqlite", values: { ...values, EMBY_URL: "emby-draft" }, configured: {} });
+    await waitFor(() => expect(screen.getByRole("button", { name: "保存设置" })).toBeEnabled());
+    expect(screen.getByLabelText("PLEX地址")).toHaveValue("unsaved-other-group");
+    await user.click(screen.getByRole("tab", { name: "Emby" }));
+    expect(screen.getByLabelText("EMBY地址")).toHaveValue("newer-edit");
+    await user.click(screen.getByRole("button", { name: "重置" }));
+    expect(screen.getByLabelText("EMBY地址")).toHaveValue("emby-draft");
+    await user.click(screen.getByRole("tab", { name: "Plex" }));
+    expect(screen.getByLabelText("PLEX地址")).toHaveValue("unsaved-other-group");
+  });
+
+  it("merges background refreshes and partial saves without losing drafts", async () => {
+    const user = userEvent.setup();
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    vi.mocked(apiRequest).mockImplementation(async (_path, options) => ({
+      database_driver: "sqlite", configured: {},
+      values: options?.method === "PUT" ? { EMBY_URL: "" } : { EMBY_URL: "initial", PLEX_URL: "initial-plex" },
+    }));
+    render(<QueryClientProvider client={client}><SettingsPage /></QueryClientProvider>);
+    await user.click(await screen.findByRole("tab", { name: "播放器设置" }));
+    fireEvent.change(screen.getByLabelText("EMBY地址"), { target: { value: "local-edit" } });
+    act(() => client.setQueryData(["system-settings"], { database_driver: "sqlite", configured: {}, values: { EMBY_URL: "remote-edit", PLEX_URL: "remote-plex" } }));
+    expect(screen.getByLabelText("EMBY地址")).toHaveValue("local-edit");
+    await user.click(screen.getByRole("tab", { name: "Plex" }));
+    expect(screen.getByLabelText("PLEX地址")).toHaveValue("remote-plex");
+    fireEvent.change(screen.getByLabelText("PLEX地址"), { target: { value: "dirty-plex" } });
+    await user.click(screen.getByRole("tab", { name: "Emby" }));
+    fireEvent.change(screen.getByLabelText("EMBY地址"), { target: { value: "" } });
+    await user.click(screen.getByRole("button", { name: "保存设置" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "保存设置" })).toBeEnabled());
+    expect(screen.getByLabelText("EMBY地址")).toHaveValue("");
+    await user.click(screen.getByRole("tab", { name: "Plex" }));
+    expect(screen.getByLabelText("PLEX地址")).toHaveValue("dirty-plex");
+    await user.click(screen.getByRole("button", { name: "重置" }));
+    expect(screen.getByLabelText("PLEX地址")).toHaveValue("remote-plex");
+  });
+
+  it("retains hidden translation credentials while displaying only the selected provider", async () => {
+    const user = userEvent.setup();
+    let values: Record<string, string> = { TRANSLATION_ENGINE: "baidu", BAIDU_APP_ID: "retained-id", GOOGLE_API_KEY: "retained-key" };
+    vi.mocked(apiRequest).mockImplementation(async (_path, options) => {
+      if (options?.method === "PUT") values = { ...values, ...JSON.parse(String(options.body)).values };
+      return { database_driver: "sqlite", values: { ...values }, configured: {} };
+    });
+    renderSettings();
+    await user.click(await screen.findByRole("tab", { name: "翻译" }));
+    expect(screen.getByLabelText("百度翻译APPID")).toHaveValue("retained-id");
+    expect(screen.queryByLabelText("Google Cloud Translation API_KEY")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("radio", { name: "Google" }));
+    expect(screen.getByLabelText("Google Cloud Translation API_KEY")).toHaveValue("retained-key");
+    expect(screen.queryByLabelText("百度翻译APPID")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "保存设置" }));
+    await waitFor(() => expect(values.TRANSLATION_ENGINE).toBe("google"));
+    expect(values.BAIDU_APP_ID).toBe("retained-id");
+  });
   it("网盘上传保存三种同名策略并独立展示目录与文件表格", async () => {
     const user=userEvent.setup();let values:Record<string,string>={CLOUD_UPLOAD_PATHS:"[]",CLOUD_UPLOAD_ENABLE:"false",CLOUD_UPLOAD_CONFLICT:"skip"};
     vi.mocked(apiRequest).mockImplementation(async (path, options) => {

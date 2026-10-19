@@ -1,7 +1,7 @@
 import { Alert, Button, Divider, Input, InputTag, Progress, Radio, Select, Switch, Tabs } from "@arco-design/web-react";
 import { IconCheck, IconClose, IconLaunch, IconSave, IconUndo } from "@arco-design/web-react/icon";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Fragment, useEffect, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
 import { apiRequest } from "../../shared/api/client";
 import type { SystemSettings } from "../../shared/api/types";
 import { ContentCard } from "../../shared/ui/ContentCard";
@@ -570,7 +570,7 @@ const groups: SettingGroup[] = [
         kind: "strm-paths",
       },
       {
-        key: strmDownloadEnableKey,
+        key: strmDownloadEnableKey, section: "文件生成与附件",
         label: "下载媒体",
         kind: "bool",
       },
@@ -588,7 +588,7 @@ const groups: SettingGroup[] = [
         description: "strm 内容使用的播放地址前缀，留空时按本次生成的请求来源兜底；容器部署建议显式填写对外可访问地址。",
       },
       {
-        key: "PAN115_EVENT_ENABLE",
+        key: "PAN115_EVENT_ENABLE", section: "自动同步与媒体库",
         label: "115事件监听",
         kind: "bool",
         description: "保存后每 30 秒检查 115 文件变更，按映射规则生成 STRM；删除事件核验后仅清理程序登记且未被修改的 STRM 和已下载附件，历史未知文件保留。未填写 Cookie 时不可开启，清空 Cookie 会自动关闭。",
@@ -622,7 +622,7 @@ const groups: SettingGroup[] = [
     title: "定时任务",
     fields: [
       {
-        key: "RANK_PAGE",
+        key: "RANK_PAGE", section: "订阅目标",
         label: "图书馆榜单自动订阅",
         placeholder: "1-5，代表订阅多少页",
         kind: "int",
@@ -640,7 +640,7 @@ const groups: SettingGroup[] = [
         kind: "text",
       },
       {
-        key: "RANK_SCHEDULE_TIME",
+        key: "RANK_SCHEDULE_TIME", section: "执行时间",
         label: "榜单订阅定时任务",
         placeholder: "cron表达式",
         description: "5 段 cron（分 时 日 月 周），如 0 20 * * * 表示每天 20:00",
@@ -667,7 +667,7 @@ const groups: SettingGroup[] = [
         kind: "text",
       },
       {
-        key: "MAX_ACTOR",
+        key: "MAX_ACTOR", section: "订阅与搜索限制",
         label: "最大共演人数",
         description: "用于演员订阅番号，不适用于榜单订阅",
         kind: "int",
@@ -816,13 +816,13 @@ const groups: SettingGroup[] = [
     title: "其他",
     fields: [
       {
-        key: "IMAGE_MODE",
+        key: "IMAGE_MODE", section: "显示偏好",
         label: "图片模式",
         kind: "enum",
         options: imageModeOptions,
       },
       {
-        key: "PROXY",
+        key: "PROXY", section: "网络访问",
         label: "代理地址",
         description: "http://host:port 或 socks5://host:port 或 socks5://user:pass@host:port",
         kind: "text",
@@ -846,7 +846,7 @@ const groups: SettingGroup[] = [
         ],
       },
       {
-        key: "BYPASS_URL",
+        key: "BYPASS_URL", section: "采集增强",
         label: "爬虫增强",
         description: "选择增强类型后填写服务地址；仅在采集遇到 Cloudflare 人机页面时调用",
         kind: "text",
@@ -857,7 +857,7 @@ const groups: SettingGroup[] = [
         description: "开启后，爬虫增强使用上方配置的代理地址访问源站；未配置代理地址时不传代理。选择“不使用”会自动关闭此开关。",
         kind: "bool",
       },
-      { key: "ENABLE_BT_ANTI_LEECH", label: "BT种子下完即撤种", kind: "bool" },
+      { key: "ENABLE_BT_ANTI_LEECH", section: "下载偏好", label: "BT种子下完即撤种", kind: "bool" },
       {
         key: "ENABLE_AUTO_COMPLETE",
         label: "已入库资源跳过下载",
@@ -912,6 +912,48 @@ function isStructuredField(kind: FieldKind): boolean {
 /** 分组的全部字段：包含页签内字段，保证草稿初始化、变更判断与保存始终覆盖整组。 */
 function groupFields(group: SettingGroup): SettingField[] {
   return [...group.fields, ...(group.tabs ?? []).flatMap((tab) => tab.fields)];
+}
+
+/** Includes hidden credentials and both model tabs in the group's edit scope. */
+function groupKeys(group: SettingGroup): string[] {
+  return groupFields(group).flatMap((field) => [field.key, ...(field.siteAuth ? [field.siteAuth.modeKey, field.siteAuth.keyField] : [])]);
+}
+
+/** Raw structured values retain incomplete mappings when merging server responses. */
+type EditorSnapshot = Record<string, unknown>;
+
+/** Decode persisted settings for initialization, scoped reset and response merging. */
+function settingsSnapshot(values: Record<string, string>): EditorSnapshot {
+  const next: Draft = {};
+  for (const group of groups) {
+    for (const field of groupFields(group)) {
+      if (isStructuredField(field.kind)) continue;
+      const raw = values[field.key] ?? (field.key === strmDownloadExtensionsKey ? defaultDownloadExtensions : field.key === "CLOUD_UPLOAD_CONFLICT" ? "skip" : "");
+      next[field.key] = field.kind === "bool" ? raw === "true" : raw;
+      if (field.siteAuth) {
+        next[field.siteAuth.modeKey] = values[field.siteAuth.modeKey] === "cookie" ? "cookie" : "key";
+        next[field.siteAuth.keyField] = values[field.siteAuth.keyField] ?? "";
+      }
+    }
+  }
+  let uploads: UploadMapping[] = [];
+  try {
+    const parsed: unknown = JSON.parse(values.CLOUD_UPLOAD_PATHS || "[]");
+    if (Array.isArray(parsed)) uploads = parsed as UploadMapping[];
+  } catch { /* Invalid persisted mappings are displayed as empty. */ }
+  return {
+    ...next,
+    DEFAULT_FILTER: parseFilterDraft(values.DEFAULT_FILTER),
+    DEFAULT_SORT: parseSortOrder(values.DEFAULT_SORT),
+    [scanPathsKey]: parseScanPaths(values[scanPathsKey]),
+    [strmPathsKey]: parseStrmPaths(values[strmPathsKey]),
+    CLOUD_UPLOAD_PATHS: uploads,
+  };
+}
+
+/** Compare raw editor values rather than potentially lossy serialized payloads. */
+function sameEditorValue(left: unknown, right: unknown): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
 }
 
 /** 选项依赖的配置键是否都已填写；缺一即视为未配置。 */
@@ -1079,14 +1121,6 @@ function serializeStrmPaths(mappings: StrmMapping[]): string {
 }
 
 /**
- * 系统设置页。
- *
- * 字段命名与分组内容对齐对标站的 /config；入口按站点、播放器、消息渠道和
- * 下载器四类显示为一级标签，下方连续展示当前分类的全部分组。
- * 每个分类统一保存；敏感值以普通文本框回显并随当前分类一起提交；布尔、数字、枚举、JSON 与排序标签
- * 的取值由后端 writableSettings 权威校验。
- */
-/**
  * 站点分组文本框的固定行数。
  *
  * 站点分组的 COOKIE 是长凭据，统一固定三行，并允许用户手动上下拉伸；馒头令牌使用单行输入框。
@@ -1132,7 +1166,16 @@ function useOpenAITest(
   });
 }
 
+/** Edits the selected group, including its model tabs, without discarding other drafts. */
 export function SettingsPage() {
+  const [isMobile, setIsMobile] = useState(() => window.matchMedia?.("(max-width: 760px)").matches ?? false);
+  useEffect(() => {
+    const media = window.matchMedia?.("(max-width: 760px)");
+    if (!media) return;
+    const updateViewport = () => setIsMobile(media.matches);
+    media.addEventListener("change", updateViewport);
+    return () => media.removeEventListener("change", updateViewport);
+  }, []);
   const [activeCategoryCode, setActiveCategoryCode] = useState(
     categories[0].code,
   );
@@ -1154,7 +1197,7 @@ export function SettingsPage() {
   const queryClient = useQueryClient();
   const query = useQuery({
     queryKey: ["system-settings"],
-    queryFn: () => apiRequest<SystemSettings>("/system/settings"),
+    queryFn: ({ signal }) => apiRequest<SystemSettings>("/system/settings", { signal }),
   });
   const activeCategory =
     categories.find((category) => category.code === activeCategoryCode) ??
@@ -1169,34 +1212,52 @@ export function SettingsPage() {
   const activeFields = activeTab ? activeTab.fields : activeGroup.fields;
   const activeTest = activeTab?.test;
 
-  const syncDraft = (settings: SystemSettings) => {
-    const values = settings.values ?? {};
-    setSavedSnapshot({ values: { ...values } });
-    const next: Draft = {};
-    for (const group of groups) {
-      for (const field of groupFields(group)) {
-        if (isStructuredField(field.kind)) continue;
-        const raw = Object.prototype.hasOwnProperty.call(values, field.key)
-          ? values[field.key]
-          : field.key === strmDownloadExtensionsKey ? defaultDownloadExtensions : field.key === "CLOUD_UPLOAD_CONFLICT" ? "skip" : "";
-        next[field.key] = field.kind === "bool" ? raw === "true" : raw;
-        if (field.siteAuth) {
-          const auth = field.siteAuth;
-          next[auth.modeKey] = values[auth.modeKey] === "cookie" ? "cookie" : "key";
-          next[auth.keyField] = values[auth.keyField] ?? "";
-        }
-      }
-    }
-    const parsed = parseFilterDraft(values.DEFAULT_FILTER);
-    if (!next.BYPASS_ENGINE) next.BYPASS_USE_PROXY = false;
-    if (!String(next.PAN115_COOKIE ?? "").trim()) next.PAN115_EVENT_ENABLE = false;
-    setDraft(applyTranslationEngineGuard(next));
+  const editor: EditorSnapshot = {
+    ...draft, DEFAULT_FILTER: { draft: filter, unknown: filterUnknown }, DEFAULT_SORT: sortOrder,
+    [scanPathsKey]: scanPaths, [strmPathsKey]: strmPaths, CLOUD_UPLOAD_PATHS: uploadPaths,
+  };
+  const editorRef = useRef(editor);
+  editorRef.current = editor;
+  const baselineRef = useRef<EditorSnapshot | null>(null);
+  const valuesRef = useRef<Record<string, string>>({});
+  const appliedResponse = useRef<SystemSettings | null>(null);
+
+  /** Apply a complete editor snapshot using the existing dependency guards. */
+  const applyEditor = (snapshot: EditorSnapshot) => {
+    const next = { ...snapshot };
+    const parsed = next.DEFAULT_FILTER as ReturnType<typeof parseFilterDraft>;
     setFilter(parsed.draft);
     setFilterUnknown(parsed.unknown);
-    setSortOrder(parseSortOrder(values.DEFAULT_SORT));
-    setScanPaths(parseScanPaths(values[scanPathsKey]));
-    setStrmPaths(parseStrmPaths(values[strmPathsKey]));
-    try { const parsed: unknown = JSON.parse(values.CLOUD_UPLOAD_PATHS || "[]"); setUploadPaths(Array.isArray(parsed) ? parsed as UploadMapping[] : []); } catch { setUploadPaths([]); }
+    setSortOrder(next.DEFAULT_SORT as string[]);
+    setScanPaths(next[scanPathsKey] as Pan115ScanPath[]);
+    setStrmPaths(next[strmPathsKey] as StrmMapping[]);
+    setUploadPaths(next.CLOUD_UPLOAD_PATHS as UploadMapping[]);
+    for (const key of ["DEFAULT_FILTER", "DEFAULT_SORT", scanPathsKey, strmPathsKey, "CLOUD_UPLOAD_PATHS"]) delete next[key];
+    if (!next.BYPASS_ENGINE) next.BYPASS_USE_PROXY = false;
+    if (!String(next.PAN115_COOKIE ?? "").trim()) next.PAN115_EVENT_ENABLE = false;
+    const guarded = applyTranslationEngineGuard(next as Draft);
+    editorRef.current = { ...snapshot, ...guarded };
+    setDraft(guarded);
+  };
+
+  /** Merge server values without replacing unrelated or post-submit edits. */
+  const syncDraft = (settings: SystemSettings, submission?: { snapshot: EditorSnapshot; values: Record<string, string> }) => {
+    if (!submission && appliedResponse.current === settings) return;
+    const values = { ...valuesRef.current, ...settings.values };
+    const baseline = settingsSnapshot(values);
+    const merged = { ...baseline };
+    if (baselineRef.current) {
+      for (const key of Object.keys(baseline)) {
+        const comparison = submission && Object.prototype.hasOwnProperty.call(submission.values, key)
+          ? submission.snapshot[key] : baselineRef.current[key];
+        if (!sameEditorValue(editorRef.current[key], comparison)) merged[key] = editorRef.current[key];
+      }
+    }
+    appliedResponse.current = settings;
+    valuesRef.current = values;
+    baselineRef.current = baseline;
+    setSavedSnapshot({ values });
+    applyEditor(merged);
   };
 
   useEffect(() => {
@@ -1204,14 +1265,19 @@ export function SettingsPage() {
   }, [query.data]);
 
   const update = useMutation({
-    mutationFn: (payload: SettingsUpdate) =>
-      apiRequest<SystemSettings>("/system/settings", {
+    mutationFn: async (submission: SettingsUpdate & { snapshot: EditorSnapshot }) => {
+      await queryClient.cancelQueries({ queryKey: ["system-settings"] });
+      return apiRequest<SystemSettings>("/system/settings", {
         method: "PUT",
-        body: JSON.stringify(payload),
-      }),
-    onSuccess: (settings) => {
-      queryClient.setQueryData(["system-settings"], settings);
-      syncDraft(settings);
+        body: JSON.stringify({ values: submission.values }),
+      });
+    },
+    onSuccess: async (settings, submission) => {
+      // A focus refetch can start during PUT; do not let its pre-save response replace the new baseline.
+      await queryClient.cancelQueries({ queryKey: ["system-settings"] });
+      syncDraft(settings, submission);
+      queryClient.setQueryData(["system-settings"], { ...settings, values: valuesRef.current });
+      appliedResponse.current = queryClient.getQueryData<SystemSettings>(["system-settings"]) ?? settings;
       message.success("设置已保存");
     },
     onError: (error: Error) => {
@@ -1307,12 +1373,11 @@ export function SettingsPage() {
   };
 
   const currentPayload = buildPayload();
-  const hasChanges = Object.keys(currentPayload).some(
-    (key) => currentPayload[key] !== baselineValue(key),
-  );
+  const hasChanges = groupKeys(activeGroup).some((key) => !sameEditorValue(editor[key], baselineRef.current?.[key]))
+    || Object.keys(currentPayload).some((key) => currentPayload[key] !== baselineValue(key));
 
   const submit = () => {
-    update.mutate({ values: buildPayload() });
+    if (!update.isPending) update.mutate({ values: buildPayload(), snapshot: editorRef.current });
   };
 
   useEffect(() => {
@@ -1326,10 +1391,16 @@ export function SettingsPage() {
   }, [update.isPending, submit]);
 
   const reset = () => {
-    if (query.data) syncDraft(query.data);
+    if (!baselineRef.current) return;
+    const restored = { ...editorRef.current };
+    for (const key of groupKeys(activeGroup)) restored[key] = baselineRef.current[key];
+    applyEditor(restored);
   };
 
   const renderField = (field: SettingField, group: SettingGroup) => {
+    // Visibility does not change serialization: inactive providers retain their credentials.
+    const provider = field.key.startsWith("BAIDU_") ? "baidu" : field.key === "GOOGLE_API_KEY" ? "google" : field.key === "DEEPLX_URL" ? "deeplx" : null;
+    if (provider && draft.TRANSLATION_ENGINE !== provider) return null;
     if (field.key === strmDownloadEnableKey) return null;
     if (field.key === strmDownloadExtensionsKey) {
       return (
@@ -1350,7 +1421,7 @@ export function SettingsPage() {
       );
     }
     if (field.key === strmEmbyMediaIntervalKey) return null;
-    // BYPASS_ENGINE 与 BYPASS_URL 合并为“左侧选择、右侧地址”的单一控件。
+    // The engine and address share a responsive connection block below.
     if (field.key === "BYPASS_ENGINE") return null;
     if (field.siteAuth) {
       const auth = field.siteAuth;
@@ -1606,29 +1677,33 @@ export function SettingsPage() {
       return (
         <div className="settings-field" key={field.key}>
           <label className="settings-field-label" htmlFor={filterId(field.key)}>{field.label}</label>
-          <Input.Group compact>
-            <Select
-              aria-label="爬虫增强类型"
-              value={engine}
-              placeholder="选择类型"
-              options={[
-                { value: "", label: "不使用" },
-                { value: "cloudflare_bypass_for_scraping", label: "ByPass" },
-                { value: "flaresolverr", label: "FlareSolverr" },
-                { value: "scrapling", label: "Scrapling" },
-              ]}
-              onChange={(value) => setValue("BYPASS_ENGINE", value)}
-              style={{ width: 220 }}
-            />
-            <Input
-              id={filterId(field.key)}
-              value={value}
-              disabled={engine === ""}
-              placeholder={bypassPlaceholder(engine)}
-              onChange={(nextValue: string) => setValue(field.key, nextValue)}
-              style={{ width: "calc(100% - 220px)" }}
-            />
-          </Input.Group>
+          <div className="settings-crawler-connection">
+            <div className="settings-field">
+              <span className="settings-field-description">增强类型</span>
+              <Select
+                aria-label="爬虫增强类型"
+                value={engine}
+                placeholder="选择类型"
+                options={[
+                  { value: "", label: "不使用" },
+                  { value: "cloudflare_bypass_for_scraping", label: "ByPass" },
+                  { value: "flaresolverr", label: "FlareSolverr" },
+                  { value: "scrapling", label: "Scrapling" },
+                ]}
+                onChange={(value) => setValue("BYPASS_ENGINE", value)}
+              />
+            </div>
+            <div className="settings-field">
+              <span className="settings-field-description">服务地址</span>
+              <Input
+                id={filterId(field.key)}
+                value={value}
+                disabled={engine === ""}
+                placeholder={bypassPlaceholder(engine)}
+                onChange={(nextValue: string) => setValue(field.key, nextValue)}
+              />
+            </div>
+          </div>
           <div className="settings-field-description">
             <span>选择“不使用”关闭爬虫增强，已填写的服务地址会保留。{field.description}</span>
             <span className="settings-reference-links" aria-label="爬虫增强项目地址">
@@ -1744,40 +1819,61 @@ export function SettingsPage() {
         onRetry={() => void query.refetch()}
       >
         <ContentCard className="settings-workspace">
-          <div className="settings-navigation">
-            <Tabs
-              className="settings-category-tabs"
-              activeTab={activeCategory.code}
-              onChange={selectCategory}
-              animation={false}
-              aria-label="设置类别"
-            >
-              {categories.map((category) => (
-                <TabPane key={category.code} title={category.title} />
-              ))}
-            </Tabs>
-          </div>
-          <div className="settings-secondary-navigation">
-            <Tabs
-              className="settings-group-tabs"
-              type="capsule"
-              size="small"
-              activeTab={activeGroup.code}
-              onChange={setActiveGroupCode}
-              animation={false}
-              aria-label={`${activeCategory.title}分组`}
-            >
-              {activeGroups.map((group) => (
-                <TabPane key={group.code} title={group.title} />
-              ))}
-            </Tabs>
-          </div>
+          {isMobile ? (
+            <div className="settings-mobile-navigation">
+              <div className="settings-field">
+                <label className="settings-field-label" htmlFor="settings-category-select">设置类别</label>
+                <Select id="settings-category-select" aria-label="设置类别" value={activeCategory.code}
+                  options={categories.map((category) => ({ value: category.code, label: category.title }))} onChange={selectCategory} />
+              </div>
+              <div className="settings-field">
+                <label className="settings-field-label" htmlFor="settings-group-select">设置分组</label>
+                <Select id="settings-group-select" aria-label="设置分组" value={activeGroup.code}
+                  options={activeGroups.map((group) => ({ value: group.code, label: group.title }))} onChange={setActiveGroupCode} />
+              </div>
+            </div>
+          ) : (
+            <>
+              <div className="settings-navigation">
+                <Tabs
+                  className="settings-category-tabs"
+                  activeTab={activeCategory.code}
+                  onChange={selectCategory}
+                  animation={false}
+                  aria-label="设置类别"
+                >
+                  {categories.map((category) => (
+                    <TabPane key={category.code} title={category.title} />
+                  ))}
+                </Tabs>
+              </div>
+              <div className="settings-secondary-navigation">
+                <Tabs
+                  className="settings-group-tabs"
+                  type="rounded"
+                  size="small"
+                  activeTab={activeGroup.code}
+                  onChange={setActiveGroupCode}
+                  animation={false}
+                  aria-label={`${activeCategory.title}分组`}
+                >
+                  {activeGroups.map((group) => (
+                    <TabPane key={group.code} title={group.title} />
+                  ))}
+                </Tabs>
+              </div>
+            </>
+          )}
           <div className="settings-form-shell">
+            <p className="settings-save-scope">
+              当前分组：{activeGroup.title} · {hasChanges ? "有未保存的修改" : "未修改"}。保存与重置作用于本分组{activeTabs.length ? "（包含全部模型页签）" : ""}。
+              {currentPayload.TRANSLATION_ENGINE !== undefined && draft.TRANSLATION_ENGINE !== baselineValue("TRANSLATION_ENGINE") ? "翻译引擎的关联调整也会随保存提交。" : ""}
+            </p>
             {activeTabs.length > 0 && activeTab ? (
               <div className="settings-model-tabs">
                 <Tabs
                   className="settings-model-tabs-bar"
-                  type="capsule"
+                  type="rounded"
                   size="small"
                   activeTab={activeTab.code}
                   onChange={(code: string) => setActiveTabCodes((previous) => ({ ...previous, [activeGroup.code]: code }))}
@@ -1797,6 +1893,12 @@ export function SettingsPage() {
                 ) : null}
                 {renderFieldSequence(activeFields)}
                 {activeGroup.code === "cloud-upload" ? <div className="settings-field settings-field-wide"><UploadMonitorStatus /></div> : null}
+                {activeGroup.strmGenerate || activeGroup.pan115Scan ? (
+                  <div className="settings-action-heading">
+                    <h3 className="settings-field-section">立即执行</h3>
+                    <p className="settings-field-description">以下操作使用已保存的配置。修改目录或规则后，请先保存设置；执行操作不会自动保存草稿。</p>
+                  </div>
+                ) : null}
                 {activeGroup.strmGenerate ? <div className="settings-field settings-field-wide"><EmbyMediaInfoAction /></div> : null}
                 {activeGroup.strmGenerate ? (
                   <div className="settings-field settings-field-wide">

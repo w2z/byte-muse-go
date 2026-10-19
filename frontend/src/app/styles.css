@@ -469,18 +469,14 @@ button.code-card-still-cell:hover img { opacity: .85; }
 .settings-secondary-navigation { padding: 12px 20px 0; border-bottom: 0; }
 .settings-group-tabs { display: block; padding: 0 0 12px; }
 .settings-group-tabs > .arco-tabs-header-nav { margin: 0; }
-.settings-group-tabs .arco-tabs-header-wrapper { justify-content: flex-start; }
-.settings-group-tabs .arco-tabs-header { flex-wrap: wrap; justify-content: flex-start; }
 .settings-group-tabs .arco-tabs-content { display: none; }
 /* 「AI 模型」分组内的页签：同一分组下切换对话与翻译两套互不影响的配置。 */
 .settings-model-tabs { padding: 0 0 18px; }
 .settings-model-tabs-bar { display: block; }
 .settings-model-tabs-bar > .arco-tabs-header-nav { margin: 0; }
-.settings-model-tabs-bar .arco-tabs-header-wrapper { justify-content: flex-start; }
-.settings-model-tabs-bar .arco-tabs-header { flex-wrap: wrap; justify-content: flex-start; }
 .settings-model-tabs-bar .arco-tabs-content { display: none; }
 .settings-group-section {
-  padding: 20px 0;
+  padding: 0;
   margin-bottom: 16px;
   background: transparent;
   border: 0;
@@ -537,12 +533,18 @@ button.code-card-still-cell:hover img { opacity: .85; }
 .setting-muted { color: var(--orange) !important; }
 .setting-unavailable { padding: 4px 7px; color: var(--muted) !important; background: rgba(155,168,167,.1); border-radius: 4px; }
 .settings-readonly-badge { padding: 7px 10px; color: var(--ink-2); background: var(--hover); border: 1px solid var(--line); border-radius: 4px; font: var(--app-font-weight) 10px var(--app-font-family); }
-.settings-form-shell { flex: 1 1 auto; width: 100%; padding: 20px 20px 24px; }
+.settings-form-shell { flex: 1 1 auto; min-width: 0; width: 100%; padding: 20px 20px 24px; }
+.settings-mobile-navigation { display: flex; flex-direction: column; gap: 12px; padding: 16px; border-bottom: 1px solid var(--line); }
+.settings-save-scope { margin: 0 0 16px; color: var(--muted); font-size: 12px; line-height: 20px; overflow-wrap: anywhere; }
+.settings-crawler-connection { display: flex; flex-wrap: wrap; gap: 12px; }
+.settings-crawler-connection > .settings-field { flex: 1 1 240px; }
+.settings-action-heading { border-top: 1px solid var(--line); padding-top: 20px; }
+.settings-action-heading p { margin: 8px 0 0; }
 .settings-fields {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   row-gap: var(--field-gap-y);
-  width: 50%;
+  width: 100%;
   max-width: 720px;
 }
 .settings-fields--single { grid-template-columns: minmax(0, 1fr); width: 100%; max-width: none; }
@@ -565,7 +567,7 @@ button.code-card-still-cell:hover img { opacity: .85; }
   overflow-wrap: anywhere;
 }
 /* 分组内成组字段的小标题，例如消息渠道里成组的“消息”开关。 */
-.settings-field-section { margin: 0; font-weight: var(--app-font-weight); }
+.settings-field-section { margin: 0; color: var(--ink); font-size: 14px; font-weight: var(--app-font-weight); line-height: 22px; }
 /* 分组底部备注：说明该组配置的适用范围，与字段说明共用同一套弱化色和 8px 间距。 */
 .settings-group-note { margin: 8px 0 0; color: var(--muted); font-size: 12px; line-height: 20px; }
 /* 同一分节内的布尔开关排成一行，空间不足时自动换行并保持左对齐。 */
@@ -865,10 +867,11 @@ button.code-card-still-cell:hover img { opacity: .85; }
   .settings-fields { width: 100%; max-width: none; }
   .settings-navigation { padding: 0 16px; }
   .settings-form-shell { padding: 16px 16px 24px; }
-  .settings-group-section { padding: 16px 0; margin-bottom: 12px; }
+  .settings-group-section { padding: 0; margin-bottom: 12px; }
+  .settings-page { padding-bottom: calc(76px + env(safe-area-inset-bottom)); }
   .settings-filter-range { grid-template-columns: 1fr; row-gap: 16px; }
   /* 窄屏侧栏收起，操作栏改为通栏固定（与页面左右边缘齐平，故去掉底圆角）。 */
-  .settings-form-footer { position: fixed; right: 0; bottom: 0; left: 0; flex-direction: row; margin: 0; border-radius: 0; }
+  .settings-form-footer { position: fixed; right: 0; bottom: 0; left: 0; flex-direction: row; margin: 0; border-radius: 0; padding-bottom: calc(12px + env(safe-area-inset-bottom)); }
   .table-shell > .arco-card-body { padding: var(--content-padding); }
   .arco-table { min-width: 610px; }
 }
