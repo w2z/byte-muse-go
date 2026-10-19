@@ -22,6 +22,29 @@ func NewCatalogQueryService(repository ports.CatalogQueryRepository) *CatalogQue
 	return &CatalogQueryService{repository: repository}
 }
 
+// FindCode 在本地目录中分页查找精确番号；不采集、不写入，供查询卡片及按钮动作复用。
+// 查询失败与未命中分别返回，避免将数据库异常误判为资料缺失。
+func (s *CatalogQueryService) FindCode(ctx context.Context, raw string) (domain.Media, bool, error) {
+	code := domain.NormalizeCode(raw)
+	if code == "" {
+		return domain.Media{}, false, nil
+	}
+	for page := 1; ; page++ {
+		result, err := s.repository.Search(ctx, code, 100, (page-1)*100)
+		if err != nil {
+			return domain.Media{}, false, err
+		}
+		for _, media := range result.Items {
+			if domain.NormalizeCode(media.Code) == code {
+				return media, true, nil
+			}
+		}
+		if len(result.Items) == 0 || page*100 >= result.Total {
+			return domain.Media{}, false, nil
+		}
+	}
+}
+
 // NewCatalogQueryServiceWithTranslation enables the shared lazy title translation rule.
 func NewCatalogQueryServiceWithTranslation(repository ports.CatalogQueryRepository, translator TranslationClient, writer ports.MediaTranslationWriter) *CatalogQueryService {
 	return &CatalogQueryService{repository: repository, translator: translator, writer: writer}

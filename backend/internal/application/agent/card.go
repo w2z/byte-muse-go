@@ -74,7 +74,7 @@ func cardActionLabel(action string) string {
 }
 
 // cardForCode 按番号构建状态卡片。
-// 番号无效、未入库或没有可执行操作时返回纯文本回复，卡片与文本两条路径由同一份状态判定驱动。
+// 本地缺失时补全远程资料；查询失败返回纯文本，不把查询失败当成影片不存在。
 func cardForCode(ctx context.Context, deps Deps, raw string) ports.Reply {
 	code := domain.NormalizeCode(raw)
 	if code == "" {
@@ -83,9 +83,9 @@ func cardForCode(ctx context.Context, deps Deps, raw string) ports.Reply {
 	if deps.Queries == nil {
 		return ports.Reply{Text: "订阅服务不可用"}
 	}
-	media, found := lookupMedia(ctx, deps, code)
-	if !found {
-		return ports.Reply{Text: "番号 " + code + " 不在媒体库中，请先在采集页入库后再订阅"}
+	media, failure := resolveMedia(ctx, deps, code)
+	if failure != "" {
+		return ports.Reply{Text: failure}
 	}
 	return mediaCard(ctx, deps, media)
 }
@@ -230,7 +230,8 @@ func cardButtons(media domain.Media, task *domain.DownloadTask) []ports.ActionBu
 		}
 		return append(buttons, ports.ActionButton{Label: "取消订阅", Data: cardData(cardActionUnsubscribe, code)})
 	}
-	if media.LibraryStatus == domain.LibraryStatusPresent {
+	// 订阅依赖影片资料 ID，不要求媒体文件已经存在。
+	if strings.TrimSpace(media.ID) != "" {
 		return []ports.ActionButton{{Label: "订阅", Data: cardData(cardActionSubscribe, code)}}
 	}
 	return nil

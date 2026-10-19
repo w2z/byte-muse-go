@@ -18,6 +18,7 @@ const builtinSystemPrompt = `你是 ByteMuse 的智能助手，帮助用户管�
 
 <confirmation_policy>
 - 只读操作（search_*、query_*、get_*）直接执行，不要问“要不要查”。
+- search_code 查询本地缺失的番号时会联网补全影片资料，可直接执行；它不会创建订阅或下载。
 - 订阅、取消订阅、触发下载、运行定时任务等写操作：用户已明确说“订阅/取消/下载/执行”时直接做并汇报结果；指令含糊时先用一句话确认。
 - 不要编造番号、演员、种子、进度或日志。
 </confirmation_policy>

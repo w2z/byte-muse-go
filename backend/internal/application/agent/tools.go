@@ -13,7 +13,7 @@ func BuiltinTools(deps Deps) []Tool {
 	return []Tool{
 		builtinTool{
 			name:        "search_code",
-			description: "按番号精确查询一部影片的本地资料，含标题、发行日期、封面、订阅与媒体库状态。",
+			description: "按番号精确查询影片资料；本地缺失时联网采集并保存精确匹配资料，不自动订阅或下载。返回标题、发行日期、封面、订阅与媒体库状态。",
 			parameters: objectSchema(map[string]any{
 				"code": stringProperty("影片番号，例如 SSIS-001"),
 			}, "code"),

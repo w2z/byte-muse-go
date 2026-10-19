@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -192,7 +193,7 @@ func TestCardButtonsFollowCurrentState(t *testing.T) {
 		task   *domain.DownloadTask
 		labels []string
 	}{
-		{name: "未入库无按钮", media: testMedia("m1", code, "First")},
+		{name: "仅有资料也能订阅", media: testMedia("m1", code, "First"), labels: []string{"订阅"}},
 		{name: "已入库未订阅", media: libraryMedia("m1", code, "First"), labels: []string{"订阅"}},
 		{name: "已订阅无任务", media: subscribedMedia("m1", code, "First"), labels: []string{"开始下载", "取消订阅"}},
 		{name: "下载中可暂停", media: subscribedMedia("m1", code, "First"), task: ptrTask(downloadTask("m1", domain.DownloadStatusDownloading, "downloading", "pause", "stop")), labels: []string{"暂停", "取消订阅"}},
@@ -241,12 +242,12 @@ func TestCardForCodeBuildsCardForLibraryMedia(t *testing.T) {
 	}
 }
 
-// TestCardForCodeWithoutActionsReturnsPlainText 验证没有可执行操作时不发卡片，只回文本。
-func TestCardForCodeWithoutActionsReturnsPlainText(t *testing.T) {
+// TestCardForCodeWithoutFilesCanSubscribe 验证仅有影片资料、尚无媒体文件时仍可订阅。
+func TestCardForCodeWithoutFilesCanSubscribe(t *testing.T) {
 	deps, _, _ := cardTestDeps(testMedia("m1", "SSIS-001", "First"))
 	reply := cardForCode(context.Background(), deps, "SSIS-001")
-	if reply.Card != nil {
-		t.Fatalf("未入库影片不应返回卡片: %+v", reply)
+	if reply.Card == nil || len(reply.Card.Buttons) != 1 || reply.Card.Buttons[0].Data != "bm:sub:SSIS-001" {
+		t.Fatalf("仅有资料的影片应提供订阅按钮: %+v", reply)
 	}
 	if !strings.Contains(reply.Text, "状态：未入库") {
 		t.Fatalf("文本=%q", reply.Text)
@@ -355,5 +356,20 @@ func TestCardTextFallsBackToDownloadStatus(t *testing.T) {
 	_, body := cardText(media, nil)
 	if !strings.Contains(body, "状态：正在搜索资源") {
 		t.Fatalf("正文=%q", body)
+	}
+}
+
+// TestCardActionsFindCodeBeyondFirstPage 防止相似标题挤满第一页后，真实影片卡片按钮失效。
+func TestCardActionsFindCodeBeyondFirstPage(t *testing.T) {
+	media := make([]domain.Media, 0, 102)
+	for i := 0; i < 101; i++ {
+		media = append(media, testMedia(fmt.Sprintf("other-%d", i), fmt.Sprintf("OTHER-%03d", i), "Mention TEST-001"))
+	}
+	media = append(media, libraryMedia("target", "TEST-001", "Target"))
+	deps, repo, _ := cardTestDeps(media...)
+	repo.add("target", domain.SubscriptionStatusActive)
+	reply := handleCardAction(context.Background(), deps, ports.InboundAction{Data: "bm:unsub:TEST-001", MessageID: "1"})
+	if !strings.Contains(reply.Text, "已取消订阅") || reply.Refresh == nil || len(repo.items) != 0 {
+		t.Fatalf("分页后动作失败: reply=%+v subscriptions=%+v", reply, repo.items)
 	}
 }

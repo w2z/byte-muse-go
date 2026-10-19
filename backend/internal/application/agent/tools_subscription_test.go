@@ -289,7 +289,7 @@ func TestSearchCodeMissReturnsPlainText(t *testing.T) {
 	ctx := context.Background()
 
 	out := registry.Call(ctx, "search_code", map[string]any{"code": "ssis 999"})
-	if out != "未找到番号: SSIS-999" {
+	if !strings.Contains(out, "SSIS-999") || !strings.Contains(out, "远程采集服务不可用") {
 		t.Fatalf("未命中文案=%q", out)
 	}
 

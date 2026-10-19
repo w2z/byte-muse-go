@@ -44,7 +44,7 @@ func NewRouter(orchestrator *Orchestrator, deps Deps) *Router {
 }
 
 // Handle 处理一条入站消息并返回要投递的回复。
-// 按钮点击走卡片动作分支，不经过 AI；文本消息按斜杠命令、Agent 对话、番号卡片的顺序分流。
+// 按钮点击与明确番号不经过 AI；文本消息优先处理斜杠命令和番号，再进入 Agent 对话。
 // 返回的错误表示渠道或配置层面的失败，调用方应记录日志；空回复表示无需回复。
 func (r *Router) Handle(ctx context.Context, msg ports.InboundMessage) (ports.Reply, error) {
 	if msg.Action != nil {
@@ -58,9 +58,12 @@ func (r *Router) Handle(ctx context.Context, msg ports.InboundMessage) (ports.Re
 		reply, err := r.command(ctx, msg, text)
 		return ports.Reply{Text: reply}, err
 	}
-	// 已入库番号优先返回状态卡片：订阅与下载是确定性业务，不经过 AI，也不消耗模型额度。
-	// 未命中的番号保持原有分流（交给 Agent 对话或提示），避免把普通英文文本误判成番号。
+	// 番号优先通过统一服务查询本地及远程资料，不消耗模型额度。
+	// 未装配远程服务的调用方保留本地卡片与原有对话降级行为。
 	if domain.LooksLikeCode(text) {
+		if r.deps.Codes != nil {
+			return cardForCode(ctx, r.deps, text), nil
+		}
 		if reply, matched := cardForKnownCode(ctx, r.deps, text); matched {
 			return reply, nil
 		}
@@ -88,15 +91,6 @@ func (r *Router) Handle(ctx context.Context, msg ports.InboundMessage) (ports.Re
 		return cardForCode(ctx, r.deps, text), nil
 	}
 	return ports.Reply{Text: r.disabledHelp()}, nil
-}
-
-// CardFailed 是卡片投递失败时的降级入口：番号消息回到「直接订阅」的原有行为，
-// 保证渠道不支持卡片时用户仍能完成订阅，而不是停在一张发不出去的卡片上。
-func (r *Router) CardFailed(ctx context.Context, msg ports.InboundMessage) string {
-	if domain.LooksLikeCode(msg.Text) {
-		return SubscribeByCode(ctx, r.deps, msg.Text)
-	}
-	return "卡片消息发送失败，请稍后重试。"
 }
 
 // agentChatEnabled 报告该渠道是否允许自然语言对话。

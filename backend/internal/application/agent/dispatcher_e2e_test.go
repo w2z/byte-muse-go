@@ -3,14 +3,34 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
 
+	"bytemuse/backend/internal/application"
 	"bytemuse/backend/internal/ports"
 )
+
+// TestDispatcherCardFailureDoesNotSubscribe 防止仅查询影片时因卡片发送失败自动订阅和下载。
+func TestDispatcherCardFailureDoesNotSubscribe(t *testing.T) {
+	deps, subscriptions, _ := cardTestDeps(libraryMedia("m1", "TEST-001", "Test"))
+	downloads := &recordingDownloadRepository{}
+	deps.SubscriptionDownloads = application.NewSubscriptionDownloadService(downloads, nil, nil, nil)
+	sender := &recordingSender{sendCardErr: errors.New("photo delivery failed")}
+	dispatcher := NewDispatcher(NewRouter(nil, deps), fakeChannels{sender: sender})
+	if err := dispatcher.Handle(context.Background(), ports.InboundMessage{Channel: ports.ChannelTelegram, ChatID: "1", Text: "TEST-001"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(subscriptions.items) != 0 || len(downloads.subscriptionIDs) != 0 {
+		t.Fatalf("查询意外触发订阅/下载: %+v %+v", subscriptions.items, downloads)
+	}
+	if len(sender.messages) != 1 || !strings.Contains(sender.messages[0], "TEST-001") {
+		t.Fatalf("缺少文本降级: %+v", sender.messages)
+	}
+}
 
 // recordingSender 记录渠道实际投递出去的消息，用于验证端到端回复内容。
 type recordingSender struct {

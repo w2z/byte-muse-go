@@ -29,8 +29,10 @@ type Tool interface {
 
 // Deps 汇总工具可用的业务能力，全部来自既有应用服务，保证与 HTTP 入口复用同一套业务规则。
 type Deps struct {
-	Catalog               *application.CatalogService
-	Queries               *application.CatalogQueryService
+	Catalog *application.CatalogService
+	Queries *application.CatalogQueryService
+	// Codes 为明确的番号查询和订阅补全本地缺失的远程资料。
+	Codes                 *application.CodeResolver
 	Actors                *application.ActorService
 	Tags                  *application.TagService
 	Subscriptions         *application.SubscriptionService

@@ -578,6 +578,7 @@ func (c *Commands) Serve(ctx context.Context) error {
 	agentDeps := agent.Deps{
 		Catalog:               catalogService,
 		Queries:               catalogQueries,
+		Codes:                 application.NewCodeResolver(catalogQueries, collector.NewRegistry(collectionClient), collectionRepository),
 		Actors:                actorService,
 		Tags:                  tagService,
 		Subscriptions:         subscriptionService,

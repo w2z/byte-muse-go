@@ -22,7 +22,7 @@ func NewDispatcher(router *Router, channels ChannelResolver) *Dispatcher {
 }
 
 // Handle 处理一条入站消息并按回复形态投递：卡片、按钮刷新或文本，空回复表示无需回应。
-// 卡片投递失败时降级为文本并交由 Router 决定降级内容，避免用户停在无法点击的卡片上。
+// 卡片投递失败只降级展示文本，不把一次查询升级成订阅或下载操作。
 func (d *Dispatcher) Handle(ctx context.Context, msg ports.InboundMessage) error {
 	if d.router == nil {
 		return nil
@@ -41,10 +41,7 @@ func (d *Dispatcher) Handle(ctx context.Context, msg ports.InboundMessage) error
 	if reply.Card != nil {
 		if err := sender.SendCard(ctx, msg.ChatID, *reply.Card); err != nil {
 			logging.Error(logging.CategoryAgent, "渠道卡片发送失败，降级为文本", "channel", msg.Channel, "error", err.Error())
-			fallback := strings.TrimSpace(d.router.CardFailed(ctx, msg))
-			if fallback == "" {
-				return nil
-			}
+			fallback := strings.TrimSpace(reply.Text) + "\n卡片发送失败，请稍后重新发送番号获取操作按钮。"
 			return sender.SendText(ctx, msg.ChatID, fallback)
 		}
 		return nil

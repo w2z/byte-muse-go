@@ -67,7 +67,7 @@ func searchCode(ctx context.Context, deps Deps, raw string) (any, error) {
 	if code == "" {
 		return "请提供番号，例如 SSIS-001", nil
 	}
-	item, failure := lookupToolMedia(ctx, deps, code)
+	item, failure := resolveMedia(ctx, deps, code)
 	if failure != "" {
 		return failure, nil
 	}

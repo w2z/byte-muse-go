@@ -23,9 +23,9 @@ func SubscribeByCode(ctx context.Context, deps Deps, code string) string {
 	if deps.Subscriptions == nil {
 		return "订阅服务不可用"
 	}
-	media, ok := lookupMedia(ctx, deps, normalized)
-	if !ok {
-		return "番号 " + normalized + " 不在媒体库中，请先在采集页入库后再订阅"
+	media, failure := resolveMedia(ctx, deps, normalized)
+	if failure != "" {
+		return failure
 	}
 	if media.SubscriptionStatus == domain.SubscriptionStatusActive {
 		enqueueUserDownload(ctx, deps, activeSubscriptionID(media), normalized)
@@ -47,6 +47,21 @@ func SubscribeByCode(ctx context.Context, deps Deps, code string) string {
 		title = *media.TranslatedTitle
 	}
 	return "番号 " + normalized + " 已加入订阅。" + strings.TrimSpace(title)
+}
+
+// resolveMedia 为明确的番号请求复用远程补全服务；未装配时仍允许查询既有本地资料。
+func resolveMedia(ctx context.Context, deps Deps, code string) (domain.Media, string) {
+	if deps.Codes != nil {
+		media, err := deps.Codes.Resolve(ctx, code)
+		if err != nil {
+			return domain.Media{}, err.Error()
+		}
+		return media, ""
+	}
+	if media, found := lookupMedia(ctx, deps, code); found {
+		return media, ""
+	}
+	return domain.Media{}, "番号 " + code + " 不在媒体库中，远程采集服务不可用"
 }
 
 // activeSubscriptionID 取影片当前的有效订阅 ID；没有有效订阅时返回空串。
@@ -74,14 +89,6 @@ func lookupMedia(ctx context.Context, deps Deps, code string) (domain.Media, boo
 	if deps.Queries == nil {
 		return domain.Media{}, false
 	}
-	page, err := deps.Queries.Search(ctx, code, 1, 20)
-	if err != nil {
-		return domain.Media{}, false
-	}
-	for _, item := range page.Items {
-		if domain.NormalizeCode(item.Code) == code {
-			return item, true
-		}
-	}
-	return domain.Media{}, false
+	media, found, err := deps.Queries.FindCode(ctx, code)
+	return media, found && err == nil
 }
