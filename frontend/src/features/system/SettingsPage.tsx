@@ -1168,14 +1168,6 @@ function useOpenAITest(
 
 /** Edits the selected group, including its model tabs, without discarding other drafts. */
 export function SettingsPage() {
-  const [isMobile, setIsMobile] = useState(() => window.matchMedia?.("(max-width: 760px)").matches ?? false);
-  useEffect(() => {
-    const media = window.matchMedia?.("(max-width: 760px)");
-    if (!media) return;
-    const updateViewport = () => setIsMobile(media.matches);
-    media.addEventListener("change", updateViewport);
-    return () => media.removeEventListener("change", updateViewport);
-  }, []);
   const [activeCategoryCode, setActiveCategoryCode] = useState(
     categories[0].code,
   );
@@ -1819,51 +1811,34 @@ export function SettingsPage() {
         onRetry={() => void query.refetch()}
       >
         <ContentCard className="settings-workspace">
-          {isMobile ? (
-            <div className="settings-mobile-navigation">
-              <div className="settings-field">
-                <label className="settings-field-label" htmlFor="settings-category-select">设置类别</label>
-                <Select id="settings-category-select" aria-label="设置类别" value={activeCategory.code}
-                  options={categories.map((category) => ({ value: category.code, label: category.title }))} onChange={selectCategory} />
-              </div>
-              <div className="settings-field">
-                <label className="settings-field-label" htmlFor="settings-group-select">设置分组</label>
-                <Select id="settings-group-select" aria-label="设置分组" value={activeGroup.code}
-                  options={activeGroups.map((group) => ({ value: group.code, label: group.title }))} onChange={setActiveGroupCode} />
-              </div>
-            </div>
-          ) : (
-            <>
-              <div className="settings-navigation">
-                <Tabs
-                  className="settings-category-tabs"
-                  activeTab={activeCategory.code}
-                  onChange={selectCategory}
-                  animation={false}
-                  aria-label="设置类别"
-                >
-                  {categories.map((category) => (
-                    <TabPane key={category.code} title={category.title} />
-                  ))}
-                </Tabs>
-              </div>
-              <div className="settings-secondary-navigation">
-                <Tabs
-                  className="settings-group-tabs"
-                  type="rounded"
-                  size="small"
-                  activeTab={activeGroup.code}
-                  onChange={setActiveGroupCode}
-                  animation={false}
-                  aria-label={`${activeCategory.title}分组`}
-                >
-                  {activeGroups.map((group) => (
-                    <TabPane key={group.code} title={group.title} />
-                  ))}
-                </Tabs>
-              </div>
-            </>
-          )}
+          <div className="settings-navigation">
+            <Tabs
+              className="settings-category-tabs"
+              activeTab={activeCategory.code}
+              onChange={selectCategory}
+              animation={false}
+              aria-label="设置类别"
+            >
+              {categories.map((category) => (
+                <TabPane key={category.code} title={category.title} />
+              ))}
+            </Tabs>
+          </div>
+          <div className="settings-secondary-navigation">
+            <Tabs
+              className="settings-group-tabs"
+              type="rounded"
+              size="small"
+              activeTab={activeGroup.code}
+              onChange={setActiveGroupCode}
+              animation={false}
+              aria-label={`${activeCategory.title}分组`}
+            >
+              {activeGroups.map((group) => (
+                <TabPane key={group.code} title={group.title} />
+              ))}
+            </Tabs>
+          </div>
           <div className="settings-form-shell">
             <p className="settings-save-scope">
               当前分组：{activeGroup.title} · {hasChanges ? "有未保存的修改" : "未修改"}。保存与重置作用于本分组{activeTabs.length ? "（包含全部模型页签）" : ""}。

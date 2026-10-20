@@ -2,7 +2,7 @@
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import "@testing-library/jest-dom/vitest";
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SettingsPage } from "./SettingsPage";
@@ -31,33 +31,6 @@ function renderSettings() {
 }
 
 describe("设置页字段布局", () => {
-  it("switches mobile selectors and desktop tabs without losing the selected group or draft", async () => {
-    const original = window.matchMedia;
-    const listeners = new Set<() => void>();
-    let mobile = true;
-    window.matchMedia = vi.fn().mockImplementation(() => ({
-      get matches() { return mobile; }, media: "(max-width: 760px)",
-      addEventListener: (_: string, fn: () => void) => listeners.add(fn),
-      removeEventListener: (_: string, fn: () => void) => listeners.delete(fn),
-    }));
-    try {
-      const user = userEvent.setup();
-      renderSettings();
-      const category = await screen.findByRole("combobox", { name: "设置类别" });
-      expect(screen.queryByRole("tab", { name: "站点设置" })).not.toBeInTheDocument();
-      await user.click(category);
-      const playerOption = await screen.findByText("播放器设置", { selector: ".arco-select-option" });
-      await waitFor(() => expect(getComputedStyle(playerOption).pointerEvents).not.toBe("none"));
-      await user.click(playerOption);
-      fireEvent.change(screen.getByLabelText("EMBY地址"), { target: { value: "retained-mobile-draft" } });
-      act(() => { mobile = false; listeners.forEach((fn) => fn()); });
-      expect(screen.getByRole("tab", { name: "播放器设置" })).toHaveAttribute("aria-selected", "true");
-      expect(screen.getByLabelText("EMBY地址")).toHaveValue("retained-mobile-draft");
-      act(() => { mobile = true; listeners.forEach((fn) => fn()); });
-      expect(screen.getByRole("combobox", { name: "设置分组" })).toHaveTextContent("Emby");
-      expect(screen.getByLabelText("EMBY地址")).toHaveValue("retained-mobile-draft");
-    } finally { cleanup(); window.matchMedia = original; }
-  });
   it("preserves other groups on reset and save, including edits made during the request", async () => {
     const user = userEvent.setup();
     let finish!: (value: unknown) => void;
@@ -101,7 +74,7 @@ describe("设置页字段布局", () => {
     render(<QueryClientProvider client={client}><SettingsPage /></QueryClientProvider>);
     await user.click(await screen.findByRole("tab", { name: "播放器设置" }));
     fireEvent.change(screen.getByLabelText("EMBY地址"), { target: { value: "local-edit" } });
-    act(() => client.setQueryData(["system-settings"], { database_driver: "sqlite", configured: {}, values: { EMBY_URL: "remote-edit", PLEX_URL: "remote-plex" } }));
+    client.setQueryData(["system-settings"], { database_driver: "sqlite", configured: {}, values: { EMBY_URL: "remote-edit", PLEX_URL: "remote-plex" } });
     expect(screen.getByLabelText("EMBY地址")).toHaveValue("local-edit");
     await user.click(screen.getByRole("tab", { name: "Plex" }));
     expect(screen.getByLabelText("PLEX地址")).toHaveValue("remote-plex");
