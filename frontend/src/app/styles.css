@@ -445,7 +445,7 @@ button.code-card-still-cell:hover img { opacity: .85; }
 .toolbar { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 14px; }
 .toolbar-note { color: var(--muted); font-size: 12px; }
 
-/* ===== 设置页：一级线型 Tabs + 二级 rounded Tabs + 同卡表单 ===== */
+/* ===== 设置页：一级线型 Tabs + 二级 capsule Tabs + 同卡表单 ===== */
 /* 撑满可视高度，好让底部操作栏精确贴到视口底部。
    这里刻意不用「100vh 减去固定像素」的算法：面包屑的实际行框高会随字体取整浮动
    （声明 24px，实测行框 25.48px），减法一旦差 1px，底部就会露出灰缝或多出一小截滚动。
@@ -468,13 +468,13 @@ button.code-card-still-cell:hover img { opacity: .85; }
 .settings-category-tabs .arco-tabs-content { display: none; }
 .settings-secondary-navigation { padding: 12px 20px 0; border-bottom: 0; }
 .settings-group-tabs { display: block; padding: 0 0 12px; }
-/* Rounded tabs are left-aligned natively; capsule tabs compute scrolling as right-aligned and clip when forced left. */
-.settings-group-tabs > .arco-tabs-header-nav { margin: 0; }
+/* Capsule tabs align and scroll from the right; shrinking the nav to its content keeps them left without breaking overflow scrolling. */
+.settings-group-tabs > .arco-tabs-header-nav { width: fit-content; max-width: 100%; margin: 0; }
 .settings-group-tabs .arco-tabs-content { display: none; }
 /* 「AI 模型」分组内的页签：同一分组下切换对话与翻译两套互不影响的配置。 */
 .settings-model-tabs { padding: 0 0 18px; }
 .settings-model-tabs-bar { display: block; }
-.settings-model-tabs-bar > .arco-tabs-header-nav { margin: 0; }
+.settings-model-tabs-bar > .arco-tabs-header-nav { width: fit-content; max-width: 100%; margin: 0; }
 .settings-model-tabs-bar .arco-tabs-content { display: none; }
 .settings-group-section {
   padding: 0;

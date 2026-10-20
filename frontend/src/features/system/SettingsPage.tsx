@@ -1827,7 +1827,7 @@ export function SettingsPage() {
           <div className="settings-secondary-navigation">
             <Tabs
               className="settings-group-tabs"
-              type="rounded"
+              type="capsule"
               size="small"
               activeTab={activeGroup.code}
               onChange={setActiveGroupCode}
@@ -1848,7 +1848,7 @@ export function SettingsPage() {
               <div className="settings-model-tabs">
                 <Tabs
                   className="settings-model-tabs-bar"
-                  type="rounded"
+                  type="capsule"
                   size="small"
                   activeTab={activeTab.code}
                   onChange={(code: string) => setActiveTabCodes((previous) => ({ ...previous, [activeGroup.code]: code }))}
