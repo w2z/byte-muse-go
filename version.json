@@ -1,16 +1,20 @@
 {
-  "version": "0.1.169",
-  "commit": "50814f87e04d050273985b96ca028da77a0825dd",
-  "short_commit": "50814f8",
-  "built_at": "2026-10-20T09:46:35Z",
+  "version": "0.1.170",
+  "commit": "c62bf7daed1789223caa0884ba2288d9a19f08d4",
+  "short_commit": "c62bf7d",
+  "built_at": "2026-10-22T12:37:09Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.169",
-    "sha-50814f8",
+    "0.1.170",
+    "sha-c62bf7d",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.170",
+      "message": "在演员下方显示可跳转的题材分类标签"
+    },
     {
       "version": "0.1.169",
       "message": "保留设置页二级胶囊页签样式并左对齐"
