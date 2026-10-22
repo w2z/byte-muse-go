@@ -249,6 +249,8 @@ h1 { margin: 0; color: var(--ink); font-size: 16px; font-weight: var(--app-font-
 .code-card-meta { color: var(--muted); font-size: 13px; }
 .code-card-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 12px; margin-top: auto; padding-top: 4px; }
 .code-card-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+/* 演员与分类各自保持单行；溢出由公共横向滚动行处理，所有标签仍可访问。 */
+.code-card-taxonomy-row { min-width: 0; max-width: 100%; white-space: nowrap; scrollbar-width: thin; }
 /* 剧照预览不需要 Arco 默认工具栏（缩小/放大/旋转/全屏），关闭走右上角 X、ESC 或点击遮罩。 */
 .arco-image-preview-toolbar { display: none; }
 /* 横向滚动行（DragScrollRow）：按住鼠标可左右拖动滚动、滚轮也能滚，触摸走浏览器原生滚动。

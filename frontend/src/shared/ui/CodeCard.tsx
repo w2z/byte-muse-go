@@ -53,7 +53,8 @@ type CodeCardProps = {
  * 所有番号页共用的媒体卡，统一大图、复制、状态、剧照和预告行为。
  *
  * 内容区版式对齐对标站卡片：番号行（大号粗体番号 + 复制 + 状态标签）→ 发售日期 → 页面级 meta → 标题 → 演员标签 → 题材分类 → 操作按钮，
- * 底部按钮右对齐。番号只从服务端字段取，卡片不做任何业务状态推导；订阅状态由 display_status 决定。
+ * 列表的演员与分类各占一行，超宽可横向滚动，两者都有内容时以分割线分隔；底部按钮右对齐。
+ * 番号只从服务端字段取，卡片不做任何业务状态推导；订阅状态由 display_status 决定。
  */
 export function CodeCard({ media, meta, actions, onSelect, hideActions = false, hideStatus = false, variant = "card" }: CodeCardProps) {
   const showDetails = variant === "detail";
@@ -90,14 +91,14 @@ export function CodeCard({ media, meta, actions, onSelect, hideActions = false, 
   const details = media.details;
   // 匹配由后端统一判定，保留采集原名；未匹配项不提供跳转。
   const actors = media.actors ?? [];
-  const actorTags = actors.length > 0 ? <Space wrap size={4} aria-label="演员">{actors.map((actor) =>
+  const actorTags = actors.length > 0 ? <Space wrap={showDetails} size={4} aria-label="演员">{actors.map((actor) =>
     actor.actor_name
       ? <Link key={actor.name} to={"/search?actor=" + encodeURIComponent(actor.actor_name)} aria-label={"搜索演员 " + actor.name + " 的影片"}><Tag color="arcoblue">{actor.name}</Tag></Link>
       : <Tag key={actor.name}>{actor.name}</Tag>
   )}</Space> : null;
   // 使用列表投影中的真实题材标签，沿用标签目录的精确搜索，不为每张卡片请求详情。
   const tags = media.tags ?? [];
-  const categoryTags = tags.length > 0 ? <Space wrap size={4} aria-label="分类">{tags.map((tag) =>
+  const categoryTags = tags.length > 0 ? <Space size={4} aria-label="分类">{tags.map((tag) =>
     <Link key={tag} to={"/search?tag=" + encodeURIComponent(tag)} aria-label={"搜索分类 " + tag + " 的影片"}><Tag color="arcoblue">{tag}</Tag></Link>
   )}</Space> : null;
   const missing = "暂无";
@@ -164,8 +165,9 @@ export function CodeCard({ media, meta, actions, onSelect, hideActions = false, 
           {media.release_date ? <span className="code-card-meta">发售日期: {media.release_date}</span> : null}
           {meta}
           {titleNode}
-          {actorTags}
-          {categoryTags}
+          {actorTags ? <DragScrollRow className="code-card-taxonomy-row">{actorTags}</DragScrollRow> : null}
+          {actorTags && categoryTags ? <Divider style={{ margin: 0 }} /> : null}
+          {categoryTags ? <DragScrollRow className="code-card-taxonomy-row">{categoryTags}</DragScrollRow> : null}
           {!actionsHidden ? <div className="code-card-actions">
             {showImages && stills.length > 0 ? <Button icon={<IconImage />} onClick={() => openStills()}>剧照</Button> : null}
             {media.preview_url ? <Button icon={<IconPlayArrow />} onClick={() => setPreviewVisible(true)}>预告</Button> : null}
