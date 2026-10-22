@@ -91,6 +91,7 @@ func ValidVideoType(value string) bool {
 
 // Media is the API-facing catalog representation.
 type Media struct {
+	Tags               []string           `json:"tags"`              // 列表和详情共用的题材标签；按来源顺序去重，无资料返回空数组。
 	Actors             []MediaActor       `json:"actors"`            // 列表和详情共用；无资料返回空数组。
 	Details            *MediaDetails      `json:"details,omitempty"` // 仅详情接口返回扩展资料。
 	ID                 string             `json:"id"`

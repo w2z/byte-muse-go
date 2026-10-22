@@ -95,15 +95,14 @@ func (r *sqlMediaRepository) Get(ctx context.Context, id string) (domain.Media, 
 		return domain.Media{}, err
 	}
 	// 扩展资料仅在详情读取，避免给每个分页卡片附加元数据查询。
-	details := &domain.MediaDetails{Actors: []string{}, Tags: []string{}}
-	var casts, genres, producer, publisher, series sql.NullString
-	err = r.exec.QueryRowContext(ctx, "SELECT casts, genres, producer, publisher, series FROM legacy_media_metadata WHERE media_id = "+placeholder(r.dialect, 1), id).Scan(&casts, &genres, &producer, &publisher, &series)
+	details := &domain.MediaDetails{Actors: []string{}, Tags: media.Tags}
+	var casts, producer, publisher, series sql.NullString
+	err = r.exec.QueryRowContext(ctx, "SELECT casts, producer, publisher, series FROM legacy_media_metadata WHERE media_id = "+placeholder(r.dialect, 1), id).Scan(&casts, &producer, &publisher, &series)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return domain.Media{}, err
 	}
 	if err == nil {
 		details.Actors = splitRecommendationValues(casts.String)
-		details.Tags = splitRecommendationValues(genres.String)
 		for field, value := range map[**string]sql.NullString{&details.Producer: producer, &details.Publisher: publisher, &details.Series: series} {
 			if value.Valid && strings.TrimSpace(value.String) != "" {
 				*field = stringPointer(strings.TrimSpace(value.String))
@@ -659,9 +658,10 @@ func mediaColumns() string {
 	return "id, code, title, translated_title, poster_url, release_date, duration_minutes, subscription_status, library_status, created_at, updated_at"
 }
 
+// mediaProjectionColumns 统一列表与详情投影，直接读取已有演员和题材标签，避免逐卡查询资料。
 func mediaProjectionColumns(alias string) string {
 	base := strings.Replace(prefixedMediaColumns(alias), alias+".subscription_status", "CASE WHEN s.id IS NOT NULL THEN 'active' ELSE "+alias+".subscription_status END", 1)
-	return base + ", " + alias + ".video_type, lm.banner_url, lm.preview_url, lm.still_photo, lm.casts, " +
+	return base + ", " + alias + ".video_type, lm.banner_url, lm.preview_url, lm.still_photo, lm.casts, lm.genres, " +
 		"s.id, s.media_id, s.status, s.mode, s.filter_json, s.created_at, s.updated_at, s.version, d.status"
 }
 
@@ -735,12 +735,13 @@ func scanMediaProjectionRows(ctx context.Context, exec sqlExecutor, dialect Dial
 	return items, nil
 }
 
+// scanMediaProjection 解析公共影片投影；标签去空、去重并保留来源顺序，与精确标签搜索共用逗号分隔语义。
 func scanMediaProjection(row rowScanner) (domain.Media, error) {
 	var item domain.Media
 	var translatedTitle, posterURL, releaseDate any
 	var duration sql.NullInt64
 	var createdAt, updatedAt any
-	var bannerURL, previewURL, stillPhoto, casts sql.NullString
+	var bannerURL, previewURL, stillPhoto, casts, genres sql.NullString
 	var subscriptionID, subscriptionMediaID, subscriptionStatus, subscriptionMode, filterJSON sql.NullString
 	var subscriptionCreatedAt, subscriptionUpdatedAt any
 	var subscriptionVersion sql.NullInt64
@@ -749,7 +750,7 @@ func scanMediaProjection(row rowScanner) (domain.Media, error) {
 		&item.ID, &item.Code, &item.Title, &translatedTitle, &posterURL, &releaseDate, &duration,
 		&item.SubscriptionStatus, &item.LibraryStatus, &createdAt, &updatedAt,
 		&item.VideoType,
-		&bannerURL, &previewURL, &stillPhoto, &casts,
+		&bannerURL, &previewURL, &stillPhoto, &casts, &genres,
 		&subscriptionID, &subscriptionMediaID, &subscriptionStatus, &subscriptionMode, &filterJSON,
 		&subscriptionCreatedAt, &subscriptionUpdatedAt, &subscriptionVersion, &downloadStatus,
 	); err != nil {
@@ -769,6 +770,14 @@ func scanMediaProjection(row rowScanner) (domain.Media, error) {
 		item.PreviewURL = stringPointer(previewURL.String)
 	}
 	item.StillPhotos = parseStillPhotos(stillPhoto.String)
+	item.Tags = make([]string, 0)
+	seenTags := map[string]bool{}
+	for _, name := range splitRecommendationValues(genres.String) {
+		if !seenTags[name] {
+			item.Tags = append(item.Tags, name)
+			seenTags[name] = true
+		}
+	}
 	item.Actors = make([]domain.MediaActor, 0)
 	seenActors := map[string]bool{}
 	for _, name := range splitRecommendationValues(casts.String) {

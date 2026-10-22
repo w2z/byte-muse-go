@@ -1981,8 +1981,15 @@ components:
           type: string
     Media:
       type: object
-      required: [id, code, title, actors, video_type, still_photos, subscription_status, library_status, display_status, created_at, updated_at]
+      required: [id, code, title, actors, tags, video_type, still_photos, subscription_status, library_status, display_status, created_at, updated_at]
       properties:
+        tags:
+          type: array
+          description: 所有影片列表及详情共用的题材分类标签；按来源顺序去空、去重，无分类资料返回空数组而非 null。名称与标签目录一致，可作为 /complex/search 的 tag 参数精确搜索，不等同于 video_type。
+          items:
+            type: string
+            description: 已保存的完整题材标签名称，去除首尾空格
+          example: [剧情, 经典]
         actors:
           type: array
           description: 所有影片列表及详情共用的演员标签，按采集顺序去重；无演员资料返回空数组。主名精确匹配优先，别名仅唯一归属时匹配；未匹配和歧义项使用默认 Tag，匹配项使用 arcoblue 并按 actor_name 搜索影片。

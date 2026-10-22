@@ -8,7 +8,32 @@ import { afterEach, expect, it, vi } from "vitest";
 import { apiRequest, coverCacheURL } from "../api/client";
 import type { Media, SystemSettings } from "../api/types";
 import { CodeCard } from "./CodeCard";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useSearchParams } from "react-router-dom";
+
+it("题材标签显示在演员下方，点击后保留完整标签进行精确搜索", async () => {
+  const user = userEvent.setup();
+  const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity } } });
+  client.setQueryData(["system-settings"], settings("INVISIBLE"));
+  function SearchTarget() {
+    const [params] = useSearchParams();
+    return <div>分类搜索：{params.get("tag")}</div>;
+  }
+  const item = { ...media, tags: ["剧情", "A&B / 特别篇"], actors: [{ name: "演员甲", actor_name: "演员甲" }] };
+  render(<MemoryRouter><QueryClientProvider client={client}><Routes>
+    <Route path="/" element={<CodeCard media={item} />} />
+    <Route path="/search" element={<SearchTarget />} />
+  </Routes></QueryClientProvider></MemoryRouter>);
+  const tag = screen.getByRole("link", { name: "搜索分类 A&B / 特别篇 的影片" });
+  expect(screen.getByLabelText("演员").compareDocumentPosition(screen.getByLabelText("分类")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(tag).toHaveAttribute("href", "/search?tag=" + encodeURIComponent("A&B / 特别篇"));
+  await user.click(tag);
+  expect(screen.getByText("分类搜索：A&B / 特别篇")).toBeInTheDocument();
+});
+
+it.each([undefined, []])("没有题材标签时不显示空分类行：%s", (tags) => {
+  renderCard("INVISIBLE", { media: { ...media, tags } });
+  expect(screen.queryByLabelText("分类")).toBeNull();
+});
 
 it("演员标签保留原名，仅数据库匹配项提供蓝色搜索链接", () => {
   const client = new QueryClient();

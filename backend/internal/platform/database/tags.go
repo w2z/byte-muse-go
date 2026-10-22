@@ -19,15 +19,30 @@ func NewTagRepository(db *sql.DB, dialect Dialect) *TagRepository {
 	return &TagRepository{db: db, dialect: dialect}
 }
 
-// tagMediaCTE 拆分兼容标签并按影片去重；目录、追新和搜索共用精确匹配。
+// trimTagSQL 与 Go strings.TrimSpace 使用相同的 Unicode White_Space 集合，
+// 保证历史标签的制表符、全角空格不会导致卡片链接搜不到原影片；expression 只能是程序固定的 SQL 表达式。
+func trimTagSQL(d Dialect, expression string) string {
+	const whitespace = "\t\n\v\f\r \u0085\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000"
+	switch d {
+	case DialectPostgres:
+		return "BTRIM(" + expression + ",'" + whitespace + "')"
+	case DialectMySQL:
+		return "REGEXP_REPLACE(" + expression + ",'^[" + whitespace + "]+|[" + whitespace + "]+$','')"
+	default:
+		return "TRIM(" + expression + ",'" + whitespace + "')"
+	}
+}
+
+// tagMediaCTE 拆分兼容标签并按影片去重；目录、追新和搜索共用与列表展示一致的空白处理及精确匹配。
 func tagMediaCTE(d Dialect) string {
 	if d == DialectPostgres {
-		return "WITH tagged AS (SELECT DISTINCT lm.media_id,BTRIM(part) AS name FROM legacy_media_metadata lm CROSS JOIN LATERAL unnest(string_to_array(COALESCE(lm.genres,''),',')) AS part WHERE BTRIM(part)<>'')"
+		name := trimTagSQL(d, "part")
+		return "WITH tagged AS (SELECT DISTINCT lm.media_id," + name + " AS name FROM legacy_media_metadata lm CROSS JOIN LATERAL unnest(string_to_array(COALESCE(lm.genres,''),',')) AS part WHERE " + name + "<>'')"
 	}
 	if d == DialectMySQL {
-		return "WITH RECURSIVE parts(media_id,name,rest) AS (SELECT lm.media_id,CAST('' AS CHAR(65535)),CONCAT(lm.genres,',') FROM legacy_media_metadata lm WHERE lm.genres IS NOT NULL AND lm.genres<>'' UNION ALL SELECT media_id,TRIM(SUBSTRING(rest,1,INSTR(rest,',')-1)),SUBSTRING(rest,INSTR(rest,',')+1) FROM parts WHERE rest<>''),tagged AS (SELECT DISTINCT media_id,name FROM parts WHERE name<>'')"
+		return "WITH RECURSIVE parts(media_id,name,rest) AS (SELECT lm.media_id,CAST('' AS CHAR(65535)),CONCAT(lm.genres,',') FROM legacy_media_metadata lm WHERE lm.genres IS NOT NULL AND lm.genres<>'' UNION ALL SELECT media_id," + trimTagSQL(d, "SUBSTRING(rest,1,INSTR(rest,',')-1)") + ",SUBSTRING(rest,INSTR(rest,',')+1) FROM parts WHERE rest<>''),tagged AS (SELECT DISTINCT media_id,name FROM parts WHERE name<>'')"
 	}
-	return "WITH RECURSIVE parts(media_id,name,rest) AS (SELECT lm.media_id,'',lm.genres||',' FROM legacy_media_metadata lm WHERE lm.genres IS NOT NULL AND lm.genres<>'' UNION ALL SELECT media_id,TRIM(SUBSTR(rest,1,INSTR(rest,',')-1)),SUBSTR(rest,INSTR(rest,',')+1) FROM parts WHERE rest<>''),tagged AS (SELECT DISTINCT media_id,name FROM parts WHERE name<>'')"
+	return "WITH RECURSIVE parts(media_id,name,rest) AS (SELECT lm.media_id,'',lm.genres||',' FROM legacy_media_metadata lm WHERE lm.genres IS NOT NULL AND lm.genres<>'' UNION ALL SELECT media_id," + trimTagSQL(d, "SUBSTR(rest,1,INSTR(rest,',')-1)") + ",SUBSTR(rest,INSTR(rest,',')+1) FROM parts WHERE rest<>''),tagged AS (SELECT DISTINCT media_id,name FROM parts WHERE name<>'')"
 }
 
 // SearchMedia 按完整标签名称精确匹配，不把相似名称或标题当作同一个标签。

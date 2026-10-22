@@ -39,6 +39,8 @@ export type LoginResponse = {
 export type MediaActor = { name: string; actor_name: string | null };
 
 export type Media = {
+  /** 所有列表与详情共用的题材标签；按来源顺序去重，空数组表示没有分类资料。 */
+  tags?: string[];
   /** 所有列表与详情的演员标签；空数组表示没有演员资料。 */
   actors?: MediaActor[];
   /** 详情接口返回的扩展资料；列表不加载。 */

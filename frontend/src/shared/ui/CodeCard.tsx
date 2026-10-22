@@ -52,7 +52,7 @@ type CodeCardProps = {
 /**
  * 所有番号页共用的媒体卡，统一大图、复制、状态、剧照和预告行为。
  *
- * 内容区版式对齐对标站卡片：番号行（大号粗体番号 + 复制 + 状态标签）→ 发售日期 → 页面级 meta → 标题 → 演员标签 → 操作按钮，
+ * 内容区版式对齐对标站卡片：番号行（大号粗体番号 + 复制 + 状态标签）→ 发售日期 → 页面级 meta → 标题 → 演员标签 → 题材分类 → 操作按钮，
  * 底部按钮右对齐。番号只从服务端字段取，卡片不做任何业务状态推导；订阅状态由 display_status 决定。
  */
 export function CodeCard({ media, meta, actions, onSelect, hideActions = false, hideStatus = false, variant = "card" }: CodeCardProps) {
@@ -94,6 +94,11 @@ export function CodeCard({ media, meta, actions, onSelect, hideActions = false, 
     actor.actor_name
       ? <Link key={actor.name} to={"/search?actor=" + encodeURIComponent(actor.actor_name)} aria-label={"搜索演员 " + actor.name + " 的影片"}><Tag color="arcoblue">{actor.name}</Tag></Link>
       : <Tag key={actor.name}>{actor.name}</Tag>
+  )}</Space> : null;
+  // 使用列表投影中的真实题材标签，沿用标签目录的精确搜索，不为每张卡片请求详情。
+  const tags = media.tags ?? [];
+  const categoryTags = tags.length > 0 ? <Space wrap size={4} aria-label="分类">{tags.map((tag) =>
+    <Link key={tag} to={"/search?tag=" + encodeURIComponent(tag)} aria-label={"搜索分类 " + tag + " 的影片"}><Tag color="arcoblue">{tag}</Tag></Link>
   )}</Space> : null;
   const missing = "暂无";
   /** 保留零值和 false 的真实含义，不用真假判断替代缺失判断。 */
@@ -160,6 +165,7 @@ export function CodeCard({ media, meta, actions, onSelect, hideActions = false, 
           {meta}
           {titleNode}
           {actorTags}
+          {categoryTags}
           {!actionsHidden ? <div className="code-card-actions">
             {showImages && stills.length > 0 ? <Button icon={<IconImage />} onClick={() => openStills()}>剧照</Button> : null}
             {media.preview_url ? <Button icon={<IconPlayArrow />} onClick={() => setPreviewVisible(true)}>预告</Button> : null}

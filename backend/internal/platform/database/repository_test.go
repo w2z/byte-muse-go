@@ -2,13 +2,71 @@ package database
 
 import (
 	"context"
+	"encoding/json"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
 	"bytemuse/backend/internal/domain"
 	"bytemuse/backend/internal/ports"
 )
+
+// TestMediaTagProjection 验证列表与详情使用同一标签集合，且每个标签都可精确搜索回原影片。
+func TestMediaTagProjection(t *testing.T) {
+	s := openCatalogQueryTestStore(t)
+	defer s.Close()
+	ctx := context.Background()
+	for _, id := range []string{"tagged", "empty", "missing"} {
+		insertCatalogTestMedia(t, s, id, id, "测试影片")
+	}
+	if _, err := s.SQLDB().Exec(`INSERT INTO legacy_media_metadata(media_id,code,genres,legacy_status,legacy_mode) VALUES('tagged','tagged',?,'NONE','strict'),('empty','empty',' , ','NONE','strict')`, " 剧情, A&B / 特别篇,剧情,, ,\tDrama\t,\u3000Classic\u3000,\u00a0Drama\u0085"); err != nil {
+		t.Fatal(err)
+	}
+	r := &sqlMediaRepository{dialect: DialectSQLite, exec: s.SQLDB()}
+	page, err := r.List(ctx, ports.MediaListQuery{Limit: 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Items) != 3 {
+		t.Fatalf("items=%d", len(page.Items))
+	}
+	for _, item := range page.Items {
+		data, err := json.Marshal(item)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var payload struct {
+			Tags []string `json:"tags"`
+		}
+		if err := json.Unmarshal(data, &payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload.Tags == nil {
+			t.Fatalf("%s: tags must be an array", item.ID)
+		}
+		expected := []string{}
+		if item.ID == "tagged" {
+			expected = []string{"剧情", "A&B / 特别篇", "Drama", "Classic"}
+		}
+		if !reflect.DeepEqual(payload.Tags, expected) {
+			t.Fatalf("%s: tags=%q", item.ID, payload.Tags)
+		}
+		for _, tag := range payload.Tags {
+			found, err := NewTagRepository(s.SQLDB(), DialectSQLite).SearchMedia(ctx, tag, 20, 0)
+			if err != nil || found.Total != 1 || len(found.Items) != 1 || found.Items[0].ID != item.ID {
+				t.Fatalf("tag=%s result=%+v err=%v", tag, found, err)
+			}
+		}
+		detail, err := r.Get(ctx, item.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(detail.Details.Tags, payload.Tags) {
+			t.Fatalf("detail=%q list=%q", detail.Details.Tags, payload.Tags)
+		}
+	}
+}
 
 func TestMediaRepositoryListFiltersCatalogState(t *testing.T) {
 	ctx := context.Background()
