@@ -1,16 +1,20 @@
 {
-  "version": "0.1.173",
-  "commit": "8376f4fc9f3f8210ea0968f490d0d5b4bbd6586f",
-  "short_commit": "8376f4f",
-  "built_at": "2026-10-26T15:47:02Z",
+  "version": "0.1.174",
+  "commit": "2403fdbe8810c46f7917c725f6171087582f10bd",
+  "short_commit": "2403fdb",
+  "built_at": "2026-10-26T15:52:16Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.173",
-    "sha-8376f4f",
+    "0.1.174",
+    "sha-2403fdb",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.174",
+      "message": "支持点击列表封面打开图片预览"
+    },
     {
       "version": "0.1.173",
       "message": "在 BT 资源站名称后添加协议标识"
