@@ -266,7 +266,8 @@ export function DownloadListPage() {
               { ...column("code", "影片", "text"), title: "影片", width: 150, fixed: "left", render: (value: string | null, task: DownloadTask) => value && task.media_id
                 ? <Button type="text" className="code-cell" onClick={() => setSelectedMediaId(task.media_id)}>{value}</Button>
                 : <span className="code-cell">{value || "—"}</span> },
-              { ...column("source_site", "资源站", "enum"), title: "资源站", width: 150, fixed: "left", render: (value: string | null) => value || "—" },
+              // 协议类型由后端判定；只给已识别的 BT 资源加标识，未知来源保留原名和缺失占位。
+              { ...column("source_site", "资源站", "enum"), title: "资源站", width: 150, fixed: "left", render: (value: string | null, task: DownloadTask) => value ? value + (task.source_kind === "bt" ? " (BT)" : "") : "—" },
               { ...column("downloader", "下载器", "enum"), title: "下载器", render: (value: string | null) => value || "—" },
               { ...column("transfer_status", "下载状态", "enum"), title: "下载状态", render: (_: unknown, task: DownloadTask) => <DownloadStatus task={task} /> },
               { ...column("size_bytes", "大小", "bytes"), title: "大小", width: 110, render: (_: unknown, task: DownloadTask) => formatBytes(task.metrics?.size_bytes) },
