@@ -31,6 +31,53 @@ function renderSettings() {
 }
 
 describe("设置页字段布局", () => {
+  it("背景刷新开启排除 BT 时，未保存的 BT 主站也回落自动", async () => {
+    const user = userEvent.setup();
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    vi.mocked(apiRequest).mockResolvedValue({ database_driver: "sqlite", values: { MAIN_SITE: "ALL", EXCLUDE_BT: "false" }, configured: {} });
+    render(<QueryClientProvider client={client}><SettingsPage /></QueryClientProvider>);
+    await user.click(await screen.findByRole("tab", { name: "站点设置" }));
+    await user.click(screen.getByRole("radio", { name: "BT" }));
+    client.setQueryData(["system-settings"], { database_driver: "sqlite", values: { MAIN_SITE: "ALL", EXCLUDE_BT: "true" }, configured: {} });
+    await waitFor(() => expect(screen.getByRole("switch", { name: "排除 BT" })).toBeChecked());
+    expect(screen.getByRole("radio", { name: "BT" })).toBeDisabled();
+    expect(screen.getByRole("radio", { name: "自动" })).toBeChecked();
+  });
+
+  it("排除 BT 位于主站下方，启用后回落自动并禁用 BT，保存和重置保持一致", async () => {
+    const user = userEvent.setup();
+    let values: Record<string, string> = { MAIN_SITE: "BT", EXCLUDE_BT: "false" };
+    vi.mocked(apiRequest).mockImplementation(async (_path, options) => {
+      if (options?.method === "PUT") values = { ...values, ...JSON.parse(String(options.body)).values };
+      return { database_driver: "sqlite", values: { ...values }, configured: {} };
+    });
+    const view = renderSettings();
+    await user.click(await screen.findByRole("tab", { name: "站点设置" }));
+    const toggle = screen.getByRole("switch", { name: "排除 BT" });
+    expect(screen.getByLabelText("主站选择（配合排序器使用）").compareDocumentPosition(toggle) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByRole("radio", { name: "BT" })).toBeChecked();
+    await user.click(toggle);
+    expect(screen.getByRole("radio", { name: "BT" })).toBeDisabled();
+    expect(screen.getByRole("radio", { name: "自动" })).toBeChecked();
+    await user.click(screen.getByRole("button", { name: "重置" }));
+    expect(toggle).not.toBeChecked();
+    expect(screen.getByRole("radio", { name: "BT" })).toBeEnabled();
+    expect(screen.getByRole("radio", { name: "BT" })).toBeChecked();
+    await user.click(toggle);
+    await user.click(screen.getByRole("button", { name: "保存设置" }));
+    await waitFor(() => expect(values.EXCLUDE_BT).toBe("true"));
+    expect(values.MAIN_SITE).toBe("ALL");
+    view.unmount();
+    renderSettings();
+    await user.click(await screen.findByRole("tab", { name: "站点设置" }));
+    expect(screen.getByRole("switch", { name: "排除 BT" })).toBeChecked();
+    expect(screen.getByRole("radio", { name: "BT" })).toBeDisabled();
+    await user.click(screen.getByRole("switch", { name: "排除 BT" }));
+    expect(screen.getByRole("radio", { name: "BT" })).toBeEnabled();
+    await user.click(screen.getByRole("radio", { name: "BT" }));
+    expect(screen.getByRole("radio", { name: "BT" })).toBeChecked();
+  });
+
   it("preserves other groups on reset and save, including edits made during the request", async () => {
     const user = userEvent.setup();
     let finish!: (value: unknown) => void;

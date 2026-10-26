@@ -317,6 +317,7 @@ const groups: SettingGroup[] = [
         kind: "enum",
         options: mainSiteOptions,
       },
+      { key: "EXCLUDE_BT", label: "排除 BT", kind: "bool", description: "开启后仅搜索已配置的 PT 站点；主站为 BT 时自动切换为自动。" },
     ],
   },
   {
@@ -962,10 +963,13 @@ function hasRequiredValues(keys: string[] | undefined, draft: Draft): boolean {
 }
 
 /**
- * OpenAI 翻译引擎要求「AI 模型 → 翻译模型」的接口、模型与密钥三者齐全，Prompt 可以为空。
- * 未配置齐全时不允许停留在 openai，统一回落默认引擎，保证设置页展示与后端装配判定一致。
+ * 编辑、重置及合并服务端刷新共用字段依赖约束：排除 BT 时主站回落自动；
+ * OpenAI 翻译配置不齐全时回落默认引擎，避免选中已禁用的选项。
  */
-function applyTranslationEngineGuard(draft: Draft): Draft {
+function applyDraftGuards(draft: Draft): Draft {
+  if (draft.EXCLUDE_BT === true && draft.MAIN_SITE === "BT") {
+    draft = { ...draft, MAIN_SITE: "ALL" };
+  }
   if (draft.TRANSLATION_ENGINE !== "openai" || hasRequiredValues(translationOpenAIKeys, draft)) {
     return draft;
   }
@@ -1227,7 +1231,7 @@ export function SettingsPage() {
     for (const key of ["DEFAULT_FILTER", "DEFAULT_SORT", scanPathsKey, strmPathsKey, "CLOUD_UPLOAD_PATHS"]) delete next[key];
     if (!next.BYPASS_ENGINE) next.BYPASS_USE_PROXY = false;
     if (!String(next.PAN115_COOKIE ?? "").trim()) next.PAN115_EVENT_ENABLE = false;
-    const guarded = applyTranslationEngineGuard(next as Draft);
+    const guarded = applyDraftGuards(next as Draft);
     editorRef.current = { ...snapshot, ...guarded };
     setDraft(guarded);
   };
@@ -1280,9 +1284,9 @@ export function SettingsPage() {
   // 测试直接提交当前草稿，不触发保存，也不依赖 Agent 开关；对话与翻译各自测试自己的配置。
   const openAITest = useOpenAITest(draft, message);
 
-  // 编辑任意字段后都重新校验 OpenAI 翻译不变式，删除翻译模型配置时引擎立即回落。
+  // 编辑任意字段后重新校验依赖，避免主站及翻译引擎停留在已禁用选项。
   const setValue = (key: string, value: string | boolean) =>
-    setDraft((previous) => applyTranslationEngineGuard({
+    setDraft((previous) => applyDraftGuards({
       ...previous,
       [key]: value,
       ...(key === "BYPASS_ENGINE" && value === "" ? { BYPASS_USE_PROXY: false } : {}),
@@ -1625,7 +1629,7 @@ export function SettingsPage() {
                 <Radio
                   key={option.value}
                   value={option.value}
-                  disabled={!hasRequiredValues(option.requires, draft)}
+                  disabled={!hasRequiredValues(option.requires, draft) || (field.key === "MAIN_SITE" && option.value === "BT" && draft.EXCLUDE_BT === true)}
                 >
                   {option.label}
                 </Radio>

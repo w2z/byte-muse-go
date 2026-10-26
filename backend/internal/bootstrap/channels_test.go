@@ -19,8 +19,41 @@ import (
 	"time"
 
 	"bytemuse/backend/internal/application"
+	"bytemuse/backend/internal/platform/torrentsearch"
 	"bytemuse/backend/internal/ports"
 )
+
+// blockedBTSearcher 会在被调用时失败，用于保证排除发生在外网搜索之前。
+type blockedBTSearcher struct{ called bool }
+
+func (s *blockedBTSearcher) Search(context.Context, string) ([]torrentsearch.Resource, error) {
+	s.called = true
+	return nil, errors.New("BT search must not run")
+}
+
+// TestResourceSearcherExcludeBT 验证开关移除全部公开搜索源，同时保留已配置的 PT 取种能力。
+func TestResourceSearcherExcludeBT(t *testing.T) {
+	bt := &blockedBTSearcher{}
+	for _, exclude := range []string{"", "false", "true"} {
+		searcher, private := newResourceSearcher(map[string]string{"EXCLUDE_BT": exclude, "MTEAM_API_KEY": "test-key"}, bt)
+		want := 3
+		if exclude == "true" {
+			want = 1
+		}
+		if got := len(searcher.(application.MultiResourceSearcher).Sources); got != want {
+			t.Fatalf("exclude=%q sources=%d want=%d", exclude, got, want)
+		}
+		if len(private) != 1 || private["mteam"] == nil {
+			t.Fatal("PT source was removed")
+		}
+	}
+	settings := newTestSettings(t)
+	saveSettings(t, settings, map[string]string{"EXCLUDE_BT": "true"})
+	items, err := (settingsResourceSearcher{settings: settings, javdb: bt}).Search(context.Background(), "TEST-001")
+	if err != nil || len(items) != 0 || bt.called {
+		t.Fatalf("items=%v err=%v BT called=%v", items, err, bt.called)
+	}
+}
 
 // transitionNotifier 捕获终态装配入口交给渠道的业务消息。
 type transitionNotifier struct {

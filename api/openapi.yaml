@@ -849,7 +849,7 @@ paths:
                 $ref: '#/components/schemas/SystemSettings'
               example:
                 database_driver: sqlite
-                values: {PTFANS_AUTH_TYPE: key, PTFANS_API_KEY: example-token, PTFANS_COOKIE: 'session=example'}
+                values: {EXCLUDE_BT: 'false', MAIN_SITE: ALL, PTFANS_AUTH_TYPE: key, PTFANS_API_KEY: example-token, PTFANS_COOKIE: 'session=example'}
                 configured: {PTFANS_API_KEY: true, PTFANS_COOKIE: true}
     put:
       operationId: updateSystemSettings
@@ -864,7 +864,7 @@ paths:
             schema:
               $ref: '#/components/schemas/SystemSettingsUpdate'
             example:
-              values: {PTFANS_AUTH_TYPE: key, PTFANS_API_KEY: example-token, PTFANS_COOKIE: 'session=example'}
+              values: {EXCLUDE_BT: 'false', MAIN_SITE: ALL, PTFANS_AUTH_TYPE: key, PTFANS_API_KEY: example-token, PTFANS_COOKIE: 'session=example'}
       responses:
         '200':
           description: 已保存并返回当前分组的完整系统设置
@@ -874,7 +874,7 @@ paths:
                 $ref: '#/components/schemas/SystemSettings'
               example:
                 database_driver: sqlite
-                values: {PTFANS_AUTH_TYPE: key, PTFANS_API_KEY: example-token, PTFANS_COOKIE: 'session=example'}
+                values: {EXCLUDE_BT: 'false', MAIN_SITE: ALL, PTFANS_AUTH_TYPE: key, PTFANS_API_KEY: example-token, PTFANS_COOKIE: 'session=example'}
                 configured: {PTFANS_API_KEY: true, PTFANS_COOKIE: true}
         '400':
           description: 包含不支持的设置项或请求体无效
@@ -2532,6 +2532,8 @@ components:
             RANK_SCHEDULE_TIME、ACTOR_SCHEDULE_TIME、TAG_SCHEDULE_TIME、DOWNLOAD_SCHEDULE_TIME 为标准 5 段 cron
             （分 时 日 月 周，如 0 20 * * * 表示每天 20:00），空值表示不注册该定时任务；非法表达式保存时返回 400 invalid_setting；保存后立即重排，无需重启后端。
           properties:
+            EXCLUDE_BT: {type: string, enum: ['true', 'false'], default: 'false', example: 'false', description: '排除 BT 搜索；非空字符串，未保存或空值读取为 false。true 时后续订阅搜索批次和渠道 Agent 搜种不调用 Nyaa、JavDB 的 BT 资源搜索，仅保留已配置的 PT 站点；不影响影片资料采集、已提交下载任务及手动直链下载。'}
+            MAIN_SITE: {type: string, enum: [ALL, 馒头, BT, PTT, NicePT, PTFans, RousiPro, ''], description: '排序器主站偏好；ALL 对应自动，空值无偏好。EXCLUDE_BT 为 true 时保存主站 BT 会原子回落为 ALL。'}
             SUBSCRIPTION_SKIP_CONFIRM: {type: string, enum: ['true', 'false', ''], default: 'false', description: '订阅时不再弹出确认框。true 直接按当前默认过滤规则创建严格模式订阅；false、空值或缺失时显示确认表单。编辑订阅始终显示表单；保存时省略保留原值。'}
             DEFAULT_FILTER: {type: string, example: '{"exclude_vr":true,"min_size":1024,"max_size":8192}', description: '默认过滤规则 JSON 字符串，字段见 SubscriptionFilter；exclude_vr 为布尔值，空值或空对象表示无默认过滤条件。'}
             PTT_AUTH_TYPE: {type: string, deprecated: true, enum: [key, cookie, ''], description: '历史兼容字段，不参与运行；PTTime 固定使用 PTT_COOKIE'}
@@ -2596,6 +2598,8 @@ components:
             BYPASS_ENGINE 的 cloudflare_bypass_for_scraping 在页面显示为 ByPass，协议值不变。BYPASS_USE_PROXY 默认 false；关闭增强时同一事务强制关闭代理开关，再次启用增强不会自动开启代理。Scrapling HTTP 协议尚未接入。
             RANK_SCHEDULE_TIME、ACTOR_SCHEDULE_TIME、TAG_SCHEDULE_TIME、DOWNLOAD_SCHEDULE_TIME 只接受标准 5 段 cron（分 时 日 月 周），空字符串表示不注册该定时任务，非法表达式返回 400 invalid_setting；保存后立即重排，无需重启后端。
           properties:
+            EXCLUDE_BT: {type: string, enum: ['true', 'false', ''], default: 'false', example: 'true', description: '排除 BT 搜索；true 开启，false 或空字符串关闭，省略保留原值。保存后后续订阅搜索批次及渠道 Agent 搜种生效。若合并后的 MAIN_SITE 为 BT，则同一事务改为 ALL；无 PT 凭据时返回空搜索结果，不回退 BT。'}
+            MAIN_SITE: {type: string, enum: [ALL, 馒头, BT, PTT, NicePT, PTFans, RousiPro, ''], description: '排序器主站偏好；ALL 对应自动，空值无偏好，省略保留。EXCLUDE_BT 为 true 时 BT 自动保存为 ALL，部分更新同样生效。'}
             SUBSCRIPTION_SKIP_CONFIRM: {type: string, enum: ['true', 'false', ''], default: 'false', description: '订阅时不再弹出确认框。true 直接按当前默认过滤规则创建严格模式订阅；false、空值或缺失时显示确认表单。编辑订阅始终显示表单；保存时省略保留原值。'}
             DEFAULT_FILTER: {type: string, example: '{"exclude_vr":true,"min_size":1024,"max_size":8192}', description: '默认过滤规则 JSON 字符串，字段见 SubscriptionFilter；exclude_vr 为布尔值，空值或空对象表示无默认过滤条件。'}
             CLOUD_UPLOAD_PATHS: {"type":"string","default":"[]","description":"本地到网盘映射JSON数组字符串。每项kind为115或cd2、id为115数字目录ID或CD2绝对路径、path为网盘显示路径、local_path为服务主机绝对路径，均必填；空数组无映射，重复映射拒绝。"}

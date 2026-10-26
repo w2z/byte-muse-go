@@ -208,6 +208,7 @@ var writableSettings = map[string]settingSpec{
 	// 排序
 	"DEFAULT_SORT": {kind: settingSort},
 	"MAIN_SITE":    {kind: settingEnum, allowed: mainSites},
+	"EXCLUDE_BT":   {kind: settingBool},
 
 	// 定时任务
 	"RANK_PAGE":                   {kind: settingInt},
@@ -313,6 +314,10 @@ func (s *SettingsService) Get(ctx context.Context) (domain.SystemSettings, error
 		}
 		result.Values[item.Key] = item.Value
 	}
+	// 未保存过开关的旧库保持 BT 搜索启用，无需回填历史设置。
+	if result.Values["EXCLUDE_BT"] != "true" {
+		result.Values["EXCLUDE_BT"] = "false"
+	}
 	// 未启用增强或历史配置未提供开关时，一律对外呈现关闭状态。
 	if result.Values["BYPASS_ENGINE"] == "" || result.Values["BYPASS_USE_PROXY"] != "true" {
 		result.Values["BYPASS_USE_PROXY"] = "false"
@@ -362,6 +367,34 @@ func (s *SettingsService) Update(ctx context.Context, values map[string]string) 
 			value = string(encoded)
 		}
 		items = append(items, ports.StoredSetting{Key: key, Value: value, IsSecret: spec.secret})
+	}
+	// 排除 BT 时主站不可保留 BT；部分更新按合并后的设置判断，并原子保存回落值。
+	_, changesExcludeBT := values["EXCLUDE_BT"]
+	_, changesMainSite := values["MAIN_SITE"]
+	if changesExcludeBT || changesMainSite {
+		current, err := s.Get(ctx)
+		if err != nil {
+			return domain.SystemSettings{}, err
+		}
+		exclude, site := current.Values["EXCLUDE_BT"], current.Values["MAIN_SITE"]
+		if value, supplied := values["EXCLUDE_BT"]; supplied {
+			exclude = strings.TrimSpace(value)
+		}
+		if value, supplied := values["MAIN_SITE"]; supplied {
+			site = strings.TrimSpace(value)
+		}
+		if exclude == "true" && site == "BT" {
+			found := false
+			for i := range items {
+				if items[i].Key == "MAIN_SITE" {
+					items[i].Value = "ALL"
+					found = true
+				}
+			}
+			if !found {
+				items = append(items, ports.StoredSetting{Key: "MAIN_SITE", Value: "ALL"})
+			}
+		}
 	}
 	// 部分更新也遵循增强关闭则代理关闭；与本次设置使用同一批次持久化。
 	_, changesEngine := values["BYPASS_ENGINE"]

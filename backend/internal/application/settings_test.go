@@ -13,6 +13,48 @@ type settingsRepositoryStub struct {
 	items []ports.StoredSetting
 }
 
+// TestExcludeBTSetting 验证默认关闭、部分更新联动、关闭后可重选 BT，以及非法值不落库。
+func TestExcludeBTSetting(t *testing.T) {
+	repo := &settingsMemoryRepository{}
+	svc, err := NewSettingsService(repo, "sqlite", strings.Repeat("x", 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	initial, err := svc.Get(ctx)
+	if err != nil || initial.Values["EXCLUDE_BT"] != "false" {
+		t.Fatalf("initial=%v err=%v", initial.Values, err)
+	}
+	for _, tc := range []struct {
+		values        map[string]string
+		exclude, site string
+	}{
+		{map[string]string{"MAIN_SITE": "BT"}, "false", "BT"},
+		{map[string]string{"EXCLUDE_BT": "true"}, "true", "ALL"},
+		{map[string]string{"MAIN_SITE": "BT"}, "true", "ALL"},
+		{map[string]string{"MAIN_SITE": "馒头"}, "true", "馒头"},
+		{map[string]string{"EXCLUDE_BT": "false", "MAIN_SITE": "BT"}, "false", "BT"},
+		{map[string]string{"EXCLUDE_BT": " true ", "MAIN_SITE": " BT "}, "true", "ALL"},
+		{map[string]string{"EXCLUDE_BT": ""}, "false", "ALL"},
+	} {
+		got, err := svc.Update(ctx, tc.values)
+		if err != nil || got.Values["EXCLUDE_BT"] != tc.exclude || got.Values["MAIN_SITE"] != tc.site {
+			t.Fatalf("update=%v got=%v err=%v", tc.values, got.Values, err)
+		}
+		read, err := svc.Get(ctx)
+		if err != nil || read.Values["MAIN_SITE"] != tc.site {
+			t.Fatalf("read=%v err=%v", read.Values, err)
+		}
+	}
+	if _, err := svc.Update(ctx, map[string]string{"EXCLUDE_BT": "yes", "MAIN_SITE": "BT"}); !errors.Is(err, ErrInvalidSetting) {
+		t.Fatal(err)
+	}
+	got, _ := svc.Get(ctx)
+	if got.Values["MAIN_SITE"] != "ALL" {
+		t.Fatal("invalid update changed main site")
+	}
+}
+
 // TestBypassProxySetting 验证开关持久化、部分更新禁用增强时关闭代理，以及非法布尔值拒绝。
 func TestBypassProxySetting(t *testing.T) {
 	repo := &settingsMemoryRepository{}

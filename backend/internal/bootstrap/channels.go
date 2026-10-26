@@ -111,12 +111,15 @@ func (s settingsResourceSearcher) Search(ctx context.Context, code string) ([]to
 }
 
 // newResourceSearcher 构造公开站点与已配置私有站点合并后的资源搜索器。
-// 订阅下载与 Agent 搜种必须共用这里，避免两处站点配置漂移。
+// 订阅下载与 Agent 搜种共用这里；排除 BT 时不装配公开搜索源，避免先请求再丢弃结果。
 func newResourceSearcher(values map[string]string, javdb ...application.ResourceSearcher) (application.ResourceSearcher, map[string]application.PrivateTorrentSource) {
-	sources := []application.ResourceSearcher{torrentsearch.NewNyaaSearcher(nil, "")}
-	for _, source := range javdb {
-		if source != nil {
-			sources = append(sources, source)
+	var sources []application.ResourceSearcher
+	if values["EXCLUDE_BT"] != "true" {
+		sources = append(sources, torrentsearch.NewNyaaSearcher(nil, ""))
+		for _, source := range javdb {
+			if source != nil {
+				sources = append(sources, source)
+			}
 		}
 	}
 	privateSearchers, privateSources := configuredPrivateSites(values, nil)
