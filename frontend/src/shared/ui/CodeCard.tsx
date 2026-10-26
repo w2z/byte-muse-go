@@ -54,6 +54,7 @@ type CodeCardProps = {
  *
  * 内容区版式对齐对标站卡片：番号行（大号粗体番号 + 复制 + 状态标签）→ 发售日期 → 页面级 meta → 标题 → 演员标签 → 题材分类 → 操作按钮，
  * 演员与分类分组展示，组内标签自动换行，两组都有内容时以分割线分隔；底部按钮右对齐。
+ * 列表封面保持 cover 裁切，正常图片模式点击后使用 Arco 图片预览，标题保留详情入口。
  * 番号只从服务端字段取，卡片不做任何业务状态推导；订阅状态由 display_status 决定。
  */
 export function CodeCard({ media, meta, actions, onSelect, hideActions = false, hideStatus = false, variant = "card" }: CodeCardProps) {
@@ -72,6 +73,7 @@ export function CodeCard({ media, meta, actions, onSelect, hideActions = false, 
   const [stillsVisible, setStillsVisible] = useState(false);
   const [currentStill, setCurrentStill] = useState(0);
   const [previewVisible, setPreviewVisible] = useState(false);
+  const [coverVisible, setCoverVisible] = useState(false);
   useEffect(() => {
     if (!showImages) setStillsVisible(false);
   }, [showImages]);
@@ -82,6 +84,11 @@ export function CodeCard({ media, meta, actions, onSelect, hideActions = false, 
   // 主封面统一生成缓存或 WordPress 图片代理地址，与微信封面推送保持一致；
   // 剧照与资料图仍用源站地址。
   const coverURL = coverCacheURL(media.code, media.banner_url || media.poster_url, settings.data?.values.EXTERNAL_DOMAIN);
+  // 切换图片模式或影片封面时关闭预览，避免恢复正常模式后自动重开旧图。
+  useEffect(() => { setCoverVisible(false); }, [imageMode, coverURL]);
+  const coverImage = showImages && coverURL
+    ? <img className={imageClassName} src={coverURL} alt={media.code + " 封面"} loading="lazy" />
+    : <ImagePlaceholder className="code-card-cover-placeholder" label={media.code + " 封面占位图"} />;
   const stills = media.still_photos ?? [];
   const status: MediaDisplayStatus = media.display_status ?? (media.subscription_status === "active" ? "subscribed" : "unsubscribed");
   const statusView = displayStatus[status];
@@ -152,9 +159,9 @@ export function CodeCard({ media, meta, actions, onSelect, hideActions = false, 
         role="article"
         size="small"
         bordered
-        cover={<div className="code-card-cover">{showImages && coverURL
-          ? <img className={imageClassName} src={coverURL} alt={media.code + " 封面"} loading="lazy" />
-          : <ImagePlaceholder className="code-card-cover-placeholder" label={media.code + " 封面占位图"} />}</div>}
+        cover={<div className="code-card-cover">{showImages && imageMode === "VISIBLE" && coverURL
+          ? <button type="button" className="code-card-cover-trigger" aria-label={"放大 " + media.code + " 封面"} onClick={() => setCoverVisible(true)}>{coverImage}</button>
+          : coverImage}</div>}
       >
         <div className="code-card-body">
           <div className="code-card-code-row">
@@ -175,6 +182,12 @@ export function CodeCard({ media, meta, actions, onSelect, hideActions = false, 
           </div> : null}
         </div>
       </Card>}
+      {!showDetails && showImages && imageMode === "VISIBLE" && coverURL && coverVisible ? <Image.Preview
+        src={coverURL}
+        imgAttributes={{ alt: media.code + " 封面预览" }}
+        visible={coverVisible}
+        onVisibleChange={setCoverVisible}
+      /> : null}
       {showDetails ? <div style={{ marginTop: 24, overflowWrap: "anywhere" }}>
         <Descriptions title="基本信息" column={detailColumns} layout="inline-horizontal" data={[
           { label: "订阅时间", value: media.active_subscription?.created_at ? dayjs(media.active_subscription.created_at).format("YYYY-MM-DD HH:mm:ss") : missing },

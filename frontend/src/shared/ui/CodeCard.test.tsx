@@ -76,6 +76,26 @@ function renderCard(mode?: string, props: Partial<ComponentProps<typeof CodeCard
   return { client, ...view };
 }
 
+it("列表封面打开图片预览，标题仍打开详情，切换模糊模式立即关闭原图", async () => {
+  const user = userEvent.setup();
+  const onSelect = vi.fn();
+  const { client } = renderCard("VISIBLE", { onSelect, hideActions: true });
+  await user.click(screen.getByRole("button", { name: "放大 TEST-001 封面" }));
+  expect(await screen.findByRole("img", { name: "TEST-001 封面预览" })).toHaveAttribute("src", coverSrc);
+  expect(onSelect).not.toHaveBeenCalled();
+  await user.keyboard("{Escape}");
+  await waitFor(() => expect(screen.queryByRole("img", { name: "TEST-001 封面预览" })).toBeNull());
+  await user.click(screen.getByRole("button", { name: "测试影片" }));
+  expect(onSelect).toHaveBeenCalledTimes(1);
+  await user.click(screen.getByRole("button", { name: "放大 TEST-001 封面" }));
+  await act(async () => { client.setQueryData(["system-settings"], settings("BLUR")); });
+  await waitFor(() => expect(screen.queryByRole("img", { name: "TEST-001 封面预览" })).toBeNull());
+  expect(screen.queryByRole("button", { name: "放大 TEST-001 封面" })).toBeNull();
+  await act(async () => { client.setQueryData(["system-settings"], settings("VISIBLE")); });
+  await screen.findByRole("button", { name: "放大 TEST-001 封面" });
+  expect(screen.queryByRole("img", { name: "TEST-001 封面预览" })).toBeNull();
+});
+
 it("无图模式用占位图替代封面且不加载真实图片，剧照入口隐藏，手动打开预告也不传封面", async () => {
   const user = userEvent.setup();
   const { container } = renderCard("INVISIBLE");
