@@ -1,16 +1,20 @@
 {
-  "version": "0.1.172",
-  "commit": "b333e68068e68a5762486f92d2572446f54ea1ae",
-  "short_commit": "b333e68",
-  "built_at": "2026-10-26T15:42:26Z",
+  "version": "0.1.173",
+  "commit": "8376f4fc9f3f8210ea0968f490d0d5b4bbd6586f",
+  "short_commit": "8376f4f",
+  "built_at": "2026-10-26T15:47:02Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.172",
-    "sha-b333e68",
+    "0.1.173",
+    "sha-8376f4f",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.173",
+      "message": "在 BT 资源站名称后添加协议标识"
+    },
     {
       "version": "0.1.172",
       "message": "支持标签自动换行并添加排除 BT 搜索开关"
