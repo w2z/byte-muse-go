@@ -1,16 +1,20 @@
 {
-  "version": "0.1.171",
-  "commit": "db6d6442f1be13971fa5c86d00d815ab4a4f22e7",
-  "short_commit": "db6d644",
-  "built_at": "2026-10-22T12:43:32Z",
+  "version": "0.1.172",
+  "commit": "b333e68068e68a5762486f92d2572446f54ea1ae",
+  "short_commit": "b333e68",
+  "built_at": "2026-10-26T15:42:26Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.171",
-    "sha-db6d644",
+    "0.1.172",
+    "sha-b333e68",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.172",
+      "message": "支持标签自动换行并添加排除 BT 搜索开关"
+    },
     {
       "version": "0.1.171",
       "message": "将演员与分类改为单行并添加分割线"
