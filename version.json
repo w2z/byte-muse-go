@@ -1,16 +1,20 @@
 {
-  "version": "0.1.174",
-  "commit": "2403fdbe8810c46f7917c725f6171087582f10bd",
-  "short_commit": "2403fdb",
-  "built_at": "2026-10-26T15:52:16Z",
+  "version": "0.1.175",
+  "commit": "5b412f19e3fc7bba36d557a6110c72cab05da9d6",
+  "short_commit": "5b412f1",
+  "built_at": "2026-10-29T05:48:28Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.174",
-    "sha-2403fdb",
+    "0.1.175",
+    "sha-5b412f1",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.175",
+      "message": "为缺少名称的磁力链接添加番号"
+    },
     {
       "version": "0.1.174",
       "message": "支持点击列表封面打开图片预览"
