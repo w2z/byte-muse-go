@@ -1,16 +1,20 @@
 {
-  "version": "0.1.176",
-  "commit": "e9a22e0626b6e4c61ba774f44099c2b96a0362c5",
-  "short_commit": "e9a22e0",
-  "built_at": "2026-10-29T05:53:32Z",
+  "version": "0.1.177",
+  "commit": "d1e349d32d7287a073960171bdbd20e531c01b13",
+  "short_commit": "d1e349d",
+  "built_at": "2026-10-29T05:59:30Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.176",
-    "sha-e9a22e0",
+    "0.1.177",
+    "sha-d1e349d",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.177",
+      "message": "在本地未命中时搜索外站资源"
+    },
     {
       "version": "0.1.176",
       "message": "为影片搜索补充标题翻译"
