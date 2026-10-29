@@ -1,16 +1,20 @@
 {
-  "version": "0.1.175",
-  "commit": "5b412f19e3fc7bba36d557a6110c72cab05da9d6",
-  "short_commit": "5b412f1",
-  "built_at": "2026-10-29T05:48:28Z",
+  "version": "0.1.176",
+  "commit": "e9a22e0626b6e4c61ba774f44099c2b96a0362c5",
+  "short_commit": "e9a22e0",
+  "built_at": "2026-10-29T05:53:32Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.175",
-    "sha-5b412f1",
+    "0.1.176",
+    "sha-e9a22e0",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.176",
+      "message": "为影片搜索补充标题翻译"
+    },
     {
       "version": "0.1.175",
       "message": "为缺少名称的磁力链接添加番号"
