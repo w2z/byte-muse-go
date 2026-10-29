@@ -150,6 +150,40 @@ func searchMedia(ctx context.Context, deps Deps, raw string) (any, error) {
 	return result, nil
 }
 
+// searchCategoryMedia 复用标签或影片类型的权威查询；不写入订阅或下载。
+func searchCategoryMedia(ctx context.Context, deps Deps, tag, videoType string) (any, error) {
+	tag, videoType = strings.TrimSpace(tag), strings.TrimSpace(videoType)
+	if tag != "" && videoType != "" {
+		return "请只指定标签或影片类型中的一种", nil
+	}
+	var page application.Page[domain.Media]
+	var err error
+	switch {
+	case tag != "":
+		if deps.Tags == nil {
+			return "标签服务不可用", nil
+		}
+		page, err = deps.Tags.SearchMedia(ctx, tag, 1, mediaSearchLimit)
+	case videoType != "":
+		if deps.Catalog == nil {
+			return "影片查询服务不可用", nil
+		}
+		page, err = deps.Catalog.List(ctx, 1, mediaSearchLimit, ports.MediaListQuery{VideoType: videoType})
+	default:
+		return "请提供标签或影片类型", nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("查询分类影片失败: %w", err)
+	}
+	if len(page.Items) == 0 {
+		return "该分类暂无影片", nil
+	}
+	result := mediaListResult(page)
+	result["tag"] = tag
+	result["video_type"] = videoType
+	return result, nil
+}
+
 // getRank 查询榜单；周期取值由 normalizeRankType 收敛。
 func getRank(ctx context.Context, deps Deps, raw string) (any, error) {
 	rankType := normalizeRankType(raw)

@@ -19,6 +19,7 @@ var expectedToolNames = []string{
 	"search_code",
 	"search_actor",
 	"search_media",
+	"search_category_media",
 	"get_rank",
 	"get_release_today",
 	"get_recommendations",

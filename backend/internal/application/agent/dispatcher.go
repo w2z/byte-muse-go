@@ -38,7 +38,28 @@ func (d *Dispatcher) Handle(ctx context.Context, msg ports.InboundMessage) error
 	if !ok {
 		return fmt.Errorf("渠道 %s 未配置，无法发送回复", msg.Channel)
 	}
+	if len(reply.Cards) > 0 {
+		for _, card := range reply.Cards {
+			if err := sender.SendCard(ctx, msg.ChatID, card); err != nil {
+				logging.Error(logging.CategoryAgent, "渠道卡片发送失败，降级为文本", "channel", msg.Channel, "error", err.Error())
+				if err := sender.SendText(ctx, msg.ChatID, card.Title+"\n"+card.Text); err != nil {
+					return err
+				}
+			}
+		}
+		if text := strings.TrimSpace(reply.FollowUp); text != "" {
+			return sender.SendText(ctx, msg.ChatID, text)
+		}
+		return nil
+	}
 	if reply.Card != nil {
+		if reply.EditMessageID != "" {
+			if editor, ok := sender.(ports.CardEditor); ok {
+				if err := editor.EditCard(ctx, msg.ChatID, reply.EditMessageID, reply.EditHasPhoto, *reply.Card); err == nil {
+					return nil
+				}
+			}
+		}
 		if err := sender.SendCard(ctx, msg.ChatID, *reply.Card); err != nil {
 			logging.Error(logging.CategoryAgent, "渠道卡片发送失败，降级为文本", "channel", msg.Channel, "error", err.Error())
 			fallback := strings.TrimSpace(reply.Text) + "\n卡片发送失败，请稍后重新发送番号获取操作按钮。"

@@ -204,6 +204,30 @@ func (c *Client) SendCard(ctx context.Context, chatID string, card ports.Outboun
 	return err
 }
 
+// EditCard 更新 Telegram 现有卡片；消息类型不兼容或封面不可用时返回错误，由调用方发送新卡片。
+func (c *Client) EditCard(ctx context.Context, chatID, messageID string, hasPhoto bool, card ports.OutboundCard) error {
+	id, err := strconv.ParseInt(strings.TrimSpace(messageID), 10, 64)
+	if err != nil {
+		return fmt.Errorf("telegram 消息 ID 无效")
+	}
+	caption := truncateRunes(composeCaption(card.Title, card.Text), maxCaptionRunes)
+	photo := strings.TrimSpace(card.PhotoURL)
+	payload := map[string]any{"chat_id": chatID, "message_id": id, "reply_markup": inlineKeyboard(card.Buttons)}
+	if hasPhoto && photo != "" {
+		media := map[string]any{"type": "photo", "media": photo, "caption": caption}
+		c.applySpoiler(media)
+		payload["media"] = media
+		_, err = c.postJSON(ctx, "editMessageMedia", payload, defaultRequestTimeout)
+		return err
+	}
+	if !hasPhoto && photo == "" {
+		payload["text"] = caption
+		_, err = c.postJSON(ctx, "editMessageText", payload, defaultRequestTimeout)
+		return err
+	}
+	return fmt.Errorf("telegram 卡片类型发生变化")
+}
+
 // ReplaceButtons 用新按钮替换原消息的内联键盘；buttons 为空表示移除键盘，防止重复点击过期操作。
 // messageID 非十进制数字时返回错误，调用方只记录日志，不影响本次回复文本的投递。
 func (c *Client) ReplaceButtons(ctx context.Context, chatID, messageID string, buttons []ports.ActionButton) error {
@@ -236,13 +260,12 @@ func (c *Client) AnswerCallback(ctx context.Context, callbackID, text string) er
 // inlineKeyboard 把按钮按每行两个排成内联键盘，最后一个奇数按钮独占一行。
 func inlineKeyboard(buttons []ports.ActionButton) map[string]any {
 	rows := make([][]map[string]string, 0, (len(buttons)+keyboardButtonsPerRow-1)/keyboardButtonsPerRow)
-	for index := 0; index < len(buttons); index += keyboardButtonsPerRow {
-		row := make([]map[string]string, 0, keyboardButtonsPerRow)
-		for offset := 0; offset < keyboardButtonsPerRow && index+offset < len(buttons); offset++ {
-			button := buttons[index+offset]
-			row = append(row, map[string]string{"text": button.Label, "callback_data": button.Data})
+	for _, button := range buttons {
+		if len(rows) == 0 || button.NewRow || len(rows[len(rows)-1]) == keyboardButtonsPerRow {
+			rows = append(rows, make([]map[string]string, 0, keyboardButtonsPerRow))
 		}
-		rows = append(rows, row)
+		index := len(rows) - 1
+		rows[index] = append(rows[index], map[string]string{"text": button.Label, "callback_data": button.Data})
 	}
 	return map[string]any{"inline_keyboard": rows}
 }
@@ -409,7 +432,8 @@ func decodeUpdates(raw json.RawMessage) ([]Update, error) {
 				ID int64 `json:"id"`
 			} `json:"from"`
 			Message *struct {
-				MessageID int64 `json:"message_id"`
+				MessageID int64           `json:"message_id"`
+				Photo     json.RawMessage `json:"photo"`
 				Chat      struct {
 					ID int64 `json:"id"`
 				} `json:"chat"`
@@ -433,6 +457,7 @@ func decodeUpdates(raw json.RawMessage) ([]Update, error) {
 				Action: &ports.InboundAction{
 					Data:       query.Data,
 					MessageID:  strconv.FormatInt(query.Message.MessageID, 10),
+					HasPhoto:   len(query.Message.Photo) > 0 && string(query.Message.Photo) != "null",
 					CallbackID: query.ID,
 				},
 			})

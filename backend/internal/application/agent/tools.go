@@ -42,6 +42,17 @@ func BuiltinTools(deps Deps) []Tool {
 			},
 		},
 		builtinTool{
+			name:        "search_category_media",
+			description: "查询指定标签或影片类型下的影片；标签使用精确名称，影片类型使用有码、无码、无码破解、流出或未分类。",
+			parameters: objectSchema(map[string]any{
+				"tag":        stringProperty("影片标签的准确名称；按影片类型查询时留空"),
+				"video_type": stringProperty("影片类型：censored、uncensored、uncensored_cracked、leaked、unknown；按标签查询时留空", "censored", "uncensored", "uncensored_cracked", "leaked", "unknown"),
+			}),
+			run: func(ctx context.Context, args map[string]any) (any, error) {
+				return searchCategoryMedia(ctx, deps, stringArg(args, "tag"), stringArg(args, "video_type"))
+			},
+		},
+		builtinTool{
 			name:        "get_rank",
 			description: "查询榜单影片，返回最多 20 条；type 支持 daily、weekly、monthly。",
 			parameters: objectSchema(map[string]any{

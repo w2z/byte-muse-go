@@ -67,6 +67,28 @@ func inlineRows(t *testing.T, body map[string]any) []any {
 	return rows
 }
 
+// 切换图片卡片时必须同时更新图片、正文和操作按钮。
+func TestEditCardUpdatesMediaAndKeyboard(t *testing.T) {
+	fixture := &cardFixture{}
+	server := fixture.server(t, nil)
+	defer server.Close()
+	client := newTestClient(t, server.URL)
+	client.spoiler = true
+	card := ports.OutboundCard{PhotoURL: "https://example.test/2.jpg", Title: "TEST-002", Text: "第二张", Buttons: []ports.ActionButton{{Label: "订阅", Data: "button"}}}
+	if err := client.EditCard(context.Background(), "555", "88", true, card); err != nil {
+		t.Fatal(err)
+	}
+	calls := fixture.snapshot()
+	if len(calls) != 1 || calls[0].method != "editMessageMedia" {
+		t.Fatalf("calls=%+v", calls)
+	}
+	media, _ := calls[0].body["media"].(map[string]any)
+	if media["media"] != card.PhotoURL || media["caption"] != "TEST-002\n第二张" || media["has_spoiler"] != true {
+		t.Fatalf("media=%v", media)
+	}
+	inlineRows(t, calls[0].body)
+}
+
 func TestSendCardSendsPhotoCaptionAndInlineKeyboard(t *testing.T) {
 	fixture := &cardFixture{}
 	server := fixture.server(t, nil)

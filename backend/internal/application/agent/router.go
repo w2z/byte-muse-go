@@ -2,9 +2,14 @@ package agent
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"bytemuse/backend/internal/application"
 	"bytemuse/backend/internal/domain"
@@ -36,11 +41,13 @@ func Commands() []ports.BotCommand {
 type Router struct {
 	orchestrator *Orchestrator
 	deps         Deps
+	mu           sync.Mutex
+	results      map[string]mediaResultSet
 }
 
 // NewRouter 绑定编排器与业务依赖。
 func NewRouter(orchestrator *Orchestrator, deps Deps) *Router {
-	return &Router{orchestrator: orchestrator, deps: deps}
+	return &Router{orchestrator: orchestrator, deps: deps, results: make(map[string]mediaResultSet)}
 }
 
 // Handle 处理一条入站消息并返回要投递的回复。
@@ -48,6 +55,9 @@ func NewRouter(orchestrator *Orchestrator, deps Deps) *Router {
 // 返回的错误表示渠道或配置层面的失败，调用方应记录日志；空回复表示无需回复。
 func (r *Router) Handle(ctx context.Context, msg ports.InboundMessage) (ports.Reply, error) {
 	if msg.Action != nil {
+		if strings.HasPrefix(msg.Action.Data, "bm:list:") {
+			return r.handleMediaResultAction(ctx, msg), nil
+		}
 		return handleCardAction(ctx, r.deps, *msg.Action), nil
 	}
 	text := strings.TrimSpace(msg.Text)
@@ -75,8 +85,22 @@ func (r *Router) Handle(ctx context.Context, msg ports.InboundMessage) (ports.Re
 			}
 			return ports.Reply{Text: agentChatDisabled}, nil
 		}
+		collected := &mediaResultCollector{}
+		ctx = context.WithValue(ctx, mediaResultsKey{}, collected)
 		reply, err := r.orchestrator.Reply(ctx, msg)
 		if err == nil {
+			if len(collected.codes) > 0 {
+				if card := r.newMediaResult(ctx, msg, collected); card.Card != nil || len(card.Cards) > 0 {
+					card.FollowUp = reply
+					if collected.incomplete {
+						card.FollowUp += "\n外站只查询了第一页，结果可能不完整。"
+					}
+					if msg.Channel != ports.ChannelTelegram && collected.total > len(collected.codes) {
+						card.FollowUp += fmt.Sprintf("\n共 %d 条，本次展示前 %d 条。", collected.total, len(collected.codes))
+					}
+					return card, nil
+				}
+			}
 			return ports.Reply{Text: reply}, nil
 		}
 		if !errors.Is(err, ErrAgentDisabled) {
@@ -91,6 +115,290 @@ func (r *Router) Handle(ctx context.Context, msg ports.InboundMessage) (ports.Re
 		return cardForCode(ctx, r.deps, text), nil
 	}
 	return ports.Reply{Text: r.disabledHelp()}, nil
+}
+
+// mediaResultCollector 保存工具返回的本地影片番号，不解析模型生成的文本。
+type mediaResultsKey struct{}
+type mediaResultCollector struct {
+	codes      []string
+	total      int
+	suppress   bool
+	external   map[string]application.ExternalMedia
+	incomplete bool
+	queryName  string
+	queryArgs  map[string]any
+}
+
+// mediaResultSet 绑定结果与原渠道、会话，限制按钮有效期和内存占用。
+type mediaResultSet struct {
+	owner     string
+	codes     []string
+	total     int
+	external  map[string]application.ExternalMedia
+	created   time.Time
+	queryName string
+	queryArgs map[string]any
+	page      int
+}
+
+func mediaResultOwner(msg ports.InboundMessage) string {
+	return msg.Channel + "\x00" + msg.ChatID + "\x00" + msg.UserID
+}
+
+func collectMediaResults(ctx context.Context, name string, args map[string]any, result any) {
+	collector, ok := ctx.Value(mediaResultsKey{}).(*mediaResultCollector)
+	if !ok {
+		return
+	}
+	switch name {
+	case "add_subscribe", "cancel_subscribe", "add_actor_subscribe", "cancel_actor_subscribe", "add_tag_subscribe", "cancel_tag_subscribe", "download_subscribe", "run_cron_job", "send_message":
+		collector.codes = nil
+		collector.suppress = true
+		return
+	}
+	if collector.suppress {
+		return
+	}
+	switch name {
+	case "search_media", "search_code", "get_rank", "get_release_today", "get_recommendations", "search_category_media":
+	default:
+		return
+	}
+	collector.codes = nil
+	collector.external = nil
+	collector.incomplete = false
+	collector.queryName = ""
+	data, ok := result.(map[string]any)
+	if !ok {
+		return
+	}
+	if name == "search_code" {
+		media := data
+		if nested, ok := data["media"].(map[string]any); ok {
+			media = nested
+		}
+		if code, ok := media["code"].(string); ok && domain.NormalizeCode(code) != "" {
+			collector.codes = []string{domain.NormalizeCode(code)}
+			collector.total = 1
+		}
+		return
+	}
+	items, ok := data["items"].([]map[string]any)
+	if !ok {
+		if external, ok := data["external_media"].([]application.ExternalMedia); ok && len(external) > 0 {
+			collector.incomplete, _ = data["external_incomplete"].(bool)
+			collector.codes = nil
+			collector.external = make(map[string]application.ExternalMedia)
+			for _, item := range external {
+				code := domain.NormalizeCode(item.Code)
+				if code == "" {
+					continue
+				}
+				if _, duplicate := collector.external[code]; duplicate {
+					continue
+				}
+				collector.external[code] = item
+				collector.codes = append(collector.codes, code)
+			}
+			collector.total = len(collector.codes)
+		}
+		return
+	}
+	codes := make([]string, 0, len(items))
+	for _, item := range items {
+		if code, ok := item["code"].(string); ok && domain.NormalizeCode(code) != "" {
+			codes = append(codes, domain.NormalizeCode(code))
+		}
+	}
+	collector.codes = codes
+	collector.total, _ = data["total"].(int)
+	switch name {
+	case "search_media", "search_category_media", "get_rank", "get_release_today":
+		collector.queryName, collector.queryArgs = name, args
+	}
+}
+
+func (r *Router) newMediaResult(ctx context.Context, msg ports.InboundMessage, collected *mediaResultCollector) ports.Reply {
+	codes, total := collected.codes, collected.total
+	if msg.Channel != ports.ChannelTelegram {
+		result := ports.Reply{}
+		for index := range codes {
+			set := mediaResultSet{codes: codes, total: total, external: collected.external}
+			if item := r.mediaResultCard(ctx, set, "", index); item.Card != nil {
+				// 非 Telegram 渠道使用原有的番号订阅动作。
+				for i, button := range item.Card.Buttons {
+					if _, _, ok := parseCardData(button.Data); !ok {
+						item.Card.Buttons[i].Data = cardData(cardActionSubscribe, codes[index])
+					}
+				}
+				result.Cards = append(result.Cards, *item.Card)
+			}
+		}
+		return result
+	}
+	var random [8]byte
+	if _, err := rand.Read(random[:]); err != nil {
+		return ports.Reply{}
+	}
+	token := hex.EncodeToString(random[:])
+	set := mediaResultSet{owner: mediaResultOwner(msg), codes: append([]string(nil), codes...), total: total, external: collected.external, created: time.Now(), queryName: collected.queryName, queryArgs: collected.queryArgs, page: 1}
+	r.mu.Lock()
+	for key, value := range r.results {
+		if time.Since(value.created) > sessionTTL {
+			delete(r.results, key)
+		}
+	}
+	if len(r.results) >= 1000 {
+		var oldest string
+		var when time.Time
+		for key, value := range r.results {
+			if oldest == "" || value.created.Before(when) {
+				oldest, when = key, value.created
+			}
+		}
+		delete(r.results, oldest)
+	}
+	r.results[token] = set
+	r.mu.Unlock()
+	return r.mediaResultCard(ctx, set, token, 0)
+}
+
+func (r *Router) mediaResultCard(ctx context.Context, set mediaResultSet, token string, index int) ports.Reply {
+	if index < 0 || index >= len(set.codes) {
+		return ports.Reply{Text: "结果已失效，请重新查询"}
+	}
+	media, found := lookupMedia(ctx, r.deps, set.codes[index])
+	if !found {
+		item, ok := set.external[set.codes[index]]
+		if !ok {
+			return ports.Reply{Text: "影片资料不可用，请重新查询"}
+		}
+		title := item.Title
+		if item.TranslatedTitle != nil && strings.TrimSpace(*item.TranslatedTitle) != "" {
+			title = *item.TranslatedTitle
+		}
+		card := &ports.OutboundCard{Title: set.codes[index], Text: title + "\n外站资料，尚未入库", PhotoURL: item.PosterURL, Buttons: []ports.ActionButton{{Label: "订阅", Data: cardData(cardActionSubscribe, set.codes[index])}}}
+		return r.decorateMediaResult(ports.Reply{Card: card, Text: card.Title + "\n" + card.Text}, set, token, index)
+	}
+	reply := mediaCard(ctx, r.deps, media)
+	return r.decorateMediaResult(reply, set, token, index)
+}
+
+// decorateMediaResult 复用原卡片动作，并为 Telegram 查询结果绑定受限的翻页回调。
+func (r *Router) decorateMediaResult(reply ports.Reply, set mediaResultSet, token string, index int) ports.Reply {
+	if reply.Card == nil {
+		return reply
+	}
+	if token == "" {
+		return reply
+	}
+	for i, button := range reply.Card.Buttons {
+		name, _, ok := parseCardData(button.Data)
+		if ok {
+			reply.Card.Buttons[i].Data = fmt.Sprintf("bm:list:%s:%d:%s", token, index, name)
+		}
+	}
+	if len(set.codes) > 1 || (set.queryName != "" && len(set.codes) < set.total) {
+		reply.Card.Text += fmt.Sprintf("\n%d / %d", index+1, len(set.codes))
+		if set.total > len(set.codes) {
+			reply.Card.Text = strings.TrimSuffix(reply.Card.Text, fmt.Sprintf("%d / %d", index+1, len(set.codes))) + fmt.Sprintf("%d / %d", index+1, set.total)
+		}
+		if index > 0 {
+			reply.Card.Buttons = append(reply.Card.Buttons, ports.ActionButton{Label: "◀ 上一张", Data: fmt.Sprintf("bm:list:%s:%d:show", token, index-1), NewRow: true})
+		}
+		if index+1 < len(set.codes) || (set.queryName != "" && len(set.codes) < set.total) {
+			reply.Card.Buttons = append(reply.Card.Buttons, ports.ActionButton{Label: "下一张 ▶", Data: fmt.Sprintf("bm:list:%s:%d:show", token, index+1), NewRow: index == 0})
+		}
+	}
+	return reply
+}
+
+func (r *Router) handleMediaResultAction(ctx context.Context, msg ports.InboundMessage) ports.Reply {
+	parts := strings.Split(msg.Action.Data, ":")
+	if len(parts) != 5 {
+		return ports.Reply{Text: "结果已失效，请重新查询"}
+	}
+	index, err := strconv.Atoi(parts[3])
+	r.mu.Lock()
+	set, ok := r.results[parts[2]]
+	r.mu.Unlock()
+	if err != nil || !ok || time.Since(set.created) > sessionTTL || set.owner != mediaResultOwner(msg) || index < 0 {
+		return ports.Reply{Text: "结果已失效，请重新查询"}
+	}
+	if parts[4] == "show" {
+		if index == len(set.codes) && set.queryName != "" && len(set.codes) < set.total {
+			set, err = r.loadMoreMediaResults(ctx, parts[2], set)
+			if err != nil {
+				return ports.Reply{Text: "加载更多影片失败，请稍后重试"}
+			}
+		}
+		reply := r.mediaResultCard(ctx, set, parts[2], index)
+		reply.EditMessageID = msg.Action.MessageID
+		reply.EditHasPhoto = msg.Action.HasPhoto
+		return reply
+	}
+	if index >= len(set.codes) {
+		return ports.Reply{Text: "结果已失效，请重新查询"}
+	}
+	if !cardActionKnown(parts[4]) {
+		return ports.Reply{Text: cardActionExpired}
+	}
+	text := runCardAction(ctx, r.deps, parts[4], set.codes[index])
+	reply := r.mediaResultCard(ctx, set, parts[2], index)
+	if reply.Card != nil {
+		reply.Refresh = &ports.ButtonRefresh{MessageID: msg.Action.MessageID, Buttons: reply.Card.Buttons}
+	}
+	reply.Card = nil
+	reply.Text = text
+	return reply
+}
+
+// loadMoreMediaResults 按原查询逐页加载，错误时保留已有结果并允许重试。
+func (r *Router) loadMoreMediaResults(ctx context.Context, token string, set mediaResultSet) (mediaResultSet, error) {
+	pageNumber := set.page + 1
+	var page application.Page[domain.Media]
+	var err error
+	switch set.queryName {
+	case "search_media":
+		page, err = r.deps.Queries.Search(ctx, stringArg(set.queryArgs, "keyword"), pageNumber, mediaSearchLimit)
+	case "search_category_media":
+		if tag := stringArg(set.queryArgs, "tag"); tag != "" {
+			page, err = r.deps.Tags.SearchMedia(ctx, tag, pageNumber, mediaSearchLimit)
+		} else {
+			page, err = r.deps.Catalog.List(ctx, pageNumber, mediaSearchLimit, ports.MediaListQuery{VideoType: stringArg(set.queryArgs, "video_type")})
+		}
+	case "get_rank":
+		page, err = r.deps.Queries.Rank(ctx, normalizeRankType(stringArg(set.queryArgs, "type")), pageNumber, mediaSearchLimit, ports.MediaListQuery{})
+	case "get_release_today":
+		page, err = r.deps.Queries.ReleaseToday(ctx, pageNumber, mediaSearchLimit, ports.MediaListQuery{})
+	default:
+		return set, errors.New("不支持分页")
+	}
+	if err != nil {
+		return set, err
+	}
+	codes := make([]string, 0, len(page.Items))
+	for _, item := range page.Items {
+		if code := domain.NormalizeCode(item.Code); code != "" {
+			codes = append(codes, code)
+		}
+	}
+	if len(codes) == 0 {
+		return set, errors.New("没有更多有效影片")
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	current, ok := r.results[token]
+	if !ok || current.created != set.created {
+		return set, errors.New("查询已失效")
+	}
+	if current.page == set.page {
+		current.codes = append(append([]string(nil), current.codes...), codes...)
+		current.page = pageNumber
+		current.total = page.Total
+		r.results[token] = current
+	}
+	return current, nil
 }
 
 // agentChatEnabled 报告该渠道是否允许自然语言对话。

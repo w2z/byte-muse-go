@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -200,6 +201,129 @@ func TestDispatcherAgentConversationCallsToolAndReplies(t *testing.T) {
 	}
 	if tools, ok := calls[0]["tools"].([]any); !ok || len(tools) == 0 {
 		t.Fatalf("首轮未携带工具定义")
+	}
+}
+
+// 查询影片时保留工具返回的真实结果，切换后仍显示对应影片的订阅操作。
+func TestAgentMediaResultsUseNavigableCards(t *testing.T) {
+	deps, subscriptions, _ := cardTestDeps(libraryMedia("m1", "TEST-001", "Test One"), libraryMedia("m2", "TEST-002", "Test Two"))
+	var round int
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		round++
+		if round == 1 {
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"call_1","type":"function","function":{"name":"search_media","arguments":"{\"keyword\":\"TEST\"}"}}]}}]}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"找到两部影片"}}]}`))
+	}))
+	defer upstream.Close()
+	orchestrator := NewOrchestrator(deps, agentSettings(upstream.URL), NewRegistry(BuiltinTools(deps)...))
+	router := NewRouter(orchestrator, deps)
+	msg := ports.InboundMessage{Channel: ports.ChannelTelegram, ChatID: "42", UserID: "7", Text: "查询 TEST 影片"}
+	reply, err := router.Handle(context.Background(), msg)
+	if err != nil || reply.Card == nil || reply.Card.Title != "TEST-001" {
+		t.Fatalf("查询应返回第一张影片卡片: reply=%+v err=%v", reply, err)
+	}
+	var next string
+	for _, button := range reply.Card.Buttons {
+		if strings.Contains(button.Label, "下一") || strings.Contains(button.Label, "▶") {
+			next = button.Data
+		}
+	}
+	if next == "" {
+		t.Fatalf("多条结果缺少下一张按钮: %+v", reply.Card.Buttons)
+	}
+	msg.Text = ""
+	msg.Action = &ports.InboundAction{Data: next, MessageID: "88"}
+	reply, err = router.Handle(context.Background(), msg)
+	if err != nil || reply.Card == nil || reply.Card.Title != "TEST-002" {
+		t.Fatalf("切换应返回第二张影片卡片: reply=%+v err=%v", reply, err)
+	}
+	if len(subscriptions.items) != 0 {
+		t.Fatal("查询或切换不应创建订阅")
+	}
+	var subscribe string
+	for _, button := range reply.Card.Buttons {
+		if button.Label == "订阅" {
+			subscribe = button.Data
+		}
+	}
+	if subscribe == "" {
+		t.Fatal("第二张卡片缺少订阅按钮")
+	}
+	msg.Action.Data = subscribe
+	result, err := router.Handle(context.Background(), msg)
+	if err != nil || len(subscriptions.items) != 1 || result.Refresh == nil {
+		t.Fatalf("订阅或按钮刷新失败: %+v %v", result, err)
+	}
+	var previous bool
+	for _, button := range result.Refresh.Buttons {
+		if strings.Contains(button.Label, "上一") {
+			previous = true
+		}
+	}
+	if !previous {
+		t.Fatal("订阅后丢失切换按钮")
+	}
+	msg.UserID = "other"
+	msg.Action.Data = next
+	if other, _ := router.Handle(context.Background(), msg); other.Card != nil {
+		t.Fatal("其他用户不应使用该结果")
+	}
+}
+
+// 外站搜索结果只展示卡片，只有点击订阅才允许走资料补全流程。
+func TestExternalMediaResultsUseCardsWithoutImport(t *testing.T) {
+	deps, subscriptions, _ := cardTestDeps()
+	router := NewRouter(nil, deps)
+	collector := &mediaResultCollector{}
+	ctx := context.WithValue(context.Background(), mediaResultsKey{}, collector)
+	collectMediaResults(ctx, "search_media", nil, map[string]any{"external_media": []application.ExternalMedia{{Code: "TEST-001", Title: "外站影片", PosterURL: "https://example.test/a.jpg"}}})
+	msg := ports.InboundMessage{Channel: ports.ChannelTelegram, ChatID: "42", UserID: "7"}
+	reply := router.newMediaResult(ctx, msg, collector)
+	if reply.Card == nil || reply.Card.Title != "TEST-001" || !strings.Contains(reply.Card.Text, "尚未入库") {
+		t.Fatalf("reply=%+v", reply)
+	}
+	if len(subscriptions.items) != 0 {
+		t.Fatal("外站搜索不应创建订阅")
+	}
+}
+
+// 结果超过一页时，点击下一张继续加载后续页，而不是停在前 20 条。
+func TestAgentMediaResultsLoadNextPage(t *testing.T) {
+	media := make([]domain.Media, 21)
+	for i := range media {
+		media[i] = libraryMedia(fmt.Sprint(i+1), fmt.Sprintf("TEST-%03d", i+1), "Test")
+	}
+	deps, _, _ := cardTestDeps(media...)
+	router := NewRouter(nil, deps)
+	collector := &mediaResultCollector{}
+	ctx := context.WithValue(context.Background(), mediaResultsKey{}, collector)
+	result, err := searchMedia(ctx, deps, "TEST")
+	if err != nil {
+		t.Fatal(err)
+	}
+	collectMediaResults(ctx, "search_media", map[string]any{"keyword": "TEST"}, result)
+	msg := ports.InboundMessage{Channel: ports.ChannelTelegram, ChatID: "42", UserID: "7"}
+	reply := router.newMediaResult(ctx, msg, collector)
+	for i := 1; i < 21; i++ {
+		var next string
+		for _, button := range reply.Card.Buttons {
+			if strings.Contains(button.Label, "下一") {
+				next = button.Data
+			}
+		}
+		if next == "" {
+			t.Fatalf("第 %d 张缺少下一张", i)
+		}
+		msg.Action = &ports.InboundAction{Data: next, MessageID: "88"}
+		reply, err = router.Handle(ctx, msg)
+		if err != nil || reply.Card == nil {
+			t.Fatalf("切换第 %d 张失败: %+v %v", i+1, reply, err)
+		}
+	}
+	if reply.Card.Title != "TEST-021" {
+		t.Fatalf("未加载后续页: %+v", reply.Card)
 	}
 }
 

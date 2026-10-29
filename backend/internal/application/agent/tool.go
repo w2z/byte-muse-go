@@ -133,6 +133,7 @@ func (r *Registry) Call(ctx context.Context, name string, args map[string]any) s
 		logging.Error(logging.CategoryAgent, "Agent 工具执行失败", "tool", name, "error", err.Error())
 		return "工具执行失败: " + err.Error()
 	}
+	collectMediaResults(ctx, name, args, result)
 	return formatToolResult(result, name)
 }
 

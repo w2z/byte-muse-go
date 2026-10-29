@@ -38,8 +38,9 @@ func (m InboundMessage) SessionKey() string {
 // ActionButton 是渠道消息上的一个可点击操作按钮。
 // Data 是业务层定义的回调载荷，渠道只负责原样回传，不解析其内容。
 type ActionButton struct {
-	Label string
-	Data  string
+	Label  string
+	Data   string
+	NewRow bool // 支持行布局的渠道在此按钮前换行。
 }
 
 // CopyTextField 标记通知正文中可复制的字段值；Label 是字段名，Text 是该行的完整值。
@@ -64,6 +65,7 @@ type InboundAction struct {
 	Data       string
 	MessageID  string
 	CallbackID string
+	HasPhoto   bool // Telegram 原消息是否为图片消息，决定可用的编辑接口。
 }
 
 // ButtonRefresh 用于在动作执行后替换原卡片上的按钮，使按钮与最新状态一致。
@@ -76,10 +78,18 @@ type ButtonRefresh struct {
 // Card 非空表示发送一张新卡片；Refresh 非空表示更新原消息按钮；Text 为文本内容。
 // 卡片失败时投递 Text；卡片成功后另行投递 FollowUp，避免渠道卡片正文截断长结果。
 type Reply struct {
-	Text     string
-	Card     *OutboundCard
-	Refresh  *ButtonRefresh
-	FollowUp string
+	Text          string
+	Card          *OutboundCard
+	Cards         []OutboundCard // 不支持原消息切换的渠道按顺序发送多张结果卡片。
+	Refresh       *ButtonRefresh
+	FollowUp      string
+	EditMessageID string // 非空时优先更新现有卡片。
+	EditHasPhoto  bool
+}
+
+// CardEditor 是支持修改已发送卡片的渠道可选能力。
+type CardEditor interface {
+	EditCard(ctx context.Context, chatID, messageID string, hasPhoto bool, card OutboundCard) error
 }
 
 // ChannelSender 是 Agent 与通知向外部渠道发送内容的统一出口。

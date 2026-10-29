@@ -85,6 +85,35 @@ type fakeTagRepository struct {
 	followErr error
 }
 
+type categoryMediaRepository struct {
+	*fakeTagRepository
+	name  string
+	media []domain.Media
+}
+
+func (r *categoryMediaRepository) SearchMedia(_ context.Context, name string, limit, offset int) (domain.MediaPage, error) {
+	r.name = name
+	return domain.MediaPage{Items: pageSlice(r.media, limit, offset), Total: len(r.media)}, nil
+}
+
+func TestSearchCategoryMediaUsesTagService(t *testing.T) {
+	repo := &categoryMediaRepository{fakeTagRepository: &fakeTagRepository{}, media: []domain.Media{libraryMedia("1", "TEST-001", "影片")}}
+	deps := Deps{Tags: application.NewTagService(repo)}
+	result, err := searchCategoryMedia(context.Background(), deps, "制服", "")
+	data, ok := result.(map[string]any)
+	if err != nil || !ok || repo.name != "制服" || data["total"] != 1 {
+		t.Fatalf("result=%v name=%q err=%v", result, repo.name, err)
+	}
+	mediaDeps, _, _ := cardTestDeps(repo.media...)
+	collector := &mediaResultCollector{}
+	ctx := context.WithValue(context.Background(), mediaResultsKey{}, collector)
+	collectMediaResults(ctx, "search_category_media", map[string]any{"tag": "制服"}, result)
+	reply := NewRouter(nil, mediaDeps).newMediaResult(ctx, ports.InboundMessage{Channel: ports.ChannelTelegram, ChatID: "42", UserID: "7"}, collector)
+	if reply.Card == nil || reply.Card.Title != "TEST-001" {
+		t.Fatalf("分类影片未转换为订阅卡片: %+v", reply)
+	}
+}
+
 // ListTags 复刻仓储的名称与订阅状态过滤。
 func (r *fakeTagRepository) ListTags(_ context.Context, query ports.TagListQuery) ([]ports.Tag, int, error) {
 	matched := make([]ports.Tag, 0, len(r.items))
