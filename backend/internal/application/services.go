@@ -93,7 +93,7 @@ func (s *CatalogService) applyTranslation(ctx context.Context, item domain.Media
 
 // applyMediaTranslation centralizes lazy title translation for all media read models.
 func applyMediaTranslation(ctx context.Context, item domain.Media, translator TranslationClient, writer ports.MediaTranslationWriter) domain.Media {
-	if translator == nil || item.TranslatedTitle != nil || strings.TrimSpace(item.Title) == "" {
+	if translator == nil || (item.TranslatedTitle != nil && strings.TrimSpace(*item.TranslatedTitle) != "") || strings.TrimSpace(item.Title) == "" {
 		return item
 	}
 	translated, err := translator.Translate(ctx, TranslationRequest{Text: item.Title, TargetLanguage: "ZH-CN"})

@@ -100,6 +100,22 @@ type settingsResourceSearcher struct {
 	javdb    application.ResourceSearcher
 }
 
+// channelTranslator 使用当前翻译设置生成渠道搜索结果，不持久化历史影片译名。
+type channelTranslator struct{ settings *application.SettingsService }
+
+// Translate 每次读取最新设置，配置变更无需重启消息通道。
+func (t channelTranslator) Translate(ctx context.Context, request application.TranslationRequest) (string, error) {
+	values, err := t.settings.Get(ctx)
+	if err != nil {
+		return "", err
+	}
+	translator, err := application.NewTranslationService(translationConfigFromSettings(values.Values), nil)
+	if err != nil {
+		return "", err
+	}
+	return translator.Translate(ctx, request)
+}
+
 // Search 读取最新设置后执行一次资源搜索。
 func (s settingsResourceSearcher) Search(ctx context.Context, code string) ([]torrentsearch.Resource, error) {
 	values, err := s.settings.Get(ctx)

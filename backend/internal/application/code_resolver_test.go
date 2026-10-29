@@ -19,6 +19,63 @@ type codeCollector struct {
 	collect func(context.Context, ports.CollectionRequest) (ports.CollectionBatch, error)
 }
 
+type codeTranslation struct {
+	calls int
+	err   error
+}
+
+func (t *codeTranslation) Translate(_ context.Context, request application.TranslationRequest) (string, error) {
+	t.calls++
+	return "中文译名", t.err
+}
+
+// TestCodeResolverTranslatesLocalAndCollectedMedia 覆盖本地命中、远程采集和重复查询的渠道译名。
+func TestCodeResolverTranslatesLocalAndCollectedMedia(t *testing.T) {
+	ctx := context.Background()
+	store, err := database.Open(ctx, database.Config{Dialect: database.DialectSQLite, SQLitePath: filepath.Join(t.TempDir(), "codes.db")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err = store.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	translator := &codeTranslation{}
+	queries := application.NewCatalogQueryServiceWithTranslation(database.NewCatalogQueryRepository(store.SQLDB(), database.DialectSQLite), translator, nil)
+	remote := codeCollector{collect: func(context.Context, ports.CollectionRequest) (ports.CollectionBatch, error) {
+		return ports.CollectionBatch{Items: []ports.CollectedMedia{{SourceID: "right", Code: "TEST-001", Title: "Original", URL: "https://example.test/right"}}}, nil
+	}}
+	resolver := application.NewCodeResolver(queries, remote, database.NewCollectionRepository(store.SQLDB(), database.DialectSQLite))
+	for range 2 {
+		media, err := resolver.Resolve(ctx, "TEST-001")
+		if err != nil || media.TranslatedTitle == nil || *media.TranslatedTitle != "中文译名" {
+			t.Fatalf("media=%+v err=%v", media, err)
+		}
+	}
+	if translator.calls != 2 {
+		t.Fatalf("translation calls=%d", translator.calls)
+	}
+	var saved *string
+	if err = store.SQLDB().QueryRowContext(ctx, "SELECT translated_title FROM media WHERE code = ?", "TEST-001").Scan(&saved); err != nil || saved != nil {
+		t.Fatalf("saved translation=%v err=%v", saved, err)
+	}
+	if _, err = store.SQLDB().ExecContext(ctx, "UPDATE media SET translated_title = ? WHERE code = ?", "已有译名", "TEST-001"); err != nil {
+		t.Fatal(err)
+	}
+	media, err := resolver.Resolve(ctx, "TEST-001")
+	if err != nil || media.TranslatedTitle == nil || *media.TranslatedTitle != "已有译名" || translator.calls != 2 {
+		t.Fatalf("media=%+v calls=%d err=%v", media, translator.calls, err)
+	}
+	if _, err = store.SQLDB().ExecContext(ctx, "UPDATE media SET translated_title = ? WHERE code = ?", "", "TEST-001"); err != nil {
+		t.Fatal(err)
+	}
+	translator.err = errors.New("translation unavailable")
+	media, err = resolver.Resolve(ctx, "TEST-001")
+	if err != nil || media.Title != "Original" || media.TranslatedTitle == nil || *media.TranslatedTitle != "" || translator.calls != 3 {
+		t.Fatalf("media=%+v calls=%d err=%v", media, translator.calls, err)
+	}
+}
+
 // TestCodeResolverPaginationAndRollback 验证下一页精确匹配、未查完、无关结果和持久化失败的区别。
 func TestCodeResolverPaginationAndRollback(t *testing.T) {
 	for _, tc := range []struct {

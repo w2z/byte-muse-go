@@ -571,14 +571,15 @@ func (c *Commands) Serve(ctx context.Context) error {
 	})
 	catalogService := application.NewCatalogService(mediaRepository)
 	catalogQueries := application.NewCatalogQueryService(database.NewCatalogQueryRepository(store.SQLDB(), database.Dialect(c.config.DatabaseDriver)))
+	channelQueries := application.NewCatalogQueryServiceWithTranslation(database.NewCatalogQueryRepository(store.SQLDB(), database.Dialect(c.config.DatabaseDriver)), channelTranslator{settings: settingsService}, nil)
 	subscriptionService := application.NewSubscriptionService(store.Subscriptions())
 	subscriptionService.SetNotifier(notifier)
 	dashboardService := application.NewDashboardService(store.Media(), store.Subscriptions(), store.Downloads())
-	// 渠道 Agent 复用与 HTTP 完全相同的应用服务，不另建业务规则。
+	// 渠道 Agent 复用应用服务；渠道查询额外启用即时翻译，不回写历史资料。
 	agentDeps := agent.Deps{
 		Catalog:               catalogService,
-		Queries:               catalogQueries,
-		Codes:                 application.NewCodeResolver(catalogQueries, collector.NewRegistry(collectionClient), collectionRepository),
+		Queries:               channelQueries,
+		Codes:                 application.NewCodeResolver(channelQueries, collector.NewRegistry(collectionClient), collectionRepository),
 		Actors:                actorService,
 		Tags:                  tagService,
 		Subscriptions:         subscriptionService,

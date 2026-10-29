@@ -22,7 +22,7 @@ func NewCatalogQueryService(repository ports.CatalogQueryRepository) *CatalogQue
 	return &CatalogQueryService{repository: repository}
 }
 
-// FindCode 在本地目录中分页查找精确番号；不采集、不写入，供查询卡片及按钮动作复用。
+// FindCode 在本地目录中分页查找精确番号；匹配后复用可选的标题翻译规则。
 // 查询失败与未命中分别返回，避免将数据库异常误判为资料缺失。
 func (s *CatalogQueryService) FindCode(ctx context.Context, raw string) (domain.Media, bool, error) {
 	code := domain.NormalizeCode(raw)
@@ -36,7 +36,7 @@ func (s *CatalogQueryService) FindCode(ctx context.Context, raw string) (domain.
 		}
 		for _, media := range result.Items {
 			if domain.NormalizeCode(media.Code) == code {
-				return media, true, nil
+				return applyMediaTranslation(ctx, media, s.translator, s.writer), true, nil
 			}
 		}
 		if len(result.Items) == 0 || page*100 >= result.Total {
