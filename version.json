@@ -1,16 +1,20 @@
 {
-  "version": "0.1.178",
-  "commit": "14d0cee0def592dd32980fe5daec91ca02d6f792",
-  "short_commit": "14d0cee",
-  "built_at": "2026-10-29T06:57:09Z",
+  "version": "0.1.179",
+  "commit": "7e2803a8e6ad43493dd6161a7fdc04eb740d7081",
+  "short_commit": "7e2803a",
+  "built_at": "2026-10-29T14:39:52Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.178",
-    "sha-14d0cee",
+    "0.1.179",
+    "sha-7e2803a",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.179",
+      "message": "为磁力下载链接补充番号参数"
+    },
     {
       "version": "0.1.178",
       "message": "使用订阅卡片浏览影片查询结果"
