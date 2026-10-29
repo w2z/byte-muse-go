@@ -44,6 +44,9 @@ func (d *Dispatcher) Handle(ctx context.Context, msg ports.InboundMessage) error
 			fallback := strings.TrimSpace(reply.Text) + "\n卡片发送失败，请稍后重新发送番号获取操作按钮。"
 			return sender.SendText(ctx, msg.ChatID, fallback)
 		}
+		if text := strings.TrimSpace(reply.FollowUp); text != "" {
+			return sender.SendText(ctx, msg.ChatID, text)
+		}
 		return nil
 	}
 	// 按钮刷新是尽力而为：更新失败不影响本次结果文本的投递。

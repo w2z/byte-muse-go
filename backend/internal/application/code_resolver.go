@@ -5,12 +5,58 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
 	"bytemuse/backend/internal/domain"
 	"bytemuse/backend/internal/ports"
 )
+
+// ExternalMedia 是外站搜索返回的只读影片资料，不代表已经入库。
+type ExternalMedia struct {
+	Source          string  `json:"source"`
+	Code            string  `json:"code"`
+	Title           string  `json:"title"`
+	TranslatedTitle *string `json:"translated_title"`
+	PosterURL       string  `json:"poster_url"`
+}
+
+// SearchExternal 读取各影片站第一页；返回的 incomplete 表示有站点失败、后续页或结果被截断。
+// 只返回外站资料，不创建媒体、订阅或下载记录。
+func (s *CodeResolver) SearchExternal(ctx context.Context, query string) (items []ExternalMedia, incomplete bool) {
+	query = strings.TrimSpace(query)
+	if s == nil || s.collector == nil || query == "" {
+		return nil, true
+	}
+	searched := false
+	for _, source := range s.collector.Sources() {
+		if !slices.Contains(source.Kinds, "search") {
+			continue
+		}
+		searched = true
+		batch, err := s.collector.Collect(ctx, ports.CollectionRequest{Source: source.ID, Kind: "search", Query: query, Page: 1})
+		if err != nil {
+			incomplete = true
+			continue
+		}
+		if batch.HasMore {
+			incomplete = true
+		}
+		for _, found := range batch.Items {
+			if len(items) >= 20 {
+				incomplete = true
+				continue
+			}
+			media := domain.Media{Title: found.Title}
+			if s.queries != nil {
+				media = applyMediaTranslation(ctx, media, s.queries.translator, nil)
+			}
+			items = append(items, ExternalMedia{Source: source.ID, Code: found.Code, Title: found.Title, TranslatedTitle: media.TranslatedTitle, PosterURL: found.PosterURL})
+		}
+	}
+	return items, incomplete || !searched
+}
 
 // CodeResolver 统一按番号查资料：本地优先，未命中才采集精确匹配项；不创建订阅或下载。
 // 与采集队列共用 Collector 和 CollectionRepository，保留既有媒体字段及来源去重规则。

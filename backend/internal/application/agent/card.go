@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"strings"
 
@@ -83,11 +84,34 @@ func cardForCode(ctx context.Context, deps Deps, raw string) ports.Reply {
 	if deps.Queries == nil {
 		return ports.Reply{Text: "订阅服务不可用"}
 	}
-	media, failure := resolveMedia(ctx, deps, code)
-	if failure != "" {
-		return ports.Reply{Text: failure}
+	if media, found := lookupMedia(ctx, deps, code); found {
+		return mediaCard(ctx, deps, media)
 	}
-	return mediaCard(ctx, deps, media)
+	media, failure := resolveMedia(ctx, deps, code)
+	reply := ports.Reply{Text: failure}
+	if failure == "" {
+		reply = mediaCard(ctx, deps, media)
+	}
+	if deps.Torrents != nil {
+		result, err := searchTorrents(ctx, deps, code)
+		lines := []string{}
+		if err != nil {
+			lines = append(lines, "资源站搜索失败，请稍后重试")
+		} else if data, ok := result.(map[string]any); ok {
+			lines = append(lines, "资源站资源（未自动订阅或下载，部分站点可能不可用）：")
+			for _, item := range data["items"].([]map[string]any) {
+				lines = append(lines, fmt.Sprintf("%s（%s）：%s", item["site"], item["kind"], item["title"]))
+			}
+		} else {
+			lines = append(lines, "资源站本次未返回资源，部分站点可能不可用")
+		}
+		detail := strings.Join(lines, "\n")
+		reply.Text += "\n" + detail
+		if reply.Card != nil {
+			reply.FollowUp = detail
+		}
+	}
+	return reply
 }
 
 // cardForKnownCode 只在番号命中媒体库时返回卡片，用于把已入库番号从 AI 分流中优先截获。

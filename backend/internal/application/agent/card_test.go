@@ -9,8 +9,57 @@ import (
 
 	"bytemuse/backend/internal/application"
 	"bytemuse/backend/internal/domain"
+	"bytemuse/backend/internal/platform/torrentsearch"
 	"bytemuse/backend/internal/ports"
 )
+
+type resourceSearchStub struct {
+	items []torrentsearch.Resource
+	err   error
+	calls int
+}
+
+type externalMediaStub struct{}
+
+func (externalMediaStub) Sources() []ports.CollectionSource {
+	return []ports.CollectionSource{{ID: "site", Kinds: []string{"search"}}}
+}
+func (externalMediaStub) Collect(context.Context, ports.CollectionRequest) (ports.CollectionBatch, error) {
+	return ports.CollectionBatch{Items: []ports.CollectedMedia{{Code: "TEST-001", Title: "外站影片"}}}, nil
+}
+
+func (s *resourceSearchStub) Search(context.Context, string) ([]torrentsearch.Resource, error) {
+	s.calls++
+	return s.items, s.err
+}
+
+func TestChannelSearchFallsBackToResources(t *testing.T) {
+	deps, _, _ := cardTestDeps()
+	searcher := &resourceSearchStub{items: []torrentsearch.Resource{{Kind: "pt", Site: "PT站", Title: "TEST-001 资源", URI: "secret-reference"}, {Kind: "bt", Site: "BT站", Title: "TEST-001 资源"}}}
+	deps.Torrents = searcher
+	reply := cardForCode(context.Background(), deps, "TEST-001")
+	if !strings.Contains(reply.Text, "PT站") || !strings.Contains(reply.Text, "BT站") || strings.Contains(reply.Text, "secret-reference") || reply.Card != nil {
+		t.Fatalf("reply=%+v", reply)
+	}
+	deps.Codes = application.NewCodeResolver(deps.Queries, externalMediaStub{}, nil)
+	result, err := searchMedia(context.Background(), deps, "TEST-001")
+	if err != nil || !strings.Contains(fmt.Sprint(result), "PT站") || !strings.Contains(fmt.Sprint(result), "外站影片") || searcher.calls != 2 {
+		t.Fatalf("result=%v calls=%d err=%v", result, searcher.calls, err)
+	}
+}
+
+func TestChannelSearchLocalHitSkipsExternalAndResourceFailureIsVisible(t *testing.T) {
+	deps, _, _ := cardTestDeps(libraryMedia("m1", "TEST-001", "本地影片"))
+	searcher := &resourceSearchStub{err: errors.New("private upstream error")}
+	deps.Torrents = searcher
+	if reply := cardForCode(context.Background(), deps, "TEST-001"); reply.Card == nil || searcher.calls != 0 {
+		t.Fatalf("reply=%+v calls=%d", reply, searcher.calls)
+	}
+	reply := cardForCode(context.Background(), deps, "TEST-999")
+	if !strings.Contains(reply.Text, "资源站搜索失败") || strings.Contains(reply.Text, "private upstream error") {
+		t.Fatalf("reply=%+v", reply)
+	}
+}
 
 // downloadControllerName 是卡片测试里下载器任务的标识，与下载器替身注册名一致。
 const downloadControllerName = "qbittorrent"

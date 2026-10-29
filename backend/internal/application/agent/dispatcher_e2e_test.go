@@ -11,8 +11,34 @@ import (
 	"testing"
 
 	"bytemuse/backend/internal/application"
+	"bytemuse/backend/internal/domain"
+	"bytemuse/backend/internal/platform/torrentsearch"
 	"bytemuse/backend/internal/ports"
 )
+
+type externalSaveStub struct{ catalog *fakeCatalogQueryRepository }
+
+func (s externalSaveStub) SaveCollection(_ context.Context, _ ports.CollectionRequest, batch ports.CollectionBatch) (ports.CollectionCounts, error) {
+	item := batch.Items[0]
+	s.catalog.media = append(s.catalog.media, domain.Media{ID: "new", Code: item.Code, Title: item.Title})
+	return ports.CollectionCounts{Inserted: 1}, nil
+}
+
+// 外站影片入库后仍需单独投递资源站结果，企业微信卡片正文长度无法容纳资源列表。
+func TestDispatcherDeliversExternalMediaAndResources(t *testing.T) {
+	catalog := &fakeCatalogQueryRepository{}
+	queries := application.NewCatalogQueryService(catalog)
+	searcher := &resourceSearchStub{items: []torrentsearch.Resource{{Site: "PT站", Kind: "pt", Title: "资源标题"}}}
+	deps := Deps{Queries: queries, Codes: application.NewCodeResolver(queries, externalMediaStub{}, externalSaveStub{catalog}), Torrents: searcher}
+	sender := &recordingSender{}
+	dispatcher := NewDispatcher(NewRouter(nil, deps), fakeChannels{sender: sender})
+	if err := dispatcher.Handle(context.Background(), ports.InboundMessage{Channel: ports.ChannelWeChat, ChatID: "1", Text: "TEST-001"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(sender.cards) != 1 || len(sender.messages) != 2 || !strings.Contains(sender.messages[1], "PT站") {
+		t.Fatalf("cards=%+v messages=%+v", sender.cards, sender.messages)
+	}
+}
 
 // TestDispatcherCardFailureDoesNotSubscribe 防止仅查询影片时因卡片发送失败自动订阅和下载。
 func TestDispatcherCardFailureDoesNotSubscribe(t *testing.T) {

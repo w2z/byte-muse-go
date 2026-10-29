@@ -67,9 +67,26 @@ func searchCode(ctx context.Context, deps Deps, raw string) (any, error) {
 	if code == "" {
 		return "请提供番号，例如 SSIS-001", nil
 	}
+	if item, found := lookupMedia(ctx, deps, code); found {
+		return mediaBrief(item), nil
+	}
 	item, failure := resolveMedia(ctx, deps, code)
 	if failure != "" {
+		if deps.Torrents != nil {
+			result, err := searchTorrents(ctx, deps, code)
+			if err != nil {
+				return map[string]any{"media_status": failure, "resource_status": "资源站搜索失败，请稍后重试"}, nil
+			}
+			return map[string]any{"media_status": failure, "resources": result, "note": "资源候选不代表影片资料已入库；部分站点可能不可用"}, nil
+		}
 		return failure, nil
+	}
+	if deps.Torrents != nil {
+		result, err := searchTorrents(ctx, deps, code)
+		if err != nil {
+			result = "资源站搜索失败，请稍后重试"
+		}
+		return map[string]any{"media": mediaBrief(item), "resources": result, "note": "部分资源站可能不可用"}, nil
 	}
 	return mediaBrief(item), nil
 }
@@ -97,7 +114,7 @@ func searchActor(ctx context.Context, deps Deps, raw string) (any, error) {
 	return map[string]any{"total": page.Total, "returned": len(items), "items": items}, nil
 }
 
-// searchMedia 按关键词搜索本地影片库。
+// searchMedia 优先搜索本地影片；未命中时搜索已配置的资源来源。
 func searchMedia(ctx context.Context, deps Deps, raw string) (any, error) {
 	keyword := strings.TrimSpace(raw)
 	if keyword == "" {
@@ -111,6 +128,21 @@ func searchMedia(ctx context.Context, deps Deps, raw string) (any, error) {
 		return nil, fmt.Errorf("搜索影片失败: %w", err)
 	}
 	if len(page.Items) == 0 {
+		var external []application.ExternalMedia
+		incomplete := true
+		if deps.Codes != nil {
+			external, incomplete = deps.Codes.SearchExternal(ctx, keyword)
+		}
+		if deps.Torrents != nil {
+			result, err := searchTorrents(ctx, deps, keyword)
+			if err != nil {
+				result = "资源站搜索失败，请稍后重试"
+			}
+			return map[string]any{"keyword": keyword, "media_status": "本地未找到影片", "external_media": external, "external_incomplete": incomplete, "resources": result, "note": "外站影片和资源候选均未入库；只查询影片站第一页，资源站可能部分失败"}, nil
+		}
+		if deps.Codes != nil {
+			return map[string]any{"keyword": keyword, "external_media": external, "external_incomplete": incomplete}, nil
+		}
 		return "未找到与「" + keyword + "」匹配的影片", nil
 	}
 	result := mediaListResult(page)
@@ -219,7 +251,7 @@ func searchTorrents(ctx context.Context, deps Deps, raw string) (any, error) {
 		return nil, fmt.Errorf("搜索资源失败: %w", err)
 	}
 	if len(resources) == 0 {
-		return "未找到资源: " + query, nil
+		return "资源站本次未返回资源，部分站点可能不可用: " + query, nil
 	}
 	items := make([]map[string]any, 0, min(len(resources), torrentResultLimit))
 	for _, item := range resources {

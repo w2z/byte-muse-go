@@ -74,11 +74,12 @@ type ButtonRefresh struct {
 
 // Reply 是业务层对一次入站消息的回复。
 // Card 非空表示发送一张新卡片；Refresh 非空表示更新原消息按钮；Text 为文本内容。
-// 三者可组合：卡片失败时调用方只投递 Text，卡片成功时 Text 作为卡片正文由 Card 携带。
+// 卡片失败时投递 Text；卡片成功后另行投递 FollowUp，避免渠道卡片正文截断长结果。
 type Reply struct {
-	Text    string
-	Card    *OutboundCard
-	Refresh *ButtonRefresh
+	Text     string
+	Card     *OutboundCard
+	Refresh  *ButtonRefresh
+	FollowUp string
 }
 
 // ChannelSender 是 Agent 与通知向外部渠道发送内容的统一出口。

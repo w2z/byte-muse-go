@@ -33,7 +33,7 @@ func BuiltinTools(deps Deps) []Tool {
 		},
 		builtinTool{
 			name:        "search_media",
-			description: "按关键词搜索本地影片库，返回最多 20 条精简影片信息。",
+			description: "按关键词优先搜索本地影片；未命中时搜索已配置的 PT、BT 资源。",
 			parameters: objectSchema(map[string]any{
 				"keyword": stringProperty("搜索关键词，可以是番号、原标题片段或演员名"),
 			}, "keyword"),
