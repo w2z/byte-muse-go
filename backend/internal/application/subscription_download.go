@@ -35,18 +35,9 @@ func (m MultiResourceSearcher) Search(ctx context.Context, code string) ([]torre
 		}
 		successes++
 		for i := range items {
-			if items[i].Kind != "bt" || strings.TrimSpace(code) == "" {
-				continue
+			if items[i].Kind == "bt" {
+				items[i].URI = magnetWithDisplayName(items[i].URI, code)
 			}
-			link, err := url.Parse(items[i].URI)
-			if err != nil || link.Scheme != "magnet" || link.Query().Has("dn") {
-				continue
-			}
-			if link.RawQuery != "" {
-				link.RawQuery += "&"
-			}
-			link.RawQuery += "dn=" + url.QueryEscape(code)
-			items[i].URI = link.String()
 		}
 		results = append(results, items...)
 	}
@@ -54,6 +45,23 @@ func (m MultiResourceSearcher) Search(ctx context.Context, code string) ([]torre
 		return nil, last
 	}
 	return results, nil
+}
+
+// magnetWithDisplayName 为缺少 dn 的磁力链接追加番号，保留原有参数和已有名称。
+func magnetWithDisplayName(uri, code string) string {
+	code = strings.TrimSpace(code)
+	if code == "" {
+		return uri
+	}
+	link, err := url.Parse(uri)
+	if err != nil || link.Scheme != "magnet" || link.Query().Has("dn") {
+		return uri
+	}
+	if link.RawQuery != "" {
+		link.RawQuery += "&"
+	}
+	link.RawQuery += "dn=" + url.QueryEscape(code)
+	return link.String()
 }
 
 // PrivateTorrentSource 返回种子字节、InfoHash、实际下载 URL 和错误。

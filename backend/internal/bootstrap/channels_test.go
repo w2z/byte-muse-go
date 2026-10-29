@@ -93,6 +93,15 @@ func TestTransferNotificationsUseResourceSnapshot(t *testing.T) {
 	}
 }
 
+// TestCompletedNotificationAddsNameToHistoricalMagnet 验证旧任务完成通知也补充番号。
+func TestCompletedNotificationAddsNameToHistoricalMagnet(t *testing.T) {
+	notifier := &transitionNotifier{}
+	notifyTransferTransitions(context.Background(), notifier, []ports.TransferTransition{{Code: "SSIS-001", Kind: "bt", URI: "magnet:?xt=urn:btih:abc", Status: "completed"}})
+	if len(notifier.messages) != 1 || !strings.Contains(notifier.messages[0].Text, "下载链接: magnet:?xt=urn:btih:abc&dn=SSIS-001") {
+		t.Fatalf("messages=%+v", notifier.messages)
+	}
+}
+
 // stubMessageHandler 用函数实现 ports.ChannelMessageHandler，供监督器测试注入。
 type stubMessageHandler func(context.Context, ports.InboundMessage) error
 

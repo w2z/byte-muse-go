@@ -162,3 +162,30 @@ func TestDownloadNotificationsCarryTitleAndCover(t *testing.T) {
 		}
 	}
 }
+
+// TestDownloadStartAddsNameToHistoricalMagnet 验证恢复及旧任务快照的通知链接和复制字段一致。
+func TestDownloadStartAddsNameToHistoricalMagnet(t *testing.T) {
+	message := NewNotificationMessage("SSIS-001", "标题", "开始下载", "站点", "bt", "magnet:?xt=urn:btih:abc&tr=tracker", "", "", "")
+	want := "magnet:?xt=urn:btih:abc&tr=tracker&dn=SSIS-001"
+	if !strings.Contains(message.Text, "下载链接: "+want) {
+		t.Fatalf("text=%q", message.Text)
+	}
+	if len(message.CopyFields) != 2 || message.CopyFields[1].Text != want {
+		t.Fatalf("copy=%+v", message.CopyFields)
+	}
+}
+
+func TestNotificationMagnetNamePreservesExistingParameters(t *testing.T) {
+	for _, tc := range []struct{ code, uri, want string }{
+		{"番号 & 001", "magnet:?xt=urn:btih:abc#part", "magnet:?xt=urn:btih:abc&dn=%E7%95%AA%E5%8F%B7+%26+001#part"},
+		{"TEST-001", "magnet:?xt=urn:btih:abc&dn=original", "magnet:?xt=urn:btih:abc&dn=original"},
+		{"TEST-001", "magnet:?xt=urn:btih:abc&dn=", "magnet:?xt=urn:btih:abc&dn="},
+		{"", "magnet:?xt=urn:btih:abc", "magnet:?xt=urn:btih:abc"},
+		{"TEST-001", "https://example.test/download", "https://example.test/download"},
+	} {
+		message := NewNotificationMessage(tc.code, "", "已完成下载", "", "bt", tc.uri, "", "", "")
+		if !strings.Contains(message.Text, "下载链接: "+tc.want+"\n") {
+			t.Errorf("uri=%q text=%q", tc.uri, message.Text)
+		}
+	}
+}

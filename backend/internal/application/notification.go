@@ -261,12 +261,14 @@ func newSubscriptionNotificationMessage(code, title, status, description, cover 
 }
 
 // NewNotificationMessage 统一生成八行下载通知，标题和描述紧随状态，保存路径紧随下载链接。
-// 缺失值显示暂无，多行描述压成一行；内部 PT 引用不是下载链接，不对外展示。
+// 缺失值显示暂无，多行描述压成一行；内部 PT 引用不展示，历史磁力链接缺少名称时使用番号。
 func NewNotificationMessage(code, title, status, site, source, uri, savePath, description, cover string) NotificationMessage {
 	link := strings.TrimSpace(uri)
 	parsed, err := url.Parse(link)
 	if err != nil || parsed.User != nil || !((parsed.Scheme == "https" || parsed.Scheme == "http") && parsed.Host != "" || parsed.Scheme == "magnet") {
 		link = ""
+	} else if parsed.Scheme == "magnet" {
+		link = magnetWithDisplayName(link, code)
 	}
 	return NotificationMessage{
 		Title: "番号: " + notificationField(code),
