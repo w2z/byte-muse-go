@@ -1,16 +1,20 @@
 {
-  "version": "0.1.177",
-  "commit": "d1e349d32d7287a073960171bdbd20e531c01b13",
-  "short_commit": "d1e349d",
-  "built_at": "2026-10-29T05:59:30Z",
+  "version": "0.1.178",
+  "commit": "14d0cee0def592dd32980fe5daec91ca02d6f792",
+  "short_commit": "14d0cee",
+  "built_at": "2026-10-29T06:57:09Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.177",
-    "sha-d1e349d",
+    "0.1.178",
+    "sha-14d0cee",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.178",
+      "message": "使用订阅卡片浏览影片查询结果"
+    },
     {
       "version": "0.1.177",
       "message": "在本地未命中时搜索外站资源"
