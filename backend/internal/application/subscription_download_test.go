@@ -35,6 +35,32 @@ func TestPrivateTorrentSourcesRouteByReference(t *testing.T) {
 
 type sourceMarker struct{ name string }
 
+type resourceList []torrentsearch.Resource
+
+func (s resourceList) Search(context.Context, string) ([]torrentsearch.Resource, error) {
+	return s, nil
+}
+
+func TestMultiResourceSearcherAddsMissingMagnetName(t *testing.T) {
+	items := resourceList{
+		{Kind: "bt", URI: "magnet:?xt=urn:btih:abc&tr=tracker"},
+		{Kind: "bt", URI: "magnet:?xt=urn:btih:def&dn=original"},
+		{Kind: "bt", URI: "magnet:?xt=urn:btih:ghi&dn="},
+		{Kind: "pt", URI: "pt:123"},
+		{Kind: "bt", URI: "magnet:?xt=urn:btih:jkl#fragment"},
+	}
+	got, err := (MultiResourceSearcher{Sources: []ResourceSearcher{items}}).Search(context.Background(), "番号 & 001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"magnet:?xt=urn:btih:abc&tr=tracker&dn=%E7%95%AA%E5%8F%B7+%26+001", "magnet:?xt=urn:btih:def&dn=original", "magnet:?xt=urn:btih:ghi&dn=", "pt:123", "magnet:?xt=urn:btih:jkl&dn=%E7%95%AA%E5%8F%B7+%26+001#fragment"}
+	for i := range want {
+		if got[i].URI != want[i] {
+			t.Errorf("item %d: got %q, want %q", i, got[i].URI, want[i])
+		}
+	}
+}
+
 func (s sourceMarker) Search(context.Context, string) ([]torrentsearch.Resource, error) {
 	return []torrentsearch.Resource{{Site: s.name}}, nil
 }

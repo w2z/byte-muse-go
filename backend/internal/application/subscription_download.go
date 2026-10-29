@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
@@ -21,7 +22,7 @@ type ResourceSearcher interface {
 // MultiResourceSearcher merges available PT and BT candidates while preserving partial site results.
 type MultiResourceSearcher struct{ Sources []ResourceSearcher }
 
-// Search queries configured sources and only fails when every source fails.
+// Search queries configured sources, adds missing BT magnet display names, and only fails when every source fails.
 func (m MultiResourceSearcher) Search(ctx context.Context, code string) ([]torrentsearch.Resource, error) {
 	var results []torrentsearch.Resource
 	var successes int
@@ -33,6 +34,20 @@ func (m MultiResourceSearcher) Search(ctx context.Context, code string) ([]torre
 			continue
 		}
 		successes++
+		for i := range items {
+			if items[i].Kind != "bt" || strings.TrimSpace(code) == "" {
+				continue
+			}
+			link, err := url.Parse(items[i].URI)
+			if err != nil || link.Scheme != "magnet" || link.Query().Has("dn") {
+				continue
+			}
+			if link.RawQuery != "" {
+				link.RawQuery += "&"
+			}
+			link.RawQuery += "dn=" + url.QueryEscape(code)
+			items[i].URI = link.String()
+		}
 		results = append(results, items...)
 	}
 	if successes == 0 && last != nil {
