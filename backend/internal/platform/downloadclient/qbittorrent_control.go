@@ -87,6 +87,16 @@ func (c *Qbittorrent) Observe(ctx context.Context, hash string) (*ports.Transfer
 	return nil, nil
 }
 
+// Start 显式启动刚提交的任务。
+// qBittorrent 的「添加种子时停止」偏好会让新任务以 stopped 状态加入，应用提交的目的是下载，
+// 不能依赖用户在 Web UI 手动启动；对运行中的任务幂等，重复调用没有副作用。
+func (c *Qbittorrent) Start(ctx context.Context, hash string) error {
+	if !validHash(hash) {
+		return fmt.Errorf("无效的任务 hash")
+	}
+	return c.Control(ctx, hash, "resume")
+}
+
 // Control 仅向精确任务发送一次命令；调用方负责持久化和结果回查。
 func (c *Qbittorrent) Control(ctx context.Context, hash, action string) error {
 	if !validHash(hash) {

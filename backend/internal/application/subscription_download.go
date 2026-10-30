@@ -98,6 +98,25 @@ type MagnetDownloader interface {
 	Submit(context.Context, string) error
 }
 
+// TorrentStarter 是下载器可选能力：任务确认落进下载器后显式启动它。
+// qBittorrent 开启「添加种子时停止」时，新任务以 stopped 状态加入并永远不自行开始，
+// 提交成功等于没有下载；不支持该能力的下载器会被跳过，不影响既有提交路径。
+type TorrentStarter interface {
+	Start(context.Context, string) error
+}
+
+// startSubmitted 在任务确认落进下载器后启动它，并吞掉启动错误。
+// 任务已经提交成功，启动只是让传输真正开始；失败只记录日志，由后续状态同步暴露。
+func startSubmitted(ctx context.Context, client MagnetDownloader, hash string) {
+	starter, ok := client.(TorrentStarter)
+	if !ok || hash == "" {
+		return
+	}
+	if err := starter.Start(ctx, hash); err != nil {
+		logging.Error(logging.CategoryDownload, "下载任务已提交但启动失败", "hash", hash, "error", err.Error())
+	}
+}
+
 // SubscriptionDownloadService coordinates durable search and safe submission.
 type SubscriptionDownloadService struct {
 	processing      chan struct{}
@@ -295,6 +314,7 @@ func (s *SubscriptionDownloadService) Process(ctx context.Context, limit int) er
 			return fmt.Errorf("回查下载器: %w", e)
 		}
 		if found {
+			startSubmitted(ctx, client, p.InfoHash)
 			if e = s.tasks.FinishSubmission(ctx, *p, true, ""); e != nil {
 				return e
 			}
@@ -408,6 +428,7 @@ func (s *SubscriptionDownloadService) Process(ctx context.Context, limit int) er
 			return fmt.Errorf("提交或回查下载器: %w", e)
 		}
 		if found {
+			startSubmitted(ctx, client, p.InfoHash)
 			if e = s.tasks.FinishSubmission(ctx, p, true, ""); e != nil {
 				return e
 			}
