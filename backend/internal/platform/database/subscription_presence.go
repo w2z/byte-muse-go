@@ -154,8 +154,10 @@ func (r *SubscriptionDownloadRepository) ActiveTransfers(ctx context.Context, su
 }
 
 // MarkTransferMissing 只关闭未被控制操作或完成同步更新的快照，保留历史记录。
+// transfer_status 必须同时清空：任务转为 failed 后 SaveTransferStates 不再更新它
+// （其 WHERE 只认 submitted/downloading/completed），遗留的下载器状态会让列表永久显示「下载中」。
 func (r *SubscriptionDownloadRepository) MarkTransferMissing(ctx context.Context, item ports.ActiveTransfer) error {
-	_, err := r.db.ExecContext(ctx, "UPDATE download_tasks SET status='failed',error_message='下载器中已不存在，允许下次搜索',updated_at="+placeholder(r.dialect, 1)+" WHERE id="+placeholder(r.dialect, 2)+" AND updated_at="+placeholder(r.dialect, 3)+" AND status IN ('submitted','downloading') AND COALESCE(transfer_status,'')<>'completed' AND lease_token IS NULL", encodeTime(time.Now().UTC(), r.dialect), item.ID, encodeTime(item.UpdatedAt, r.dialect))
+	_, err := r.db.ExecContext(ctx, "UPDATE download_tasks SET status='failed',transfer_status=NULL,error_message='下载器中已不存在，允许下次搜索',updated_at="+placeholder(r.dialect, 1)+" WHERE id="+placeholder(r.dialect, 2)+" AND updated_at="+placeholder(r.dialect, 3)+" AND status IN ('submitted','downloading') AND COALESCE(transfer_status,'')<>'completed' AND lease_token IS NULL", encodeTime(time.Now().UTC(), r.dialect), item.ID, encodeTime(item.UpdatedAt, r.dialect))
 	return err
 }
 

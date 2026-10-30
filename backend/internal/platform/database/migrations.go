@@ -67,6 +67,17 @@ func scanTasksMigration(dialect Dialect) Migration {
 	}}
 }
 
+// staleFailedTransferStatusMigration 清理失败任务上残留的下载器状态。
+// MarkTransferMissing 曾只写 status='failed' 而保留 transfer_status，这些任务不再参与
+// SaveTransferStates（其条件只含 submitted/downloading/completed），残留值会让下载列表
+// 永久显示「下载中」「等待连接」等状态，与下载器实际内容不符。
+// 只清冗余字段，不改 status 与任务历史；幂等，重复执行影响 0 行。
+func staleFailedTransferStatusMigration(dialect Dialect) Migration {
+	return Migration{Version: 44, Name: "clear_stale_failed_transfer_status", Statements: []string{
+		"UPDATE download_tasks SET transfer_status=NULL WHERE status='failed' AND transfer_status IS NOT NULL AND transfer_status<>'failed'",
+	}}
+}
+
 // MigrationPlan returns the authoritative dialect-specific migration list.
 func MigrationPlan(dialect Dialect) []Migration {
 	var plan []Migration
@@ -80,7 +91,7 @@ func MigrationPlan(dialect Dialect) []Migration {
 	default:
 		return nil
 	}
-	return append(plan, settingsMigration(dialect), activeSubscriptionMigration(dialect), defaultSettingsMigration(dialect), systemLogsMigration(dialect), logRetentionSettingMigration(dialect), cleanupCanceledSubscriptionsMigration(dialect), catalogQueryIndexesMigration(dialect), downloaderAndBypassSettingsMigration(dialect), collectionMigration(dialect), collectionQueueMigration(dialect), mediaTypeMigration(dialect), subscriptionDownloadMigration(dialect), downloadTransferMigration(dialect), ptSiteSettingsMigration(dialect), siteAuthSettingsMigration(dialect), tagSubscriptionMigration(dialect), bypassProxySettingMigration(dialect), actorSubscriptionMigration(dialect), translationModelSettingsMigration(dialect), notificationSettingsMigration(dialect), tagAliasMigration(dialect), pan115AccountMigration(dialect), pan115ScanPathsSettingMigration(dialect), strmSettingsMigration(dialect), downloadOriginMigration(dialect), dropUnusedJavdbHostSettingMigration(dialect), actorAliasesMigration(dialect), dropUnusedPhotoCacheSettingMigration(dialect), strmRootSettingMigration(dialect), subscriptionScanMigration(dialect), pan115CookieSettingMigration(dialect), scanTasksMigration(dialect), strmDownloadSettingsMigration(dialect), strmEmbyMediaSettingsMigration(dialect), cloudUploadMigration(dialect), taskCheckpointsMigration(dialect), downloadURLMigration(dialect), strmFilesMigration(dialect), subscriptionPresenceMigration(dialect))
+	return append(plan, settingsMigration(dialect), activeSubscriptionMigration(dialect), defaultSettingsMigration(dialect), systemLogsMigration(dialect), logRetentionSettingMigration(dialect), cleanupCanceledSubscriptionsMigration(dialect), catalogQueryIndexesMigration(dialect), downloaderAndBypassSettingsMigration(dialect), collectionMigration(dialect), collectionQueueMigration(dialect), mediaTypeMigration(dialect), subscriptionDownloadMigration(dialect), downloadTransferMigration(dialect), ptSiteSettingsMigration(dialect), siteAuthSettingsMigration(dialect), tagSubscriptionMigration(dialect), bypassProxySettingMigration(dialect), actorSubscriptionMigration(dialect), translationModelSettingsMigration(dialect), notificationSettingsMigration(dialect), tagAliasMigration(dialect), pan115AccountMigration(dialect), pan115ScanPathsSettingMigration(dialect), strmSettingsMigration(dialect), downloadOriginMigration(dialect), dropUnusedJavdbHostSettingMigration(dialect), actorAliasesMigration(dialect), dropUnusedPhotoCacheSettingMigration(dialect), strmRootSettingMigration(dialect), subscriptionScanMigration(dialect), pan115CookieSettingMigration(dialect), scanTasksMigration(dialect), strmDownloadSettingsMigration(dialect), strmEmbyMediaSettingsMigration(dialect), cloudUploadMigration(dialect), taskCheckpointsMigration(dialect), downloadURLMigration(dialect), strmFilesMigration(dialect), subscriptionPresenceMigration(dialect), staleFailedTransferStatusMigration(dialect))
 }
 
 // strmFilesMigration 新增受管文件归属，不回填历史文件；回退保留表即可。
