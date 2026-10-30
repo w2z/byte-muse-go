@@ -1,16 +1,20 @@
 {
-  "version": "0.1.182",
-  "commit": "b64dc58d99a28e6ab8188fa5f057108ba9995e57",
-  "short_commit": "b64dc58",
-  "built_at": "2026-10-30T13:23:42Z",
+  "version": "0.1.183",
+  "commit": "a07dab3b7eefa43d7da3966c96a89315c4d1d79a",
+  "short_commit": "a07dab3",
+  "built_at": "2026-10-30T14:09:14Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.182",
-    "sha-b64dc58",
+    "0.1.183",
+    "sha-a07dab3",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.183",
+      "message": "直连失败后按配置代理重试"
+    },
     {
       "version": "0.1.182",
       "message": "读取NFO并恢复影片标题简介"
