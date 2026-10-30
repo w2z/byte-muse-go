@@ -138,7 +138,12 @@ func newResourceSearcher(values map[string]string, javdb ...application.Resource
 			}
 		}
 	}
-	privateSearchers, privateSources := configuredPrivateSites(values, nil)
+	searchClient, err := torrentsearch.NewPTSearchClient(nil, values["PROXY"])
+	if err != nil {
+		// 代理配置由设置服务保存为文本；非法值只跳过代理回退，仍保留直连搜索能力。
+		searchClient, _ = torrentsearch.NewPTSearchClient(nil, "")
+	}
+	privateSearchers, privateSources := configuredPrivateSitesWithClients(values, nil, searchClient)
 	sources = append(sources, privateSearchers...)
 	return application.MultiResourceSearcher{Sources: sources}, privateSources
 }
