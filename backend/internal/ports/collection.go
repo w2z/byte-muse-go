@@ -70,6 +70,7 @@ type CollectedMedia struct {
 	URL             string           `json:"url"`
 	Code            string           `json:"code,omitempty"`
 	Title           string           `json:"title"`
+	Plot            string           `json:"plot,omitempty"`
 	VideoType       string           `json:"video_type,omitempty"` // 明确的影片类型；缺失时不猜测。
 	PosterURL       string           `json:"poster_url,omitempty"`
 	ReleaseDate     string           `json:"release_date,omitempty"`

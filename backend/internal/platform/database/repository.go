@@ -96,8 +96,8 @@ func (r *sqlMediaRepository) Get(ctx context.Context, id string) (domain.Media, 
 	}
 	// 扩展资料仅在详情读取，避免给每个分页卡片附加元数据查询。
 	details := &domain.MediaDetails{Actors: []string{}, Tags: media.Tags}
-	var casts, producer, publisher, series sql.NullString
-	err = r.exec.QueryRowContext(ctx, "SELECT casts, producer, publisher, series FROM legacy_media_metadata WHERE media_id = "+placeholder(r.dialect, 1), id).Scan(&casts, &producer, &publisher, &series)
+	var casts, producer, publisher, series, plot sql.NullString
+	err = r.exec.QueryRowContext(ctx, "SELECT casts, producer, publisher, series, plot FROM legacy_media_metadata WHERE media_id = "+placeholder(r.dialect, 1), id).Scan(&casts, &producer, &publisher, &series, &plot)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return domain.Media{}, err
 	}
@@ -107,6 +107,9 @@ func (r *sqlMediaRepository) Get(ctx context.Context, id string) (domain.Media, 
 			if value.Valid && strings.TrimSpace(value.String) != "" {
 				*field = stringPointer(strings.TrimSpace(value.String))
 			}
+		}
+		if plot.Valid && strings.TrimSpace(plot.String) != "" {
+			details.Plot = stringPointer(strings.TrimSpace(plot.String))
 		}
 	}
 	// 只采用明确分类；流出类别不能说明是否有码或有马赛克。

@@ -65,6 +65,7 @@ type LibraryMediaItem struct {
 	Sources   []LibrarySource // 同番号的分卷或多份文件全部保留，任意一份存在即可满足。
 	Code      string
 	Title     string
+	Plot      string
 	VideoType string
 }
 

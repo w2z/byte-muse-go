@@ -10,6 +10,26 @@ import (
 	"bytemuse/backend/internal/ports"
 )
 
+func TestParseNFOReadsTitleAndPlot(t *testing.T) {
+	metadata, err := parseNFO([]byte(`<movie><title>真实影片标题</title><plot>这是影片简介。</plot></movie>`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if metadata.Title != "真实影片标题" || metadata.Plot != "这是影片简介。" {
+		t.Fatalf("metadata=%+v", metadata)
+	}
+}
+
+func TestParseNFOIgnoresBlankMetadata(t *testing.T) {
+	metadata, err := parseNFO([]byte("<movie><title>  </title><plot>\n\t</plot></movie>"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if metadata.Title != "" || metadata.Plot != "" {
+		t.Fatalf("metadata=%+v", metadata)
+	}
+}
+
 // libraryScanCall 记录一次 Files 调用，用于断言每页读取 1150 条与翻页偏移。
 type libraryScanCall struct {
 	directoryID string

@@ -148,6 +148,10 @@ func (r *CollectionRepository) saveCollectionTx(ctx context.Context, tx *sql.Tx,
 			return empty, e
 		}
 		if e == nil {
+			// 采集到可靠标题时，仅替换媒体库扫描产生的文件名兜底，不覆盖人工标题；简介只补空值。
+			if metadataErr := r.mergeCollectedMetadataTx(ctx, tx, id, code, m.Title, m.Plot); metadataErr != nil {
+				return empty, metadataErr
+			}
 			if e = r.mergeMediaTagsTx(ctx, tx, id, code, m.Tags, mapping); e != nil {
 				return empty, e
 			}
@@ -167,7 +171,7 @@ func (r *CollectionRepository) saveCollectionTx(ctx context.Context, tx *sql.Tx,
 		for _, a := range m.Actors {
 			names = append(names, a.Name)
 		}
-		_, e = tx.ExecContext(ctx, "INSERT INTO legacy_media_metadata (media_id,code,genres,casts,legacy_status,legacy_mode) VALUES ("+placeholders(r.dialect, 6, 1)+")", id, code, mergeMediaTags("", m.Tags, mapping), strings.Join(names, ","), "UN_SUBSCRIBE", "STRICT")
+		_, e = tx.ExecContext(ctx, "INSERT INTO legacy_media_metadata (media_id,code,genres,casts,plot,legacy_status,legacy_mode) VALUES ("+placeholders(r.dialect, 7, 1)+")", id, code, mergeMediaTags("", m.Tags, mapping), strings.Join(names, ","), nullIfEmpty(m.Plot), "UN_SUBSCRIBE", "STRICT")
 		if e != nil {
 			return empty, e
 		}
@@ -183,6 +187,35 @@ func (r *CollectionRepository) saveCollectionTx(ctx context.Context, tx *sql.Tx,
 		}
 	}
 	return counts, nil
+}
+
+func (r *CollectionRepository) mergeCollectedMetadataTx(ctx context.Context, tx *sql.Tx, id, code, title, plot string) error {
+	var oldTitle string
+	var oldTranslated sql.NullString
+	if err := tx.QueryRowContext(ctx, "SELECT title,translated_title FROM media WHERE id = "+placeholder(r.dialect, 1), id).Scan(&oldTitle, &oldTranslated); err != nil {
+		return err
+	}
+	if title = strings.TrimSpace(title); title != "" && isLibraryFilenameTitle(code, oldTitle) {
+		stamp := encodeTime(time.Now().UTC(), r.dialect)
+		query := "UPDATE media SET title = "+placeholder(r.dialect, 1)+", updated_at = "+placeholder(r.dialect, 2)+" WHERE id = "+placeholder(r.dialect, 3)
+		args := []any{title, stamp, id}
+		if strings.EqualFold(strings.TrimSpace(oldTranslated.String), strings.TrimSpace(oldTitle)) {
+			query = "UPDATE media SET title = "+placeholder(r.dialect, 1)+", translated_title = NULL, updated_at = "+placeholder(r.dialect, 2)+" WHERE id = "+placeholder(r.dialect, 3)
+			args = []any{title, stamp, id}
+		}
+		if _, err := tx.ExecContext(ctx, query, args...); err != nil {
+			return err
+		}
+	}
+	if plot = strings.TrimSpace(plot); plot == "" {
+		return nil
+	}
+	result, err := tx.ExecContext(ctx, "UPDATE legacy_media_metadata SET plot = COALESCE(NULLIF(plot,''), "+placeholder(r.dialect, 1)+") WHERE media_id = "+placeholder(r.dialect, 2), plot, id)
+	if err != nil { return err }
+	if affected, rowsErr := result.RowsAffected(); rowsErr == nil && affected == 0 {
+		_, err = tx.ExecContext(ctx, "INSERT INTO legacy_media_metadata (media_id,code,plot,legacy_status,legacy_mode) VALUES ("+placeholders(r.dialect, 5, 1)+")", id, code, plot, "UN_SUBSCRIBE", "STRICT")
+	}
+	return err
 }
 
 // mergeMediaTagsTx 仅补本次命中影片的标签；与来源快照共用可串行化事务，避免并发覆盖。

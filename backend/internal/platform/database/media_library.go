@@ -66,6 +66,18 @@ func (r *sqlMediaLibraryRepository) MarkLibraryPresent(ctx context.Context, item
 		if err != nil {
 			return 0, fmt.Errorf("mark media library %q: %w", code, err)
 		}
+		if strings.TrimSpace(item.Plot) != "" {
+			result, updateErr := tx.ExecContext(ctx, "UPDATE legacy_media_metadata SET plot = COALESCE(NULLIF(plot,''), "+placeholder(r.dialect, 1)+") WHERE media_id = "+placeholder(r.dialect, 2), strings.TrimSpace(item.Plot), id)
+			err = updateErr
+			if err == nil {
+				if affected, rowsErr := result.RowsAffected(); rowsErr == nil && affected == 0 {
+					_, err = tx.ExecContext(ctx, "INSERT INTO legacy_media_metadata (media_id,code,plot,legacy_status,legacy_mode) VALUES ("+placeholders(r.dialect, 5, 1)+")", id, code, strings.TrimSpace(item.Plot), "UN_SUBSCRIBE", "STRICT")
+				}
+			}
+			if err != nil {
+				return 0, fmt.Errorf("save media library plot %q: %w", code, err)
+			}
+		}
 		if item.Source != nil {
 			if err = saveLibrarySource(ctx, tx, r.dialect, id, *item.Source); err != nil {
 				return 0, err
@@ -82,6 +94,56 @@ func (r *sqlMediaLibraryRepository) MarkLibraryPresent(ctx context.Context, item
 	}
 	committed = true
 	return created, nil
+}
+
+// UpdateLibraryMetadata 补齐 NFO 提供的资料；仅命中文件名兜底标题或空简介，保持人工资料不被扫描覆盖。
+func (r *sqlMediaLibraryRepository) UpdateLibraryMetadata(ctx context.Context, code, title, plot string) error {
+	code = strings.ToUpper(strings.TrimSpace(code))
+	title = truncateMediaTitle(strings.TrimSpace(title))
+	plot = strings.TrimSpace(plot)
+	if code == "" || (title == "" && plot == "") {
+		return nil
+	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var id, oldTitle string
+	var oldTranslated sql.NullString
+	if err = tx.QueryRowContext(ctx, "SELECT id,title,translated_title FROM media WHERE UPPER(code) = "+placeholder(r.dialect, 1), code).Scan(&id, &oldTitle, &oldTranslated); err != nil {
+		if errors.Is(err, sql.ErrNoRows) { return nil }
+		return err
+	}
+	set := []string{}
+	args := []any{}
+	if title != "" && isLibraryFilenameTitle(code, oldTitle) {
+		set = append(set, "title = "+placeholder(r.dialect, len(args)+1)); args = append(args, title)
+		if strings.EqualFold(strings.TrimSpace(oldTranslated.String), strings.TrimSpace(oldTitle)) {
+			set = append(set, "translated_title = NULL")
+		}
+	}
+	if len(set) > 0 {
+		set = append(set, "updated_at = "+placeholder(r.dialect, len(args)+1)); args = append(args, encodeTime(time.Now().UTC(), r.dialect))
+		args = append(args, id)
+		if _, err = tx.ExecContext(ctx, "UPDATE media SET "+strings.Join(set, ", ")+" WHERE id = "+placeholder(r.dialect, len(args)), args...); err != nil { return err }
+	}
+	if plot != "" {
+		result, updateErr := tx.ExecContext(ctx, "UPDATE legacy_media_metadata SET plot = COALESCE(NULLIF(plot,''), "+placeholder(r.dialect, 1)+") WHERE media_id = "+placeholder(r.dialect, 2), plot, id)
+		err = updateErr
+		if err == nil {
+			if affected, rowsErr := result.RowsAffected(); rowsErr == nil && affected == 0 {
+				_, err = tx.ExecContext(ctx, "INSERT INTO legacy_media_metadata (media_id,code,plot,legacy_status,legacy_mode) VALUES ("+placeholders(r.dialect, 5, 1)+")", id, code, plot, "UN_SUBSCRIBE", "STRICT")
+			}
+		}
+		if err != nil { return err }
+	}
+	return tx.Commit()
+}
+
+func isLibraryFilenameTitle(code, title string) bool {
+	value := strings.TrimSpace(title)
+	return strings.EqualFold(value, code) || (len(value) > len(code) && strings.EqualFold(value[:len(code)], code) && strings.ContainsAny(value[len(code):len(code)+1], "-_ ."))
 }
 
 // truncateMediaTitle 按 Unicode 码点截断标题，保证不超过 media.title 的列长度。

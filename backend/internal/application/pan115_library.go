@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"path/filepath"
 	"strings"
 	"time"
@@ -91,7 +93,7 @@ func (s *Pan115LibraryService) Scan(ctx context.Context) (domain.Pan115LibrarySc
 		// 边扫描边入库：遍历到符合格式的文件就立即识别并分批登记，
 		// 限流或取消只影响尚未扫描到的部分，已入库结果保留。
 		entry := s.scanDirectory(scanCtx, directory, func(walkCtx context.Context, visit strmFileVisit) error {
-			return walkPan115Files(walkCtx, s.pan115, directory.ID, strmFileFilter{formats: defaultStrmFormats}, visit)
+			return walkPan115Files(walkCtx, s.pan115, directory.ID, strmFileFilter{formats: defaultStrmFormats, includeNFO: true}, visit)
 		}, func() {
 			processed++
 			reportScanProgress(ctx, "processing", processed, total, directory.Path)
@@ -128,6 +130,10 @@ func (s *Pan115LibraryService) scanDirectory(ctx context.Context, directory pan1
 		}
 	}
 	seen := make(map[string]bool)
+	nfos := make(map[string]nfoMetadata)
+	nfoStems := make(map[string]nfoMetadata)
+	readNFO, _ := s.pan115.(interface { PlayURL(context.Context, string, string) (string, error) })
+	httpClient := &http.Client{Timeout: 30 * time.Second}
 	committed := make(map[string]bool)
 	pending := make([]ports.LibraryMediaItem, 0, libraryMarkBatchSize)
 	pendingFiles := make([]strmSourceFile, 0, libraryMarkBatchSize)
@@ -140,6 +146,15 @@ func (s *Pan115LibraryService) scanDirectory(ctx context.Context, directory pan1
 			return fmt.Errorf("写入媒体库失败：%w", err)
 		}
 		entry.Created += created
+		if updater, ok := s.library.(interface {
+			UpdateLibraryMetadata(context.Context, string, string, string) error
+		}); ok {
+			for _, item := range pending {
+				if err := updater.UpdateLibraryMetadata(ctx, item.Code, item.Title, item.Plot); err != nil {
+					return fmt.Errorf("补齐媒体库资料失败：%w", err)
+				}
+			}
+		}
 		for _, item := range pending {
 			committed[item.Code] = true
 		}
@@ -157,6 +172,44 @@ func (s *Pan115LibraryService) scanDirectory(ctx context.Context, directory pan1
 			return err
 		}
 		entry.Files++
+		if strings.EqualFold(filepath.Ext(file.Name), ".nfo") {
+			if readNFO != nil && file.PickCode != "" {
+				address, downloadErr := readNFO.PlayURL(ctx, file.PickCode, "ByteMuse/NFO")
+				if downloadErr == nil {
+					res, requestErr := httpClient.Get(address)
+					if requestErr == nil {
+						body, readErr := io.ReadAll(io.LimitReader(res.Body, 2<<20))
+						_ = res.Body.Close()
+						if res.StatusCode >= 200 && res.StatusCode < 300 && readErr == nil {
+							if metadata, parseErr := parseNFO(body); parseErr == nil {
+								key := strings.ToUpper(strings.TrimSpace(domain.ExtractCode(strings.TrimSuffix(file.Name, filepath.Ext(file.Name)))))
+								stem := strings.ToLower(filepath.ToSlash(filepath.Join(file.Directory, strings.TrimSuffix(file.Name, filepath.Ext(file.Name)))))
+								nfoStems[stem] = metadata
+								if key != "" {
+									nfos[key] = metadata
+									if updater, ok := s.library.(interface {
+										UpdateLibraryMetadata(context.Context, string, string, string) error
+									}); ok {
+										if err := updater.UpdateLibraryMetadata(ctx, key, metadata.Title, metadata.Plot); err != nil {
+											return err
+										}
+									}
+									for index := range pending {
+										if pending[index].Code == key {
+											if metadata.Title != "" { pending[index].Title = metadata.Title }
+											if metadata.Plot != "" { pending[index].Plot = metadata.Plot }
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+			entry.Skipped++
+			advance()
+			return completeTaskUnit(ctx, "library-file", directory.ID, file.Directory, file.ID)
+		}
 		done, err := taskUnitDone(ctx, "library-file", directory.ID, file.Directory, file.ID)
 		if err != nil {
 			return err
@@ -197,10 +250,17 @@ func (s *Pan115LibraryService) scanDirectory(ctx context.Context, directory pan1
 		seen[code] = true
 		// 标题兜底用去掉扩展名的文件名；真正的标题由采集链路补齐，这里不覆盖已有值。
 		title := strings.TrimSpace(strings.TrimSuffix(file.Name, filepath.Ext(file.Name)))
+		metadata := nfos[strings.ToUpper(code)]
+		if metadata.Title == "" && metadata.Plot == "" {
+			stem := strings.ToLower(filepath.ToSlash(filepath.Join(file.Directory, strings.TrimSuffix(file.Name, filepath.Ext(file.Name)))))
+			metadata = nfoStems[stem]
+		}
+		if metadata.Title != "" { title = metadata.Title }
 		pending = append(pending, ports.LibraryMediaItem{
 			Source:    &ports.LibrarySource{Kind: "115", Scope: accountID, Location: file.ParentID, ItemID: file.ID},
 			Code:      code,
 			Title:     title,
+			Plot:      metadata.Plot,
 			VideoType: domain.ClassifyVideoType(code, title, nil),
 		})
 		pendingFiles = append(pendingFiles, file)

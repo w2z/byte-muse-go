@@ -85,6 +85,7 @@ type strmFileFilter struct {
 	minSizeMB       int
 	exclude         []domain.StrmExcludeKeyword
 	downloadFormats []string
+	includeNFO      bool
 }
 
 // newStrmFileFilter 由一条映射构造过滤器；formats 与 exclude 已由 parseStrmMappings 规范化。
@@ -536,6 +537,12 @@ func walkPan115Files(ctx context.Context, api pan115FileAPI, rootID string, filt
 				}
 				if file.IsDirectory {
 					if err := walk(file.ID, joinStrmRelative(relative, file.Name)); err != nil {
+						return err
+					}
+					continue
+				}
+				if filter.includeNFO && strings.EqualFold(filepath.Ext(file.Name), ".nfo") {
+					if err := visit(strmSourceFile{ID: file.ID, PickCode: file.PickCode, Name: file.Name, Directory: relative, ParentID: directoryID, Size: file.Size, SizeKnown: file.SizeKnown, Ancestors: append([]string(nil), ancestors...)}); err != nil {
 						return err
 					}
 					continue
