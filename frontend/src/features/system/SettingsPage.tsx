@@ -8,6 +8,7 @@ import { ContentCard } from "../../shared/ui/ContentCard";
 import { PageState } from "../../shared/ui/PageState";
 import { useFeedbackMessage } from "../../shared/ui/FeedbackMessage";
 import { Pan115LoginPanel } from "./Pan115LoginPanel";
+import { MCPClientConfigs, MCPTokenInput } from "./MCPSettings";
 import { UploadPathsField, UploadMonitorStatus, type UploadMapping } from "./UploadPathsField";
 import { UploadTables } from "./UploadTables";
 import { Pan115LibraryScanAction, Pan115ScanPathsField, type Pan115ScanPath } from "./Pan115ScanPathsField";
@@ -823,7 +824,7 @@ const groups: SettingGroup[] = [
       {
         key: "MCP_TOKEN", label: "MCP 访问令牌", kind: "text", secret: true,
         placeholder: "开启后保存自动生成",
-        description: "生成后可直接编辑为自定义令牌，保存后旧令牌立即失效。使用 Authorization: Bearer <令牌> 连接，令牌加密保存；开启状态下清空并保存会生成新令牌。自定义令牌需 32 到 128 位字母、数字、下划线或短横线。",
+        description: "点击更换令牌生成新值，也可直接编辑为自定义令牌；保存后旧令牌立即失效。右侧复制按钮复制当前输入。令牌加密保存；自定义值需 32 到 128 位字母、数字、下划线或短横线。",
       },
     ],
   },
@@ -1759,11 +1760,10 @@ export function SettingsPage() {
             onChange={(nextValue: string) => setValue(field.key, nextValue)}
           />
         ) : field.key === "MCP_TOKEN" ? (
-          <Input.Password
+          <MCPTokenInput
             id={filterId(field.key)}
             value={value}
-            placeholder={placeholder}
-            autoComplete="off"
+            disabled={update.isPending}
             onChange={(nextValue: string) => setValue(field.key, nextValue)}
           />
         ) : field.kind === "int" ? (
@@ -1896,12 +1896,15 @@ export function SettingsPage() {
                 ) : null}
                 {renderFieldSequence(activeFields)}
                 {activeGroup.code === "mcp" ? (
-                  <div className="settings-field settings-field-wide">
-                    <label className="settings-field-label" htmlFor="mcp-endpoint">MCP 服务地址</label>
-                    {/* MCP 跟随当前站点来源，不能使用封面代理的 EXTERNAL_DOMAIN。 */}
-                    <Input id="mcp-endpoint" readOnly value={`${window.location.origin}/api/v1/mcp`} />
-                    <span className="settings-field-description">地址跟随当前浏览器访问的站点；供外部客户端连接时，请通过其可访问的域名或 IP 打开本站后复制。客户端选择 Streamable HTTP，填写此地址与访问令牌。订阅与任务工具会执行相应业务操作，请妥善保管令牌。</span>
-                  </div>
+                  <>
+                    <div className="settings-field settings-field-wide">
+                      <label className="settings-field-label" htmlFor="mcp-endpoint">MCP 服务地址</label>
+                      {/* MCP 跟随当前站点来源，不能使用封面代理的 EXTERNAL_DOMAIN。 */}
+                      <Input id="mcp-endpoint" readOnly value={`${window.location.origin}/api/v1/mcp`} />
+                      <span className="settings-field-description">地址跟随当前浏览器访问的站点；供外部客户端连接时，请通过其可访问的域名或 IP 打开本站后复制。客户端选择 Streamable HTTP，填写此地址与访问令牌。订阅与任务工具会执行相应业务操作，请妥善保管令牌。</span>
+                    </div>
+                    <MCPClientConfigs endpoint={`${window.location.origin}/api/v1/mcp`} savedToken={savedSnapshot.values.MCP_TOKEN ?? ""} />
+                  </>
                 ) : null}
                 {activeGroup.code === "cloud-upload" ? <div className="settings-field settings-field-wide"><UploadMonitorStatus /></div> : null}
                 {activeGroup.strmGenerate || activeGroup.pan115Scan ? (

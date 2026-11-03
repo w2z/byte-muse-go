@@ -10,6 +10,7 @@ import { MediaPlayer } from "./MediaPlayer";
 import { DragScrollRow } from "./DragScrollRow";
 import { useFeedbackMessage } from "./FeedbackMessage";
 import { AppDialog } from "./AppDialog";
+import { copyText } from "./clipboard";
 
 const displayStatus = {
   unsubscribed: { text: "未订阅", className: "idle" },
@@ -125,24 +126,7 @@ export function CodeCard({ media, meta, actions, onSelect, hideActions = false, 
   /** 文字与图标共用复制反馈；内网 HTTP 无 Clipboard API 时在当前抽屉内兼容复制。 */
   async function copyCode() {
     try {
-      if (navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(media.code);
-      } else {
-        const focused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-        const input = document.createElement("textarea");
-        input.value = media.code;
-        input.readOnly = true;
-        input.style.cssText = "position:fixed;opacity:0;pointer-events:none;";
-        (focused?.closest('[role="dialog"]') || document.body).appendChild(input);
-        try {
-          input.focus({ preventScroll: true });
-          input.select();
-          if (!document.execCommand("copy")) throw new Error("Copy failed");
-        } finally {
-          input.remove();
-          focused?.focus({ preventScroll: true });
-        }
-      }
+      await copyText(media.code);
       message.success?.("番号已复制");
     } catch {
       message.error?.("番号复制失败");
