@@ -1,16 +1,20 @@
 {
-  "version": "0.1.187",
-  "commit": "1057cf97d00b66c40d277a766771fab9a75f88c4",
-  "short_commit": "1057cf9",
-  "built_at": "2026-11-03T10:26:49Z",
+  "version": "0.1.188",
+  "commit": "4d0afafdc744010fc8a763bdff82bc51f6dc555f",
+  "short_commit": "4d0afaf",
+  "built_at": "2026-11-03T15:17:49Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.187",
-    "sha-1057cf9",
+    "0.1.188",
+    "sha-4d0afaf",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.188",
+      "message": "补充可授权的分页影片列表查询"
+    },
     {
       "version": "0.1.187",
       "message": "按工具勾选控制访问权限"
