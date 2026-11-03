@@ -1,16 +1,20 @@
 {
-  "version": "0.1.186",
-  "commit": "fa00c49a1a5a861c756db1d55517eae4c4244a49",
-  "short_commit": "fa00c49",
-  "built_at": "2026-11-03T09:43:40Z",
+  "version": "0.1.187",
+  "commit": "1057cf97d00b66c40d277a766771fab9a75f88c4",
+  "short_commit": "1057cf9",
+  "built_at": "2026-11-03T10:26:49Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.186",
-    "sha-fa00c49",
+    "0.1.187",
+    "sha-1057cf9",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.187",
+      "message": "按工具勾选控制访问权限"
+    },
     {
       "version": "0.1.186",
       "message": "添加令牌更换复制按钮和客户端配置"
