@@ -1,16 +1,20 @@
 {
-  "version": "0.1.185",
-  "commit": "90856bad24bf38ea27881c72153f441254a705ba",
-  "short_commit": "90856ba",
-  "built_at": "2026-11-03T09:10:11Z",
+  "version": "0.1.186",
+  "commit": "fa00c49a1a5a861c756db1d55517eae4c4244a49",
+  "short_commit": "fa00c49",
+  "built_at": "2026-11-03T09:43:40Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.185",
-    "sha-90856ba",
+    "0.1.186",
+    "sha-fa00c49",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.186",
+      "message": "添加令牌更换复制按钮和客户端配置"
+    },
     {
       "version": "0.1.185",
       "message": "修正服务地址并拆分独立设置分组"
