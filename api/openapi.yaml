@@ -845,6 +845,8 @@ paths:
         每个请求重新读取开关和令牌，关闭或更换令牌立即影响后续请求；已受理任务不撤销。请求体最多 1048576 字节，单次工具执行最多 60 秒。
         MCP_ALLOWED_TOOLS 是按工具名明确授权的白名单。默认、缺失或空数组时无工具可用；仅登记勾选的工具，tools/list 不返回未授权工具，直接 tools/call 未授权或已撤销工具返回 JSON-RPC 协议错误，不执行任何业务逻辑。
         权限保存后对后续请求生效，客户端缓存不构成授权依据；新授权工具可能需要客户端刷新目录。网页与渠道 Agent 不受 MCP 白名单限制。
+        query_media 为影片列表查询，默认未授权；无关键词可浏览，复用网页查询服务及其按需标题翻译，不主动采集、订阅或下载。page 为 1–1000000（默认 1），page_size 为 1–20（默认 20）；search 为番号/原标题/译名关键词。subscription 取 none/active/canceled；download 取 queued/searching/submitted/downloading/completed/failed/unknown（按最近下载任务筛选，无任务按 unknown）；library 取 unknown/absent/present；video_type 取 censored/uncensored/uncensored_cracked/leaked/unknown（未分类）；vr 取 hide/only（按番号识别 VR）。字符串筛选省略或空字符串均不限，可组合筛选，非法类型/枚举/分页值以 result.isError=true 拒绝。
+        query_media 工具文本内容为 JSON，含 page、page_size、total、returned、has_more、items；items 含 id、code、title、translated_title、video_type、release_date、poster_url、banner_url、preview_url、duration_minutes、subscription_status、download_status、library_status、display_status。缺失资料保留 null，空列表 items 为 []、total 为 0。
         客户端使用手动配置的 Bearer 令牌，当前不提供 OAuth 授权或旧版 /sse 入口。服务不发放 Mcp-Session-Id；开启且鉴权通过时 GET/DELETE 返回 405。
       security:
         - mcpBearer: []
@@ -867,6 +869,9 @@ paths:
               tools:
                 summary: 获取工具目录
                 value: {jsonrpc: '2.0', id: 1, method: tools/list, params: {}}
+              media:
+                summary: 分页浏览未订阅且未入库的非 VR 影片
+                value: {jsonrpc: '2.0', id: 3, method: tools/call, params: {name: query_media, arguments: {page: 1, page_size: 20, subscription: none, library: absent, vr: hide}}}
               subscribe:
                 summary: 按番号订阅并登记下载搜索
                 value: {jsonrpc: '2.0', id: 2, method: tools/call, params: {name: add_subscribe, arguments: {codes: TEST-001}}}

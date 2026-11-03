@@ -114,6 +114,32 @@ func searchActor(ctx context.Context, deps Deps, raw string) (any, error) {
 	return map[string]any{"total": page.Total, "returned": len(items), "items": items}, nil
 }
 
+// queryMedia 复用网页影片列表的分页与过滤；不联网补资料或创建订阅/下载，保留服务已有的按需翻译。
+func queryMedia(ctx context.Context, deps Deps, args map[string]any) (any, error) {
+	if deps.Catalog == nil {
+		return "影片列表服务不可用", nil
+	}
+	page, err := deps.Catalog.List(ctx, intArg(args, "page", 1, 1, 1000000), intArg(args, "page_size", mediaSearchLimit, 1, mediaSearchLimit), ports.MediaListQuery{
+		Search:             stringArg(args, "search"),
+		SubscriptionStatus: stringArg(args, "subscription"),
+		DownloadStatus:     stringArg(args, "download"),
+		LibraryStatus:      stringArg(args, "library"),
+		VideoType:          stringArg(args, "video_type"),
+		VR:                 stringArg(args, "vr"),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("查询影片列表失败: %w", err)
+	}
+	result := mediaListResult(page)
+	result["page"], result["page_size"] = page.Page, page.PageSize
+	result["has_more"] = page.Page*page.PageSize < page.Total
+	items := result["items"].([]map[string]any)
+	for i, item := range page.Items {
+		items[i]["id"], items[i]["video_type"], items[i]["download_status"] = item.ID, item.VideoType, item.DownloadStatus
+	}
+	return result, nil
+}
+
 // searchMedia 优先搜索本地影片；未命中时搜索已配置的资源来源。
 func searchMedia(ctx context.Context, deps Deps, raw string) (any, error) {
 	keyword := strings.TrimSpace(raw)

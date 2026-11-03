@@ -38,6 +38,7 @@ func TestMCPHTTP(t *testing.T) {
 	}
 	registry := agent.NewRegistry(agent.BuiltinTools(agent.Deps{
 		Version:               "test-mcp",
+		Catalog:               application.NewCatalogService(store.Media()),
 		Queries:               application.NewCatalogQueryService(database.NewCatalogQueryRepository(store.SQLDB(), database.DialectSQLite)),
 		Subscriptions:         application.NewSubscriptionService(store.Subscriptions()),
 		SubscriptionDownloads: application.NewSubscriptionDownloadService(database.NewSubscriptionDownloadRepository(store.SQLDB(), database.DialectSQLite), nil, nil, nil),
@@ -62,15 +63,16 @@ func TestMCPHTTP(t *testing.T) {
 	if json.Unmarshal(metadata.Body.Bytes(), &view) != nil || len(view.MCPTools) == 0 {
 		t.Fatal("未返回授权目录")
 	}
-	var hasVersion, hasSubscribe bool
+	var hasVersion, hasSubscribe, hasMediaList bool
 	for _, item := range view.MCPTools {
 		if item.Name == "send_message" || item.Description == "" {
 			t.Fatal("权限目录包含不可用工具或无说明")
 		}
 		hasVersion = hasVersion || item.Name == "get_version"
 		hasSubscribe = hasSubscribe || item.Name == "add_subscribe"
+		hasMediaList = hasMediaList || item.Name == "query_media"
 	}
-	if !hasVersion || !hasSubscribe {
+	if !hasVersion || !hasSubscribe || !hasMediaList {
 		t.Fatal("权限目录缺少真实工具")
 	}
 	request := func(body, token, origin string) *httptest.ResponseRecorder {
@@ -105,7 +107,10 @@ func TestMCPHTTP(t *testing.T) {
 	if w := request(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"get_version","arguments":{}}}`, token, ""); !strings.Contains(w.Body.String(), `"error"`) {
 		t.Fatalf("空白名单仍可执行: %s", w.Body)
 	}
-	if _, err := settings.Update(ctx, map[string]string{"MCP_ALLOWED_TOOLS": `["get_version","search_category_media","add_subscribe","query_subscribes","cancel_subscribe","send_message","unknown_tool"]`}); err != nil {
+	if w := request(`{"jsonrpc":"2.0","id":22,"method":"tools/call","params":{"name":"query_media","arguments":{}}}`, token, ""); !strings.Contains(w.Body.String(), `"error"`) {
+		t.Fatalf("新增影片列表被自动授权: %s", w.Body)
+	}
+	if _, err := settings.Update(ctx, map[string]string{"MCP_ALLOWED_TOOLS": `["get_version","query_media","search_category_media","add_subscribe","query_subscribes","cancel_subscribe","send_message","unknown_tool"]`}); err != nil {
 		t.Fatal(err)
 	}
 	for _, bad := range []string{"", "wrong"} {
@@ -137,6 +142,42 @@ func TestMCPHTTP(t *testing.T) {
 		}
 		if json.Unmarshal(w.Body.Bytes(), &result) != nil || !result.Result.IsError {
 			t.Fatalf("参数未验证: %s", w.Body)
+		}
+	}
+	// 影片列表来自真实 CatalogService；空条件可浏览，分页、组合筛选和 schema 边界均生效。
+	for _, tc := range []struct {
+		args, fragment string
+		invalid        bool
+	}{
+		{`{}`, `"total":1`, false},
+		{`{"page":1,"page_size":1,"subscription":"none","download":"unknown","library":"absent","video_type":"unknown","vr":"hide","search":"test"}`, `"code":"TEST-001"`, false},
+		{`{"page":2,"page_size":1}`, `"items":[]`, false},
+		{`{"library":"present"}`, `"total":0`, false},
+		{`{"vr":"only"}`, `"total":0`, false},
+		{`{"search":"missing"}`, `"total":0`, false},
+		{`{"page":0}`, "", true},
+		{`{"page_size":21}`, "", true},
+		{`{"page_size":1.5}`, "", true},
+		{`{"subscription":"bad"}`, "", true},
+		{`{"download":"bad"}`, "", true},
+		{`{"library":"bad"}`, "", true},
+		{`{"video_type":"bad"}`, "", true},
+		{`{"vr":"bad"}`, "", true},
+	} {
+		response := request(`{"jsonrpc":"2.0","id":21,"method":"tools/call","params":{"name":"query_media","arguments":`+tc.args+`}}`, token, "")
+		var result struct {
+			Result struct {
+				IsError bool `json:"isError"`
+				Content []struct {
+					Text string `json:"text"`
+				} `json:"content"`
+			} `json:"result"`
+		}
+		if response.Code != 200 || json.Unmarshal(response.Body.Bytes(), &result) != nil || result.Result.IsError != tc.invalid {
+			t.Fatalf("影片列表参数 %s: %d %s", tc.args, response.Code, response.Body)
+		}
+		if !tc.invalid && (len(result.Result.Content) == 0 || !strings.Contains(result.Result.Content[0].Text, tc.fragment)) {
+			t.Fatalf("影片列表结果 %s: %s", tc.args, response.Body)
 		}
 	}
 	// 官方客户端通过真实 HTTP 验证当前协议协商，实际查询、重复订阅和取消复用同一个业务仓储。
@@ -211,6 +252,9 @@ func TestMCPHTTP(t *testing.T) {
 	filtered, err := session.ListTools(ctx, nil)
 	if err != nil || len(filtered.Tools) != 1 || filtered.Tools[0].Name != "get_version" {
 		t.Fatalf("目录未收紧: %v %v", filtered, err)
+	}
+	if _, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "query_media"}); err == nil {
+		t.Fatal("已撤销的影片列表工具仍可调用")
 	}
 	if _, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "add_subscribe", Arguments: map[string]any{"codes": "TEST-001"}}); err == nil {
 		t.Fatal("已撤销的订阅工具仍可调用")

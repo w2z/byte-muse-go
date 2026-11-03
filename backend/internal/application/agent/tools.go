@@ -42,6 +42,23 @@ func BuiltinTools(deps Deps) []Tool {
 			},
 		},
 		builtinTool{
+			name:        "query_media",
+			description: "查询影片列表：无需关键词即可分页浏览，支持关键词、订阅状态、下载状态、媒体库状态、影片类型和 VR 筛选；默认每页 20 条，最多 20 条。复用网页影片列表，不主动采集、订阅或下载；沿用按需标题翻译。",
+			parameters: objectSchema(map[string]any{
+				"page":         map[string]any{"type": "integer", "description": "页码，从 1 开始，默认 1，最多 1000000", "minimum": 1, "maximum": 1000000, "default": 1},
+				"page_size":    map[string]any{"type": "integer", "description": "每页条数，默认 20，范围 1-20", "minimum": 1, "maximum": mediaSearchLimit, "default": mediaSearchLimit},
+				"search":       stringProperty("番号、原标题或译名关键词；省略或空字符串表示不过滤"),
+				"subscription": stringProperty("订阅状态；空字符串不限，none 无有效订阅、active 有效订阅、canceled 已取消", "", "none", "active", "canceled"),
+				"download":     stringProperty("下载状态；空字符串不限，unknown 表示无下载任务或最近任务状态未知，其余按最近下载任务筛选", "", "queued", "searching", "submitted", "downloading", "completed", "failed", "unknown"),
+				"library":      stringProperty("媒体库状态；空字符串不限，unknown 未知、absent 未入库、present 已入库", "", "unknown", "absent", "present"),
+				"video_type":   stringProperty("影片类型；空字符串不限，unknown 未分类，其余为有码、无码、无码破解或流出", "", "censored", "uncensored", "uncensored_cracked", "leaked", "unknown"),
+				"vr":           stringProperty("VR 筛选；空字符串不限，hide 隐藏 VR，only 仅 VR，与网页一样按番号识别", "", "hide", "only"),
+			}),
+			run: func(ctx context.Context, args map[string]any) (any, error) {
+				return queryMedia(ctx, deps, args)
+			},
+		},
+		builtinTool{
 			name:        "search_category_media",
 			description: "查询指定标签或影片类型下的影片；标签使用精确名称，影片类型使用有码、无码、无码破解、流出或未分类。",
 			parameters: objectSchema(map[string]any{

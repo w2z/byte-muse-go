@@ -24,6 +24,7 @@ const builtinSystemPrompt = `你是 ByteMuse 的智能助手，帮助用户管�
 </confirmation_policy>
 
 <tool_strategy>
+- 浏览影片列表、分页或按订阅/下载/媒体库状态组合筛选时调用 query_media；没有关键词也可以查询，按 has_more 判断是否继续翻页。
 - 按标签或影片类型查找影片时调用 search_category_media，不能用普通影片关键词搜索代替分类筛选。
 - 互不依赖的只读查询在同一轮内并行调用，例如 query_subscribes 与 query_download_tasks。
 - 后一步依赖前一步结果、或会改变状态时才串行。

@@ -19,6 +19,7 @@ var expectedToolNames = []string{
 	"search_code",
 	"search_actor",
 	"search_media",
+	"query_media",
 	"search_category_media",
 	"get_rank",
 	"get_release_today",
@@ -232,5 +233,64 @@ func TestQueryLogsValidatesLevelAndLines(t *testing.T) {
 	}
 	if store.last.PageSize != 80 {
 		t.Fatalf("默认条数=%d，期望 80", store.last.PageSize)
+	}
+}
+
+// mediaListRecorder 验证影片列表工具透传网页所用查询条件，不引入另一套仓储规则。
+type mediaListRecorder struct {
+	last   ports.MediaListQuery
+	result domain.MediaPage
+}
+
+func (r *mediaListRecorder) List(_ context.Context, query ports.MediaListQuery) (domain.MediaPage, error) {
+	r.last = query
+	return r.result, nil
+}
+
+func (*mediaListRecorder) Get(context.Context, string) (domain.Media, error) {
+	return domain.Media{}, ports.ErrMediaNotFound
+}
+
+// TestQueryMediaListsAndFilters 验证无关键词列表、分页与全部筛选均复用 CatalogService。
+func TestQueryMediaListsAndFilters(t *testing.T) {
+	repo := &mediaListRecorder{result: domain.MediaPage{Items: []domain.Media{{ID: "m1", Code: "TEST-001", Title: "测试影片"}}, Total: 23}}
+	registry := NewRegistry(BuiltinTools(Deps{Catalog: application.NewCatalogService(repo)})...)
+	tool, ok := registry.Get("query_media")
+	if !ok {
+		t.Fatal("缺少影片列表工具 query_media")
+	}
+	result, err := tool.Run(context.Background(), map[string]any{"page": 2, "page_size": 3, "search": " TEST ", "subscription": "none", "download": "unknown", "library": "absent", "video_type": "unknown", "vr": "hide"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := ports.MediaListQuery{Limit: 3, Offset: 3, Search: "TEST", SubscriptionStatus: "none", DownloadStatus: "unknown", LibraryStatus: "absent", VideoType: "unknown", VR: "hide"}
+	if repo.last != want {
+		t.Fatalf("查询条件=%+v want=%+v", repo.last, want)
+	}
+	data := result.(map[string]any)
+	if data["page"] != 2 || data["page_size"] != 3 || data["total"] != 23 || data["has_more"] != true || data["returned"] != 1 {
+		t.Fatalf("分页结果=%v", data)
+	}
+	items := data["items"].([]map[string]any)
+	if items[0]["id"] != "m1" || items[0]["code"] != "TEST-001" {
+		t.Fatalf("影片结果=%v", items)
+	}
+	repo.result = domain.MediaPage{}
+	result, err = tool.Run(context.Background(), nil)
+	if err != nil || repo.last.Limit != 20 || repo.last.Offset != 0 || repo.last.Search != "" {
+		t.Fatalf("空条件无法查询: %v %v %+v", result, err, repo.last)
+	}
+	data = result.(map[string]any)
+	if data["total"] != 0 || data["has_more"] != false || len(data["items"].([]map[string]any)) != 0 {
+		t.Fatalf("空列表=%v", data)
+	}
+	for _, args := range []map[string]any{{"video_type": "bad"}, {"vr": "bad"}} {
+		if _, err := tool.Run(context.Background(), args); err == nil {
+			t.Fatalf("非法筛选未拒绝: %v", args)
+		}
+	}
+	out := NewRegistry(BuiltinTools(Deps{})...).Call(context.Background(), "query_media", nil)
+	if !strings.Contains(out, "影片列表服务不可用") {
+		t.Fatalf("空服务=%s", out)
 	}
 }
