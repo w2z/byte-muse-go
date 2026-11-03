@@ -101,6 +101,17 @@ func (r *Registry) List() []Tool {
 	return items
 }
 
+// MCPTools 返回可被 MCP 授权的工具目录；排除依赖聊天上下文的工具，设置页与协议入口共用。
+func (r *Registry) MCPTools() []Tool {
+	items := []Tool{}
+	for _, tool := range r.List() {
+		if tool.Name() != "send_message" {
+			items = append(items, tool)
+		}
+	}
+	return items
+}
+
 // OpenAITools 生成 chat/completions 的 tools 字段。
 func (r *Registry) OpenAITools() []map[string]any {
 	tools := r.List()

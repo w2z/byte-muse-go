@@ -2,7 +2,9 @@ package application
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -11,6 +13,68 @@ import (
 
 type settingsRepositoryStub struct {
 	items []ports.StoredSetting
+}
+
+// TestMCPPermissionsBounds 验证契约允许的最大数组可完整保存，越界请求不产生部分写入。
+func TestMCPPermissionsBounds(t *testing.T) {
+	repo := &settingsMemoryRepository{}
+	svc, _ := NewSettingsService(repo, "sqlite", strings.Repeat("x", 32))
+	names := make([]string, 128)
+	for i := range names {
+		names[i] = fmt.Sprintf("%064d", i)
+	}
+	raw, _ := json.Marshal(names)
+	if len(raw) != 8577 {
+		t.Fatal("边界夹具长度错误")
+	}
+	got, err := svc.Update(context.Background(), map[string]string{"MCP_ALLOWED_TOOLS": string(raw)})
+	if err != nil || got.Values["MCP_ALLOWED_TOOLS"] != string(raw) {
+		t.Fatal("最大合法权限数组无法保存", err)
+	}
+	for _, invalid := range [][]string{append(names, "another_tool"), {strings.Repeat("a", 65)}} {
+		value, _ := json.Marshal(invalid)
+		if _, err := svc.Update(context.Background(), map[string]string{"MCP_ALLOWED_TOOLS": string(value), "MCP_ENABLE": "true"}); !errors.Is(err, ErrInvalidSetting) {
+			t.Fatalf("未拒绝越界权限: %v", err)
+		}
+		read, _ := svc.Get(context.Background())
+		if read.Values["MCP_ALLOWED_TOOLS"] != string(raw) || read.Values["MCP_ENABLE"] != "false" {
+			t.Fatal("越界请求产生部分写入")
+		}
+	}
+}
+
+// TestMCPPermissionsSetting 验证白名单默认空、规范化、部分更新保留、清空与非法值整批拒绝。
+func TestMCPPermissionsSetting(t *testing.T) {
+	repo := &settingsMemoryRepository{}
+	svc, _ := NewSettingsService(repo, "sqlite", strings.Repeat("x", 32))
+	ctx := context.Background()
+	initial, err := svc.Get(ctx)
+	if err != nil || initial.Values["MCP_ALLOWED_TOOLS"] != "[]" || len(repo.items) != 0 {
+		t.Fatal("默认权限应为空且不回填", err)
+	}
+	for _, tc := range []struct{ value, want string }{
+		{`["query_subscribes","get_version","get_version"]`, `["get_version","query_subscribes"]`},
+		{`[]`, `[]`}, {"", "[]"},
+	} {
+		got, err := svc.Update(ctx, map[string]string{"MCP_ALLOWED_TOOLS": tc.value})
+		if err != nil || got.Values["MCP_ALLOWED_TOOLS"] != tc.want {
+			t.Fatalf("got=%v err=%v", got, err)
+		}
+	}
+	_, _ = svc.Update(ctx, map[string]string{"MCP_ALLOWED_TOOLS": `["get_version"]`})
+	for _, invalid := range []string{`null`, `{}`, `[null]`, `[1]`, `[""]`, `["*"]`, `["get version"]`} {
+		if _, err := svc.Update(ctx, map[string]string{"MCP_ALLOWED_TOOLS": invalid, "MCP_ENABLE": "true"}); !errors.Is(err, ErrInvalidSetting) {
+			t.Fatalf("未拒绝 %s: %v", invalid, err)
+		}
+		got, _ := svc.Get(ctx)
+		if got.Values["MCP_ALLOWED_TOOLS"] != `["get_version"]` || got.Values["MCP_ENABLE"] != "false" || got.Values["MCP_TOKEN"] != "" {
+			t.Fatal("非法请求产生部分写入")
+		}
+	}
+	got, err := svc.Update(ctx, map[string]string{"MCP_ENABLE": "true"})
+	if err != nil || got.Values["MCP_ALLOWED_TOOLS"] != `["get_version"]` {
+		t.Fatal("保存其他设置丢失权限", err)
+	}
 }
 
 // TestMCPSettings 验证默认关闭、原子生成加密令牌、停启保留和令牌轮换，不回填历史设置。

@@ -110,7 +110,7 @@ func BuiltinTools(deps Deps) []Tool {
 		},
 		builtinTool{
 			name:        "add_subscribe",
-			description: "按番号创建影片订阅；多个番号用逗号分隔，逐个受理并返回每一条结果。",
+			description: "按番号创建影片订阅并登记资源搜索与下载受理（不表示下载完成）；多个番号用逗号分隔，逐个受理并返回每一条结果。",
 			parameters: objectSchema(map[string]any{
 				"codes": stringProperty("一个或多个番号，用英文逗号或中文逗号分隔，例如 SSIS-001,SSIS-002"),
 			}, "codes"),

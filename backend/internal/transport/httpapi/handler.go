@@ -20,6 +20,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"bytemuse/backend/internal/application"
+	"bytemuse/backend/internal/application/agent"
 	"bytemuse/backend/internal/auth"
 	"bytemuse/backend/internal/domain"
 	"bytemuse/backend/internal/logging"
@@ -45,6 +46,8 @@ type Dependencies struct {
 	Settings              *application.SettingsService
 	// MCP 独立校验设置开关与 Bearer 令牌，不使用后台 Cookie。
 	MCP http.Handler
+	// MCPTools 为管理员设置响应提供同一份可授权工具目录。
+	MCPTools *agent.Registry
 	// Version 提供当前运行版本与发布仓库版本的比较结果，供顶栏版本标签使用。
 	Version *application.VersionService
 	// Upgrade 管理单个后台升级任务，只有启动器运行环境支持实际安装。
@@ -129,8 +132,8 @@ func New(dependencies Dependencies) http.Handler {
 		router.Get("/downloads/source-sites", listDownloadSourceSites(dependencies.Downloads))
 		router.Post("/downloads/{taskId}/{action}", controlDownload(dependencies.Downloads))
 		router.Delete("/downloads/{taskId}", controlDownload(dependencies.Downloads))
-		router.Get("/system/settings", getSystemSettings(dependencies.Settings))
-		router.Put("/system/settings", updateSystemSettings(dependencies.Settings))
+		router.Get("/system/settings", getSystemSettings(dependencies.Settings, dependencies.MCPTools))
+		router.Put("/system/settings", updateSystemSettings(dependencies.Settings, dependencies.MCPTools))
 		router.Post("/system/settings/openai/test", testOpenAI)
 		router.Get("/system/version", systemVersion(dependencies.Version))
 		router.Get("/system/upgrade", systemUpgradeStatus(dependencies.Upgrade))
@@ -865,7 +868,7 @@ func updateScheduledTask(manager *scheduler.Manager, service *application.Settin
 	}
 }
 
-func getSystemSettings(service *application.SettingsService) http.HandlerFunc {
+func getSystemSettings(service *application.SettingsService, registry *agent.Registry) http.HandlerFunc {
 	return func(response http.ResponseWriter, request *http.Request) {
 		if service == nil {
 			writeError(response, http.StatusServiceUnavailable, "service_unavailable", "设置服务尚未就绪")
@@ -876,11 +879,11 @@ func getSystemSettings(service *application.SettingsService) http.HandlerFunc {
 			writeApplicationError(response, err)
 			return
 		}
-		writeJSON(response, http.StatusOK, settings)
+		writeJSON(response, http.StatusOK, settingsWithMCPTools(settings, registry))
 	}
 }
 
-func updateSystemSettings(service *application.SettingsService) http.HandlerFunc {
+func updateSystemSettings(service *application.SettingsService, registry *agent.Registry) http.HandlerFunc {
 	type requestBody struct{ Values map[string]string }
 	return func(response http.ResponseWriter, request *http.Request) {
 		var body requestBody
@@ -901,7 +904,7 @@ func updateSystemSettings(service *application.SettingsService) http.HandlerFunc
 			writeApplicationError(response, err)
 			return
 		}
-		writeJSON(response, http.StatusOK, settings)
+		writeJSON(response, http.StatusOK, settingsWithMCPTools(settings, registry))
 	}
 }
 func pagination(response http.ResponseWriter, request *http.Request) (int, int, bool) {

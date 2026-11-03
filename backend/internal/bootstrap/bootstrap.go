@@ -638,6 +638,7 @@ func (c *Commands) Serve(ctx context.Context) error {
 		Dashboard:             dashboardService,
 		Settings:              settingsService,
 		MCP:                   httpapi.NewMCPHandler(settingsService, registry, c.config.Version),
+		MCPTools:              registry,
 		// 版本检查复用运行版本与发布仓库记录，顶栏标签与 Agent 运行环境提示取同一来源。
 		Version:         versions,
 		Upgrade:         application.NewUpgradeService(ctx, versions, installer),

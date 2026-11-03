@@ -1,8 +1,41 @@
-import { Button, Input, Space, Tabs } from "@arco-design/web-react";
+import { Button, Checkbox, Grid, Input, Space, Tabs } from "@arco-design/web-react";
 import { IconCopy, IconRefresh } from "@arco-design/web-react/icon";
 import { useState } from "react";
 import { copyText } from "../../shared/ui/clipboard";
 import { useFeedbackMessage } from "../../shared/ui/FeedbackMessage";
+import type { MCPToolPermission } from "../../shared/api/types";
+
+/** 逐项编辑 MCP 工具白名单；选项只读后端目录，缺少目录时保留原草稿，不隐式授予权限。 */
+export function MCPPermissionsField({ value, onChange, tools, disabled = false }: {
+  value: string; onChange: (value: string) => void; tools?: MCPToolPermission[]; disabled?: boolean;
+}) {
+  if (!tools) return <span className="settings-field-description">工具目录不可用，已保存权限保持不变；请刷新设置后重试。</span>;
+  if (tools.length === 0) return <span className="settings-field-description">当前没有可授权工具。</span>;
+  let parsed: unknown = [];
+  try { parsed = JSON.parse(value || "[]"); } catch { /* 非法历史值按未授权展示，不自动写回。 */ }
+  const names = tools.map((tool) => tool.name);
+  const selected = Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string" && names.includes(item)) : [];
+  const selectedCount = new Set(selected).size;
+  return <div role="group" aria-label="MCP 工具权限">
+    <p className="settings-field-description">只有勾选并保存的工具才能使用，默认全部不选；取消权限后，客户端缓存的工具名也无法继续调用。不影响网页和渠道 Agent。</p>
+    <Space>
+      <Checkbox aria-label="全选权限" disabled={disabled} checked={selectedCount === tools.length}
+        indeterminate={selectedCount > 0 && selectedCount < tools.length}
+        onChange={(checked) => onChange(JSON.stringify(checked ? names : []))}>全选</Checkbox>
+      <span className="settings-field-description">已选 {selectedCount} / {tools.length} 项</span>
+    </Space>
+    <Checkbox.Group value={selected} disabled={disabled} onChange={(next) => onChange(JSON.stringify(next))} className="settings-mcp-permissions">
+      <Grid.Row gutter={[12, 12]}>
+        {tools.map((tool) => <Grid.Col key={tool.name} xs={24} md={12}>
+          <Checkbox value={tool.name} aria-label={tool.description} className="settings-mcp-permission">
+            <span className="settings-mcp-permission-description">{tool.description}</span>
+            <span className="settings-field-description">{tool.name}</span>
+          </Checkbox>
+        </Grid.Col>)}
+      </Grid.Row>
+    </Checkbox.Group>
+  </div>;
+}
 
 /** MCP 令牌编辑器：按钮仅更换草稿；右侧相连的复制按钮复制当前输入，保存由设置页统一处理。 */
 export function MCPTokenInput({ id, value, onChange, disabled = false }: {

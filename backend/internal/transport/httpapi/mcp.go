@@ -12,17 +12,17 @@ import (
 
 	"bytemuse/backend/internal/application"
 	"bytemuse/backend/internal/application/agent"
+	"bytemuse/backend/internal/domain"
 	"bytemuse/backend/internal/logging"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// NewMCPHandler 将唯一工具目录适配为无会话 Streamable HTTP 服务；每个请求重新读取开关与专用令牌。
-// 它不接受后台 Cookie，不暴露依赖聊天上下文的 send_message；业务操作仍复用原应用服务。
-func NewMCPHandler(settings *application.SettingsService, registry *agent.Registry, version string) http.Handler {
-	server := mcp.NewServer(&mcp.Implementation{Name: "ByteMuse", Version: version}, nil)
-	for _, tool := range registry.List() {
-		if tool.Name() == "send_message" {
+// newMCPServer 为本次请求构造不可变的授权工具目录，未授权工具不会登记为可调用方法。
+func newMCPServer(registry *agent.Registry, allowed map[string]bool, version string) *mcp.Server {
+	server := mcp.NewServer(&mcp.Implementation{Name: "ByteMuse", Version: version}, &mcp.ServerOptions{Capabilities: &mcp.ServerCapabilities{Tools: &mcp.ToolCapabilities{}}})
+	for _, tool := range registry.MCPTools() {
+		if !allowed[tool.Name()] {
 			continue
 		}
 		mcp.AddTool[map[string]any, any](server, &mcp.Tool{
@@ -46,7 +46,18 @@ func NewMCPHandler(settings *application.SettingsService, registry *agent.Regist
 			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: text}}}, nil, nil
 		})
 	}
-	transport := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, &mcp.StreamableHTTPOptions{
+	return server
+}
+
+// mcpPermissionsKey 只携带本次已鉴权请求的权限快照，避免无会话请求之间共享可变工具目录。
+type mcpPermissionsKey struct{}
+
+// NewMCPHandler 对每个请求重新读取令牌与白名单；只登记被明确授权的工具，目录与调用同时收紧。
+func NewMCPHandler(settings *application.SettingsService, registry *agent.Registry, version string) http.Handler {
+	transport := mcp.NewStreamableHTTPHandler(func(r *http.Request) *mcp.Server {
+		allowed, _ := r.Context().Value(mcpPermissionsKey{}).(map[string]bool)
+		return newMCPServer(registry, allowed, version)
+	}, &mcp.StreamableHTTPOptions{
 		Stateless: true, JSONResponse: true, MaxRequestBodyBytes: 1024 * 1024, PropagateRequestCancellation: true,
 	})
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -85,6 +96,32 @@ func NewMCPHandler(settings *application.SettingsService, registry *agent.Regist
 			writeError(w, http.StatusUnauthorized, "unauthorized", "MCP 访问令牌无效")
 			return
 		}
-		transport.ServeHTTP(w, r)
+		names, err := application.MCPAllowedTools(current.Values["MCP_ALLOWED_TOOLS"])
+		if err != nil {
+			names = nil
+		}
+		allowed := make(map[string]bool, len(names))
+		for _, name := range names {
+			allowed[name] = true
+		}
+		transport.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), mcpPermissionsKey{}, allowed)))
 	})
+}
+
+// mcpToolDescriptor 来自唯一工具目录，不包含令牌或用户数据，供管理员逐项勾选授权。
+type mcpToolDescriptor struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
+// settingsWithMCPTools 在设置响应附带可授权目录，避免前端另行维护工具名称与业务说明。
+func settingsWithMCPTools(settings domain.SystemSettings, registry *agent.Registry) any {
+	items := []mcpToolDescriptor{}
+	for _, tool := range registry.MCPTools() {
+		items = append(items, mcpToolDescriptor{Name: tool.Name(), Description: tool.Description()})
+	}
+	return struct {
+		domain.SystemSettings
+		MCPTools []mcpToolDescriptor `json:"mcp_tools"`
+	}{settings, items}
 }

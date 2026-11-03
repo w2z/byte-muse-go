@@ -158,7 +158,12 @@ export type SystemSettings = {
   database_driver: DatabaseDriver;
   values: Record<string, string>;
   configured: Record<string, boolean>;
+  /** 后端唯一工具目录生成的 MCP 可授权项；旧服务可缺失，不代表自动授权。 */
+  mcp_tools?: MCPToolPermission[];
 };
+
+/** MCP 权限项使用实际工具名作为稳定授权标识，说明与工具调用目录一致。 */
+export type MCPToolPermission = { name: string; description: string };
 
 /** 顶栏版本标签数据：当前运行版本与发布仓库版本的比较结果。 */
 export type SystemVersion = {

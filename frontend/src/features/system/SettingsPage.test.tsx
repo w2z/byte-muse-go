@@ -8,6 +8,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SettingsPage } from "./SettingsPage";
 import { apiRequest } from "../../shared/api/client";
 
+Object.defineProperty(window,"matchMedia",{writable:true,value:(query:string)=>({matches:false,media:query,addListener(){},removeListener(){}})});
+
 vi.mock("../../shared/api/client", () => ({
   apiRequest: vi.fn(async () => ({
     database_driver: "sqlite",
@@ -78,7 +80,7 @@ describe("设置页字段布局", () => {
         values = { ...values, ...payload };
         if (values.MCP_ENABLE === "true" && !values.MCP_TOKEN) values.MCP_TOKEN = "test-generated-token-for-settings-only";
       }
-      return { database_driver: "sqlite", values: { ...values }, configured: {} };
+      return { database_driver: "sqlite", values: { ...values }, configured: {}, mcp_tools:[{name:"get_version",description:"查询当前运行版本"}] };
     });
     renderSettings();
     await user.click(await screen.findByRole("tab", { name: "AI 模型" }));
@@ -86,13 +88,16 @@ describe("设置页字段布局", () => {
     await user.type(screen.getByLabelText("模型名称"), "unsaved-model");
     await user.click(within(screen.getByLabelText("站点设置分组")).getByRole("tab", { name: "MCP 服务" }));
     expect(screen.queryByRole("tab", { name: "对话 Agent" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("checkbox", {name:"查询当前运行版本"}));
     await user.click(screen.getByRole("switch", { name: "启用 MCP 服务" }));
     await user.click(screen.getByRole("button", { name: "重置" }));
     expect(screen.getByRole("switch", { name: "启用 MCP 服务" })).not.toBeChecked();
+    expect(screen.getByRole("checkbox", {name:"查询当前运行版本"})).not.toBeChecked();
+    await user.click(screen.getByRole("checkbox", {name:"查询当前运行版本"}));
     await user.click(screen.getByRole("switch", { name: "启用 MCP 服务" }));
     await user.click(screen.getByRole("button", { name: "保存设置" }));
     await waitFor(() => expect(payloads).toHaveLength(1));
-    expect(payloads[0]).toEqual({ MCP_ENABLE: "true", MCP_TOKEN: "" });
+    expect(payloads[0]).toEqual({ MCP_ENABLE: "true", MCP_TOKEN: "", MCP_ALLOWED_TOOLS:'["get_version"]' });
     expect(values.OPENAI_MODEL).toBe("original-model");
     await user.click(screen.getByRole("tab", { name: "AI 模型" }));
     expect(screen.getByLabelText("模型名称")).toHaveValue("unsaved-model");

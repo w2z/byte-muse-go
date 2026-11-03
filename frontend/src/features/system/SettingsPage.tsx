@@ -8,7 +8,7 @@ import { ContentCard } from "../../shared/ui/ContentCard";
 import { PageState } from "../../shared/ui/PageState";
 import { useFeedbackMessage } from "../../shared/ui/FeedbackMessage";
 import { Pan115LoginPanel } from "./Pan115LoginPanel";
-import { MCPClientConfigs, MCPTokenInput } from "./MCPSettings";
+import { MCPClientConfigs, MCPPermissionsField, MCPTokenInput } from "./MCPSettings";
 import { UploadPathsField, UploadMonitorStatus, type UploadMapping } from "./UploadPathsField";
 import { UploadTables } from "./UploadTables";
 import { Pan115LibraryScanAction, Pan115ScanPathsField, type Pan115ScanPath } from "./Pan115ScanPathsField";
@@ -826,6 +826,7 @@ const groups: SettingGroup[] = [
         placeholder: "开启后保存自动生成",
         description: "点击更换令牌生成新值，也可直接编辑为自定义令牌；保存后旧令牌立即失效。右侧复制按钮复制当前输入。令牌加密保存；自定义值需 32 到 128 位字母、数字、下划线或短横线。",
       },
+      { key: "MCP_ALLOWED_TOOLS", label: "工具权限", kind: "text", wide: true },
     ],
   },
   {
@@ -946,7 +947,7 @@ function settingsSnapshot(values: Record<string, string>): EditorSnapshot {
   for (const group of groups) {
     for (const field of groupFields(group)) {
       if (isStructuredField(field.kind)) continue;
-      const raw = values[field.key] ?? (field.key === strmDownloadExtensionsKey ? defaultDownloadExtensions : field.key === "CLOUD_UPLOAD_CONFLICT" ? "skip" : "");
+      const raw = values[field.key] ?? (field.key === "MCP_ALLOWED_TOOLS" ? "[]" : field.key === strmDownloadExtensionsKey ? defaultDownloadExtensions : field.key === "CLOUD_UPLOAD_CONFLICT" ? "skip" : "");
       next[field.key] = field.kind === "bool" ? raw === "true" : raw;
       if (field.siteAuth) {
         next[field.siteAuth.modeKey] = values[field.siteAuth.modeKey] === "cookie" ? "cookie" : "key";
@@ -1337,6 +1338,7 @@ export function SettingsPage() {
       .flatMap((group) => groupFields(group))
       .find((item) => item.key === key);
     if (field?.kind === "bool") return "false";
+    if (key === "MCP_ALLOWED_TOOLS") return "[]";
     if (key === strmDownloadExtensionsKey) return defaultDownloadExtensions;
     if (field && isStructuredField(field.kind)) return "";
     return "";
@@ -1411,6 +1413,13 @@ export function SettingsPage() {
   };
 
   const renderField = (field: SettingField, group: SettingGroup) => {
+    if (field.key === "MCP_ALLOWED_TOOLS") return (
+      <div className="settings-field settings-field-wide" key={field.key}>
+        <span className="settings-field-label">{field.label}</span>
+        <MCPPermissionsField value={String(draft[field.key] ?? "[]")} onChange={(value) => setValue(field.key, value)}
+          tools={query.data?.mcp_tools} disabled={update.isPending} />
+      </div>
+    );
     // Visibility does not change serialization: inactive providers retain their credentials.
     const provider = field.key.startsWith("BAIDU_") ? "baidu" : field.key === "GOOGLE_API_KEY" ? "google" : field.key === "DEEPLX_URL" ? "deeplx" : null;
     if (provider && draft.TRANSLATION_ENGINE !== provider) return null;

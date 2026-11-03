@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -247,8 +248,9 @@ var writableSettings = map[string]settingSpec{
 	"AGENT_ENABLE":        {kind: settingBool},
 	"AGENT_SYSTEM_PROMPT": {kind: settingText, maxBytes: 60 * 1024},
 	// MCP 独立于对话 Agent；访问令牌通过已有敏感设置机制加密保存。
-	"MCP_ENABLE": {kind: settingBool},
-	"MCP_TOKEN":  {secret: true, kind: settingText},
+	"MCP_ENABLE":        {kind: settingBool},
+	"MCP_TOKEN":         {secret: true, kind: settingText},
+	"MCP_ALLOWED_TOOLS": {kind: settingText, maxBytes: 16 * 1024},
 
 	// 其他
 	"IMAGE_MODE":           {kind: settingEnum, allowed: imageModes},
@@ -335,6 +337,13 @@ func (s *SettingsService) Get(ctx context.Context) (domain.SystemSettings, error
 	if result.Values["MCP_ENABLE"] != "true" || result.Values["MCP_TOKEN"] == "" {
 		result.Values["MCP_ENABLE"] = "false"
 	}
+	// 缺失或损坏的白名单只在读取时收紧为空，不回填历史配置，不默认授予任何工具。
+	names, err := MCPAllowedTools(result.Values["MCP_ALLOWED_TOOLS"])
+	if err != nil {
+		names = []string{}
+	}
+	raw, _ := json.Marshal(names)
+	result.Values["MCP_ALLOWED_TOOLS"] = string(raw)
 	return result, nil
 }
 
@@ -387,6 +396,11 @@ func (s *SettingsService) Update(ctx context.Context, values map[string]string) 
 		value = strings.TrimSpace(value)
 		if err := validateSettingValue(key, spec, value); err != nil {
 			return domain.SystemSettings{}, err
+		}
+		if key == "MCP_ALLOWED_TOOLS" {
+			names, _ := MCPAllowedTools(value)
+			raw, _ := json.Marshal(names)
+			value = string(raw)
 		}
 		if spec.secret {
 			encrypted, err := s.encrypt(value)
@@ -574,6 +588,11 @@ func validateSettingValue(key string, spec settingSpec, value string) error {
 	invalid := func(reason string) error {
 		return fmt.Errorf("%w: %s %s", ErrInvalidSetting, key, reason)
 	}
+	if key == "MCP_ALLOWED_TOOLS" {
+		if _, err := MCPAllowedTools(value); err != nil {
+			return invalid(err.Error())
+		}
+	}
 	if key == "MCP_TOKEN" {
 		if len(value) < 32 || len(value) > 128 || strings.Trim(value, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-") != "" {
 			return invalid("需要 32 到 128 位字母、数字、下划线或短横线")
@@ -643,6 +662,31 @@ func validateSettingValue(key string, spec settingSpec, value string) error {
 		}
 	}
 	return nil
+}
+
+// MCPAllowedTools 解析按工具名称明确授权的 JSON 字符串数组；空值表示不授权，去重并排序。
+// 名称是否属于当前工具目录由 MCP 传输层与唯一 Registry 取交集判断，不支持通配符或自动授权新工具。
+func MCPAllowedTools(raw string) ([]string, error) {
+	names := []string{}
+	if strings.TrimSpace(raw) == "" {
+		return names, nil
+	}
+	if !strings.HasPrefix(strings.TrimSpace(raw), "[") || json.Unmarshal([]byte(raw), &names) != nil || len(names) > 128 {
+		return nil, errors.New("需要最多 128 项工具名称的 JSON 字符串数组")
+	}
+	seen := map[string]bool{}
+	result := []string{}
+	for _, name := range names {
+		if len(name) == 0 || len(name) > 64 || strings.Trim(name, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-") != "" {
+			return nil, errors.New("工具名称需为 1 到 64 位字母、数字、下划线或短横线，不支持通配符")
+		}
+		if !seen[name] {
+			seen[name] = true
+			result = append(result, name)
+		}
+	}
+	sort.Strings(result)
+	return result, nil
 }
 
 func containsValue(values []string, target string) bool {

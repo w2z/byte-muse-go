@@ -12,6 +12,7 @@ import (
 
 	"bytemuse/backend/internal/application"
 	"bytemuse/backend/internal/application/agent"
+	"bytemuse/backend/internal/auth"
 	"bytemuse/backend/internal/platform/database"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -41,7 +42,37 @@ func TestMCPHTTP(t *testing.T) {
 		Subscriptions:         application.NewSubscriptionService(store.Subscriptions()),
 		SubscriptionDownloads: application.NewSubscriptionDownloadService(database.NewSubscriptionDownloadRepository(store.SQLDB(), database.DialectSQLite), nil, nil, nil),
 	})...)
-	h := New(Dependencies{MCP: NewMCPHandler(settings, registry, "test-mcp")})
+	authService, err := auth.New(auth.Config{Username: "mcp-admin", Password: "test-only-password", Secret: strings.Repeat("x", 32)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := New(Dependencies{MCP: NewMCPHandler(settings, registry, "test-mcp"), MCPTools: registry, Settings: settings, Auth: authService})
+	login := httptest.NewRecorder()
+	h.ServeHTTP(login, httptest.NewRequest("POST", "/api/v1/auth/login", strings.NewReader(`{"username":"mcp-admin","password":"test-only-password"}`)))
+	if login.Code != 200 || len(login.Result().Cookies()) == 0 {
+		t.Fatal("管理员登录失败")
+	}
+	adminRead := httptest.NewRequest("GET", "/api/v1/system/settings", nil)
+	adminRead.AddCookie(login.Result().Cookies()[0])
+	metadata := httptest.NewRecorder()
+	h.ServeHTTP(metadata, adminRead)
+	var view struct {
+		MCPTools []mcpToolDescriptor `json:"mcp_tools"`
+	}
+	if json.Unmarshal(metadata.Body.Bytes(), &view) != nil || len(view.MCPTools) == 0 {
+		t.Fatal("未返回授权目录")
+	}
+	var hasVersion, hasSubscribe bool
+	for _, item := range view.MCPTools {
+		if item.Name == "send_message" || item.Description == "" {
+			t.Fatal("权限目录包含不可用工具或无说明")
+		}
+		hasVersion = hasVersion || item.Name == "get_version"
+		hasSubscribe = hasSubscribe || item.Name == "add_subscribe"
+	}
+	if !hasVersion || !hasSubscribe {
+		t.Fatal("权限目录缺少真实工具")
+	}
 	request := func(body, token, origin string) *httptest.ResponseRecorder {
 		t.Helper()
 		r := httptest.NewRequest("POST", "http://localhost/api/v1/mcp", strings.NewReader(body))
@@ -67,6 +98,16 @@ func TestMCPHTTP(t *testing.T) {
 		t.Fatal(err)
 	}
 	token := saved.Values["MCP_TOKEN"]
+	// 已有实例未配置权限时也不自动全开；直接构造调用不能绕过空白名单。
+	if w := request(list, token, ""); w.Code != 200 || strings.Contains(w.Body.String(), `"name":"get_version"`) {
+		t.Fatalf("未授权工具被暴露: %d %s", w.Code, w.Body)
+	}
+	if w := request(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"get_version","arguments":{}}}`, token, ""); !strings.Contains(w.Body.String(), `"error"`) {
+		t.Fatalf("空白名单仍可执行: %s", w.Body)
+	}
+	if _, err := settings.Update(ctx, map[string]string{"MCP_ALLOWED_TOOLS": `["get_version","search_category_media","add_subscribe","query_subscribes","cancel_subscribe","send_message","unknown_tool"]`}); err != nil {
+		t.Fatal(err)
+	}
 	for _, bad := range []string{"", "wrong"} {
 		if w := request(list, bad, ""); w.Code != 401 || w.Header().Get("WWW-Authenticate") == "" {
 			t.Fatalf("未拒绝错误令牌: %d", w.Code)
@@ -162,6 +203,30 @@ func TestMCPHTTP(t *testing.T) {
 	}
 	if _, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "unknown_tool"}); err == nil {
 		t.Fatal("未知工具未返回协议错误")
+	}
+	// 客户端缓存了工具名也不能绕过新权限；撤销后目录和调用必须在下一请求同时生效。
+	if _, err := settings.Update(ctx, map[string]string{"MCP_ALLOWED_TOOLS": `["get_version"]`}); err != nil {
+		t.Fatal(err)
+	}
+	filtered, err := session.ListTools(ctx, nil)
+	if err != nil || len(filtered.Tools) != 1 || filtered.Tools[0].Name != "get_version" {
+		t.Fatalf("目录未收紧: %v %v", filtered, err)
+	}
+	if _, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "add_subscribe", Arguments: map[string]any{"codes": "TEST-001"}}); err == nil {
+		t.Fatal("已撤销的订阅工具仍可调用")
+	}
+	if err := store.SQLDB().QueryRow("SELECT COUNT(*) FROM subscriptions WHERE status='active'").Scan(&subscriptions); err != nil || subscriptions != 0 {
+		t.Fatalf("越权调用产生订阅: %d %v", subscriptions, err)
+	}
+	if got := registry.Call(ctx, "get_version", nil); !strings.Contains(got, "test-mcp") {
+		t.Fatal("MCP权限影响了原Agent入口")
+	}
+	if _, err := settings.Update(ctx, map[string]string{"MCP_ALLOWED_TOOLS": "[]"}); err != nil {
+		t.Fatal(err)
+	}
+	filtered, err = session.ListTools(ctx, nil)
+	if err != nil || len(filtered.Tools) != 0 {
+		t.Fatalf("清空未生效: %v %v", filtered, err)
 	}
 	if _, err := settings.Update(ctx, map[string]string{"MCP_TOKEN": strings.Repeat("z", 40)}); err != nil {
 		t.Fatal(err)

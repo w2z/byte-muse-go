@@ -644,6 +644,10 @@ button.code-card-still-cell:hover img { opacity: .85; }
 .settings-textarea { width: 100%; }
 /* MCP 客户端配置沿用设置表单宽度，长地址在框内换行，保持窄屏可读。 */
 .settings-mcp-config { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; overflow-wrap: anywhere; }
+/* 权限选项的列数交由 Arco 栅格处理，长说明与工具名只在列内换行。 */
+.settings-mcp-permissions { display: block; width: 100%; margin-top: 12px; }
+.settings-mcp-permission { display: inline-flex; max-width: 100%; align-items: flex-start; }
+.settings-mcp-permission-description { display: block; overflow-wrap: anywhere; }
 .settings-prompt-input { position: relative; width: 100%; }
 .settings-prompt-textarea { min-height: 120px; padding-bottom: 28px; resize: vertical; overflow-x: hidden; }
 .settings-prompt-count { position: absolute; right: 16px; bottom: 8px; color: var(--color-text-3); font-size: 12px; line-height: 18px; pointer-events: none; }

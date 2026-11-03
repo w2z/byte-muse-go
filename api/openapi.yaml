@@ -843,6 +843,8 @@ paths:
         使用官方 Go SDK 协商协议，支持 initialize、tools/list、tools/call、ping 等协议消息；工具参数由 tools/list 返回的 inputSchema 定义。
         复用现有 Agent 业务工具，排除依赖聊天上下文的 send_message；订阅工具会沿现有规则登记资源搜索和下载受理，不表示下载完成。
         每个请求重新读取开关和令牌，关闭或更换令牌立即影响后续请求；已受理任务不撤销。请求体最多 1048576 字节，单次工具执行最多 60 秒。
+        MCP_ALLOWED_TOOLS 是按工具名明确授权的白名单。默认、缺失或空数组时无工具可用；仅登记勾选的工具，tools/list 不返回未授权工具，直接 tools/call 未授权或已撤销工具返回 JSON-RPC 协议错误，不执行任何业务逻辑。
+        权限保存后对后续请求生效，客户端缓存不构成授权依据；新授权工具可能需要客户端刷新目录。网页与渠道 Agent 不受 MCP 白名单限制。
         客户端使用手动配置的 Bearer 令牌，当前不提供 OAuth 授权或旧版 /sse 入口。服务不发放 Mcp-Session-Id；开启且鉴权通过时 GET/DELETE 返回 405。
       security:
         - mcpBearer: []
@@ -905,12 +907,12 @@ paths:
                 $ref: '#/components/schemas/SystemSettings'
               example:
                 database_driver: sqlite
-                values: {MCP_ENABLE: 'false', MCP_TOKEN: '', EXCLUDE_BT: 'false', MAIN_SITE: ALL, PTFANS_AUTH_TYPE: key, PTFANS_API_KEY: example-token, PTFANS_COOKIE: 'session=example'}
+                values: {MCP_ENABLE: 'false', MCP_TOKEN: '', MCP_ALLOWED_TOOLS: '[]', EXCLUDE_BT: 'false', MAIN_SITE: ALL, PTFANS_AUTH_TYPE: key, PTFANS_API_KEY: example-token, PTFANS_COOKIE: 'session=example'}
                 configured: {MCP_TOKEN: false, PTFANS_API_KEY: true, PTFANS_COOKIE: true}
     put:
       operationId: updateSystemSettings
       summary: 保存系统设置
-      description: STRM_DOWNLOAD_ENABLE 控制生成时的媒体下载；STRM_DOWNLOAD_EXTENSIONS 是后缀 JSON 字符串数组，保存时规范化并去重，非法值整批拒绝。原子保存当前分组；密钥与 Cookie 分别加密保存，切换类型不清除隐藏凭据。AGENT_SYSTEM_PROMPT 和 TRANSLATION_PROMPT 各允许最多 61440 个 UTF-8 字节，其他值最多 8192 字节；按去除首尾空白前的输入计算，超限返回 400 invalid_setting，message 包含字段名、字节上限和当前字节数，整批不写入且不截断。本地 strm 根目录固定为 /strm，不接受 STRM_ROOT 配置；STRM_PATHS 中每项的 min_size_mb 不能为负数，exclude 的 mode 必须是 equals / prefix / suffix / contains，value 保存时去除首尾空白、转为小写并去重，空 value 规则被丢弃；PAN115_COOKIE 为空字符串时同一批请求强制把 PAN115_EVENT_ENABLE 保存为 false。
+      description: STRM_DOWNLOAD_ENABLE 控制生成时的媒体下载；STRM_DOWNLOAD_EXTENSIONS 是后缀 JSON 字符串数组，保存时规范化并去重，非法值整批拒绝。原子保存当前分组；密钥与 Cookie 分别加密保存，切换类型不清除隐藏凭据。AGENT_SYSTEM_PROMPT 和 TRANSLATION_PROMPT 各允许最多 61440 个 UTF-8 字节，MCP_ALLOWED_TOOLS 最多 16384 字节，其他值最多 8192 字节；按去除首尾空白前的输入计算，超限返回 400 invalid_setting，message 包含字段名、字节上限和当前字节数，整批不写入且不截断。本地 strm 根目录固定为 /strm，不接受 STRM_ROOT 配置；STRM_PATHS 中每项的 min_size_mb 不能为负数，exclude 的 mode 必须是 equals / prefix / suffix / contains，value 保存时去除首尾空白、转为小写并去重，空 value 规则被丢弃；PAN115_COOKIE 为空字符串时同一批请求强制把 PAN115_EVENT_ENABLE 保存为 false。
       parameters:
         - {in: cookie, name: bytemuse_session, required: true, schema: {type: string}, description: 登录签发的管理员会话 Cookie，不在示例中填写真实值}
       requestBody:
@@ -920,7 +922,7 @@ paths:
             schema:
               $ref: '#/components/schemas/SystemSettingsUpdate'
             example:
-              values: {MCP_ENABLE: 'false', MCP_TOKEN: '', EXCLUDE_BT: 'false', MAIN_SITE: ALL, PTFANS_AUTH_TYPE: key, PTFANS_API_KEY: example-token, PTFANS_COOKIE: 'session=example'}
+              values: {MCP_ENABLE: 'false', MCP_TOKEN: '', MCP_ALLOWED_TOOLS: '[]', EXCLUDE_BT: 'false', MAIN_SITE: ALL, PTFANS_AUTH_TYPE: key, PTFANS_API_KEY: example-token, PTFANS_COOKIE: 'session=example'}
       responses:
         '200':
           description: 已保存并返回当前分组的完整系统设置
@@ -930,7 +932,7 @@ paths:
                 $ref: '#/components/schemas/SystemSettings'
               example:
                 database_driver: sqlite
-                values: {MCP_ENABLE: 'false', MCP_TOKEN: '', EXCLUDE_BT: 'false', MAIN_SITE: ALL, PTFANS_AUTH_TYPE: key, PTFANS_API_KEY: example-token, PTFANS_COOKIE: 'session=example'}
+                values: {MCP_ENABLE: 'false', MCP_TOKEN: '', MCP_ALLOWED_TOOLS: '[]', EXCLUDE_BT: 'false', MAIN_SITE: ALL, PTFANS_AUTH_TYPE: key, PTFANS_API_KEY: example-token, PTFANS_COOKIE: 'session=example'}
                 configured: {MCP_TOKEN: false, PTFANS_API_KEY: true, PTFANS_COOKIE: true}
         '400':
           description: 包含不支持的设置项或请求体无效
@@ -2582,6 +2584,15 @@ components:
       type: object
       required: [database_driver, values, configured]
       properties:
+        mcp_tools:
+          type: array
+          description: 当前完整 MCP 可授权工具目录，来自实际 Registry，与已勾选权限子集独立；不包含依赖消息渠道的 send_message。用于设置页逐项授权，旧版本可缺失。
+          items:
+            type: object
+            required: [name, description]
+            properties:
+              name: {type: string, description: '稳定工具名，与 MCP tools/list 和 MCP_ALLOWED_TOOLS 使用同一标识'}
+              description: {type: string, description: '工具实际职责与副作用说明，直接来自工具定义'}
         database_driver:
           type: string
           enum: [sqlite, postgres, mysql]
@@ -2597,6 +2608,7 @@ components:
             布尔取值固定为 true / false；数字为非负整数字符串；DEFAULT_FILTER 为过滤规则 JSON 字符串，其中 exclude_vr 布尔字段表示排除标题或番号含 VR 的资源；
             SUBSCRIPTION_SKIP_CONFIRM 为 true/false 字符串，默认 false，开启后点击订阅直接使用默认规则创建，编辑订阅仍显示表单；
             MCP_ENABLE 为 true/false 字符串，缺失或无可用令牌时读取为 false，默认关闭；MCP_TOKEN 为加密保存并向已登录管理员回显的 MCP 专用令牌，configured.MCP_TOKEN 标识是否可用，不依赖 AGENT_ENABLE 或模型配置；
+            MCP_ALLOWED_TOOLS 为工具名称 JSON 字符串数组，默认 []；旧库没有配置时也不授予任何工具。读取时去重排序，损坏值按 [] 处理但不回填数据库；授权只影响 MCP，工具目录以 mcp_tools 为准。
             DEFAULT_SORT 为逗号分隔的排序标签（uc、!uc、seeders、chinese、uhd、!uhd、site、free）；
             PTFANS_AUTH_TYPE、ROUSIPRO_AUTH_TYPE、NICEPT_AUTH_TYPE 为 key（密钥）或 cookie（Cookie），默认 key，空值使用密钥；
             PTFANS_API_KEY、ROUSIPRO_API_KEY、NICEPT_API_KEY 是分别加密保存的密钥，空值表示未配置；
@@ -2622,6 +2634,7 @@ components:
           properties:
             MCP_ENABLE: {type: string, enum: ['true', 'false'], default: 'false', description: '对外 MCP 服务开关；未保存、关闭或无可用令牌时为 false。保存后立即影响后续请求，不依赖对话 Agent 或模型。'}
             MCP_TOKEN: {type: string, description: 'MCP 专用访问令牌，服务端加密保存，向已登录管理员回显明文；未配置时为空或省略；不要写入日志或对外共享。'}
+            MCP_ALLOWED_TOOLS: {type: string, default: '[]', example: '["get_version","query_subscribes"]', description: '已授权 MCP 工具名的 JSON 数组字符串，默认及缺失为 []，去重排序；只有明确列出的且仍在 mcp_tools 目录中的工具才能使用。未授权工具不会出现在 MCP 目录中，直接调用同样被拒绝。'}
             EXCLUDE_BT: {type: string, enum: ['true', 'false'], default: 'false', example: 'false', description: '排除 BT 搜索；非空字符串，未保存或空值读取为 false。true 时后续订阅搜索批次和渠道 Agent 搜种不调用 Nyaa、JavDB 的 BT 资源搜索，仅保留已配置的 PT 站点；不影响影片资料采集、已提交下载任务及手动直链下载。'}
             MAIN_SITE: {type: string, enum: [ALL, 馒头, BT, PTT, NicePT, PTFans, RousiPro, ''], description: '排序器主站偏好；ALL 对应自动，空值无偏好。EXCLUDE_BT 为 true 时保存主站 BT 会原子回落为 ALL。'}
             SUBSCRIPTION_SKIP_CONFIRM: {type: string, enum: ['true', 'false', ''], default: 'false', description: '订阅时不再弹出确认框。true 直接按当前默认过滤规则创建严格模式订阅；false、空值或缺失时显示确认表单。编辑订阅始终显示表单；保存时省略保留原值。'}
@@ -2683,13 +2696,14 @@ components:
             用于显式清除配置；保存其他字段时不要提交未编辑的敏感字段。
             取值域与 SystemSettings.values 一致，越界或未声明的键返回 400 invalid_setting。
             SUBSCRIPTION_SKIP_CONFIRM 控制新建订阅免确认，省略保留原值；DEFAULT_FILTER 内 exclude_vr 布尔字段控制排除 VR。
-            AGENT_SYSTEM_PROMPT 和 TRANSLATION_PROMPT 各允许最多 61440 个 UTF-8 字节，其他值最多 8192 字节；按去除首尾空白前的输入计算，超限拒绝整批且不截断。
+            AGENT_SYSTEM_PROMPT 和 TRANSLATION_PROMPT 各允许最多 61440 个 UTF-8 字节，MCP_ALLOWED_TOOLS 最多 16384 字节，其他值最多 8192 字节；按去除首尾空白前的输入计算，超限拒绝整批且不截断。
             站点模式与两种凭据可同时提交；只修改模式不应清空另一种凭据，显式提交空字符串才清除密钥或 Cookie。
             BYPASS_ENGINE 的 cloudflare_bypass_for_scraping 在页面显示为 ByPass，协议值不变。BYPASS_USE_PROXY 默认 false；关闭增强时同一事务强制关闭代理开关，再次启用增强不会自动开启代理。Scrapling HTTP 协议尚未接入。
             RANK_SCHEDULE_TIME、ACTOR_SCHEDULE_TIME、TAG_SCHEDULE_TIME、DOWNLOAD_SCHEDULE_TIME 只接受标准 5 段 cron（分 时 日 月 周），空字符串表示不注册该定时任务，非法表达式返回 400 invalid_setting；保存后立即重排，无需重启后端。
           properties:
             MCP_ENABLE: {type: string, enum: ['true', 'false', ''], default: 'false', description: '开启对外 MCP 服务；true 开启，false 或空值关闭，省略保留。首次开启且令牌为空时生成 32 字节随机令牌，并与开关原子保存；每次请求动态读取，保存后立即生效，不依赖 Agent 或模型。关闭保留令牌，不撤销已受理任务。'}
             MCP_TOKEN: {type: string, description: 'MCP 专用 Bearer 令牌；非空时须为 32 到 128 位字母、数字、下划线或短横线，加密保存。开启状态下提交空字符串生成新令牌；关闭状态下提交空字符串清除；省略保留。新值保存后旧令牌即失效，响应向管理员回显新值。'}
+            MCP_ALLOWED_TOOLS: {type: string, default: '[]', example: '["get_version","query_subscribes"]', description: '工具权限白名单 JSON 字符串数组，最多 16384 个 UTF-8 字节及 128 项；名称为 1 到 64 位字母、数字、下划线或短横线，不支持通配符。空字符串或 [] 清空，null、非数组、非字符串元素或非法名称返回 400 invalid_setting，整批不保存；省略保留原值。保存时去重排序；未知、已移除或禁止暴露的工具名不产生授权，以 mcp_tools 中实际目录为准。保存后下一请求立即生效，客户端缓存的旧工具也不能绕过；已受理任务不撤销，网页及渠道入口不受影响。'}
             EXCLUDE_BT: {type: string, enum: ['true', 'false', ''], default: 'false', example: 'true', description: '排除 BT 搜索；true 开启，false 或空字符串关闭，省略保留原值。保存后后续订阅搜索批次及渠道 Agent 搜种生效。若合并后的 MAIN_SITE 为 BT，则同一事务改为 ALL；无 PT 凭据时返回空搜索结果，不回退 BT。'}
             MAIN_SITE: {type: string, enum: [ALL, 馒头, BT, PTT, NicePT, PTFans, RousiPro, ''], description: '排序器主站偏好；ALL 对应自动，空值无偏好，省略保留。EXCLUDE_BT 为 true 时 BT 自动保存为 ALL，部分更新同样生效。'}
             SUBSCRIPTION_SKIP_CONFIRM: {type: string, enum: ['true', 'false', ''], default: 'false', description: '订阅时不再弹出确认框。true 直接按当前默认过滤规则创建严格模式订阅；false、空值或缺失时显示确认表单。编辑订阅始终显示表单；保存时省略保留原值。'}

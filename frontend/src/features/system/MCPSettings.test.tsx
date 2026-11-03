@@ -4,9 +4,44 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { afterEach, expect, it, vi } from "vitest";
-import { MCPClientConfigs, MCPTokenInput } from "./MCPSettings";
+import { MCPClientConfigs, MCPPermissionsField, MCPTokenInput } from "./MCPSettings";
+
+Object.defineProperty(window,"matchMedia",{writable:true,value:(query:string)=>({matches:false,media:query,addListener(){},removeListener(){}})});
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+
+/** 权限草稿沿用设置页的字符串存储口径，通过受控勾选验证全选和撤销。 */
+function PermissionEditor() {
+  const [value,setValue] = useState("[]");
+  return <MCPPermissionsField value={value} onChange={setValue} tools={[
+    {name:"get_version",description:"查询当前运行版本"},
+    {name:"add_subscribe",description:"创建影片订阅并登记资源搜索"},
+  ]} />;
+}
+
+it("权限默认不勾选，逐项选择与全选均由明确工具名组成", async () => {
+  const user = userEvent.setup();
+  render(<PermissionEditor />);
+  const version = screen.getByRole("checkbox",{name:"查询当前运行版本"});
+  const subscribe = screen.getByRole("checkbox",{name:"创建影片订阅并登记资源搜索"});
+  const all = screen.getByRole("checkbox",{name:"全选权限"});
+  expect(version).not.toBeChecked(); expect(subscribe).not.toBeChecked();
+  await user.click(version);
+  expect(version).toBeChecked(); expect(subscribe).not.toBeChecked();
+  expect(screen.getByText("已选 1 / 2 项")).toBeInTheDocument();
+  await user.click(all);
+  expect(version).toBeChecked(); expect(subscribe).toBeChecked();
+  await user.click(all);
+  expect(version).not.toBeChecked(); expect(subscribe).not.toBeChecked();
+});
+
+it("权限目录缺失时不清空已保存权限，也不提供凭空构造的选项", () => {
+  const change=vi.fn();
+  render(<MCPPermissionsField value='["get_version"]' onChange={change} />);
+  expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+  expect(screen.getByText(/工具目录不可用/)).toBeInTheDocument();
+  expect(change).not.toHaveBeenCalled();
+});
 
 /** 使用真实受控输入，验证按钮生成的草稿、复制内容和手动编辑。 */
 function TokenEditor({ initial = "saved-token-for-tests-only" }: { initial?: string }) {
