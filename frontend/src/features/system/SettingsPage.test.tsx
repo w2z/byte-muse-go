@@ -33,7 +33,7 @@ function renderSettings() {
 describe("设置页字段布局", () => {
   it("MCP 默认关闭，保存开启后显示服务端生成的令牌，重置恢复已保存开关", async () => {
     const user = userEvent.setup();
-    let values: Record<string, string> = { MCP_ENABLE: "false", MCP_TOKEN: "" };
+    let values: Record<string, string> = { MCP_ENABLE: "false", MCP_TOKEN: "", EXTERNAL_DOMAIN: "https://i0.wp.com" };
     vi.mocked(apiRequest).mockImplementation(async (_path, options) => {
       if (options?.method === "PUT") {
         values = { ...values, ...JSON.parse(String(options.body)).values };
@@ -42,24 +42,60 @@ describe("设置页字段布局", () => {
       return { database_driver: "sqlite", values: { ...values }, configured: {} };
     });
     renderSettings();
-    await user.click(await screen.findByRole("tab", { name: "AI 模型" }));
-    await user.click(screen.getByRole("tab", { name: "MCP 服务" }));
+    await user.click(await screen.findByRole("tab", { name: "MCP 服务" }));
     const toggle = screen.getByRole("switch", { name: "启用 MCP 服务" });
     expect(toggle).not.toBeChecked();
-    expect((screen.getByLabelText("MCP 服务地址") as HTMLInputElement).value).toMatch(/\/api\/v1\/mcp$/);
+    expect(screen.getByLabelText("MCP 服务地址")).toHaveValue(`${window.location.origin}/api/v1/mcp`);
     const tokenInput = screen.getByLabelText("MCP 访问令牌");
     expect(tokenInput).toHaveAttribute("type", "password");
     await user.click(toggle);
     await user.click(screen.getByRole("button", { name: "保存设置" }));
     await waitFor(() => expect(tokenInput).toHaveValue("test-generated-token-for-settings-only"));
     expect(toggle).toBeChecked();
+    const customToken = "manually-replaced-token-for-settings-only";
+    await user.clear(tokenInput);
+    await user.type(tokenInput, customToken);
+    await user.click(screen.getByRole("button", { name: "保存设置" }));
+    await waitFor(() => expect(values.MCP_TOKEN).toBe(customToken));
+    expect(tokenInput).toHaveValue(customToken);
     await user.click(toggle);
     await user.click(screen.getByRole("button", { name: "重置" }));
     expect(toggle).toBeChecked();
     await user.click(toggle);
     await user.click(screen.getByRole("button", { name: "保存设置" }));
     await waitFor(() => expect(values.MCP_ENABLE).toBe("false"));
-    expect(values.MCP_TOKEN).toBe("test-generated-token-for-settings-only");
+    expect(values.MCP_TOKEN).toBe(customToken);
+  });
+
+  it("MCP 与 AI 模型同级，保存和重置不影响模型草稿", async () => {
+    const user = userEvent.setup();
+    const payloads: Record<string, string>[] = [];
+    let values: Record<string, string> = { OPENAI_MODEL: "original-model", MCP_ENABLE: "false", MCP_TOKEN: "" };
+    vi.mocked(apiRequest).mockImplementation(async (_path, options) => {
+      if (options?.method === "PUT") {
+        const payload = JSON.parse(String(options.body)).values;
+        payloads.push(payload);
+        values = { ...values, ...payload };
+        if (values.MCP_ENABLE === "true" && !values.MCP_TOKEN) values.MCP_TOKEN = "test-generated-token-for-settings-only";
+      }
+      return { database_driver: "sqlite", values: { ...values }, configured: {} };
+    });
+    renderSettings();
+    await user.click(await screen.findByRole("tab", { name: "AI 模型" }));
+    await user.clear(screen.getByLabelText("模型名称"));
+    await user.type(screen.getByLabelText("模型名称"), "unsaved-model");
+    await user.click(within(screen.getByLabelText("站点设置分组")).getByRole("tab", { name: "MCP 服务" }));
+    expect(screen.queryByRole("tab", { name: "对话 Agent" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("switch", { name: "启用 MCP 服务" }));
+    await user.click(screen.getByRole("button", { name: "重置" }));
+    expect(screen.getByRole("switch", { name: "启用 MCP 服务" })).not.toBeChecked();
+    await user.click(screen.getByRole("switch", { name: "启用 MCP 服务" }));
+    await user.click(screen.getByRole("button", { name: "保存设置" }));
+    await waitFor(() => expect(payloads).toHaveLength(1));
+    expect(payloads[0]).toEqual({ MCP_ENABLE: "true", MCP_TOKEN: "" });
+    expect(values.OPENAI_MODEL).toBe("original-model");
+    await user.click(screen.getByRole("tab", { name: "AI 模型" }));
+    expect(screen.getByLabelText("模型名称")).toHaveValue("unsaved-model");
   });
 
   it("背景刷新开启排除 BT 时，未保存的 BT 主站也回落自动", async () => {

@@ -441,13 +441,13 @@ docker compose -f deploy/compose.mysql.yaml up -d
 
 ## MCP 服务
 
-在「设置 → 站点设置 → AI 模型 → MCP 服务」开启并保存，默认关闭，保存后立即生效，无需重启。首次开启自动生成访问令牌，加密保存；点击令牌框的显示按钮后可复制。MCP 不依赖对话 Agent 开关或 OpenAI 模型配置。
+在独立的「设置 → 站点设置 → MCP 服务」分组开启并保存，默认关闭，保存后立即生效，无需重启。首次开启自动生成访问令牌，加密保存；点击令牌框的显示按钮后可复制。MCP 不依赖对话 Agent 开关或 OpenAI 模型配置，保存与重置也只作用于 MCP 分组。
 
-客户端选择 **Streamable HTTP**，服务地址为 `https://你的域名/api/v1/mcp`（也可复制设置页显示的地址），配置请求头 `Authorization: Bearer <MCP 访问令牌>`。客户端须支持自定义 Bearer 请求头；当前不提供 OAuth 授权流程或旧版 HTTP+SSE `/sse` 端点。请求使用 `Content-Type: application/json`，兼容客户端的 `Accept: application/json, text/event-stream`。
+客户端选择 **Streamable HTTP**，服务地址为 `https://你的域名/api/v1/mcp`（也可复制设置页显示的地址），配置请求头 `Authorization: Bearer <MCP 访问令牌>`。设置页地址使用当前浏览器访问站点的协议、域名或 IP 与端口，不使用封面地址前缀 `EXTERNAL_DOMAIN`；外部客户端需要连接时，请通过它可访问的站点地址打开设置页后复制。客户端须支持自定义 Bearer 请求头；当前不提供 OAuth 授权流程或旧版 HTTP+SSE `/sse` 端点。请求使用 `Content-Type: application/json`，兼容客户端的 `Accept: application/json, text/event-stream`。
 
 MCP 复用渠道 Agent 的工具目录，支持影片、演员、标签、榜单、媒体库、下载任务和日志查询，以及影片/演员/标签订阅、取消订阅和触发任务。依赖当前消息渠道的 `send_message` 不对外开放。影片订阅沿用现有规则，会登记一次资源搜索与下载受理；受理不表示下载完成，重复请求由现有业务服务去重。工具参数以 `tools/list` 返回的 JSON Schema 为准。
 
-关闭后后续 MCP 请求返回 404，保留令牌；开启状态下清空令牌并保存会生成新令牌，旧令牌立即失效。修改自定义令牌也立即生效，支持 32 到 128 位字母、数字、下划线或短横线。已经受理的业务任务沿原生命周期执行。管理登录 Cookie 不作为 MCP 凭据，MCP 令牌也不能访问后台设置 API。该令牌允许执行目录中列出的业务操作，仅交给可信客户端。
+关闭后后续 MCP 请求返回 404，保留令牌。自动生成后仍可直接编辑令牌，填写自定义值并保存即可替换，旧令牌立即失效；开启状态下清空令牌并保存会重新生成。自定义令牌支持 32 到 128 位字母、数字、下划线或短横线。已经受理的业务任务沿原生命周期执行。管理登录 Cookie 不作为 MCP 凭据，MCP 令牌也不能访问后台设置 API。该令牌允许执行目录中列出的业务操作，仅交给可信客户端。
 
 服务采用无会话模式：POST 执行 MCP JSON-RPC，通知返回 202，GET 和 DELETE 返回 405；无需保存 `Mcp-Session-Id`。单次请求体上限 1 MiB，单次工具执行上限 60 秒。此功能复用 `app_settings`，不新增表、不回填历史数据。
 

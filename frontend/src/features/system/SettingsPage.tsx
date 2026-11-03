@@ -740,7 +740,7 @@ const groups: SettingGroup[] = [
     code: "agent",
     title: "AI 模型",
     fields: [],
-    // 对话、翻译和 MCP 各自配置；MCP 不依赖模型与对话 Agent 开关。
+    // 对话与翻译使用独立模型配置；MCP 由同级独立分组维护。
     tabs: [
       {
         code: "conversation",
@@ -777,21 +777,6 @@ const groups: SettingGroup[] = [
         test: { label: "测试 OpenAI", urlKey: "OPENAI_URL", modelKey: "OPENAI_MODEL", apiKeyKey: "OPENAI_API_KEY" },
       },
       {
-        code: "mcp",
-        title: "MCP 服务",
-        fields: [
-          {
-            key: "MCP_ENABLE", label: "启用 MCP 服务", kind: "bool",
-            description: "默认关闭。保存后立即生效，供外部 AI 查询影片、管理订阅及调用现有业务工具；不依赖对话 Agent 或模型配置。",
-          },
-          {
-            key: "MCP_TOKEN", label: "MCP 访问令牌", kind: "text", secret: true,
-            placeholder: "开启后保存自动生成",
-            description: "使用 Authorization: Bearer <令牌> 连接。令牌加密保存；开启状态下清空并保存会生成新令牌，旧令牌随即失效。自定义令牌需 32 到 128 位字母、数字、下划线或短横线。",
-          },
-        ],
-      },
-      {
         code: "translation",
         title: "翻译模型",
         fields: [
@@ -824,6 +809,21 @@ const groups: SettingGroup[] = [
           },
         ],
         test: { label: "测试翻译模型", urlKey: "TRANSLATION_OPENAI_URL", modelKey: "TRANSLATION_OPENAI_MODEL", apiKeyKey: "TRANSLATION_OPENAI_API_KEY" },
+      },
+    ],
+  },
+  {
+    code: "mcp",
+    title: "MCP 服务",
+    fields: [
+      {
+        key: "MCP_ENABLE", label: "启用 MCP 服务", kind: "bool",
+        description: "默认关闭。保存后立即生效，供外部 AI 查询影片、管理订阅及调用现有业务工具；不依赖对话 Agent 或模型配置。",
+      },
+      {
+        key: "MCP_TOKEN", label: "MCP 访问令牌", kind: "text", secret: true,
+        placeholder: "开启后保存自动生成",
+        description: "生成后可直接编辑为自定义令牌，保存后旧令牌立即失效。使用 Authorization: Bearer <令牌> 连接，令牌加密保存；开启状态下清空并保存会生成新令牌。自定义令牌需 32 到 128 位字母、数字、下划线或短横线。",
       },
     ],
   },
@@ -895,6 +895,7 @@ const categories: SettingCategory[] = [
       "task",
       "translate",
       "agent",
+      "mcp",
       "other",
     ],
   },
@@ -1894,11 +1895,12 @@ export function SettingsPage() {
                   <Pan115LoginPanel onCookie={(cookie) => setValue("PAN115_COOKIE", cookie)} />
                 ) : null}
                 {renderFieldSequence(activeFields)}
-                {activeGroup.code === "agent" && activeTab?.code === "mcp" ? (
+                {activeGroup.code === "mcp" ? (
                   <div className="settings-field settings-field-wide">
                     <label className="settings-field-label" htmlFor="mcp-endpoint">MCP 服务地址</label>
-                    <Input id="mcp-endpoint" readOnly value={`${String(draft.EXTERNAL_DOMAIN || window.location.origin).replace(/\/+$/, "")}/api/v1/mcp`} />
-                    <span className="settings-field-description">客户端选择 Streamable HTTP，填写此地址与访问令牌。订阅与任务工具会执行相应业务操作，请妥善保管令牌。</span>
+                    {/* MCP 跟随当前站点来源，不能使用封面代理的 EXTERNAL_DOMAIN。 */}
+                    <Input id="mcp-endpoint" readOnly value={`${window.location.origin}/api/v1/mcp`} />
+                    <span className="settings-field-description">地址跟随当前浏览器访问的站点；供外部客户端连接时，请通过其可访问的域名或 IP 打开本站后复制。客户端选择 Streamable HTTP，填写此地址与访问令牌。订阅与任务工具会执行相应业务操作，请妥善保管令牌。</span>
                   </div>
                 ) : null}
                 {activeGroup.code === "cloud-upload" ? <div className="settings-field settings-field-wide"><UploadMonitorStatus /></div> : null}
