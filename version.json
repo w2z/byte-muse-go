@@ -1,16 +1,20 @@
 {
-  "version": "0.1.183",
-  "commit": "a07dab3b7eefa43d7da3966c96a89315c4d1d79a",
-  "short_commit": "a07dab3",
-  "built_at": "2026-10-30T14:09:14Z",
+  "version": "0.1.184",
+  "commit": "e63109425bbb26e451bbf2f7b650f8ecd9df7eba",
+  "short_commit": "e631094",
+  "built_at": "2026-11-03T07:56:59Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.183",
-    "sha-a07dab3",
+    "0.1.184",
+    "sha-e631094",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.184",
+      "message": "新增默认关闭的对外工具服务与设置开关"
+    },
     {
       "version": "0.1.183",
       "message": "直连失败后按配置代理重试"
