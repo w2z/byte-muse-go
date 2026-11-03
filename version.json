@@ -1,16 +1,20 @@
 {
-  "version": "0.1.184",
-  "commit": "e63109425bbb26e451bbf2f7b650f8ecd9df7eba",
-  "short_commit": "e631094",
-  "built_at": "2026-11-03T07:56:59Z",
+  "version": "0.1.185",
+  "commit": "90856bad24bf38ea27881c72153f441254a705ba",
+  "short_commit": "90856ba",
+  "built_at": "2026-11-03T09:10:11Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.184",
-    "sha-e631094",
+    "0.1.185",
+    "sha-90856ba",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.185",
+      "message": "修正服务地址并拆分独立设置分组"
+    },
     {
       "version": "0.1.184",
       "message": "新增默认关闭的对外工具服务与设置开关"
