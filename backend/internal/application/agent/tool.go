@@ -54,7 +54,7 @@ type Deps struct {
 // ChannelResolver 按渠道名解析发送器；与 ports.ChannelResolver 共用同一份定义，不重复声明。
 type ChannelResolver = ports.ChannelResolver
 
-// Registry 是工具的唯一目录；编排器、斜杠命令和未来的 MCP 暴露共用同一份定义。
+// Registry 是工具的唯一目录；编排器、斜杠命令和 MCP 暴露共用同一份定义。
 type Registry struct {
 	tools map[string]Tool
 	order []string

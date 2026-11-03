@@ -833,6 +833,62 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+  /mcp:
+    post:
+      operationId: callMCP
+      summary: 调用 MCP 业务工具
+      tags: [MCP]
+      description: >-
+        无会话 Streamable HTTP MCP 入口，完整路径 /api/v1/mcp。默认关闭（404）；独立校验 MCP_TOKEN，不接受后台 Cookie，且不依赖 AGENT_ENABLE 或模型配置。
+        使用官方 Go SDK 协商协议，支持 initialize、tools/list、tools/call、ping 等协议消息；工具参数由 tools/list 返回的 inputSchema 定义。
+        复用现有 Agent 业务工具，排除依赖聊天上下文的 send_message；订阅工具会沿现有规则登记资源搜索和下载受理，不表示下载完成。
+        每个请求重新读取开关和令牌，关闭或更换令牌立即影响后续请求；已受理任务不撤销。请求体最多 1048576 字节，单次工具执行最多 60 秒。
+        客户端使用手动配置的 Bearer 令牌，当前不提供 OAuth 授权或旧版 /sse 入口。服务不发放 Mcp-Session-Id；开启且鉴权通过时 GET/DELETE 返回 405。
+      security:
+        - mcpBearer: []
+      parameters:
+        - in: header
+          name: Accept
+          required: true
+          schema: {type: string, example: 'application/json, text/event-stream'}
+          description: MCP 客户端声明接受 JSON 与 SSE；本服务普通请求响应采用 JSON。
+        - in: header
+          name: MCP-Protocol-Version
+          schema: {type: string, example: '2025-11-25'}
+          description: 客户端协商后的协议版本；新协议元数据按 SDK 约定传入，旧协议可在 initialize 中协商。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/MCPRequest'}
+            examples:
+              tools:
+                summary: 获取工具目录
+                value: {jsonrpc: '2.0', id: 1, method: tools/list, params: {}}
+              subscribe:
+                summary: 按番号订阅并登记下载搜索
+                value: {jsonrpc: '2.0', id: 2, method: tools/call, params: {name: add_subscribe, arguments: {codes: TEST-001}}}
+      responses:
+        '200':
+          description: JSON-RPC 响应。业务执行异常或参数校验失败通过 result.isError=true 表达；未知工具等协议异常通过 error 表达。
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/MCPResponse'}
+              example: {jsonrpc: '2.0', id: 2, result: {content: [{type: text, text: '番号 TEST-001 已加入订阅。'}]}}
+        '202': {description: MCP 通知已接受，无响应体}
+        '400': {description: '非法 JSON-RPC 消息、不支持的协议版本，或 Accept 未同时包含 application/json 与 text/event-stream'}
+        '401':
+          description: MCP 访问令牌缺失或无效，返回 WWW-Authenticate Bearer 提示
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+              example: {code: unauthorized, message: MCP 访问令牌无效}
+        '403': {description: Origin 非同源且不匹配 EXTERNAL_DOMAIN，或 SDK 的本机 DNS 重绑定校验失败}
+        '404': {description: MCP 未开启或不存在}
+        '405': {description: 此无会话入口不接受该 HTTP 方法}
+        '413': {description: 请求体超过 1 MiB}
+        '415': {description: Content-Type 不是 application/json}
+        '503': {description: MCP 依赖未就绪或设置读取失败}
   /system/settings:
     get:
       operationId: getSystemSettings
@@ -849,8 +905,8 @@ paths:
                 $ref: '#/components/schemas/SystemSettings'
               example:
                 database_driver: sqlite
-                values: {EXCLUDE_BT: 'false', MAIN_SITE: ALL, PTFANS_AUTH_TYPE: key, PTFANS_API_KEY: example-token, PTFANS_COOKIE: 'session=example'}
-                configured: {PTFANS_API_KEY: true, PTFANS_COOKIE: true}
+                values: {MCP_ENABLE: 'false', MCP_TOKEN: '', EXCLUDE_BT: 'false', MAIN_SITE: ALL, PTFANS_AUTH_TYPE: key, PTFANS_API_KEY: example-token, PTFANS_COOKIE: 'session=example'}
+                configured: {MCP_TOKEN: false, PTFANS_API_KEY: true, PTFANS_COOKIE: true}
     put:
       operationId: updateSystemSettings
       summary: 保存系统设置
@@ -864,7 +920,7 @@ paths:
             schema:
               $ref: '#/components/schemas/SystemSettingsUpdate'
             example:
-              values: {EXCLUDE_BT: 'false', MAIN_SITE: ALL, PTFANS_AUTH_TYPE: key, PTFANS_API_KEY: example-token, PTFANS_COOKIE: 'session=example'}
+              values: {MCP_ENABLE: 'false', MCP_TOKEN: '', EXCLUDE_BT: 'false', MAIN_SITE: ALL, PTFANS_AUTH_TYPE: key, PTFANS_API_KEY: example-token, PTFANS_COOKIE: 'session=example'}
       responses:
         '200':
           description: 已保存并返回当前分组的完整系统设置
@@ -874,8 +930,8 @@ paths:
                 $ref: '#/components/schemas/SystemSettings'
               example:
                 database_driver: sqlite
-                values: {EXCLUDE_BT: 'false', MAIN_SITE: ALL, PTFANS_AUTH_TYPE: key, PTFANS_API_KEY: example-token, PTFANS_COOKIE: 'session=example'}
-                configured: {PTFANS_API_KEY: true, PTFANS_COOKIE: true}
+                values: {MCP_ENABLE: 'false', MCP_TOKEN: '', EXCLUDE_BT: 'false', MAIN_SITE: ALL, PTFANS_AUTH_TYPE: key, PTFANS_API_KEY: example-token, PTFANS_COOKIE: 'session=example'}
+                configured: {MCP_TOKEN: false, PTFANS_API_KEY: true, PTFANS_COOKIE: true}
         '400':
           description: 包含不支持的设置项或请求体无效
           content:
@@ -1846,6 +1902,10 @@ paths:
                 $ref: '#/components/schemas/Error'
 components:
   securitySchemes:
+    mcpBearer:
+      type: http
+      scheme: bearer
+      description: 设置页生成或配置的 MCP_TOKEN，仅授权 MCP 业务工具，不用于后台 API；当前不提供 OAuth 发现与授权。
     sessionCookie:
       type: apiKey
       in: cookie
@@ -2491,6 +2551,33 @@ components:
         progress_indeterminate: {type: boolean, description: '当前阶段总量未知或等待服务就绪时为true，页面显示处理中；false时显示phase_progress_percent当前步骤百分比。失败和成功为false'}
         target: {type: string, description: 本次任务的目标版本，尚无任务时为空串}
         error: {type: string, description: 脱敏中文失败原因，未失败时为空串}
+    MCPRequest:
+      type: object
+      required: [jsonrpc, method]
+      properties:
+        jsonrpc: {type: string, enum: ['2.0'], description: JSON-RPC 协议版本}
+        id:
+          oneOf: [{type: string}, {type: integer}]
+          description: 请求标识；通知省略此字段，服务返回 202
+        method: {type: string, description: 'MCP 方法名，例如 initialize、tools/list、tools/call、notifications/initialized'}
+        params: {type: object, additionalProperties: true, description: '方法参数；tools/call 包含 name（工具名）与 arguments（符合工具 JSON Schema 的参数对象）'}
+    MCPResponse:
+      type: object
+      required: [jsonrpc, id]
+      properties:
+        jsonrpc: {type: string, enum: ['2.0'], description: JSON-RPC 协议版本}
+        id:
+          nullable: true
+          oneOf: [{type: string}, {type: integer}]
+          description: 原请求标识；无法识别请求标识的协议错误可为 null
+        result: {type: object, additionalProperties: true, description: 'MCP 方法结果；工具调用含 content 数组（text 项含文本），执行失败时 isError 为 true'}
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: {type: integer, description: JSON-RPC 错误码}
+            message: {type: string, description: 协议错误说明}
+            data: {description: 可选错误详情}
     SystemSettings:
       type: object
       required: [database_driver, values, configured]
@@ -2509,6 +2596,7 @@ components:
             Transmission、aria2、迅雷、CloudDrive2、115网盘、过滤、排序、定时任务、翻译、Agent、其他。
             布尔取值固定为 true / false；数字为非负整数字符串；DEFAULT_FILTER 为过滤规则 JSON 字符串，其中 exclude_vr 布尔字段表示排除标题或番号含 VR 的资源；
             SUBSCRIPTION_SKIP_CONFIRM 为 true/false 字符串，默认 false，开启后点击订阅直接使用默认规则创建，编辑订阅仍显示表单；
+            MCP_ENABLE 为 true/false 字符串，缺失或无可用令牌时读取为 false，默认关闭；MCP_TOKEN 为加密保存并向已登录管理员回显的 MCP 专用令牌，configured.MCP_TOKEN 标识是否可用，不依赖 AGENT_ENABLE 或模型配置；
             DEFAULT_SORT 为逗号分隔的排序标签（uc、!uc、seeders、chinese、uhd、!uhd、site、free）；
             PTFANS_AUTH_TYPE、ROUSIPRO_AUTH_TYPE、NICEPT_AUTH_TYPE 为 key（密钥）或 cookie（Cookie），默认 key，空值使用密钥；
             PTFANS_API_KEY、ROUSIPRO_API_KEY、NICEPT_API_KEY 是分别加密保存的密钥，空值表示未配置；
@@ -2532,6 +2620,8 @@ components:
             RANK_SCHEDULE_TIME、ACTOR_SCHEDULE_TIME、TAG_SCHEDULE_TIME、DOWNLOAD_SCHEDULE_TIME 为标准 5 段 cron
             （分 时 日 月 周，如 0 20 * * * 表示每天 20:00），空值表示不注册该定时任务；非法表达式保存时返回 400 invalid_setting；保存后立即重排，无需重启后端。
           properties:
+            MCP_ENABLE: {type: string, enum: ['true', 'false'], default: 'false', description: '对外 MCP 服务开关；未保存、关闭或无可用令牌时为 false。保存后立即影响后续请求，不依赖对话 Agent 或模型。'}
+            MCP_TOKEN: {type: string, description: 'MCP 专用访问令牌，服务端加密保存，向已登录管理员回显明文；未配置时为空或省略；不要写入日志或对外共享。'}
             EXCLUDE_BT: {type: string, enum: ['true', 'false'], default: 'false', example: 'false', description: '排除 BT 搜索；非空字符串，未保存或空值读取为 false。true 时后续订阅搜索批次和渠道 Agent 搜种不调用 Nyaa、JavDB 的 BT 资源搜索，仅保留已配置的 PT 站点；不影响影片资料采集、已提交下载任务及手动直链下载。'}
             MAIN_SITE: {type: string, enum: [ALL, 馒头, BT, PTT, NicePT, PTFans, RousiPro, ''], description: '排序器主站偏好；ALL 对应自动，空值无偏好。EXCLUDE_BT 为 true 时保存主站 BT 会原子回落为 ALL。'}
             SUBSCRIPTION_SKIP_CONFIRM: {type: string, enum: ['true', 'false', ''], default: 'false', description: '订阅时不再弹出确认框。true 直接按当前默认过滤规则创建严格模式订阅；false、空值或缺失时显示确认表单。编辑订阅始终显示表单；保存时省略保留原值。'}
@@ -2598,6 +2688,8 @@ components:
             BYPASS_ENGINE 的 cloudflare_bypass_for_scraping 在页面显示为 ByPass，协议值不变。BYPASS_USE_PROXY 默认 false；关闭增强时同一事务强制关闭代理开关，再次启用增强不会自动开启代理。Scrapling HTTP 协议尚未接入。
             RANK_SCHEDULE_TIME、ACTOR_SCHEDULE_TIME、TAG_SCHEDULE_TIME、DOWNLOAD_SCHEDULE_TIME 只接受标准 5 段 cron（分 时 日 月 周），空字符串表示不注册该定时任务，非法表达式返回 400 invalid_setting；保存后立即重排，无需重启后端。
           properties:
+            MCP_ENABLE: {type: string, enum: ['true', 'false', ''], default: 'false', description: '开启对外 MCP 服务；true 开启，false 或空值关闭，省略保留。首次开启且令牌为空时生成 32 字节随机令牌，并与开关原子保存；每次请求动态读取，保存后立即生效，不依赖 Agent 或模型。关闭保留令牌，不撤销已受理任务。'}
+            MCP_TOKEN: {type: string, description: 'MCP 专用 Bearer 令牌；非空时须为 32 到 128 位字母、数字、下划线或短横线，加密保存。开启状态下提交空字符串生成新令牌；关闭状态下提交空字符串清除；省略保留。新值保存后旧令牌即失效，响应向管理员回显新值。'}
             EXCLUDE_BT: {type: string, enum: ['true', 'false', ''], default: 'false', example: 'true', description: '排除 BT 搜索；true 开启，false 或空字符串关闭，省略保留原值。保存后后续订阅搜索批次及渠道 Agent 搜种生效。若合并后的 MAIN_SITE 为 BT，则同一事务改为 ALL；无 PT 凭据时返回空搜索结果，不回退 BT。'}
             MAIN_SITE: {type: string, enum: [ALL, 馒头, BT, PTT, NicePT, PTFans, RousiPro, ''], description: '排序器主站偏好；ALL 对应自动，空值无偏好，省略保留。EXCLUDE_BT 为 true 时 BT 自动保存为 ALL，部分更新同样生效。'}
             SUBSCRIPTION_SKIP_CONFIRM: {type: string, enum: ['true', 'false', ''], default: 'false', description: '订阅时不再弹出确认框。true 直接按当前默认过滤规则创建严格模式订阅；false、空值或缺失时显示确认表单。编辑订阅始终显示表单；保存时省略保留原值。'}

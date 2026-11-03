@@ -740,7 +740,7 @@ const groups: SettingGroup[] = [
     code: "agent",
     title: "AI 模型",
     fields: [],
-    // 对话与翻译是两套独立配置：可以分别指向不同模型，互不覆盖。
+    // 对话、翻译和 MCP 各自配置；MCP 不依赖模型与对话 Agent 开关。
     tabs: [
       {
         code: "conversation",
@@ -775,6 +775,21 @@ const groups: SettingGroup[] = [
           },
         ],
         test: { label: "测试 OpenAI", urlKey: "OPENAI_URL", modelKey: "OPENAI_MODEL", apiKeyKey: "OPENAI_API_KEY" },
+      },
+      {
+        code: "mcp",
+        title: "MCP 服务",
+        fields: [
+          {
+            key: "MCP_ENABLE", label: "启用 MCP 服务", kind: "bool",
+            description: "默认关闭。保存后立即生效，供外部 AI 查询影片、管理订阅及调用现有业务工具；不依赖对话 Agent 或模型配置。",
+          },
+          {
+            key: "MCP_TOKEN", label: "MCP 访问令牌", kind: "text", secret: true,
+            placeholder: "开启后保存自动生成",
+            description: "使用 Authorization: Bearer <令牌> 连接。令牌加密保存；开启状态下清空并保存会生成新令牌，旧令牌随即失效。自定义令牌需 32 到 128 位字母、数字、下划线或短横线。",
+          },
+        ],
       },
       {
         code: "translation",
@@ -915,7 +930,7 @@ function groupFields(group: SettingGroup): SettingField[] {
   return [...group.fields, ...(group.tabs ?? []).flatMap((tab) => tab.fields)];
 }
 
-/** Includes hidden credentials and both model tabs in the group's edit scope. */
+/** Includes hidden credentials and every configuration tab in the group's edit scope. */
 function groupKeys(group: SettingGroup): string[] {
   return groupFields(group).flatMap((field) => [field.key, ...(field.siteAuth ? [field.siteAuth.modeKey, field.siteAuth.keyField] : [])]);
 }
@@ -1742,6 +1757,14 @@ export function SettingsPage() {
             }
             onChange={(nextValue: string) => setValue(field.key, nextValue)}
           />
+        ) : field.key === "MCP_TOKEN" ? (
+          <Input.Password
+            id={filterId(field.key)}
+            value={value}
+            placeholder={placeholder}
+            autoComplete="off"
+            onChange={(nextValue: string) => setValue(field.key, nextValue)}
+          />
         ) : field.kind === "int" ? (
           <div className="settings-input-with-unit">
             <Input type="number"
@@ -1845,7 +1868,7 @@ export function SettingsPage() {
           </div>
           <div className="settings-form-shell">
             <p className="settings-save-scope">
-              当前分组：{activeGroup.title} · {hasChanges ? "有未保存的修改" : "未修改"}。保存与重置作用于本分组{activeTabs.length ? "（包含全部模型页签）" : ""}。
+              当前分组：{activeGroup.title} · {hasChanges ? "有未保存的修改" : "未修改"}。保存与重置作用于本分组{activeTabs.length ? "（包含全部页签）" : ""}。
               {currentPayload.TRANSLATION_ENGINE !== undefined && draft.TRANSLATION_ENGINE !== baselineValue("TRANSLATION_ENGINE") ? "翻译引擎的关联调整也会随保存提交。" : ""}
             </p>
             {activeTabs.length > 0 && activeTab ? (
@@ -1871,6 +1894,13 @@ export function SettingsPage() {
                   <Pan115LoginPanel onCookie={(cookie) => setValue("PAN115_COOKIE", cookie)} />
                 ) : null}
                 {renderFieldSequence(activeFields)}
+                {activeGroup.code === "agent" && activeTab?.code === "mcp" ? (
+                  <div className="settings-field settings-field-wide">
+                    <label className="settings-field-label" htmlFor="mcp-endpoint">MCP 服务地址</label>
+                    <Input id="mcp-endpoint" readOnly value={`${String(draft.EXTERNAL_DOMAIN || window.location.origin).replace(/\/+$/, "")}/api/v1/mcp`} />
+                    <span className="settings-field-description">客户端选择 Streamable HTTP，填写此地址与访问令牌。订阅与任务工具会执行相应业务操作，请妥善保管令牌。</span>
+                  </div>
+                ) : null}
                 {activeGroup.code === "cloud-upload" ? <div className="settings-field settings-field-wide"><UploadMonitorStatus /></div> : null}
                 {activeGroup.strmGenerate || activeGroup.pan115Scan ? (
                   <div className="settings-action-heading">

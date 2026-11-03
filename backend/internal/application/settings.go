@@ -2,6 +2,8 @@ package application
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -244,6 +246,9 @@ var writableSettings = map[string]settingSpec{
 	"OPENAI_API_KEY":      {secret: true, kind: settingText},
 	"AGENT_ENABLE":        {kind: settingBool},
 	"AGENT_SYSTEM_PROMPT": {kind: settingText, maxBytes: 60 * 1024},
+	// MCP 独立于对话 Agent；访问令牌通过已有敏感设置机制加密保存。
+	"MCP_ENABLE": {kind: settingBool},
+	"MCP_TOKEN":  {secret: true, kind: settingText},
 
 	// 其他
 	"IMAGE_MODE":           {kind: settingEnum, allowed: imageModes},
@@ -326,6 +331,10 @@ func (s *SettingsService) Get(ctx context.Context) (domain.SystemSettings, error
 	if strings.TrimSpace(result.Values["PAN115_COOKIE"]) == "" || result.Values["PAN115_EVENT_ENABLE"] != "true" {
 		result.Values["PAN115_EVENT_ENABLE"] = "false"
 	}
+	// 未保存开关或没有可用令牌时关闭 MCP，只归一化读取结果，不回填历史数据。
+	if result.Values["MCP_ENABLE"] != "true" || result.Values["MCP_TOKEN"] == "" {
+		result.Values["MCP_ENABLE"] = "false"
+	}
 	return result, nil
 }
 
@@ -334,6 +343,34 @@ func (s *SettingsService) Get(ctx context.Context) (domain.SystemSettings, error
 func (s *SettingsService) Update(ctx context.Context, values map[string]string) (domain.SystemSettings, error) {
 	s.updateMu.Lock()
 	defer s.updateMu.Unlock()
+	// 首次开启或开启时清空令牌会生成新凭据；与开关同批原子保存，避免无鉴权窗口。
+	_, changesMCPEnable := values["MCP_ENABLE"]
+	_, changesMCPToken := values["MCP_TOKEN"]
+	if changesMCPEnable || changesMCPToken {
+		current, err := s.Get(ctx)
+		if err != nil {
+			return domain.SystemSettings{}, err
+		}
+		enable, token := current.Values["MCP_ENABLE"], current.Values["MCP_TOKEN"]
+		if value, ok := values["MCP_ENABLE"]; ok {
+			enable = strings.TrimSpace(value)
+		}
+		if value, ok := values["MCP_TOKEN"]; ok {
+			token = strings.TrimSpace(value)
+		}
+		if enable == "true" && token == "" {
+			raw := make([]byte, 32)
+			if _, err := rand.Read(raw); err != nil {
+				return domain.SystemSettings{}, fmt.Errorf("generate MCP token: %w", err)
+			}
+			updated := make(map[string]string, len(values)+1)
+			for key, value := range values {
+				updated[key] = value
+			}
+			updated["MCP_TOKEN"] = base64.RawURLEncoding.EncodeToString(raw)
+			values = updated
+		}
+	}
 	items := make([]ports.StoredSetting, 0, len(values))
 	for key, value := range values {
 		spec, ok := writableSettings[key]
@@ -536,6 +573,11 @@ func validateSettingValue(key string, spec settingSpec, value string) error {
 	}
 	invalid := func(reason string) error {
 		return fmt.Errorf("%w: %s %s", ErrInvalidSetting, key, reason)
+	}
+	if key == "MCP_TOKEN" {
+		if len(value) < 32 || len(value) > 128 || strings.Trim(value, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-") != "" {
+			return invalid("需要 32 到 128 位字母、数字、下划线或短横线")
+		}
 	}
 	if key == "PAN115_COOKIE" && pan115.LifeCookieUserID(value) == "" {
 		return invalid("需要有效的 UID、CID、SEID，且不能含换行")

@@ -43,6 +43,8 @@ type Dependencies struct {
 	Downloads             *application.DownloadService
 	Dashboard             *application.DashboardService
 	Settings              *application.SettingsService
+	// MCP 独立校验设置开关与 Bearer 令牌，不使用后台 Cookie。
+	MCP http.Handler
 	// Version 提供当前运行版本与发布仓库版本的比较结果，供顶栏版本标签使用。
 	Version *application.VersionService
 	// Upgrade 管理单个后台升级任务，只有启动器运行环境支持实际安装。
@@ -73,6 +75,8 @@ var publicAuthPaths = map[string]struct{}{
 	"/api/v1/auth/refresh": {},
 	// 企业微信回调由平台服务器直接请求，没有会话；安全性由回调签名与 AES 解密保证。
 	"/api/v1/message": {},
+	// MCP 在自己的处理器中执行专用令牌鉴权，不能复用浏览器会话。
+	"/api/v1/mcp": {},
 }
 
 // New builds the API router and SPA static-file fallback.
@@ -83,6 +87,13 @@ func New(dependencies Dependencies) http.Handler {
 	// strm 播放地址：Emby 等播放器直接请求，没有会话；路径由服务端生成，不可枚举。
 	api.HandleFunc("/files/play/*", playStrmFile(dependencies.Strm))
 	api.Route("/api/v1", func(router chi.Router) {
+		router.Handle("/mcp", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if dependencies.MCP == nil {
+				http.NotFound(w, r)
+				return
+			}
+			dependencies.MCP.ServeHTTP(w, r)
+		}))
 		router.Get("/collection/sources", collectionSources(dependencies.Collection))
 		router.Post("/collection/runs", runCollection(dependencies.Collection))
 		router.Get("/collection/runs/{runId}", collectionRunStatus(dependencies.Collection))

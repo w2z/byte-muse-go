@@ -13,6 +13,56 @@ type settingsRepositoryStub struct {
 	items []ports.StoredSetting
 }
 
+// TestMCPSettings 验证默认关闭、原子生成加密令牌、停启保留和令牌轮换，不回填历史设置。
+func TestMCPSettings(t *testing.T) {
+	repo := &settingsMemoryRepository{}
+	svc, err := NewSettingsService(repo, "sqlite", strings.Repeat("x", 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	initial, err := svc.Get(ctx)
+	if err != nil || initial.Values["MCP_ENABLE"] != "false" || len(repo.items) != 0 {
+		t.Fatalf("initial=%v stored=%d err=%v", initial.Values, len(repo.items), err)
+	}
+	enabled, err := svc.Update(ctx, map[string]string{"MCP_ENABLE": "true"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	token := enabled.Values["MCP_TOKEN"]
+	if len(token) < 32 || !enabled.Configured["MCP_TOKEN"] || enabled.Values["MCP_ENABLE"] != "true" {
+		t.Fatal("开启时未生成访问令牌")
+	}
+	for _, item := range repo.items {
+		if item.Key == "MCP_TOKEN" && (!item.IsSecret || item.Value == token || strings.Contains(item.Value, token)) {
+			t.Fatal("令牌未加密保存")
+		}
+	}
+	for _, value := range []string{"false", "true", ""} {
+		got, err := svc.Update(ctx, map[string]string{"MCP_ENABLE": value})
+		if err != nil || got.Values["MCP_TOKEN"] != token {
+			t.Fatalf("停启丢失令牌: %v", err)
+		}
+		if value != "true" && got.Values["MCP_ENABLE"] != "false" {
+			t.Fatal("空开关未关闭")
+		}
+	}
+	for _, bad := range []map[string]string{{"MCP_ENABLE": "yes"}, {"MCP_TOKEN": "short"}, {"MCP_TOKEN": strings.Repeat("a", 32) + "\nheader"}} {
+		if _, err := svc.Update(ctx, bad); !errors.Is(err, ErrInvalidSetting) {
+			t.Fatalf("非法值未拒绝: %v", err)
+		}
+	}
+	rotated, err := svc.Update(ctx, map[string]string{"MCP_ENABLE": "true", "MCP_TOKEN": ""})
+	if err != nil || rotated.Values["MCP_TOKEN"] == token || len(rotated.Values["MCP_TOKEN"]) < 32 {
+		t.Fatal("未轮换令牌", err)
+	}
+	reopened, _ := NewSettingsService(repo, "sqlite", strings.Repeat("x", 32))
+	read, err := reopened.Get(ctx)
+	if err != nil || read.Values["MCP_TOKEN"] != rotated.Values["MCP_TOKEN"] || read.Values["MCP_ENABLE"] != "true" {
+		t.Fatal("重开后设置丢失", err)
+	}
+}
+
 // TestExcludeBTSetting 验证默认关闭、部分更新联动、关闭后可重选 BT，以及非法值不落库。
 func TestExcludeBTSetting(t *testing.T) {
 	repo := &settingsMemoryRepository{}
