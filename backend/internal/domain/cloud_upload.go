@@ -48,5 +48,11 @@ type UploadRecord struct {
 	Backup     string `json:"backup"`
 	SHA1       string `json:"sha1"`
 	Error      string `json:"error"`
-	UpdatedAt  string `json:"updated_at"`
+	// QueuedAt is the UTC RFC3339Nano time a file first entered the queue.
+	// It stays fixed across retries and controls. Empty means a record written before ordered queueing; callers use UpdatedAt.
+	QueuedAt string `json:"queued_at"`
+	// CompletedAt is the UTC RFC3339Nano time a file first reached completed or skipped.
+	// Empty means it has not finished successfully; later controls and retries do not overwrite it.
+	CompletedAt string `json:"completed_at"`
+	UpdatedAt   string `json:"updated_at"`
 }

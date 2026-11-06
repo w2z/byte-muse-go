@@ -68,7 +68,7 @@ func TestUploadQueueRestartAndControls(t *testing.T) {
 		}
 	}
 	s, stop := start()
-	wait(func() bool { return s.Files(1, 20).Total == 1 })
+	wait(func() bool { return s.Files(1, 20, "").Total == 1 })
 	request := func(action string, want int) {
 		t.Helper()
 		w := httptest.NewRecorder()
@@ -83,15 +83,15 @@ func TestUploadQueueRestartAndControls(t *testing.T) {
 	s, stop = start()
 	defer stop()
 	wait(func() bool { return s.Status().Actions["resume"] })
-	if s.Files(1, 20).Items[0].State != "paused" {
+	if s.Files(1, 20, "").Items[0].State != "paused" {
 		t.Fatal("pause not restored")
 	}
 	request("resume", 200)
 	request("stop", 200)
 	request("delete_all", 200)
-	wait(func() bool { return s.Files(1, 20).Total == 0 })
+	wait(func() bool { return s.Files(1, 20, "").Total == 0 })
 	time.Sleep(1100 * time.Millisecond)
-	if s.Files(1, 20).Total != 0 {
+	if s.Files(1, 20, "").Total != 0 {
 		t.Fatal("deleted tasks rediscovered")
 	}
 	records, err := repo.List(ctx)
@@ -114,6 +114,11 @@ func TestUploadPagingRejectsInvalidBounds(t *testing.T) {
 	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/?page=1&page_size=15", nil))
 	if response.Code != http.StatusOK {
 		t.Fatalf("empty page: %d", response.Code)
+	}
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/?status=bad", nil))
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status: %d", response.Code)
 	}
 }
 
@@ -140,5 +145,15 @@ func TestUploadScopedControlValidatesTarget(t *testing.T) {
 		if response.Code != http.StatusBadRequest && response.Code != http.StatusConflict {
 			t.Fatalf("%s: %d %s", body, response.Code, response.Body.String())
 		}
+	}
+	response := httptest.NewRecorder()
+	uploadControl(service)(response, httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"action":"clear_failed","scope":"files"}`)))
+	if response.Code != http.StatusConflict {
+		t.Fatalf("list clear before ready: %d", response.Code)
+	}
+	response = httptest.NewRecorder()
+	uploadControl(service)(response, httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"action":"retry","scope":"files"}`)))
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("retry list scope: %d", response.Code)
 	}
 }

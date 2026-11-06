@@ -24,7 +24,8 @@ func uploadControl(service *application.UploadService) http.HandlerFunc {
 			return
 		}
 		var err error
-		if body.Scope == "" {
+		switch body.Scope {
+		case "":
 			switch body.Action {
 			case "pause", "stop", "clear_completed", "resume", "delete_all", "scan":
 			default:
@@ -32,15 +33,19 @@ func uploadControl(service *application.UploadService) http.HandlerFunc {
 				return
 			}
 			err = service.Control(r.Context(), body.Action)
-		} else {
+		case "files", "directories":
 			switch body.Action {
-			case "pause", "stop", "start", "delete":
+			case "clear_completed", "clear_failed":
 			default:
 				writeError(w, 400, "invalid_request", "无效的上传任务操作")
 				return
 			}
-			if body.Scope != "file" && body.Scope != "directory" {
-				writeError(w, 400, "invalid_request", "无效的上传任务范围")
+			err = service.ControlScope(r.Context(), body.Action, body.Scope, "")
+		case "file", "directory":
+			switch body.Action {
+			case "pause", "stop", "start", "retry", "delete":
+			default:
+				writeError(w, 400, "invalid_request", "无效的上传任务操作")
 				return
 			}
 			if strings.TrimSpace(body.Key) == "" {
@@ -48,6 +53,9 @@ func uploadControl(service *application.UploadService) http.HandlerFunc {
 				return
 			}
 			err = service.ControlScope(r.Context(), body.Action, body.Scope, body.Key)
+		default:
+			writeError(w, 400, "invalid_request", "无效的上传任务范围")
+			return
 		}
 		if err != nil {
 			code := 500
@@ -89,7 +97,11 @@ func uploadDirectoriesProgress(service *application.UploadService) http.HandlerF
 			writeError(w, 503, "service_unavailable", "网盘上传服务尚未就绪")
 			return
 		}
-		writeJSON(w, 200, map[string]any{"items": service.Directories()})
+		status, ok := uploadListStatusQuery(w, r.URL.Query().Get("status"))
+		if !ok {
+			return
+		}
+		writeJSON(w, 200, map[string]any{"items": service.Directories(status)})
 	}
 }
 
@@ -116,6 +128,21 @@ func uploadFilesProgress(service *application.UploadService) http.HandlerFunc {
 				return
 			}
 		}
-		writeJSON(w, 200, service.Files(page, size))
+		status, ok := uploadListStatusQuery(w, r.URL.Query().Get("status"))
+		if !ok {
+			return
+		}
+		writeJSON(w, 200, service.Files(page, size, status))
 	}
+}
+
+func uploadListStatusQuery(w http.ResponseWriter, raw string) (string, bool) {
+	if !application.UploadListStatusAllowed(raw) {
+		writeError(w, 400, "invalid_request", "status 无效")
+		return "", false
+	}
+	if raw == "all" {
+		return "", true
+	}
+	return raw, true
 }

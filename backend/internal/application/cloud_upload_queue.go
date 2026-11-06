@@ -179,6 +179,15 @@ func (s *UploadService) Run(ctx context.Context) {
 							s.mu.Unlock()
 						}
 						record = &domain.UploadRecord{Key: key, Kind: m.Kind, Root: m.ID, LocalRoot: m.LocalPath, RemotePath: m.Path, Relative: f.Relative, Source: f.Absolute, Size: f.Size, Modified: f.Modified, Policy: policy, State: "pending", UpdatedAt: now.UTC().Format(time.RFC3339Nano)}
+						record.QueuedAt = record.UpdatedAt
+						if saveErr := s.store.Save(ctx, *record); saveErr != nil {
+							s.update(func(st *UploadStatus) { st.Error = saveErr.Error() })
+						}
+					} else if record.QueuedAt == "" {
+						record.QueuedAt = record.UpdatedAt
+						if record.QueuedAt == "" {
+							record.QueuedAt = now.UTC().Format(time.RFC3339Nano)
+						}
 						if saveErr := s.store.Save(ctx, *record); saveErr != nil {
 							s.update(func(st *UploadStatus) { st.Error = saveErr.Error() })
 						}
@@ -207,13 +216,7 @@ func (s *UploadService) Run(ctx context.Context) {
 					}
 				}
 				sort.Slice(records, func(i, j int) bool {
-					if (records[i].State == "pending") != (records[j].State == "pending") {
-						return records[i].State != "pending"
-					}
-					if records[i].UpdatedAt == records[j].UpdatedAt {
-						return records[i].Key < records[j].Key
-					}
-					return records[i].UpdatedAt < records[j].UpdatedAt
+					return uploadQueueBefore(records[i], records[j])
 				})
 				for _, r := range records {
 					if !uploadRetryDue(r, now) {
@@ -279,7 +282,7 @@ func (s *UploadService) Run(ctx context.Context) {
 			finish(result)
 		case command := <-s.commands:
 			if command.scope != "" {
-				if command.action != "start" && uploadCommandTargetsBusy(ctx, s, busy, command) {
+				if command.action != "start" && command.action != "retry" && command.action != "clear_completed" && command.action != "clear_failed" && uploadCommandTargetsBusy(ctx, s, busy, command) {
 					stopWorker()
 				}
 				command.reply <- s.applyScopedUploadControl(ctx, command.action, command.scope, command.key)

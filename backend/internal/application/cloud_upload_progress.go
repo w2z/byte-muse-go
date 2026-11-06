@@ -1,6 +1,7 @@
 package application
 
 import (
+	"bytemuse/backend/internal/domain"
 	"crypto/sha256"
 	"fmt"
 	"path"
@@ -23,6 +24,9 @@ type UploadFileProgress struct {
 	State         string          `json:"state"`
 	Error         string          `json:"error"`
 	Actions       map[string]bool `json:"actions"`
+	QueuedAt      string          `json:"queued_at"`
+	CompletedAt   string          `json:"completed_at"`
+	MaxRetries    int             `json:"max_retries"`
 	updated       time.Time
 	sample        time.Time
 	sampleBytes   int64
@@ -30,18 +34,20 @@ type UploadFileProgress struct {
 
 // UploadDirectoryProgress aggregates one mapping, including skipped counts separately from uploaded counts.
 type UploadDirectoryProgress struct {
-	Key        string          `json:"key"`
-	LocalPath  string          `json:"local_path"`
-	RemotePath string          `json:"remote_path"`
-	Kind       string          `json:"kind"`
-	Size       int64           `json:"size"`
-	Progress   float64         `json:"progress"`
-	Speed      float64         `json:"speed"`
-	Uploaded   int             `json:"uploaded"`
-	Total      int             `json:"total"`
-	Skipped    int             `json:"skipped"`
-	Failed     int             `json:"failed"`
-	Actions    map[string]bool `json:"actions"`
+	Key         string          `json:"key"`
+	LocalPath   string          `json:"local_path"`
+	RemotePath  string          `json:"remote_path"`
+	Kind        string          `json:"kind"`
+	Size        int64           `json:"size"`
+	Progress    float64         `json:"progress"`
+	Speed       float64         `json:"speed"`
+	Uploaded    int             `json:"uploaded"`
+	Total       int             `json:"total"`
+	Skipped     int             `json:"skipped"`
+	Failed      int             `json:"failed"`
+	Actions     map[string]bool `json:"actions"`
+	QueuedAt    string          `json:"queued_at"`
+	CompletedAt string          `json:"completed_at"`
 }
 
 // UploadFilePage is server-paginated so large libraries do not produce unbounded polling responses.
@@ -56,8 +62,9 @@ func uploadDirectoryKey(m UploadMapping) string {
 	return fmt.Sprintf("%x", sha256.Sum256([]byte(m.Kind+"\x00"+m.ID+"\x00"+m.LocalPath)))
 }
 
-// Files returns a stable path-sorted page while normalizing idle speeds to zero.
-func (s *UploadService) Files(page, size int) UploadFilePage {
+// Files returns one status group in ascending queue time and normalizes idle speeds to zero.
+// An empty status returns every file. Filtering happens before sorting and pagination.
+func (s *UploadService) Files(page, size int, status string) UploadFilePage {
 	if page < 1 {
 		page = 1
 	}
@@ -68,15 +75,22 @@ func (s *UploadService) Files(page, size int) UploadFilePage {
 	defer s.mu.RUnlock()
 	items := make([]UploadFileProgress, 0, len(s.files))
 	for _, item := range s.files {
+		if !uploadMatchesStatus(item.State, status) {
+			continue
+		}
 		item = normalizedUploadProgress(item)
+		item.MaxRetries = uploadMaxAutoRetries
 		item.Actions = uploadProgressActions(item.State)
 		items = append(items, item)
 	}
 	sort.Slice(items, func(i, j int) bool {
-		if items[i].Path == items[j].Path {
-			return items[i].Key < items[j].Key
+		if items[i].QueuedAt != items[j].QueuedAt {
+			return items[i].QueuedAt < items[j].QueuedAt
 		}
-		return items[i].Path < items[j].Path
+		if items[i].Path != items[j].Path {
+			return items[i].Path < items[j].Path
+		}
+		return items[i].Key < items[j].Key
 	})
 	total := len(items)
 	start := min((page-1)*size, total)
@@ -86,7 +100,9 @@ func (s *UploadService) Files(page, size int) UploadFilePage {
 
 // Directories aggregates mappings that already have upload tasks.
 // Saving a mapping alone does not create a row; queued, active, failed, and finished files do.
-func (s *UploadService) Directories() []UploadDirectoryProgress {
+// Directories returns mappings containing at least one file in status. An empty status returns every active mapping.
+// Row totals still describe the whole directory, not only the matching files.
+func (s *UploadService) Directories(status string) []UploadDirectoryProgress {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	result := make([]UploadDirectoryProgress, 0, len(s.mappings))
@@ -94,14 +110,29 @@ func (s *UploadService) Directories() []UploadDirectoryProgress {
 		row := UploadDirectoryProgress{Key: uploadDirectoryKey(m), Kind: m.Kind, LocalPath: m.LocalPath, RemotePath: m.Path}
 		var processedBytes int64
 		processed := 0
+		finished := true
+		matched := status == "" || status == "all"
 		for _, file := range s.files {
 			if file.DirectoryKey != row.Key {
 				continue
 			}
 			file = normalizedUploadProgress(file)
+			if uploadMatchesStatus(file.State, status) {
+				matched = true
+			}
 			row.Total++
 			row.Size += file.Size
 			row.Speed += file.Speed
+			if file.QueuedAt != "" && (row.QueuedAt == "" || file.QueuedAt < row.QueuedAt) {
+				row.QueuedAt = file.QueuedAt
+			}
+			if file.State == "completed" || file.State == "skipped" {
+				if file.CompletedAt > row.CompletedAt {
+					row.CompletedAt = file.CompletedAt
+				}
+			} else {
+				finished = false
+			}
 			processedBytes += min(file.Size, file.UploadedBytes)
 			if file.State == "completed" || file.State == "cleanup" {
 				row.Uploaded++
@@ -125,10 +156,13 @@ func (s *UploadService) Directories() []UploadDirectoryProgress {
 		if row.Total == 0 {
 			continue
 		}
+		if !matched {
+			continue
+		}
 		if row.Actions == nil {
 			row.Actions = map[string]bool{}
 		}
-		for _, name := range []string{"pause", "stop", "start", "delete"} {
+		for _, name := range []string{"pause", "stop", "start", "retry", "delete"} {
 			if _, ok := row.Actions[name]; !ok {
 				row.Actions[name] = false
 			}
@@ -142,9 +176,69 @@ func (s *UploadService) Directories() []UploadDirectoryProgress {
 		if processed < row.Total {
 			row.Progress = min(99.9, row.Progress)
 		}
+		if !finished {
+			row.CompletedAt = ""
+		}
 		result = append(result, row)
 	}
 	return result
+}
+
+// uploadQueueBefore orders unfinished replacement work first, then files by the time they entered the queue.
+// Equal queue times use the record key so the order stays stable. Historical records without QueuedAt use UpdatedAt.
+func uploadQueueBefore(left, right domain.UploadRecord) bool {
+	if pending := left.State == "pending"; pending != (right.State == "pending") {
+		return !pending
+	}
+	if leftTime, rightTime := uploadQueueTime(left), uploadQueueTime(right); leftTime != rightTime {
+		return leftTime < rightTime
+	}
+	return left.Key < right.Key
+}
+
+func uploadQueueTime(record domain.UploadRecord) string {
+	if record.QueuedAt != "" {
+		return record.QueuedAt
+	}
+	return record.UpdatedAt
+}
+
+// uploadListStatus collapses detailed transport states into the list filter.
+func uploadListStatus(state string) string {
+	switch state {
+	case "uploading", "transferring", "verifying", "retrying", "uploaded", "backing_up", "committing", "restoring", "cleanup", "discarding":
+		return "running"
+	case "waiting":
+		return "waiting"
+	case "paused":
+		return "paused"
+	case "stopped":
+		return "stopped"
+	case "failed", "attention", "blocked":
+		return "failed"
+	case "completed":
+		return "completed"
+	case "skipped":
+		return "skipped"
+	case "discarded":
+		return "changed"
+	default:
+		return ""
+	}
+}
+
+func uploadMatchesStatus(state, status string) bool {
+	return status == "" || status == "all" || uploadListStatus(state) == status
+}
+
+// UploadListStatusAllowed reports whether a list filter is recognized. Empty and all mean no filter.
+func UploadListStatusAllowed(status string) bool {
+	switch status {
+	case "", "all", "running", "waiting", "paused", "stopped", "failed", "completed", "skipped", "changed":
+		return true
+	default:
+		return false
+	}
 }
 
 // uploadRemoteFilePath builds the cloud display path from the mapped directory and relative file.
@@ -171,7 +265,7 @@ func uploadRemoteFilePath(remoteDir, relative, target string) string {
 // uploadProgressActions is the row-button contract shared by files and their parent directory.
 // A directory button is enabled when any contained file accepts that action.
 func uploadProgressActions(state string) map[string]bool {
-	actions := map[string]bool{"pause": false, "stop": false, "start": false, "delete": true}
+	actions := map[string]bool{"pause": false, "stop": false, "start": false, "retry": false, "delete": true}
 	switch state {
 	case "completed", "skipped", "discarded":
 	case "stopped":
@@ -179,10 +273,17 @@ func uploadProgressActions(state string) map[string]bool {
 	case "paused":
 		actions["stop"] = true
 		actions["start"] = true
-	case "failed", "blocked":
+	case "failed":
+		actions["pause"] = true
+		actions["stop"] = true
+		actions["retry"] = true
+	case "blocked":
 		actions["pause"] = true
 		actions["stop"] = true
 		actions["start"] = true
+	case "retrying":
+		actions["pause"] = true
+		actions["stop"] = true
 	case "attention":
 		actions["stop"] = true
 	case "waiting", "uploading", "transferring", "verifying", "uploaded":

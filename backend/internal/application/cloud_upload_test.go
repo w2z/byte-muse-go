@@ -2,6 +2,7 @@ package application
 
 import (
 	"bytemuse/backend/internal/domain"
+	"bytes"
 	"context"
 	"crypto/sha1"
 	"encoding/json"
@@ -70,14 +71,14 @@ func TestUploadMonitorDiscoveryAndStop(t *testing.T) {
 			time.Sleep(20 * time.Millisecond)
 		}
 	}
-	wait(func() bool { return s.Files(1, 20).Total == 1 })
+	wait(func() bool { return s.Files(1, 20, "").Total == 1 })
 	if err := os.WriteFile(filepath.Join(root, "new.txt"), []byte("b"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	wait(func() bool { return s.Files(1, 20).Total == 2 })
+	wait(func() bool { return s.Files(1, 20, "").Total == 2 })
 	enabled.Store(false)
 	wait(func() bool { return !s.Status().Enabled })
-	files := s.Files(1, 20)
+	files := s.Files(1, 20, "")
 	if files.Total != 2 || files.Items[0].State != "stopped" {
 		t.Fatalf("lost stopped snapshot: %+v", files)
 	}
@@ -117,17 +118,24 @@ func TestManualUploadScanWithoutMonitoring(t *testing.T) {
 		}
 	}
 	wait(func() bool { return s.Status().Actions["scan"] })
-	if s.Files(1, 20).Total != 0 || s.Status().Enabled {
+	if s.Files(1, 20, "").Total != 0 || s.Status().Enabled {
 		t.Fatal("disabled monitoring discovered files")
 	}
 	if err := s.Control(ctx, "scan"); err != nil {
 		t.Fatal(err)
 	}
-	wait(func() bool { return s.Files(1, 20).Total == 1 })
-	wait(func() bool {
-		files := s.Files(1, 20)
-		return files.Total == 1 && files.Items[0].State == "failed" && strings.Contains(files.Items[0].Error, "test provider offline")
-	})
+	wait(func() bool { return s.Files(1, 20, "").Total == 1 })
+	deadline := time.Now().Add(25 * time.Second)
+	for {
+		files := s.Files(1, 20, "")
+		if files.Total == 1 && files.Items[0].State == "failed" && files.Items[0].Retries == uploadMaxAutoRetries && strings.Contains(files.Items[0].Error, "test provider offline") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("manual scan did not exhaust retries: %+v", files.Items)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 	if s.Status().Enabled {
 		t.Fatal("manual scan enabled monitoring")
 	}
@@ -147,21 +155,55 @@ func TestUploadProgressWaitsForVerification(t *testing.T) {
 		"a": {Key: "a", DirectoryKey: key, Path: "a", Size: 10, UploadedBytes: 10, State: "uploading", Speed: 5, updated: time.Now()},
 		"b": {Key: "b", DirectoryKey: key, Path: "b", Size: 10, State: "skipped"},
 	}}
-	row := s.Directories()[0]
+	row := s.Directories("")[0]
 	if row.Progress >= 100 || row.Uploaded != 0 || row.Skipped != 1 || row.Total != 2 || row.Size != 20 {
 		t.Fatalf("premature completion: %+v", row)
 	}
 	s.finishFile("a", "completed", nil)
-	row = s.Directories()[0]
+	row = s.Directories("")[0]
 	if row.Progress != 100 || row.Uploaded != 1 || row.Speed != 0 {
 		t.Fatalf("final counts: %+v", row)
 	}
-	page := s.Files(2, 1)
+	page := s.Files(2, 1, "")
 	if page.Total != 2 || len(page.Items) != 1 || page.Items[0].Path != "b" {
 		t.Fatalf("paging: %+v", page)
 	}
-	if len(s.Files(3, 1).Items) != 0 {
+	if len(s.Files(3, 1, "").Items) != 0 {
 		t.Fatal("out of range page must be empty")
+	}
+}
+
+// TestUploadVerificationReportsHashedBytes keeps checksum progress moving before any network transfer starts.
+func TestUploadVerificationReportsHashedBytes(t *testing.T) {
+	root := t.TempDir()
+	content := bytes.Repeat([]byte("v"), 2*1024*1024+100)
+	if err := os.WriteFile(filepath.Join(root, "film.mkv"), content, 0600); err != nil {
+		t.Fatal(err)
+	}
+	m := UploadMapping{Kind: "115", ID: "0", Path: "/", LocalPath: root}
+	files, err := uploadSnapshot(context.Background(), m)
+	if err != nil || len(files) != 1 {
+		t.Fatal(err, len(files))
+	}
+	var reports []int64
+	ctx := domain.WithUploadProgress(context.Background(), func(done, total int64, phase string) {
+		if phase != "verifying" || total != int64(len(content)) {
+			t.Errorf("progress phase=%s done=%d total=%d", phase, done, total)
+		}
+		reports = append(reports, done)
+	})
+	remote := &uploadMemoryRemote{files: map[string][]byte{}}
+	s := &UploadService{store: uploadMemoryStore{}, provider: func(context.Context, string) (uploadRemote, error) { return remote, nil }}
+	if _, err = s.process(ctx, m, files[0], "overwrite"); err != nil {
+		t.Fatal(err)
+	}
+	if len(reports) < 3 || reports[0] != 0 || reports[len(reports)-1] != int64(len(content)) {
+		t.Fatalf("verification reports: %v", reports)
+	}
+	for i := 1; i < len(reports); i++ {
+		if reports[i] <= reports[i-1] {
+			t.Fatalf("verification progress rewound: %v", reports)
+		}
 	}
 }
 
@@ -174,9 +216,65 @@ func TestUploadDirectoriesHideSavedMappingsWithoutTasks(t *testing.T) {
 		"queued": {DirectoryKey: uploadDirectoryKey(queued), Path: "new.mkv", Size: 8, State: "waiting"},
 		"done":   {DirectoryKey: uploadDirectoryKey(done), Path: "old.mkv", Size: 8, State: "completed", Progress: 100},
 	}}
-	rows := s.Directories()
+	rows := s.Directories("")
 	if len(rows) != 2 || rows[0].LocalPath != queued.LocalPath || rows[0].Total != 1 || rows[1].LocalPath != done.LocalPath || rows[1].Uploaded != 1 {
 		t.Fatalf("%+v", rows)
+	}
+}
+
+func TestUploadDirectoryTimesUseQueueAndFinalCompletion(t *testing.T) {
+	mapping := UploadMapping{Kind: "115", ID: "1", Path: "/videos", LocalPath: "/media"}
+	key := uploadDirectoryKey(mapping)
+	s := &UploadService{mappings: []UploadMapping{mapping}, files: map[string]UploadFileProgress{
+		"a": {DirectoryKey: key, State: "completed", QueuedAt: "2026-11-07T01:00:00Z", CompletedAt: "2026-11-07T03:00:00Z", Size: 1},
+		"b": {DirectoryKey: key, State: "skipped", QueuedAt: "2026-11-07T02:00:00Z", CompletedAt: "2026-11-07T04:00:00Z", Size: 1},
+	}}
+	row := s.Directories("")[0]
+	if row.QueuedAt != "2026-11-07T01:00:00Z" || row.CompletedAt != "2026-11-07T04:00:00Z" {
+		t.Fatalf("%+v", row)
+	}
+	s.files["c"] = UploadFileProgress{DirectoryKey: key, State: "waiting", QueuedAt: "2026-11-07T00:30:00Z", Size: 1}
+	row = s.Directories("")[0]
+	if row.QueuedAt != "2026-11-07T00:30:00Z" || row.CompletedAt != "" {
+		t.Fatalf("unfinished directory: %+v", row)
+	}
+}
+
+func TestUploadCompletionTimeFallsBackAndIsRecordedOnce(t *testing.T) {
+	store := uploadMemoryStore{"old": {Key: "old", State: "completed", QueuedAt: "2026-11-07T01:00:00Z", UpdatedAt: "2026-11-07T05:00:00Z", Source: "/old"}}
+	s := &UploadService{store: store, files: map[string]UploadFileProgress{}}
+	if err := s.refreshUploadView(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	old := s.Files(1, 10, "").Items[0]
+	if old.QueuedAt != "2026-11-07T01:00:00Z" || old.CompletedAt != "2026-11-07T05:00:00Z" {
+		t.Fatalf("fallback: %+v", old)
+	}
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "film.mkv"), []byte("new video"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	mapping := UploadMapping{Kind: "115", ID: "0", Path: "/", LocalPath: root}
+	files, err := uploadSnapshot(context.Background(), mapping)
+	if err != nil || len(files) != 1 {
+		t.Fatal(err)
+	}
+	remote := &uploadMemoryRemote{files: map[string][]byte{"film.mkv": []byte("old video")}}
+	fresh := uploadMemoryStore{}
+	service := &UploadService{store: fresh, provider: func(context.Context, string) (uploadRemote, error) { return remote, nil }}
+	if _, err = service.process(context.Background(), mapping, files[0], "skip"); err != nil {
+		t.Fatal(err)
+	}
+	key := uploadKey(mapping, files[0], "skip")
+	if fresh[key].State != "skipped" || fresh[key].CompletedAt == "" {
+		t.Fatalf("%+v", fresh[key])
+	}
+	recorded := fresh[key].CompletedAt
+	if _, err = service.process(context.Background(), mapping, files[0], "skip"); err != nil {
+		t.Fatal(err)
+	}
+	if fresh[key].CompletedAt != recorded {
+		t.Fatalf("completion time changed: %s", fresh[key].CompletedAt)
 	}
 }
 
@@ -192,7 +290,7 @@ func TestUploadFileListShowsLocalAndRemotePaths(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := map[string]UploadFileProgress{}
-	for _, item := range s.Files(1, 10).Items {
+	for _, item := range s.Files(1, 10, "").Items {
 		got[item.Key] = item
 	}
 	if got["nested"].Path != `E:\media\A\a.mkv` || got["nested"].RemotePath != "/电影/A/a.mkv" {
@@ -203,6 +301,40 @@ func TestUploadFileListShowsLocalAndRemotePaths(t *testing.T) {
 	}
 	if got["fallback"].Path != "/data/c.mkv" || got["fallback"].RemotePath != "/cloud/c.mkv" {
 		t.Fatalf("fallback: %+v", got["fallback"])
+	}
+}
+
+func TestUploadQueueStartsInAscendingEnqueueOrder(t *testing.T) {
+	older := domain.UploadRecord{Key: "older", State: "pending", QueuedAt: "2026-11-07T01:00:00Z", UpdatedAt: "2026-11-07T03:00:00Z"}
+	newer := domain.UploadRecord{Key: "newer", State: "pending", QueuedAt: "2026-11-07T02:00:00Z", UpdatedAt: "2026-11-07T02:00:00Z"}
+	commit := domain.UploadRecord{Key: "commit", State: "uploaded", QueuedAt: "2026-11-07T04:00:00Z"}
+	if !uploadQueueBefore(older, newer) || uploadQueueBefore(newer, older) || !uploadQueueBefore(commit, older) {
+		t.Fatal("queue order changed")
+	}
+	historical := domain.UploadRecord{Key: "historical", State: "pending", UpdatedAt: "2026-11-07T00:30:00Z"}
+	if !uploadQueueBefore(historical, older) {
+		t.Fatal("historical record did not keep its original update time")
+	}
+}
+
+func TestUploadStatusFilterKeepsDirectoryTotals(t *testing.T) {
+	directory := UploadMapping{Kind: "115", ID: "1", Path: "/videos", LocalPath: "/videos"}
+	other := UploadMapping{Kind: "115", ID: "2", Path: "/other", LocalPath: "/other"}
+	key := uploadDirectoryKey(directory)
+	s := &UploadService{mappings: []UploadMapping{directory, other}, files: map[string]UploadFileProgress{
+		"run":  {Key: "run", DirectoryKey: key, Path: "/videos/a.mkv", State: "uploading", Size: 10, QueuedAt: "2"},
+		"wait": {Key: "wait", DirectoryKey: key, Path: "/videos/b.mkv", State: "waiting", Size: 10, QueuedAt: "1"},
+		"done": {Key: "done", DirectoryKey: uploadDirectoryKey(other), Path: "/other/c.mkv", State: "completed", Size: 10, QueuedAt: "3"},
+	}}
+	if s.Files(1, 10, "waiting").Total != 1 || s.Files(1, 10, "waiting").Items[0].Key != "wait" {
+		t.Fatalf("files: %+v", s.Files(1, 10, "waiting"))
+	}
+	if len(s.Files(1, 10, "running").Items) != 1 || s.Files(1, 10, "running").Items[0].Actions["start"] {
+		t.Fatalf("running exposed start: %+v", s.Files(1, 10, "running").Items)
+	}
+	rows := s.Directories("waiting")
+	if len(rows) != 1 || rows[0].Key != key || rows[0].Total != 2 || !rows[0].Actions["pause"] || rows[0].Actions["start"] {
+		t.Fatalf("directory filter: %+v", rows)
 	}
 }
 

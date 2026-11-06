@@ -86,12 +86,15 @@ export function UploadPathsField({
   value,
   onChange,
   hasUnsavedUploadSettings = false,
+  savedValue = [],
   onUpload,
 }: {
   value: UploadMapping[];
   onChange: (next: UploadMapping[]) => void;
   /** 目录或同名策略相对已保存配置有改动；点击上传只提示保存，不提交扫描。 */
   hasUnsavedUploadSettings?: boolean;
+  /** 最近一次已保存的映射。草稿改动后仍用它判断正在上传的原目录。 */
+  savedValue?: UploadMapping[];
   /** 按已保存映射立即扫描并上传。调用方负责成功、失败提示。 */
   onUpload?: () => Promise<void>;
 }) {
@@ -102,8 +105,27 @@ export function UploadPathsField({
     queryFn: () => apiRequest<{ actions?: { scan?: boolean } }>("/cloud-upload/status"),
     refetchInterval: 2000,
   });
+  const runningDirectories = useQuery({
+    queryKey: ["upload-directory-progress", "running"],
+    queryFn: () => apiRequest<{ items: Array<{ kind: string; local_path: string; remote_path: string }> }>("/cloud-upload/directories/progress?status=running"),
+    refetchInterval: 2000,
+  });
   const upload = useMutation({ mutationFn: () => onUploadRef.current?.() ?? Promise.resolve() });
   const canScan = actions.data?.actions?.scan === true;
+  const sameMapping = (mapping: UploadMapping, directory: { kind: string; local_path: string; remote_path: string }) =>
+    mapping.kind === directory.kind && mapping.local_path === directory.local_path && mapping.path === directory.remote_path;
+  const matchesRunning = (mapping?: UploadMapping) =>
+    Boolean(mapping && runningDirectories.data?.items.some((directory) => sameMapping(mapping, directory)));
+  /** 当前行或其未保存前的原映射正在传输时，不能从目录选择中删除。 */
+  const mappingBusy = (row: UploadMapping, index: number) => {
+    if (matchesRunning(row)) return true;
+    const saved = savedValue?.[index];
+    if (!saved || sameMapping(saved, { kind: row.kind, local_path: row.local_path, remote_path: row.path })) return false;
+    const shifted = savedValue?.slice(index + 1).some((item) => item.kind === row.kind && item.local_path === row.local_path && item.path === row.path);
+    if (shifted) return false;
+    const savedKept = value.some((item, itemIndex) => itemIndex !== index && item.kind === saved.kind && item.local_path === saved.local_path && item.path === saved.path);
+    return !savedKept && matchesRunning(saved);
+  };
   const uploadButton = (name: string) => (
     <Tooltip content="上传文件">
       <span className="settings-upload-trigger">
@@ -182,12 +204,17 @@ export function UploadPathsField({
           />
           <div className="settings-upload-mapping-actions">
             {uploadButton(`上传文件 ${index + 1}`)}
+            <Tooltip content={mappingBusy(item, index) ? "目录正在上传，不能删除" : ""} disabled={!mappingBusy(item, index)}>
+              <span>
             <Button
               aria-label={`删除目录映射 ${index + 1}`}
               icon={<IconDelete />}
               status="danger"
+              disabled={mappingBusy(item, index)}
               onClick={() => onChange(value.filter((_, i) => i !== index))}
             />
+              </span>
+            </Tooltip>
           </div>
         </div>
       ))}

@@ -10,6 +10,10 @@ import (
 
 const uploadControlKey = "upload-queue-control"
 
+// uploadMaxAutoRetries is the number of failed attempts allowed before a task waits for manual reupload.
+// The initial transfer counts as the first attempt. Blocked account or permission errors keep their own schedule.
+const uploadMaxAutoRetries = 3
+
 // ErrUploadControl signals a stale or unavailable operation and maps to HTTP 409.
 var ErrUploadControl = errors.New("当前任务状态不允许此操作")
 
@@ -25,14 +29,19 @@ func uploadTerminal(state string) bool {
 }
 
 // uploadBatchActive reports unfinished work that should continue after a manual scan.
-// Identity conflicts stay visible but never retry on their own.
+// Failures that have used the automatic attempts stay visible but do not keep the manual batch running.
 func uploadBatchActive(records []domain.UploadRecord) bool {
 	for _, record := range records {
-		if record.ErrorKind != "attention" {
+		if !uploadRetriesExhausted(record) {
 			return true
 		}
 	}
 	return false
+}
+
+// uploadRetriesExhausted reports a non-blocked failure that has used all automatic attempts.
+func uploadRetriesExhausted(record domain.UploadRecord) bool {
+	return record.Error != "" && record.ErrorKind != "blocked" && record.Retries >= uploadMaxAutoRetries
 }
 
 // Control serializes queue commands with discovery and waits for durable acknowledgement.
@@ -75,7 +84,7 @@ func (s *UploadService) uploadActionsLocked() map[string]bool {
 			completed = true
 		}
 	}
-	return map[string]bool{
+	actions := map[string]bool{
 		"pause":           s.ready && s.status.Enabled && s.mode == "running" && active,
 		"stop":            s.ready && active && s.mode != "stopping" && s.mode != "stopped",
 		"resume":          s.ready && s.status.Enabled && s.mode == "paused",
@@ -83,6 +92,51 @@ func (s *UploadService) uploadActionsLocked() map[string]bool {
 		"delete_all":      s.ready && visible && s.mode != "deleting",
 		"scan":            s.ready && len(s.mappings) > 0 && s.mode != "paused" && s.mode != "stopping" && s.mode != "deleting",
 	}
+	if s.ready {
+		for name, enabled := range uploadListClearActions(s.files) {
+			actions[name] = enabled
+		}
+	}
+	return actions
+}
+
+// uploadListClearActions reports which tab-scoped clear buttons currently have matching rows.
+// A directory is cleared only when every visible file in it belongs to the requested outcome.
+func uploadListClearActions(files map[string]UploadFileProgress) map[string]bool {
+	type counts struct{ total, done, failed int }
+	directories := map[string]*counts{}
+	completedFiles, failedFiles := false, false
+	for _, file := range files {
+		row := directories[file.DirectoryKey]
+		if row == nil {
+			row = &counts{}
+			directories[file.DirectoryKey] = row
+		}
+		row.total++
+		if file.State == "completed" || file.State == "skipped" {
+			completedFiles = true
+			row.done++
+		}
+		if file.State == "failed" {
+			failedFiles = true
+			row.failed++
+		}
+	}
+	actions := map[string]bool{
+		"clear_completed_files":       completedFiles,
+		"clear_failed_files":          failedFiles,
+		"clear_completed_directories": false,
+		"clear_failed_directories":    false,
+	}
+	for _, row := range directories {
+		if row.total > 0 && row.done == row.total {
+			actions["clear_completed_directories"] = true
+		}
+		if row.total > 0 && row.failed == row.total {
+			actions["clear_failed_directories"] = true
+		}
+	}
+	return actions
 }
 
 // applyUploadControl retains hidden deduplication receipts and unfinished recovery records.
@@ -161,6 +215,9 @@ func (s *UploadService) applyUploadControl(ctx context.Context, action string) e
 // applyScopedUploadControl changes only the selected file or every file in the selected directory.
 // It does not change the queue-wide pause, stop, or monitoring mode.
 func (s *UploadService) applyScopedUploadControl(ctx context.Context, action, scope, key string) error {
+	if scope == "files" || scope == "directories" {
+		return s.applyListClear(ctx, action, scope)
+	}
 	if (scope != "file" && scope != "directory") || strings.TrimSpace(key) == "" {
 		return ErrUploadControl
 	}
@@ -188,6 +245,76 @@ func (s *UploadService) applyScopedUploadControl(ctx context.Context, action, sc
 	return s.refreshUploadView(ctx)
 }
 
+// applyListClear hides completed or exhausted tasks in the selected list without deleting cloud files.
+// The directory list removes a row only when all of its visible files have that outcome; the file list removes matching rows individually.
+func (s *UploadService) applyListClear(ctx context.Context, action, scope string) error {
+	if action != "clear_completed" && action != "clear_failed" {
+		return ErrUploadControl
+	}
+	records, err := s.store.List(ctx)
+	if err != nil {
+		return err
+	}
+	visible := make([]domain.UploadRecord, 0, len(records))
+	grouped := map[string][]domain.UploadRecord{}
+	for _, record := range records {
+		if record.State == "control" || record.Hidden {
+			continue
+		}
+		visible = append(visible, record)
+		directory := uploadDirectoryKey(UploadMapping{Kind: record.Kind, ID: record.Root, LocalPath: record.LocalRoot})
+		grouped[directory] = append(grouped[directory], record)
+	}
+	selected := map[string]bool{}
+	if scope == "files" {
+		for _, record := range visible {
+			if uploadClearMatches(record, action) {
+				selected[record.Key] = true
+			}
+		}
+	} else {
+		for _, group := range grouped {
+			if len(group) == 0 {
+				continue
+			}
+			matched := true
+			for _, record := range group {
+				if !uploadClearMatches(record, action) {
+					matched = false
+					break
+				}
+			}
+			if matched {
+				for _, record := range group {
+					selected[record.Key] = true
+				}
+			}
+		}
+	}
+	if len(selected) == 0 {
+		return ErrUploadControl
+	}
+	for _, record := range records {
+		if !selected[record.Key] {
+			continue
+		}
+		record.Hidden = true
+		record.Error, record.ErrorKind, record.NextRetry = "", "", ""
+		if err = s.store.Save(ctx, record); err != nil {
+			return err
+		}
+	}
+	return s.refreshUploadView(ctx)
+}
+
+// uploadClearMatches reports whether one visible record belongs to a clear operation.
+func uploadClearMatches(record domain.UploadRecord, action string) bool {
+	if action == "clear_completed" {
+		return record.State == "completed" || record.State == "skipped"
+	}
+	return uploadRetriesExhausted(record)
+}
+
 func uploadScopeMatch(record domain.UploadRecord, scope, key string) bool {
 	if scope == "file" {
 		return record.Key == key
@@ -202,7 +329,7 @@ func uploadScopeMatch(record domain.UploadRecord, scope, key string) bool {
 func transformUploadControl(record domain.UploadRecord, action, mode string, scheduled bool) (domain.UploadRecord, bool) {
 	switch action {
 	case "pause":
-		if record.Intent == "pause" || record.ErrorKind == "attention" || (record.State != "pending" && record.State != "uploaded") {
+		if record.Intent == "pause" || (record.State != "pending" && record.State != "uploaded") {
 			return record, false
 		}
 		record.Intent = "pause"
@@ -222,7 +349,7 @@ func transformUploadControl(record domain.UploadRecord, action, mode string, sch
 		}
 		return record, true
 	case "start":
-		if record.ErrorKind == "attention" || !uploadStartable(record, mode, scheduled) {
+		if record.ErrorKind == "attention" || uploadRetriesExhausted(record) || !uploadStartable(record, mode, scheduled) {
 			return record, false
 		}
 		if record.State == "stopped" {
@@ -237,6 +364,21 @@ func transformUploadControl(record domain.UploadRecord, action, mode string, sch
 		record.NextRetry = ""
 		if record.ErrorKind == "transient" || record.ErrorKind == "blocked" {
 			record.Error, record.ErrorKind = "", ""
+		}
+		return record, true
+	case "retry":
+		if !uploadRetriesExhausted(record) {
+			return record, false
+		}
+		record.Retries = 0
+		record.Error, record.ErrorKind, record.NextRetry = "", "", ""
+		if record.State == "stopped" {
+			record.State = "pending"
+		}
+		if mode == "paused" || !scheduled {
+			record.Intent = "run"
+		} else {
+			record.Intent = ""
 		}
 		return record, true
 	case "delete":
@@ -312,6 +454,7 @@ func (s *UploadService) refreshUploadView(ctx context.Context) error {
 		f := s.files[r.Key]
 		f.Key = r.Key
 		f.Path = r.Source
+		f.QueuedAt = uploadQueueTime(r)
 		remoteDir := r.RemotePath
 		if remoteDir == "" {
 			for _, mapping := range s.mappings {
@@ -325,8 +468,13 @@ func (s *UploadService) refreshUploadView(ctx context.Context) error {
 		f.Size = r.Size
 		f.DirectoryKey = uploadDirectoryKey(UploadMapping{Kind: r.Kind, ID: r.Root, LocalPath: r.LocalRoot})
 		f.Retries = r.Retries
+		f.MaxRetries = uploadMaxAutoRetries
 		f.NextRetry = r.NextRetry
 		f.Error = r.Error
+		f.CompletedAt = r.CompletedAt
+		if f.CompletedAt == "" && (r.State == "completed" || r.State == "skipped") {
+			f.CompletedAt = r.UpdatedAt
+		}
 		if st.Current != r.Key {
 			f.Speed = 0
 			f.State = r.State
@@ -339,11 +487,19 @@ func (s *UploadService) refreshUploadView(ctx context.Context) error {
 				}
 			}
 			if !uploadTerminal(r.State) && r.ErrorKind == "attention" {
-				f.State = "attention"
+				if r.Retries < uploadMaxAutoRetries {
+					f.State = "retrying"
+				} else {
+					f.State = "failed"
+				}
 			} else if !uploadTerminal(r.State) && r.ErrorKind == "blocked" {
 				f.State = "blocked"
 			} else if r.Error != "" && r.State == "pending" {
-				f.State = "failed"
+				if r.Retries < uploadMaxAutoRetries {
+					f.State = "retrying"
+				} else {
+					f.State = "failed"
+				}
 			}
 			if (r.State == "pending" || r.State == "uploaded") && uploadIndividuallyPaused(r, s.mode) {
 				f.State = "paused"
@@ -385,9 +541,10 @@ func (s *UploadService) refreshUploadView(ctx context.Context) error {
 	return nil
 }
 
-// uploadRetryDue preserves backoff across restarts and never retries identity conflicts blindly.
+// uploadRetryDue preserves backoff across restarts and stops after the automatic attempt budget.
+// Identity conflicts use the same budget; blocked account errors remain separately scheduled.
 func uploadRetryDue(r domain.UploadRecord, now time.Time) bool {
-	if r.ErrorKind == "attention" {
+	if uploadRetriesExhausted(r) {
 		return false
 	}
 	next, err := time.Parse(time.RFC3339Nano, r.NextRetry)

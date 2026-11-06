@@ -1529,7 +1529,7 @@ export function SettingsPage() {
         </div>
       );
     }
-    if (field.kind === "upload-paths") return <div className="settings-field settings-field-wide" key={field.key}><span className="settings-field-label">{field.label}</span><UploadPathsField value={uploadPaths} onChange={setUploadPaths} hasUnsavedUploadSettings={uploadSettingsUnsaved} onUpload={startCloudUpload}/></div>;
+    if (field.kind === "upload-paths") return <div className="settings-field settings-field-wide" key={field.key}><span className="settings-field-label">{field.label}</span><UploadPathsField value={uploadPaths} savedValue={Array.isArray(baselineRef.current?.CLOUD_UPLOAD_PATHS) ? baselineRef.current.CLOUD_UPLOAD_PATHS as UploadMapping[] : []} onChange={setUploadPaths} hasUnsavedUploadSettings={uploadSettingsUnsaved} onUpload={startCloudUpload}/></div>;
     if (field.key === "CLOUD_UPLOAD_CONFLICT") return <div className="settings-field settings-field-wide" key={field.key}><span className="settings-field-label">{field.label}</span><Radio.Group aria-label={field.label} value={draft[field.key] || "skip"} onChange={(value)=>setValue(field.key,value)} options={field.options}/></div>;
     if (field.kind === "json") {
       return (

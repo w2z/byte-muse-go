@@ -69,10 +69,15 @@ type uploadInit struct {
 }
 
 // uploadHash computes an uppercase SHA1 over a bounded section and honors cancellation.
-func uploadHash(ctx context.Context, f *os.File, offset, length int64) (string, error) {
+// Only the whole-file pass reports verifying progress; shorter preid and signature ranges must not rewind it.
+func uploadHash(ctx context.Context, f *os.File, offset, length int64, report bool) (string, error) {
+	if report {
+		domain.ReportUploadProgress(ctx, 0, length, "verifying")
+	}
 	h := sha1.New()
 	reader := io.NewSectionReader(f, offset, length)
 	buf := make([]byte, 1024*1024)
+	var done int64
 	for {
 		if err := ctx.Err(); err != nil {
 			return "", err
@@ -80,6 +85,10 @@ func uploadHash(ctx context.Context, f *os.File, offset, length int64) (string, 
 		n, err := reader.Read(buf)
 		if n > 0 {
 			_, _ = h.Write(buf[:n])
+			done += int64(n)
+			if report {
+				domain.ReportUploadProgress(ctx, done, length, "verifying")
+			}
 		}
 		if err == io.EOF {
 			break
@@ -88,17 +97,20 @@ func uploadHash(ctx context.Context, f *os.File, offset, length int64) (string, 
 			return "", err
 		}
 	}
+	if done != length {
+		return "", io.ErrUnexpectedEOF
+	}
 	return strings.ToUpper(fmt.Sprintf("%x", h.Sum(nil))), nil
 }
 
 // Upload uses 115 instant-upload verification followed by bounded OSS multipart transfers when needed.
 // The caller owns the open file and must verify the final remote object before reporting completion.
 func (c *Client) Upload(ctx context.Context, token, parent, name string, f *os.File, size int64) error {
-	hash, err := uploadHash(ctx, f, 0, size)
+	hash, err := uploadHash(ctx, f, 0, size, true)
 	if err != nil {
 		return err
 	}
-	pre, err := uploadHash(ctx, f, 0, min(size, 128*1024))
+	pre, err := uploadHash(ctx, f, 0, min(size, 128*1024), false)
 	if err != nil {
 		return err
 	}
@@ -127,7 +139,7 @@ func (c *Client) Upload(ctx context.Context, token, parent, name string, f *os.F
 		if e1 != nil || e2 != nil || start < 0 || end < start || end >= size {
 			return fmt.Errorf("115 上传校验范围越界")
 		}
-		sign, e := uploadHash(ctx, f, start, end-start+1)
+		sign, e := uploadHash(ctx, f, start, end-start+1, false)
 		if e != nil {
 			return e
 		}

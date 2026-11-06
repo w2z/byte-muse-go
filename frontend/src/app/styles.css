@@ -724,6 +724,8 @@ button.code-card-still-cell:hover img { opacity: .85; }
 .settings-upload-local, .settings-upload-remote { flex: 1 1 0; min-width: 0; }
 .settings-upload-kind { flex: 0 0 150px; }
 .settings-upload-mapping-actions, .settings-upload-trigger { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 8px; }
+.settings-upload-filter { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+.settings-upload-filter .arco-select { width: 160px; }
 .settings-upload-tables { min-width: 0; }
 .settings-upload-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
 .settings-upload-actions { max-width: 100%; }

@@ -154,10 +154,13 @@ func (s *UploadService) process(ctx context.Context, m UploadMapping, f uploadLo
 			if errors.Is(resultErr, ErrPan115NotLinked) || pan115.Unauthorized(resultErr) || errors.Is(resultErr, clouddrive.ErrUnauthorized) || errors.Is(resultErr, clouddrive.ErrNotConfigured) || (errors.As(resultErr, &httpErr) && (httpErr.StatusCode == 401 || httpErr.StatusCode == 403)) || (errors.As(resultErr, &apiErr) && apiErr.Code == 770004) {
 				record.ErrorKind = "blocked"
 			}
-			record.NextRetry = time.Now().Add(min(15*time.Minute, 5*time.Second*time.Duration(1<<min(record.Retries-1, 8)))).UTC().Format(time.RFC3339Nano)
 			if record.ErrorKind == "blocked" {
 				record.NextRetry = time.Now().Add(15 * time.Minute).UTC().Format(time.RFC3339Nano)
+			} else if record.Retries < uploadMaxAutoRetries {
+				record.NextRetry = time.Now().Add(min(15*time.Minute, 5*time.Second*time.Duration(1<<min(record.Retries-1, 8)))).UTC().Format(time.RFC3339Nano)
 			}
+		} else if record.CompletedAt == "" && (record.State == "completed" || record.State == "skipped") {
+			record.CompletedAt = time.Now().UTC().Format(time.RFC3339Nano)
 		}
 		persist, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer cancel()
@@ -195,7 +198,14 @@ func (s *UploadService) process(ctx context.Context, m UploadMapping, f uploadLo
 		}
 		name := path.Base(f.Relative)
 		existing, exists := findUploadEntry(entries, name)
-		record = &domain.UploadRecord{Key: key, Kind: m.Kind, Root: m.ID, LocalRoot: m.LocalPath, Relative: f.Relative, Source: f.Absolute, Size: f.Size, Modified: f.Modified, Policy: policy, Parent: parent, Target: name, Stage: ".bytemuse-upload-" + key, Backup: ".bytemuse-backup-" + key, State: "pending"}
+		queuedAt := ""
+		if record != nil {
+			queuedAt = record.QueuedAt
+		}
+		if queuedAt == "" {
+			queuedAt = time.Now().UTC().Format(time.RFC3339Nano)
+		}
+		record = &domain.UploadRecord{Key: key, Kind: m.Kind, Root: m.ID, LocalRoot: m.LocalPath, Relative: f.Relative, Source: f.Absolute, Size: f.Size, Modified: f.Modified, Policy: policy, Parent: parent, Target: name, Stage: ".bytemuse-upload-" + key, Backup: ".bytemuse-backup-" + key, State: "pending", QueuedAt: queuedAt}
 		if exists && existing.Directory {
 			return "", fmt.Errorf("目标已存在同名目录: %s", name)
 		}
@@ -247,25 +257,10 @@ func (s *UploadService) process(ctx context.Context, m UploadMapping, f uploadLo
 			return "", fmt.Errorf("文件仍在变化: %s", f.Relative)
 		}
 		if record.SHA1 == "" {
-			domain.ReportUploadProgress(ctx, 0, f.Size, "verifying")
-			h := sha1.New()
-			buf := make([]byte, 1024*1024)
-			for {
-				if e = ctx.Err(); e != nil {
-					return "", e
-				}
-				n, readErr := file.Read(buf)
-				if n > 0 {
-					_, _ = h.Write(buf[:n])
-				}
-				if readErr == io.EOF {
-					break
-				}
-				if readErr != nil {
-					return "", readErr
-				}
+			record.SHA1, e = hashUploadSource(ctx, file, f.Size)
+			if e != nil {
+				return "", e
 			}
-			record.SHA1 = fmt.Sprintf("%x", h.Sum(nil))
 			if e = save(); e != nil {
 				return "", e
 			}
@@ -372,4 +367,37 @@ func (s *UploadService) process(ctx context.Context, m UploadMapping, f uploadLo
 		}
 	}
 	return s.commitUpload(ctx, remote, record, save)
+}
+
+// hashUploadSource calculates the source SHA1 and publishes absolute verified bytes.
+// Progress stays in the verifying phase and never exceeds the selected file size; cancellation leaves the hash unsaved.
+func hashUploadSource(ctx context.Context, file io.Reader, size int64) (string, error) {
+	domain.ReportUploadProgress(ctx, 0, size, "verifying")
+	h := sha1.New()
+	buf := make([]byte, 1024*1024)
+	var done int64
+	for {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		n, readErr := file.Read(buf)
+		if n > 0 {
+			_, _ = h.Write(buf[:n])
+			done += int64(n)
+			if size >= 0 && done > size {
+				return "", io.ErrUnexpectedEOF
+			}
+			domain.ReportUploadProgress(ctx, done, size, "verifying")
+		}
+		if readErr == io.EOF {
+			break
+		}
+		if readErr != nil {
+			return "", readErr
+		}
+	}
+	if done != size {
+		return "", io.ErrUnexpectedEOF
+	}
+	return fmt.Sprintf("%x", h.Sum(nil)), nil
 }
