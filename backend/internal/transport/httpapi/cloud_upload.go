@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 )
 
 // uploadControl applies authenticated queue commands; availability is enforced by the service.
@@ -16,17 +17,39 @@ func uploadControl(service *application.UploadService) http.HandlerFunc {
 		}
 		var body struct {
 			Action string `json:"action"`
+			Scope  string `json:"scope"`
+			Key    string `json:"key"`
 		}
 		if decodeJSON(w, r, &body) != nil {
 			return
 		}
-		switch body.Action {
-		case "pause", "stop", "clear_completed", "resume", "delete_all", "scan":
-		default:
-			writeError(w, 400, "invalid_request", "无效的上传任务操作")
-			return
+		var err error
+		if body.Scope == "" {
+			switch body.Action {
+			case "pause", "stop", "clear_completed", "resume", "delete_all", "scan":
+			default:
+				writeError(w, 400, "invalid_request", "无效的上传任务操作")
+				return
+			}
+			err = service.Control(r.Context(), body.Action)
+		} else {
+			switch body.Action {
+			case "pause", "stop", "start", "delete":
+			default:
+				writeError(w, 400, "invalid_request", "无效的上传任务操作")
+				return
+			}
+			if body.Scope != "file" && body.Scope != "directory" {
+				writeError(w, 400, "invalid_request", "无效的上传任务范围")
+				return
+			}
+			if strings.TrimSpace(body.Key) == "" {
+				writeError(w, 400, "invalid_request", "需要指定上传任务")
+				return
+			}
+			err = service.ControlScope(r.Context(), body.Action, body.Scope, body.Key)
 		}
-		if err := service.Control(r.Context(), body.Action); err != nil {
+		if err != nil {
 			code := 500
 			if errors.Is(err, application.ErrUploadControl) {
 				code = 409

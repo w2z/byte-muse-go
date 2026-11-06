@@ -9,17 +9,18 @@ import (
 
 // UploadFileProgress describes a discovered file version; speed is a recent byte delta, never a fabricated estimate.
 type UploadFileProgress struct {
-	Retries       int     `json:"retries"`
-	NextRetry     string  `json:"next_retry"`
-	Key           string  `json:"key"`
-	DirectoryKey  string  `json:"directory_key"`
-	Path          string  `json:"path"`
-	Size          int64   `json:"size"`
-	UploadedBytes int64   `json:"uploaded_bytes"`
-	Progress      float64 `json:"progress"`
-	Speed         float64 `json:"speed"`
-	State         string  `json:"state"`
-	Error         string  `json:"error"`
+	Retries       int             `json:"retries"`
+	NextRetry     string          `json:"next_retry"`
+	Key           string          `json:"key"`
+	DirectoryKey  string          `json:"directory_key"`
+	Path          string          `json:"path"`
+	Size          int64           `json:"size"`
+	UploadedBytes int64           `json:"uploaded_bytes"`
+	Progress      float64         `json:"progress"`
+	Speed         float64         `json:"speed"`
+	State         string          `json:"state"`
+	Error         string          `json:"error"`
+	Actions       map[string]bool `json:"actions"`
 	updated       time.Time
 	sample        time.Time
 	sampleBytes   int64
@@ -27,17 +28,18 @@ type UploadFileProgress struct {
 
 // UploadDirectoryProgress aggregates one mapping, including skipped counts separately from uploaded counts.
 type UploadDirectoryProgress struct {
-	Key        string  `json:"key"`
-	LocalPath  string  `json:"local_path"`
-	RemotePath string  `json:"remote_path"`
-	Kind       string  `json:"kind"`
-	Size       int64   `json:"size"`
-	Progress   float64 `json:"progress"`
-	Speed      float64 `json:"speed"`
-	Uploaded   int     `json:"uploaded"`
-	Total      int     `json:"total"`
-	Skipped    int     `json:"skipped"`
-	Failed     int     `json:"failed"`
+	Key        string          `json:"key"`
+	LocalPath  string          `json:"local_path"`
+	RemotePath string          `json:"remote_path"`
+	Kind       string          `json:"kind"`
+	Size       int64           `json:"size"`
+	Progress   float64         `json:"progress"`
+	Speed      float64         `json:"speed"`
+	Uploaded   int             `json:"uploaded"`
+	Total      int             `json:"total"`
+	Skipped    int             `json:"skipped"`
+	Failed     int             `json:"failed"`
+	Actions    map[string]bool `json:"actions"`
 }
 
 // UploadFilePage is server-paginated so large libraries do not produce unbounded polling responses.
@@ -64,7 +66,9 @@ func (s *UploadService) Files(page, size int) UploadFilePage {
 	defer s.mu.RUnlock()
 	items := make([]UploadFileProgress, 0, len(s.files))
 	for _, item := range s.files {
-		items = append(items, normalizedUploadProgress(item))
+		item = normalizedUploadProgress(item)
+		item.Actions = uploadProgressActions(item.State)
+		items = append(items, item)
 	}
 	sort.Slice(items, func(i, j int) bool {
 		if items[i].Path == items[j].Path {
@@ -107,9 +111,25 @@ func (s *UploadService) Directories() []UploadDirectoryProgress {
 			} else if file.Error != "" {
 				row.Failed++
 			}
+			for name, enabled := range uploadProgressActions(file.State) {
+				if enabled {
+					if row.Actions == nil {
+						row.Actions = map[string]bool{}
+					}
+					row.Actions[name] = true
+				}
+			}
 		}
 		if row.Total == 0 {
 			continue
+		}
+		if row.Actions == nil {
+			row.Actions = map[string]bool{}
+		}
+		for _, name := range []string{"pause", "stop", "start", "delete"} {
+			if _, ok := row.Actions[name]; !ok {
+				row.Actions[name] = false
+			}
 		}
 		if row.Size > 0 {
 			row.Progress = float64(processedBytes) * 100 / float64(row.Size)
@@ -124,6 +144,33 @@ func (s *UploadService) Directories() []UploadDirectoryProgress {
 	}
 	return result
 }
+
+// uploadProgressActions is the row-button contract shared by files and their parent directory.
+// A directory button is enabled when any contained file accepts that action.
+func uploadProgressActions(state string) map[string]bool {
+	actions := map[string]bool{"pause": false, "stop": false, "start": false, "delete": true}
+	switch state {
+	case "completed", "skipped", "discarded":
+	case "stopped":
+		actions["start"] = true
+	case "paused":
+		actions["stop"] = true
+		actions["start"] = true
+	case "failed", "blocked":
+		actions["pause"] = true
+		actions["stop"] = true
+		actions["start"] = true
+	case "attention":
+		actions["stop"] = true
+	case "waiting", "uploading", "transferring", "verifying", "uploaded":
+		actions["pause"] = true
+		actions["stop"] = true
+	default:
+		actions["stop"] = true
+	}
+	return actions
+}
+
 func normalizedUploadProgress(item UploadFileProgress) UploadFileProgress {
 	if time.Since(item.updated) > 3*time.Second || item.State == "completed" || item.State == "skipped" || item.State == "failed" || item.State == "stopped" {
 		item.Speed = 0

@@ -224,7 +224,7 @@ func (s *UploadService) Run(ctx context.Context) {
 							continue
 						}
 						sourceExists := uploadUnchanged(uploadLocalFile{Absolute: r.Source, Size: r.Size, Modified: r.Modified})
-						if sourceExists && ((!enabled && !manual) || s.mode == "paused") {
+						if sourceExists && ((!enabled && !manual && r.Intent != "run") || uploadIndividuallyPaused(r, s.mode)) {
 							continue
 						}
 						allowed := false
@@ -240,7 +240,7 @@ func (s *UploadService) Run(ctx context.Context) {
 						if now.Sub(discovered) < 5*time.Second {
 							continue
 						}
-					} else if s.mode == "paused" && r.State == "uploaded" {
+					} else if uploadIndividuallyPaused(r, s.mode) && r.State == "uploaded" {
 						continue
 					}
 					busy = r.Key
@@ -278,6 +278,13 @@ func (s *UploadService) Run(ctx context.Context) {
 		case result := <-results:
 			finish(result)
 		case command := <-s.commands:
+			if command.scope != "" {
+				if command.action != "start" && uploadCommandTargetsBusy(ctx, s, busy, command) {
+					stopWorker()
+				}
+				command.reply <- s.applyScopedUploadControl(ctx, command.action, command.scope, command.key)
+				continue
+			}
 			s.mu.RLock()
 			allowed := s.uploadActionsLocked()[command.action]
 			s.mu.RUnlock()

@@ -4,6 +4,7 @@ import (
 	"bytemuse/backend/internal/domain"
 	"context"
 	"errors"
+	"strings"
 	"time"
 )
 
@@ -14,6 +15,8 @@ var ErrUploadControl = errors.New("当前任务状态不允许此操作")
 
 type uploadCommand struct {
 	action string
+	scope  string
+	key    string
 	reply  chan error
 }
 
@@ -34,13 +37,19 @@ func uploadBatchActive(records []domain.UploadRecord) bool {
 
 // Control serializes queue commands with discovery and waits for durable acknowledgement.
 func (s *UploadService) Control(ctx context.Context, action string) error {
+	return s.ControlScope(ctx, action, "", "")
+}
+
+// ControlScope serializes one queue, directory, or file command.
+// An empty scope preserves whole-queue behavior. directory applies one action to every file task in that directory.
+func (s *UploadService) ControlScope(ctx context.Context, action, scope, key string) error {
 	s.mu.RLock()
 	ready, ch := s.ready, s.commands
 	s.mu.RUnlock()
 	if !ready || ch == nil {
 		return ErrUploadControl
 	}
-	command := uploadCommand{action: action, reply: make(chan error, 1)}
+	command := uploadCommand{action: action, scope: scope, key: key, reply: make(chan error, 1)}
 	select {
 	case ch <- command:
 	case <-ctx.Done():
@@ -149,6 +158,134 @@ func (s *UploadService) applyUploadControl(ctx context.Context, action string) e
 	return s.refreshUploadView(ctx)
 }
 
+// applyScopedUploadControl changes only the selected file or every file in the selected directory.
+// It does not change the queue-wide pause, stop, or monitoring mode.
+func (s *UploadService) applyScopedUploadControl(ctx context.Context, action, scope, key string) error {
+	if (scope != "file" && scope != "directory") || strings.TrimSpace(key) == "" {
+		return ErrUploadControl
+	}
+	records, err := s.store.List(ctx)
+	if err != nil {
+		return err
+	}
+	changed := false
+	for _, record := range records {
+		if record.State == "control" || record.Hidden || !uploadScopeMatch(record, scope, key) {
+			continue
+		}
+		next, ok := transformUploadControl(record, action, s.mode, s.status.Enabled || s.manualUpload)
+		if !ok {
+			continue
+		}
+		if err = s.store.Save(ctx, next); err != nil {
+			return err
+		}
+		changed = true
+	}
+	if !changed {
+		return ErrUploadControl
+	}
+	return s.refreshUploadView(ctx)
+}
+
+func uploadScopeMatch(record domain.UploadRecord, scope, key string) bool {
+	if scope == "file" {
+		return record.Key == key
+	}
+	return uploadDirectoryKey(UploadMapping{Kind: record.Kind, ID: record.Root, LocalPath: record.LocalRoot}) == key
+}
+
+// transformUploadControl returns the persisted result of one file action.
+// Pause covers files waiting to transfer and files uploaded but not yet replaced.
+// Start overrides a queue pause, and also runs the selection while monitoring is off.
+// scheduled reports whether a normal pending file would run without an individual run intent.
+func transformUploadControl(record domain.UploadRecord, action, mode string, scheduled bool) (domain.UploadRecord, bool) {
+	switch action {
+	case "pause":
+		if record.Intent == "pause" || record.ErrorKind == "attention" || (record.State != "pending" && record.State != "uploaded") {
+			return record, false
+		}
+		record.Intent = "pause"
+		return record, true
+	case "stop":
+		if uploadTerminal(record.State) {
+			return record, false
+		}
+		record.Intent = "stop"
+		if record.Parent == "" && record.State == "pending" {
+			record.State = "stopped"
+		} else if record.State == "pending" || record.State == "uploaded" {
+			record.State = "discarding"
+		}
+		if uploadTerminal(record.State) {
+			record.Error, record.ErrorKind, record.NextRetry = "", "", ""
+		}
+		return record, true
+	case "start":
+		if record.ErrorKind == "attention" || !uploadStartable(record, mode, scheduled) {
+			return record, false
+		}
+		if record.State == "stopped" {
+			record.State = "pending"
+			record.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+		}
+		if mode == "paused" || !scheduled {
+			record.Intent = "run"
+		} else {
+			record.Intent = ""
+		}
+		record.NextRetry = ""
+		if record.ErrorKind == "transient" || record.ErrorKind == "blocked" {
+			record.Error, record.ErrorKind = "", ""
+		}
+		return record, true
+	case "delete":
+		if !uploadTerminal(record.State) {
+			record.Intent = "delete"
+			if record.Parent == "" && record.State == "pending" {
+				record.State = "stopped"
+			} else if record.State == "pending" || record.State == "uploaded" {
+				record.State = "discarding"
+			}
+		}
+		if uploadTerminal(record.State) {
+			record.Hidden = true
+			record.Error, record.ErrorKind, record.NextRetry = "", "", ""
+		}
+		return record, true
+	default:
+		return record, false
+	}
+}
+
+// uploadStartable selects records whose individual start changes scheduling.
+// Pending files held only because monitoring is off are startable; identity conflicts are not.
+func uploadStartable(record domain.UploadRecord, mode string, scheduled bool) bool {
+	if record.Intent == "pause" || record.State == "stopped" {
+		return true
+	}
+	if record.State != "pending" && record.State != "uploaded" {
+		return false
+	}
+	if record.Error != "" || record.NextRetry != "" || (mode == "paused" && record.Intent != "run") {
+		return true
+	}
+	return !scheduled && record.Intent != "run"
+}
+
+func uploadIndividuallyPaused(record domain.UploadRecord, mode string) bool {
+	return record.Intent == "pause" || (mode == "paused" && record.Intent != "run")
+}
+
+// uploadCommandTargetsBusy reports whether pausing, stopping, or deleting would interrupt the active worker.
+func uploadCommandTargetsBusy(ctx context.Context, service *UploadService, busy string, command uploadCommand) bool {
+	if busy == "" || command.scope == "file" {
+		return busy != "" && busy == command.key
+	}
+	record, err := service.store.Get(ctx, busy)
+	return err == nil && record != nil && uploadScopeMatch(*record, command.scope, command.key)
+}
+
 // refreshUploadView rebuilds presentation from durable records without replacing live byte samples.
 func (s *UploadService) refreshUploadView(ctx context.Context) error {
 	records, err := s.store.List(ctx)
@@ -185,9 +322,9 @@ func (s *UploadService) refreshUploadView(ctx context.Context) error {
 			f.State = r.State
 			if r.State == "pending" {
 				f.State = "waiting"
-				if s.mode == "paused" {
+				if uploadIndividuallyPaused(r, s.mode) {
 					f.State = "paused"
-				} else if !st.Enabled && !s.manualUpload {
+				} else if !st.Enabled && !s.manualUpload && r.Intent != "run" {
 					f.State = "stopped"
 				}
 			}
@@ -198,7 +335,7 @@ func (s *UploadService) refreshUploadView(ctx context.Context) error {
 			} else if r.Error != "" && r.State == "pending" {
 				f.State = "failed"
 			}
-			if r.State == "pending" && s.mode == "paused" {
+			if (r.State == "pending" || r.State == "uploaded") && uploadIndividuallyPaused(r, s.mode) {
 				f.State = "paused"
 			}
 		}

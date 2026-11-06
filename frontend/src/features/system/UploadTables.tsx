@@ -16,6 +16,7 @@ type DirectoryRow = {
   total: number;
   skipped: number;
   failed: number;
+  actions?: Record<string, boolean>;
 };
 type FileRow = {
   key: string;
@@ -25,6 +26,7 @@ type FileRow = {
   speed: number;
   state: string;
   error: string;
+  actions?: Record<string, boolean>;
 };
 const states: Record<string, string> = {
   paused: "已暂停",
@@ -56,6 +58,8 @@ const progress = (value: number) => (
   <Progress percent={Math.min(100, Math.max(0, Math.round(value * 10) / 10))} />
 );
 
+type UploadTarget = { action: "pause" | "stop" | "start" | "delete"; scope: "directory" | "file"; key: string };
+
 /** 目录与文件分别展示，文件使用服务端分页；后台进度每两秒刷新。 */
 export function UploadTables() {
   const client = useQueryClient();
@@ -65,6 +69,14 @@ export function UploadTables() {
     onSuccess:async()=>{await Promise.all([client.invalidateQueries({queryKey:["cloud-upload-status"]}),client.invalidateQueries({queryKey:["upload-directory-progress"]}),client.invalidateQueries({queryKey:["upload-file-progress"]})]);},
     onError:(error:Error)=>{Message.error(error.message);void client.invalidateQueries({queryKey:["cloud-upload-status"]});},
   });
+  const rowControl = useMutation({
+    mutationFn: (target: UploadTarget) => apiRequest("/cloud-upload/control", { method: "POST", body: JSON.stringify(target) }),
+    onSuccess: async () => { await Promise.all([client.invalidateQueries({ queryKey: ["cloud-upload-status"] }), client.invalidateQueries({ queryKey: ["upload-directory-progress"] }), client.invalidateQueries({ queryKey: ["upload-file-progress"] })]); },
+    onError: (error: Error) => { Message.error(error.message); void client.invalidateQueries({ queryKey: ["upload-directory-progress"] }); void client.invalidateQueries({ queryKey: ["upload-file-progress"] }); },
+  });
+  const rowActions = (scope: UploadTarget["scope"], name: string, row: { key: string; actions?: Record<string, boolean> }) => <Space wrap>{([
+    ["pause", "暂停"], ["stop", "停止"], ["start", "开始"], ["delete", "删除"],
+  ] as const).map(([action, text]) => <Button key={action} htmlType="button" status={action === "delete" ? "danger" : undefined} aria-label={`${text}${scope === "directory" ? "目录" : "文件"} ${name}`} disabled={!row.actions?.[action] || rowControl.isPending} loading={rowControl.isPending && rowControl.variables?.key === row.key && rowControl.variables.action === action} onClick={() => rowControl.mutate({ action, scope, key: row.key })}>{text}</Button>)}</Space>;
   const actions = <Space wrap className="settings-upload-actions" aria-label="上传任务操作">{[
     ["pause","暂停"],["stop","停止"],["clear_completed","清除已完成"],["resume","继续"],["delete_all","删除所有任务"],
   ].map(([action,label])=><Button key={action} htmlType="button" status={action==="delete_all"?"danger":undefined} disabled={status.isError || !status.data?.actions?.[action] || control.isPending} loading={control.isPending && control.variables===action} onClick={()=>control.mutate(action)}>{label}</Button>)}</Space>;
@@ -110,7 +122,7 @@ export function UploadTables() {
             loading={directories.isPending}
             data={directories.data?.items ?? []}
             pagination={false}
-            scroll={{ x: 1050 }}
+            scroll={{ x: 1360 }}
             columns={[
               { title: "本地目录", dataIndex: "local_path", width: 230 },
               {
@@ -147,6 +159,7 @@ export function UploadTables() {
                 width: 110,
                 render: (_, row) => `${row.skipped}/${row.failed}`,
               },
+              { title: "操作", width: 300, render: (_, row) => rowActions("directory", row.local_path, row) },
             ]}
           />
         </Tabs.TabPane>
@@ -157,7 +170,7 @@ export function UploadTables() {
             loading={files.isPending}
             data={files.data?.items ?? []}
             pagination={false}
-            scroll={{ x: 900 }}
+            scroll={{ x: 1200 }}
             columns={[
               { title: "文件路径", dataIndex: "path", width: 300 },
               {
@@ -198,6 +211,7 @@ export function UploadTables() {
                 width: 120,
                 render: (value: number) => `${bytes(value)}/s`,
               },
+              { title: "操作", width: 300, render: (_, row) => rowActions("file", row.path, row) },
             ]}
           />
           <ListPagination

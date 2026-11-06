@@ -131,3 +131,14 @@ func TestUploadScanActionAvailability(t *testing.T) {
 		t.Fatalf("unknown: %d", response.Code)
 	}
 }
+
+func TestUploadScopedControlValidatesTarget(t *testing.T) {
+	service := application.NewUploadService(nil, nil, nil, nil)
+	for _, body := range []string{`{"action":"start","scope":"group","key":"1"}`, `{"action":"pause","scope":"file"}`, `{"action":"scan","scope":"directory","key":"1"}`} {
+		response := httptest.NewRecorder()
+		uploadControl(service)(response, httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body)))
+		if response.Code != http.StatusBadRequest && response.Code != http.StatusConflict {
+			t.Fatalf("%s: %d %s", body, response.Code, response.Body.String())
+		}
+	}
+}
