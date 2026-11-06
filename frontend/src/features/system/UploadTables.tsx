@@ -69,14 +69,25 @@ function formatTime(value?: string) {
   if (Number.isNaN(date.getTime())) return "—";
   return date.toLocaleString("zh-CN", { hour12: false });
 }
-const progress = (value: number) => (
-  <Progress percent={Math.min(100, Math.max(0, Math.round(value * 10) / 10))} />
-);
+/** 成功使用组件成功色，失败使用错误色；百分比文字与进度条保持同一状态色。 */
+function uploadProgress(value: number, status?: "success" | "error") {
+  const percent = Math.min(100, Math.max(0, Math.round(value * 10) / 10));
+  return (
+    <div className={status ? `settings-upload-progress settings-upload-progress-${status}` : undefined}>
+      <Progress percent={percent} {...(status ? { status } : {})} formatText={(current) => `${current}%`} />
+    </div>
+  );
+}
+function fileProgressStatus(state: string): "success" | "error" | undefined {
+  if (state === "failed") return "error";
+  if (state === "completed" || state === "cleanup") return "success";
+  return undefined;
+}
 /** 校验阶段单独显示已读取字节，避免进度条停留在 0 时无法区分是否仍在计算。 */
 function fileProgress(row: FileRow) {
   return (
     <div>
-      {progress(row.progress)}
+      {uploadProgress(row.progress, fileProgressStatus(row.state))}
       {row.state === "verifying" ? (
         <div>已校验 {bytes(row.uploaded_bytes ?? 0)} / {bytes(row.size)}</div>
       ) : null}
@@ -99,7 +110,7 @@ function fileState(row: FileRow) {
       <Tag color={row.state === "failed" ? "red" : row.state === "completed" ? "green" : undefined}>
         {states[row.state] ?? row.state}
       </Tag>
-      {row.error ? <div>{row.error}</div> : null}
+      {row.error ? <div className="settings-upload-error">{row.error}</div> : null}
     </span>
   );
 }
@@ -217,7 +228,7 @@ export function UploadTables() {
                 title: "上传进度",
                 dataIndex: "progress",
                 width: 150,
-                render: progress,
+                render: (_, row) => uploadProgress(row.progress, row.completed_at ? "success" : undefined),
               },
               {
                 title: "上传速度",

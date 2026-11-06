@@ -59,6 +59,8 @@ it("按当前列表清空，并在三次失败后显示重新上传", async () =
  render(<QueryClientProvider client={client}><UploadTables /></QueryClientProvider>);
  expect(await screen.findByRole("columnheader", { name: "添加时间" })).toBeInTheDocument();
  expect(screen.getByRole("columnheader", { name: "完成时间" })).toBeInTheDocument();
+ expect(await screen.findByText("/videos")).toBeInTheDocument();
+ expect(document.querySelector(".settings-upload-progress-success .arco-progress-is-success")).toBeTruthy();
  await userEvent.click(screen.getByRole("button", { name: "清空已完成" }));
  await waitFor(() => expect(posts).toContainEqual({ action: "clear_completed", scope: "directories" }));
  await userEvent.click(screen.getByRole("button", { name: "重新上传目录 /videos" }));
@@ -66,6 +68,8 @@ it("按当前列表清空，并在三次失败后显示重新上传", async () =
  await userEvent.click(screen.getByRole("tab", { name: "文件列表" }));
  expect(await screen.findByText("处理中 (2/3)")).toBeInTheDocument();
  expect(screen.queryByRole("button", { name: "重新上传文件 /videos/b.mkv" })).not.toBeInTheDocument();
+ expect(screen.getByText("远端文件身份无法确认")).toHaveClass("settings-upload-error");
+ expect(document.querySelector(".settings-upload-progress-error .arco-progress-is-error")).toBeTruthy();
  await userEvent.hover(screen.getByText("处理中 (2/3)"));
  expect(await screen.findByText("当前重试次数:2次，总共3次")).toBeInTheDocument();
  await userEvent.click(screen.getByRole("button", { name: "重新上传文件 /videos/a.mkv" }));
