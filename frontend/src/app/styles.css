@@ -724,12 +724,14 @@ button.code-card-still-cell:hover img { opacity: .85; }
 .settings-upload-local, .settings-upload-remote { flex: 1 1 0; min-width: 0; }
 .settings-upload-kind { flex: 0 0 150px; }
 .settings-upload-mapping-actions, .settings-upload-trigger { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 8px; }
-.settings-upload-filter { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
-.settings-upload-filter .arco-select { width: 160px; }
+.settings-upload-status-select { width: 140px; }
 .settings-upload-tables { min-width: 0; }
 .settings-upload-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
-.settings-upload-actions { max-width: 100%; }
+.settings-upload-header-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; min-width: 0; flex: 1 1 340px; }
+.settings-upload-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; max-width: 100%; flex: 1 1 300px; }
 .settings-upload-error { color: rgb(var(--danger-6)); font-size: 12px; line-height: 18px; }
+.settings-upload-verifying { color: var(--muted); font-size: 12px; line-height: 18px; }
+.settings-upload-paths { line-height: 20px; overflow-wrap: anywhere; }
 .settings-upload-progress-success .arco-progress-line-text { color: rgb(var(--success-6)); }
 .settings-upload-progress-error .arco-progress-line-text { color: rgb(var(--danger-6)); }
 .settings-strm-path-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; margin: 0; padding: 0; list-style: none; }

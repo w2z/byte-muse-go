@@ -54,8 +54,16 @@ func TestUploadDeleteDefersCleanupWithoutErasingRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := store["active"]
-	if r.Hidden || r.State != "cleanup" || r.Intent != "delete" || r.Backup == "" {
+	if !r.Hidden || r.State != "cleanup" || r.Intent != "delete" || r.Backup == "" {
 		t.Fatalf("recovery lost: %+v", r)
+	}
+}
+
+func TestUploadDeleteDoesNotRestartPendingTransfer(t *testing.T) {
+	record := domain.UploadRecord{Key: "pending", State: "pending", Parent: "parent", Intent: "delete"}
+	next, ok := transformUploadControl(record, "delete", "running", true)
+	if !ok || next.State != "discarding" || next.Intent != "delete" {
+		t.Fatalf("delete should discard pending transfer: %+v", next)
 	}
 }
 
@@ -119,7 +127,7 @@ func TestScopedUploadControlChangesOnlySelectedFiles(t *testing.T) {
 	if err := s.applyScopedUploadControl(ctx, "delete", "directory", directory); err != nil {
 		t.Fatal(err)
 	}
-	if !store["a1"].Hidden || !store["a2"].Hidden || store["a3"].State != "discarding" || store["a3"].Intent != "delete" || store["a3"].Hidden || !store["b1"].Hidden {
+	if !store["a1"].Hidden || !store["a2"].Hidden || store["a3"].State != "discarding" || store["a3"].Intent != "delete" || !store["a3"].Hidden || !store["b1"].Hidden {
 		t.Fatalf("directory delete leaked: %+v", store)
 	}
 	if s.Directories("") != nil && len(s.Directories("")) != 0 {
@@ -141,11 +149,54 @@ func TestUploadRetryBudgetStopsAfterThreeFailures(t *testing.T) {
 	if !uploadRetryDue(blocked, time.Now()) {
 		t.Fatal("blocked account keeps its own schedule")
 	}
+	transient := domain.UploadRecord{Error: "传输失败", ErrorKind: "transient", Retries: 1, NextRetry: time.Now().Add(time.Hour).UTC().Format(time.RFC3339Nano)}
+	if !uploadRetryDue(transient, time.Now()) {
+		t.Fatal("ordinary failures must retry immediately")
+	}
+}
+
+func TestUploadExhaustedFailureHidesPauseAndStop(t *testing.T) {
+	actions := uploadProgressActions("failed")
+	if actions["pause"] || actions["stop"] || !actions["retry"] || !actions["delete"] {
+		t.Fatalf("failed actions: %+v", actions)
+	}
+	for _, action := range []string{"pause", "stop"} {
+		if _, allowed := transformUploadControl(domain.UploadRecord{State: "pending", Error: "failed", Retries: 3}, action, "running", true); allowed {
+			t.Fatalf("exhausted task accepted %s", action)
+		}
+	}
+}
+
+func TestUploadRetryAllResetsEveryError(t *testing.T) {
+	ctx := context.Background()
+	store := uploadMemoryStore{
+		"failed":  {Key: "failed", State: "pending", Error: "传输失败", ErrorKind: "transient", Retries: 3},
+		"blocked": {Key: "blocked", State: "pending", Error: "账号失效", ErrorKind: "blocked", Retries: 1, NextRetry: time.Now().Add(time.Hour).UTC().Format(time.RFC3339Nano)},
+	}
+	service := &UploadService{store: store, ready: true, mode: "running", status: UploadStatus{Enabled: true}, files: map[string]UploadFileProgress{
+		"failed":  {Key: "failed", State: "failed", Error: "传输失败"},
+		"blocked": {Key: "blocked", State: "blocked", Error: "账号失效"},
+	}}
+	if !service.uploadActionsLocked()["retry_all"] {
+		t.Fatal("retry_all should be available")
+	}
+	if err := service.applyUploadControl(ctx, "retry_all"); err != nil {
+		t.Fatal(err)
+	}
+	for key, record := range store {
+		if key == uploadControlKey {
+			continue
+		}
+		if record.Retries != 0 || record.Error != "" || record.ErrorKind != "" || record.NextRetry != "" || record.Intent != "run" {
+			t.Fatalf("retry_all did not reset %s: %+v", key, record)
+		}
+	}
 }
 
 func TestUploadRetryPresentationAndManualRestart(t *testing.T) {
 	ctx := context.Background()
 	store := uploadMemoryStore{
+		"first":    {Key: "first", State: "committing", Error: "首次传输失败", ErrorKind: "transient", Retries: 1, Source: "/videos/first.mkv", Size: 4},
 		"retrying": {Key: "retrying", State: "pending", Error: "需处理：远端文件身份无法确认", ErrorKind: "attention", Retries: 2, Source: "/videos/a.mkv", Size: 4},
 		"failed":   {Key: "failed", State: "pending", Error: "传输失败", ErrorKind: "transient", Retries: 3, Source: "/videos/b.mkv", Size: 4},
 	}
@@ -157,13 +208,16 @@ func TestUploadRetryPresentationAndManualRestart(t *testing.T) {
 	for _, item := range s.Files(1, 10, "").Items {
 		items[item.Key] = item
 	}
+	if items["first"].State != "retrying" || items["first"].Error != "首次传输失败" {
+		t.Fatalf("first failure: %+v", items["first"])
+	}
 	if items["retrying"].State != "retrying" || items["retrying"].Actions["retry"] || !items["retrying"].Actions["pause"] || items["retrying"].MaxRetries != 3 {
 		t.Fatalf("retrying: %+v", items["retrying"])
 	}
 	if items["failed"].State != "failed" || !items["failed"].Actions["retry"] || items["failed"].Actions["start"] {
 		t.Fatalf("failed: %+v", items["failed"])
 	}
-	if len(s.Files(1, 10, "running").Items) != 1 || len(s.Files(1, 10, "failed").Items) != 1 {
+	if len(s.Files(1, 10, "running").Items) != 2 || len(s.Files(1, 10, "failed").Items) != 1 {
 		t.Fatal("retry filter mismatch")
 	}
 	if err := s.applyScopedUploadControl(ctx, "retry", "file", "failed"); err != nil {
@@ -217,5 +271,37 @@ func TestUploadListClearFollowsSelectedTab(t *testing.T) {
 	}
 	if !store["mb"].Hidden || store["m2"].Hidden {
 		t.Fatalf("file failed clear: %+v", store["mb"])
+	}
+}
+func TestUploadPresentationPreservesLivePhaseAndPause(t *testing.T) {
+	for _, phase := range []string{"verifying", "uploading", "transferring"} {
+		if got := uploadPresentationState(domain.UploadRecord{State: "pending"}, phase, true, "running", true, false); got != phase {
+			t.Fatalf("phase %s became %s", phase, got)
+		}
+	}
+	record := domain.UploadRecord{State: "pending", Intent: "pause", Error: "network error", Retries: 1}
+	if got := uploadPresentationState(record, "uploading", false, "running", true, false); got != "paused" {
+		t.Fatalf("paused retry became %s", got)
+	}
+	if got := uploadPresentationState(domain.UploadRecord{State: "pending"}, "failed", true, "running", true, false); got == "failed" {
+		t.Fatal("manual retry retained stale failed state")
+	}
+}
+
+func TestUploadClearFailedRetainsRetryBudget(t *testing.T) {
+	store := uploadMemoryStore{"failed": {Key: "failed", State: "pending", Error: "failed", Retries: 3}}
+	service := &UploadService{store: store}
+	if err := service.applyListClear(context.Background(), "clear_failed", "files"); err != nil {
+		t.Fatal(err)
+	}
+	if uploadRetryDue(store["failed"], time.Now()) {
+		t.Fatal("cleared failure became runnable")
+	}
+}
+
+func TestUploadDeleteCleanupHasFiniteRetryBudget(t *testing.T) {
+	record := domain.UploadRecord{Intent: "delete", State: "discarding", Error: "remote unavailable", Retries: 3}
+	if uploadRetryDue(record, time.Now()) {
+		t.Fatal("delete cleanup retries forever")
 	}
 }

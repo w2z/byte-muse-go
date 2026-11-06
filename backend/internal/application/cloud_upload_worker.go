@@ -124,6 +124,53 @@ func uploadParent(ctx context.Context, remote uploadRemote, root, relative strin
 	return parent, nil
 }
 
+// uploadMappingRoot resolves a configured 115 directory by its display path
+// when the saved directory ID was deleted. The configured mapping remains the
+// queue identity; only the effective remote parent ID is replaced.
+func uploadMappingRoot(ctx context.Context, remote uploadRemote, mapping UploadMapping) (string, error) {
+	if _, err := remote.List(ctx, mapping.ID); err == nil {
+		return mapping.ID, nil
+	} else if !isUploadRemoteMissingError(err) || mapping.Kind != "115" {
+		return "", err
+	}
+	cleanPath := strings.Trim(strings.TrimSpace(mapping.Path), "/")
+	if cleanPath == "" || !strings.HasPrefix(mapping.Path, "/") {
+		return "", errors.New("原网盘目录已删除且缺少完整路径，请重新选择上传目录")
+	}
+	parent := pan115RootDirectoryID
+	for _, name := range strings.Split(cleanPath, "/") {
+		if name == "" || name == "." || name == ".." {
+			return "", errors.New("网盘目录路径无效，请重新选择上传目录")
+		}
+		entries, err := remote.List(ctx, parent)
+		if err != nil {
+			return "", err
+		}
+		matches := 0
+		for _, entry := range entries {
+			if entry.Name == name {
+				matches++
+			}
+		}
+		if matches > 1 {
+			return "", fmt.Errorf("%w：恢复目录存在同名对象", errUploadAttention)
+		}
+		entry, exists := findUploadEntry(entries, name)
+		if exists {
+			if !entry.Directory {
+				return "", fmt.Errorf("网盘路径 %s 已存在同名文件", name)
+			}
+			parent = entry.ID
+			continue
+		}
+		parent, err = remote.Mkdir(ctx, parent, name)
+		if err != nil {
+			return "", err
+		}
+	}
+	return parent, nil
+}
+
 // process persists its chosen names before any upload and reconciles each commit stage after uncertain failures.
 func (s *UploadService) process(ctx context.Context, m UploadMapping, f uploadLocalFile, policy string) (state string, resultErr error) {
 	key := uploadKey(m, f, policy)
@@ -135,19 +182,36 @@ func (s *UploadService) process(ctx context.Context, m UploadMapping, f uploadLo
 		if record == nil {
 			return
 		}
-		state = record.State
 		if record.Intent == "delete" && uploadTerminal(record.State) {
 			record.Hidden = true
 		}
-		record.Error = ""
-		record.ErrorKind = ""
-		record.NextRetry = ""
+		if !errors.Is(resultErr, context.Canceled) {
+			record.Error, record.ErrorKind, record.NextRetry = "", "", ""
+		}
 		if resultErr != nil && !errors.Is(resultErr, context.Canceled) {
-			record.Error = resultErr.Error()
-			record.Retries++
-			record.ErrorKind = "transient"
-			if errors.Is(resultErr, errUploadAttention) || errors.Is(resultErr, clouddrive.ErrUploadFailed) {
-				record.ErrorKind = "attention"
+			if errors.Is(resultErr, errUploadRemoteMissing) {
+				record.Parent = ""
+				record.StageID, record.StageSHA1, record.StageSize = "", "", 0
+				record.OldID, record.OldSHA1, record.OldSize = "", "", 0
+				if record.Intent == "delete" || record.Intent == "stop" {
+					record.State = "stopped"
+					record.Hidden = record.Intent == "delete"
+				} else {
+					record.State = "pending"
+				}
+				resultErr = nil
+			} else {
+				record.Error = resultErr.Error()
+			}
+			if errors.Is(resultErr, errUploadFileLocked) {
+				record.ErrorKind = "locked"
+				record.NextRetry = time.Now().Add(time.Second).UTC().Format(time.RFC3339Nano)
+			} else if resultErr != nil {
+				record.Retries++
+				record.ErrorKind = "transient"
+				if errors.Is(resultErr, errUploadAttention) || errors.Is(resultErr, clouddrive.ErrUploadFailed) {
+					record.ErrorKind = "attention"
+				}
 			}
 			var httpErr *pan115.HTTPError
 			var apiErr *pan115.APIError
@@ -156,18 +220,30 @@ func (s *UploadService) process(ctx context.Context, m UploadMapping, f uploadLo
 			}
 			if record.ErrorKind == "blocked" {
 				record.NextRetry = time.Now().Add(15 * time.Minute).UTC().Format(time.RFC3339Nano)
-			} else if record.Retries < uploadMaxAutoRetries {
-				record.NextRetry = time.Now().Add(min(15*time.Minute, 5*time.Second*time.Duration(1<<min(record.Retries-1, 8)))).UTC().Format(time.RFC3339Nano)
+			}
+			if record.Error != "" && record.ErrorKind != "blocked" && record.ErrorKind != "locked" && record.Retries < uploadMaxAutoRetries {
+				record.Error = uploadRetryMessage(record.Retries, record.Error)
 			}
 		} else if record.CompletedAt == "" && (record.State == "completed" || record.State == "skipped") {
 			record.CompletedAt = time.Now().UTC().Format(time.RFC3339Nano)
 		}
 		persist, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer cancel()
+		state = record.State
 		resultErr = errors.Join(resultErr, s.store.Save(persist, *record))
 	}()
 	if record != nil && uploadTerminal(record.State) {
 		return record.State, nil
+	}
+	if record != nil && record.Intent == "delete" {
+		if record.Parent == "" {
+			record.State = "stopped"
+			record.Hidden = true
+			return record.State, nil
+		}
+		if record.State == "pending" || record.State == "uploaded" || record.State == "uploading" {
+			record.State = "discarding"
+		}
 	}
 	if record == nil && !uploadUnchanged(f) {
 		return "", fmt.Errorf("文件仍在变化: %s", f.Relative)
@@ -176,6 +252,21 @@ func (s *UploadService) process(ctx context.Context, m UploadMapping, f uploadLo
 		record.State = "discarded"
 		return record.State, nil
 	}
+	sourceGuarded := false
+	if record == nil || record.State == "pending" {
+		release, lockErr := uploadSourceGuard(f.Absolute)
+		if lockErr != nil {
+			return "", lockErr
+		}
+		defer release()
+		sourceGuarded = true
+		if record != nil && record.ErrorKind == "locked" {
+			record.Error, record.ErrorKind, record.NextRetry = "", "", ""
+			if err = s.store.Save(ctx, *record); err != nil {
+				return "", err
+			}
+		}
+	}
 	remote, err := s.provider(ctx, m.Kind)
 	if err != nil {
 		return "", err
@@ -183,12 +274,36 @@ func (s *UploadService) process(ctx context.Context, m UploadMapping, f uploadLo
 	if policy != "skip" && policy != "overwrite" && policy != "keep_both" {
 		return "", fmt.Errorf("同名文件处理方式无效")
 	}
+	if record != nil && record.Kind == "115" && record.Parent != "" {
+		if _, listErr := remote.List(ctx, record.Parent); listErr != nil {
+			if isUploadRemoteMissingError(listErr) {
+				record.Parent, record.StageID, record.StageSHA1, record.StageSize = "", "", "", 0
+				record.OldID, record.OldSHA1, record.OldSize = "", "", 0
+				if record.Intent == "delete" || record.Intent == "stop" {
+					record.State = "stopped"
+					record.Hidden = record.Intent == "delete"
+					return record.State, nil
+				}
+				record.State = "pending"
+				record.Error, record.ErrorKind, record.NextRetry = "", "", ""
+				if err = s.store.Save(ctx, *record); err != nil {
+					return "", err
+				}
+			} else {
+				return "", listErr
+			}
+		}
+	}
 	save := func() error {
 		record.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 		return s.store.Save(ctx, *record)
 	}
 	if record == nil || record.Parent == "" {
-		parent, e := uploadParent(ctx, remote, m.ID, f.Relative)
+		root, e := uploadMappingRoot(ctx, remote, m)
+		if e != nil {
+			return "", e
+		}
+		parent, e := uploadParent(ctx, remote, root, f.Relative)
 		if e != nil {
 			return "", e
 		}
@@ -198,14 +313,17 @@ func (s *UploadService) process(ctx context.Context, m UploadMapping, f uploadLo
 		}
 		name := path.Base(f.Relative)
 		existing, exists := findUploadEntry(entries, name)
-		queuedAt := ""
-		if record != nil {
-			queuedAt = record.QueuedAt
+		if record == nil {
+			record = &domain.UploadRecord{Key: key, Kind: m.Kind, Root: m.ID, LocalRoot: m.LocalPath, Relative: f.Relative, Source: f.Absolute, Size: f.Size, Modified: f.Modified, Policy: policy, State: "pending"}
 		}
-		if queuedAt == "" {
-			queuedAt = time.Now().UTC().Format(time.RFC3339Nano)
+		if record.QueuedAt == "" {
+			record.QueuedAt = time.Now().UTC().Format(time.RFC3339Nano)
 		}
-		record = &domain.UploadRecord{Key: key, Kind: m.Kind, Root: m.ID, LocalRoot: m.LocalPath, Relative: f.Relative, Source: f.Absolute, Size: f.Size, Modified: f.Modified, Policy: policy, Parent: parent, Target: name, Stage: name + ".bytemuse-go-tmp", Backup: ".bytemuse-backup-" + key, State: "pending", QueuedAt: queuedAt}
+		record.Parent, record.Target = parent, name
+		if record.Stage == "" {
+			record.Stage = name + ".bytemuse-go-tmp"
+		}
+		record.Backup = ".bytemuse-backup-" + key
 		if exists && existing.Directory {
 			return "", fmt.Errorf("目标已存在同名目录: %s", name)
 		}
@@ -239,6 +357,13 @@ func (s *UploadService) process(ctx context.Context, m UploadMapping, f uploadLo
 	}
 	if record.State == "pending" {
 		// Anchor file access to the selected root so replacing a parent with a symlink cannot escape it.
+		if !sourceGuarded {
+			release, lockErr := uploadSourceGuard(f.Absolute)
+			if lockErr != nil {
+				return "", lockErr
+			}
+			defer release()
+		}
 		root, e := os.OpenRoot(m.LocalPath)
 		if e != nil {
 			return "", e
@@ -367,6 +492,16 @@ func (s *UploadService) process(ctx context.Context, m UploadMapping, f uploadLo
 		}
 	}
 	return s.commitUpload(ctx, remote, record, save)
+}
+
+func uploadRetryMessage(retries int, message string) string {
+	prefix := fmt.Sprintf("正在重试 (%d/%d)；", retries, uploadMaxAutoRetries)
+	if strings.HasPrefix(message, "正在重试 (") {
+		if separator := strings.Index(message, "；"); separator >= 0 {
+			message = strings.TrimSpace(message[separator+len("；"):])
+		}
+	}
+	return prefix + strings.TrimSpace(message)
 }
 
 // hashUploadSource calculates the source SHA1 and publishes absolute verified bytes.

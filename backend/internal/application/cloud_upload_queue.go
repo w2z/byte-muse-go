@@ -3,8 +3,10 @@ package application
 import (
 	"bytemuse/backend/internal/domain"
 	"context"
+	"errors"
 	"github.com/fsnotify/fsnotify"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"sort"
 	"time"
@@ -227,7 +229,7 @@ func (s *UploadService) Run(ctx context.Context) {
 							continue
 						}
 						sourceExists := uploadUnchanged(uploadLocalFile{Absolute: r.Source, Size: r.Size, Modified: r.Modified})
-						if sourceExists && ((!enabled && !manual && r.Intent != "run") || uploadIndividuallyPaused(r, s.mode)) {
+						if r.Intent != "delete" && ((!enabled && !manual && r.Intent != "run") || uploadIndividuallyPaused(r, s.mode)) {
 							continue
 						}
 						allowed := false
@@ -236,12 +238,55 @@ func (s *UploadService) Run(ctx context.Context) {
 								allowed = true
 							}
 						}
-						if !allowed && sourceExists {
+						if !allowed && sourceExists && r.Intent != "delete" {
 							continue
 						}
-						discovered, _ := time.Parse(time.RFC3339Nano, r.UpdatedAt)
-						if now.Sub(discovered) < 5*time.Second {
+						if r.Intent != "delete" && uploadFileLocked(r.Source) {
+							r.Error = "该文件正在被占用"
+							r.ErrorKind = "locked"
+							r.NextRetry = now.Add(time.Second).UTC().Format(time.RFC3339Nano)
+							if saveErr := s.store.Save(ctx, r); saveErr != nil {
+								s.update(func(st *UploadStatus) { st.Error = saveErr.Error() })
+							}
 							continue
+						}
+						if r.Intent != "delete" && !sourceExists {
+							info, statErr := os.Lstat(r.Source)
+							if statErr == nil && info.Mode().IsRegular() {
+								replacement := r
+								replacement.Size, replacement.Modified = info.Size(), info.ModTime().UnixNano()
+								mapping := UploadMapping{Kind: r.Kind, ID: r.Root, LocalPath: r.LocalRoot}
+								replacement.Key = uploadKey(mapping, uploadLocalFile{Absolute: r.Source, Size: replacement.Size, Modified: replacement.Modified}, r.Policy)
+								replacement.Parent, replacement.Stage, replacement.StageID, replacement.SHA1 = "", "", "", ""
+								replacement.OldID, replacement.OldSHA1, replacement.StageSHA1 = "", "", ""
+								replacement.Error, replacement.ErrorKind, replacement.NextRetry = "", "", ""
+								replacement.Retries = 0
+								replacement.UpdatedAt = now.UTC().Format(time.RFC3339Nano)
+								previous, getErr := s.store.Get(ctx, replacement.Key)
+								if getErr != nil {
+									s.update(func(st *UploadStatus) { st.Error = getErr.Error() })
+									continue
+								}
+								if previous == nil {
+									if saveErr := s.store.Save(ctx, replacement); saveErr != nil {
+										s.update(func(st *UploadStatus) { st.Error = saveErr.Error() })
+										continue
+									}
+								}
+							}
+							if r.Parent == "" {
+								r.State, r.Hidden = "discarded", true
+								if saveErr := s.store.Save(ctx, r); saveErr != nil {
+									s.update(func(st *UploadStatus) { st.Error = saveErr.Error() })
+								}
+								continue
+							}
+						}
+						if r.Error == "" {
+							discovered, _ := time.Parse(time.RFC3339Nano, r.UpdatedAt)
+							if now.Sub(discovered) < 5*time.Second {
+								continue
+							}
 						}
 					} else if uploadIndividuallyPaused(r, s.mode) && r.State == "uploaded" {
 						continue
@@ -302,7 +347,7 @@ func (s *UploadService) Run(ctx context.Context) {
 				command.reply <- nil
 				continue
 			}
-			if command.action != "clear_completed" {
+			if command.action != "clear_completed" && command.action != "retry_all" {
 				stopWorker()
 			}
 			command.reply <- s.applyUploadControl(ctx, command.action)
@@ -322,4 +367,12 @@ func (s *UploadService) Run(ctx context.Context) {
 		case <-ticker.C:
 		}
 	}
+}
+
+func uploadFileLocked(path string) bool {
+	release, err := uploadSourceGuard(path)
+	if err == nil {
+		release()
+	}
+	return errors.Is(err, errUploadFileLocked)
 }

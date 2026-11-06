@@ -2,6 +2,7 @@ package application
 
 import (
 	"bytemuse/backend/internal/domain"
+	"bytemuse/backend/internal/platform/pan115"
 	"bytes"
 	"context"
 	"crypto/sha1"
@@ -308,12 +309,111 @@ func TestUploadQueueStartsInAscendingEnqueueOrder(t *testing.T) {
 	older := domain.UploadRecord{Key: "older", State: "pending", QueuedAt: "2026-11-07T01:00:00Z", UpdatedAt: "2026-11-07T03:00:00Z"}
 	newer := domain.UploadRecord{Key: "newer", State: "pending", QueuedAt: "2026-11-07T02:00:00Z", UpdatedAt: "2026-11-07T02:00:00Z"}
 	commit := domain.UploadRecord{Key: "commit", State: "uploaded", QueuedAt: "2026-11-07T04:00:00Z"}
-	if !uploadQueueBefore(older, newer) || uploadQueueBefore(newer, older) || !uploadQueueBefore(commit, older) {
+	if !uploadQueueBefore(older, newer) || uploadQueueBefore(newer, older) || uploadQueueBefore(commit, older) {
 		t.Fatal("queue order changed")
 	}
 	historical := domain.UploadRecord{Key: "historical", State: "pending", UpdatedAt: "2026-11-07T00:30:00Z"}
 	if !uploadQueueBefore(historical, older) {
 		t.Fatal("historical record did not keep its original update time")
+	}
+}
+
+func TestUploadQueueRetriesLockedFileBeforeQueueDrain(t *testing.T) {
+	first := domain.UploadRecord{Key: "first", State: "pending", QueuedAt: "2026-11-07T01:00:00Z"}
+	second := domain.UploadRecord{Key: "second", State: "pending", QueuedAt: "2026-11-07T02:00:00Z"}
+	if !uploadQueueBefore(first, second) {
+		t.Fatal("older task must remain first in the queue")
+	}
+	if !uploadRetryDue(domain.UploadRecord{Error: "该文件正在被占用", ErrorKind: "locked", NextRetry: time.Now().Add(time.Second).UTC().Format(time.RFC3339Nano)}, time.Now()) {
+		t.Fatal("locked task must be probed after every subsequent completion")
+	}
+}
+
+func TestUploadSourceGuardDetectsWriter(t *testing.T) {
+	name := filepath.Join(t.TempDir(), "copying.bin")
+	writer, err := os.Create(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	if !uploadFileLocked(name) {
+		t.Fatal("open writable file was not detected")
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if uploadFileLocked(name) {
+		t.Fatal("closed writer still blocks upload")
+	}
+}
+
+func TestUploadQueueRechecksLockedFileAfterNextCompletion(t *testing.T) {
+	root := t.TempDir()
+	mapping := UploadMapping{Kind: "115", ID: "0", LocalPath: root, Path: "/"}
+	for _, name := range []string{"a.bin", "b.bin", "c.bin"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte("content"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writer, err := os.OpenFile(filepath.Join(root, "a.bin"), os.O_WRONLY, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	files, err := uploadSnapshot(context.Background(), mapping)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := uploadMemoryStore{}
+	for index, file := range files {
+		key := uploadKey(mapping, file, "overwrite")
+		stamp := time.Now().Add(time.Duration(index-20) * time.Second).UTC().Format(time.RFC3339Nano)
+		store[key] = domain.UploadRecord{Key: key, Kind: "115", Root: "0", LocalRoot: root, RemotePath: "/", Source: file.Absolute, Relative: file.Relative, Size: file.Size, Modified: file.Modified, State: "pending", Policy: "overwrite", Intent: "run", QueuedAt: stamp, UpdatedAt: stamp}
+	}
+	remote := &uploadOrderedRemote{uploadMemoryRemote: uploadMemoryRemote{files: map[string][]byte{}}, writer: writer}
+	raw, _ := json.Marshal([]UploadMapping{mapping})
+	service := &UploadService{store: store, settings: func(context.Context) (map[string]string, error) {
+		return map[string]string{"CLOUD_UPLOAD_ENABLE": "false", "CLOUD_UPLOAD_PATHS": string(raw), "CLOUD_UPLOAD_CONFLICT": "overwrite"}, nil
+	}, provider: func(context.Context, string) (uploadRemote, error) { return remote, nil }}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { defer close(done); service.Run(ctx) }()
+	defer func() { cancel(); <-done }()
+	deadline := time.Now().Add(8 * time.Second)
+	for service.Files(1, 20, "").Completed != 3 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if service.Files(1, 20, "").Completed != 3 {
+		t.Fatalf("queue did not complete: %+v", service.Files(1, 20, ""))
+	}
+	if strings.Join(remote.order, ",") != "b.bin.bytemuse-go-tmp,a.bin.bytemuse-go-tmp,c.bin.bytemuse-go-tmp" {
+		t.Fatalf("locked task waited for queue drain: %v", remote.order)
+	}
+}
+
+type uploadOrderedRemote struct {
+	uploadMemoryRemote
+	writer *os.File
+	order  []string
+}
+
+func (remote *uploadOrderedRemote) Upload(ctx context.Context, parent, name string, file *os.File, size int64) error {
+	remote.order = append(remote.order, name)
+	if strings.HasPrefix(name, "b.bin.") {
+		if err := remote.writer.Close(); err != nil {
+			return err
+		}
+	}
+	return remote.uploadMemoryRemote.Upload(ctx, parent, name, file, size)
+}
+
+func TestUploadRemoteMissingClassificationDoesNotTreatRateLimitAsDeleted(t *testing.T) {
+	for _, message := range []string{"请求过于频繁", "文件不存在或已删除", "目录不存在"} {
+		got := isUploadRemoteMissingError(&pan115.APIError{Code: 20018, Message: message})
+		want := message != "请求过于频繁"
+		if got != want {
+			t.Fatalf("message=%q got=%v want=%v", message, got, want)
+		}
 	}
 }
 
@@ -335,6 +435,14 @@ func TestUploadStatusFilterKeepsDirectoryTotals(t *testing.T) {
 	rows := s.Directories("waiting")
 	if len(rows) != 1 || rows[0].Key != key || rows[0].Total != 2 || !rows[0].Actions["pause"] || rows[0].Actions["start"] {
 		t.Fatalf("directory filter: %+v", rows)
+	}
+	directoryPage := s.DirectoryPage("waiting")
+	if directoryPage.Total != 2 || directoryPage.Completed != 1 || len(directoryPage.Items) != 1 {
+		t.Fatalf("directory counts must ignore filters and count directories: %+v", directoryPage)
+	}
+	filePage := s.Files(2, 1, "completed")
+	if filePage.Total != 1 || filePage.TaskTotal != 3 || filePage.Completed != 1 || len(filePage.Items) != 0 {
+		t.Fatalf("file counts must ignore filters and pagination: %+v", filePage)
 	}
 }
 
@@ -365,6 +473,28 @@ func TestUploadRetriesPartialStage(t *testing.T) {
 		t.Fatal(remote.files)
 	}
 }
+
+func TestUploadInitializationPreservesRetryBudget(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "file.txt"), []byte("abc"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	mapping := UploadMapping{Kind: "115", ID: "0", LocalPath: root}
+	files, err := uploadSnapshot(context.Background(), mapping)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := uploadKey(mapping, files[0], "overwrite")
+	store := uploadMemoryStore{key: {Key: key, State: "pending", Retries: 2, Intent: "run", QueuedAt: "original", Source: files[0].Absolute, Size: files[0].Size, Modified: files[0].Modified}}
+	remote := &uploadMemoryRemote{files: map[string][]byte{}, failUpload: true}
+	service := &UploadService{store: store, provider: func(context.Context, string) (uploadRemote, error) { return remote, nil }}
+	if _, err = service.process(context.Background(), mapping, files[0], "overwrite"); err == nil {
+		t.Fatal("expected transfer failure")
+	}
+	if record := store[key]; record.Retries != 3 || record.Intent != "run" || record.QueuedAt != "original" || uploadRetryDue(record, time.Now()) {
+		t.Fatalf("initialization lost queue metadata: %+v", record)
+	}
+}
 func (s uploadMemoryStore) Save(_ context.Context, r domain.UploadRecord) error {
 	s[r.Key] = r
 	return nil
@@ -379,6 +509,43 @@ type uploadMemoryRemote struct {
 	afterUpload        func()
 	loseDeleteResponse bool
 }
+
+type uploadRecreateRemote struct {
+	entries     map[string][]uploadEntry
+	createdRoot string
+	uploaded    string
+}
+
+func (r *uploadRecreateRemote) List(_ context.Context, parent string) ([]uploadEntry, error) {
+	if parent == "deleted" {
+		return nil, &pan115.APIError{Code: 20018, Message: "文件不存在或已删除"}
+	}
+	return r.entries[parent], nil
+}
+func (r *uploadRecreateRemote) Mkdir(_ context.Context, parent, name string) (string, error) {
+	id := parent + "/" + name
+	r.entries[parent] = append(r.entries[parent], uploadEntry{ID: id, Name: name, Directory: true})
+	r.entries[id] = nil
+	if name == "restored" {
+		r.createdRoot = id
+	}
+	return id, nil
+}
+func (r *uploadRecreateRemote) Upload(_ context.Context, parent, name string, _ *os.File, _ int64) error {
+	r.uploaded = parent + ":" + name
+	r.entries[parent] = append(r.entries[parent], uploadEntry{ID: name, Name: name, Size: 9})
+	return nil
+}
+func (r *uploadRecreateRemote) Rename(_ context.Context, parent string, entry uploadEntry, name string) error {
+	for i := range r.entries[parent] {
+		if r.entries[parent][i].Name == entry.Name {
+			r.entries[parent][i].Name = name
+			return nil
+		}
+	}
+	return errors.New("rename entry not found")
+}
+func (r *uploadRecreateRemote) Delete(context.Context, string, uploadEntry) error { return nil }
 
 func (r *uploadMemoryRemote) List(context.Context, string) ([]uploadEntry, error) {
 	var out []uploadEntry

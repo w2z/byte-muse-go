@@ -5,6 +5,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -80,6 +81,29 @@ func TestUploadUsesShortSourceBasedStageName(t *testing.T) {
 	}
 }
 
+func TestUploadRecreatesDeleted115MappingDirectory(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "film.mkv"), []byte("new video"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	m := UploadMapping{Kind: "115", ID: "deleted", Path: "/restored", LocalPath: root}
+	f := uploadLocalFile{Absolute: filepath.Join(root, "film.mkv"), Relative: "film.mkv"}
+	info, err := os.Stat(f.Absolute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Size, f.Modified = info.Size(), info.ModTime().UnixNano()
+	remote := &uploadRecreateRemote{entries: map[string][]uploadEntry{"0": nil}}
+	store := uploadMemoryStore{}
+	service := &UploadService{store: store, provider: func(context.Context, string) (uploadRemote, error) { return remote, nil }}
+	if _, err = service.process(context.Background(), m, f, "overwrite"); err != nil {
+		t.Fatal(err)
+	}
+	if remote.createdRoot == "" || len(remote.entries[remote.createdRoot]) != 1 || remote.entries[remote.createdRoot][0].Name != "film.mkv" {
+		t.Fatalf("directory was not recreated: %+v", remote)
+	}
+}
+
 func TestUploadMatches115EntryByContentWhenRemoteIDChanges(t *testing.T) {
 	record := domain.UploadRecord{Kind: "115", Size: 3, StageID: "old-id", SHA1: "abc123"}
 	entry := uploadEntry{ID: "new-id", Size: 3, SHA1: "ABC123"}
@@ -142,11 +166,24 @@ func TestUploadReservesKeepBothAcrossPendingTasks(t *testing.T) {
 func TestUploadSourceChangedCleansOldStageBeforeNewVersion(t *testing.T) {
 	s, m, f, r, store := recoveryFixture(t)
 	r.afterUpload = func() {
-		if err := os.WriteFile(f.Absolute, []byte("changed version"), 0600); err != nil {
+		err := os.WriteFile(f.Absolute, []byte("changed version"), 0600)
+		if runtime.GOOS == "windows" {
+			if err == nil {
+				t.Fatal("upload guard allowed source modification")
+			}
+			return
+		}
+		if err != nil {
 			t.Fatal(err)
 		}
 	}
 	state, err := s.process(context.Background(), m, f, "overwrite")
+	if runtime.GOOS == "windows" {
+		if err != nil || state != "completed" || string(r.files["film.mkv"]) != "new video" {
+			t.Fatalf("guarded upload: state=%s err=%v files=%v", state, err, r.files)
+		}
+		return
+	}
 	if err != nil || state != "discarded" || len(r.files) != 1 || string(r.files["film.mkv"]) != "old video" {
 		t.Fatalf("state=%s err=%v files=%v", state, err, r.files)
 	}
@@ -174,5 +211,50 @@ func TestUploadUncertainDeleteReconcilesWithoutReupload(t *testing.T) {
 	}
 	if r.uploads != 1 || len(r.files) != 1 {
 		t.Fatalf("uploads=%d files=%v", r.uploads, r.files)
+	}
+}
+
+func TestUploadRetryAfterRemoteObjectsDeleted(t *testing.T) {
+	service, mapping, file, remote, store := recoveryFixture(t)
+	remote.failDelete = true
+	if _, err := service.process(context.Background(), mapping, file, "overwrite"); err == nil {
+		t.Fatal("expected cleanup failure")
+	}
+	key := uploadKey(mapping, file, "overwrite")
+	record := store[key]
+	record.Retries = 3
+	store[key] = record
+	remote.files = map[string][]byte{}
+	remote.failDelete = false
+	service.mode = "running"
+	service.status.Enabled = true
+	if err := service.applyScopedUploadControl(context.Background(), "retry", "file", key); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.process(context.Background(), mapping, file, "overwrite"); err != nil {
+		t.Fatal(err)
+	}
+	if store[key].State != "pending" || store[key].Parent != "" {
+		t.Fatalf("missing objects were not reset: %+v", store[key])
+	}
+	if state, err := service.process(context.Background(), mapping, file, "overwrite"); err != nil || state != "completed" {
+		t.Fatalf("retry state=%s err=%v", state, err)
+	}
+	if remote.uploads != 2 || string(remote.files["film.mkv"]) != "new video" {
+		t.Fatalf("retry did not upload source: %+v", remote)
+	}
+}
+
+func TestUploadStopDoesNotRecreateDeletedParent(t *testing.T) {
+	service, mapping, file, _, store := recoveryFixture(t)
+	key := uploadKey(mapping, file, "overwrite")
+	store[key] = domain.UploadRecord{Key: key, State: "discarding", Kind: "115", Parent: "deleted", Intent: "stop"}
+	remote := &uploadRecreateRemote{entries: map[string][]uploadEntry{}}
+	service.provider = func(context.Context, string) (uploadRemote, error) { return remote, nil }
+	if state, err := service.process(context.Background(), mapping, file, "overwrite"); err != nil || state != "stopped" {
+		t.Fatalf("stop state=%s err=%v", state, err)
+	}
+	if remote.uploaded != "" || len(remote.entries) != 0 {
+		t.Fatal("stop recreated remote data")
 	}
 }

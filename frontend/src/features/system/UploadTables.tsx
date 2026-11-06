@@ -20,6 +20,7 @@ type DirectoryRow = {
   queued_at?: string;
   completed_at?: string;
 };
+type DirectoryPage = { items: DirectoryRow[]; total?: number; completed?: number };
 type FileRow = {
   key: string;
   path: string;
@@ -36,6 +37,7 @@ type FileRow = {
   completed_at?: string;
   actions?: Record<string, boolean>;
 };
+type FilePage = { items: FileRow[]; total: number; task_total?: number; completed?: number };
 const states: Record<string, string> = {
   paused: "已暂停",
   uploaded: "等待替换",
@@ -80,7 +82,7 @@ function uploadProgress(value: number, status?: "success" | "error") {
 }
 function fileProgressStatus(state: string): "success" | "error" | undefined {
   if (state === "failed") return "error";
-  if (state === "completed" || state === "cleanup") return "success";
+  if (state === "completed" || state === "skipped") return "success";
   return undefined;
 }
 /** 校验阶段单独显示已读取字节，避免进度条停留在 0 时无法区分是否仍在计算。 */
@@ -94,15 +96,32 @@ function fileProgress(row: FileRow) {
     </div>
   );
 }
-/** 自动重试期间显示已用次数；用尽后才显示失败和错误原因。 */
+/** 首次失败即展示原因，重试次数由服务端计数驱动。 */
 function fileState(row: FileRow) {
   if (row.state === "retrying") {
     const current = row.retries ?? 0;
     const total = row.max_retries || 3;
+    const retryError = row.error && row.error.startsWith("正在重试 (")
+      ? row.error
+      : row.error
+        ? `正在重试 (${current}/${total})；${row.error}`
+        : "";
     return (
-      <Tooltip content={`当前重试次数:${current}次，总共${total}次`}>
-        <Tag>{`处理中 (${current}/${total})`}</Tag>
-      </Tooltip>
+      <span title={row.error}>
+        <Tooltip content={`当前重试次数:${current}次，总共${total}次`}>
+          <Tag>{`正在重试 (${current}/${total})`}</Tag>
+        </Tooltip>
+        {retryError ? <div className="settings-upload-error">{retryError}</div> : null}
+      </span>
+    );
+  }
+  if (row.state === "verifying") {
+    return (
+      <span>
+        <Tag>{states[row.state]}</Tag>
+        <div className="settings-upload-verifying">正在校验文件 ({Math.round(row.progress)}%)</div>
+        {row.error ? <div className="settings-upload-error">{row.error}</div> : null}
+      </span>
     );
   }
   return (
@@ -158,18 +177,18 @@ export function UploadTables() {
     const name = `${command.action}_${command.scope}`;
     return Boolean(status.data?.actions?.[name]);
   };
-  const actions = <Space wrap className="settings-upload-actions" aria-label="上传任务操作">{([
-    ["pause","暂停","pause"],["stop","停止","stop"],["clear_completed","清除已完成","clear_completed"],["resume","继续","resume"],
+  const actions = <div className="settings-upload-actions" aria-label="上传任务操作">{([
+    ["pause","暂停","pause"],["stop","停止","stop"],["resume","继续","resume"],["retry_all","全部重试","retry_all"],
   ] as const).map(([action,label])=><Button key={action} htmlType="button" disabled={status.isError || !headerEnabled(action) || control.isPending} loading={control.isPending && control.variables===action} onClick={()=>control.mutate(action)}>{label}</Button>)}
     {([
       ["clear_completed","清空已完成"],["clear_failed","清空错误"],
     ] as const).map(([action,label])=><Button key={`${action}-${listScope}`} htmlType="button" disabled={status.isError || !headerEnabled({action,scope:listScope}) || control.isPending} loading={control.isPending && typeof control.variables==="object" && control.variables?.action===action && control.variables.scope===listScope} onClick={()=>control.mutate({action,scope:listScope})}>{label}</Button>)}
     <Button htmlType="button" status="danger" disabled={status.isError || !headerEnabled("delete_all") || control.isPending} loading={control.isPending && control.variables==="delete_all"} onClick={()=>control.mutate("delete_all")}>删除所有任务</Button>
-  </Space>;
+  </div>;
   const directories = useQuery({
     queryKey: ["upload-directory-progress", directoryStatus],
     queryFn: () =>
-      apiRequest<{ items: DirectoryRow[] }>(
+      apiRequest<DirectoryPage>(
         `/cloud-upload/directories/progress?status=${encodeURIComponent(directoryStatus)}`,
       ),
     refetchInterval: 2000,
@@ -177,12 +196,18 @@ export function UploadTables() {
   const files = useQuery({
     queryKey: ["upload-file-progress", page, pageSize, fileStatus],
     queryFn: () =>
-      apiRequest<{ items: FileRow[]; total: number }>(
+      apiRequest<FilePage>(
         `/cloud-upload/files?page=${page}&page_size=${pageSize}&status=${encodeURIComponent(fileStatus)}`,
       ),
     refetchInterval: 2000,
-    enabled: tab === "files",
   });
+  const directoryLabel = `目录列表 (${directories.data?.completed ?? 0}/${directories.data?.total ?? 0})`;
+  const fileLabel = `文件列表 (${files.data?.completed ?? 0}/${files.data?.task_total ?? files.data?.total ?? 0})`;
+  const filter = tab === "files" ? (
+    <Select className="settings-upload-status-select" aria-label="文件状态" value={fileStatus} options={statusOptions} onChange={(value) => { setFileStatus(String(value)); setPage(1); }} />
+  ) : (
+    <Select className="settings-upload-status-select" aria-label="目录状态" value={directoryStatus} options={statusOptions} onChange={(value) => setDirectoryStatus(String(value))} />
+  );
   useEffect(() => {
     if (files.data && page > 1 && (page - 1) * pageSize >= files.data.total)
       setPage(Math.max(1, Math.ceil(files.data.total / pageSize)));
@@ -194,16 +219,12 @@ export function UploadTables() {
         onChange={setTab}
         animation={false}
         aria-label="上传任务列表"
-        renderTabHeader={(props, DefaultTabHeader)=><div className="settings-upload-header"><DefaultTabHeader {...props}/>{actions}</div>}
+        renderTabHeader={(props, DefaultTabHeader)=><div className="settings-upload-header"><DefaultTabHeader {...props}/><div className="settings-upload-header-actions"><span>状态</span>{filter}{actions}</div></div>}
       >
-        <Tabs.TabPane key="directories" title="目录列表">
+        <Tabs.TabPane key="directories" title={directoryLabel}>
           {directories.error ? (
             <p role="alert">{directories.error.message}</p>
           ) : null}
-          <div className="settings-upload-filter">
-            <span>状态</span>
-            <Select aria-label="目录状态" value={directoryStatus} options={statusOptions} onChange={(value) => setDirectoryStatus(String(value))} />
-          </div>
           <Table<DirectoryRow>
             rowKey="key"
             loading={directories.isPending}
@@ -252,12 +273,8 @@ export function UploadTables() {
             ]}
           />
         </Tabs.TabPane>
-        <Tabs.TabPane key="files" title="文件列表">
+        <Tabs.TabPane key="files" title={fileLabel}>
           {files.error ? <p role="alert">{files.error.message}</p> : null}
-          <div className="settings-upload-filter">
-            <span>状态</span>
-            <Select aria-label="文件状态" value={fileStatus} options={statusOptions} onChange={(value) => { setFileStatus(String(value)); setPage(1); }} />
-          </div>
           <Table<FileRow>
             rowKey="key"
             loading={files.isPending}
@@ -265,8 +282,16 @@ export function UploadTables() {
             pagination={false}
             scroll={{ x: 1960 }}
             columns={[
-              { title: "本地路径", dataIndex: "path", width: 300 },
-              { title: "网盘路径", dataIndex: "remote_path", width: 300 },
+              {
+                title: "路径",
+                width: 420,
+                render: (_, row) => (
+                  <div className="settings-upload-paths">
+                    <div>本地路径: {row.path}</div>
+                    <div>网盘路径: {row.remote_path || "—"}</div>
+                  </div>
+                ),
+              },
               {
                 title: "文件大小",
                 dataIndex: "size",

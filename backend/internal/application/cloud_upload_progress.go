@@ -50,12 +50,21 @@ type UploadDirectoryProgress struct {
 	CompletedAt string          `json:"completed_at"`
 }
 
+// UploadDirectoryPage returns filtered directory rows plus unfiltered task counts for the tab title.
+type UploadDirectoryPage struct {
+	Items     []UploadDirectoryProgress `json:"items"`
+	Total     int                       `json:"total"`
+	Completed int                       `json:"completed"`
+}
+
 // UploadFilePage is server-paginated so large libraries do not produce unbounded polling responses.
 type UploadFilePage struct {
-	Items    []UploadFileProgress `json:"items"`
-	Total    int                  `json:"total"`
-	Page     int                  `json:"page"`
-	PageSize int                  `json:"page_size"`
+	Items     []UploadFileProgress `json:"items"`
+	Total     int                  `json:"total"`
+	TaskTotal int                  `json:"task_total"`
+	Completed int                  `json:"completed"`
+	Page      int                  `json:"page"`
+	PageSize  int                  `json:"page_size"`
 }
 
 func uploadDirectoryKey(m UploadMapping) string {
@@ -74,7 +83,12 @@ func (s *UploadService) Files(page, size int, status string) UploadFilePage {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	items := make([]UploadFileProgress, 0, len(s.files))
+	taskTotal, completed := 0, 0
 	for _, item := range s.files {
+		taskTotal++
+		if item.State == "completed" || item.State == "skipped" {
+			completed++
+		}
 		if !uploadMatchesStatus(item.State, status) {
 			continue
 		}
@@ -95,7 +109,7 @@ func (s *UploadService) Files(page, size int, status string) UploadFilePage {
 	total := len(items)
 	start := min((page-1)*size, total)
 	end := min(start+size, total)
-	return UploadFilePage{Items: items[start:end], Total: total, Page: page, PageSize: size}
+	return UploadFilePage{Items: items[start:end], Total: total, TaskTotal: taskTotal, Completed: completed, Page: page, PageSize: size}
 }
 
 // Directories aggregates mappings that already have upload tasks.
@@ -105,6 +119,28 @@ func (s *UploadService) Files(page, size int, status string) UploadFilePage {
 func (s *UploadService) Directories(status string) []UploadDirectoryProgress {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	return s.directoriesLocked(status)
+}
+
+// DirectoryPage keeps filtering independent from the completed/total counters.
+func (s *UploadService) DirectoryPage(status string) UploadDirectoryPage {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	all := s.directoriesLocked("")
+	return UploadDirectoryPage{Items: s.directoriesLocked(status), Total: len(all), Completed: countCompletedDirectories(all)}
+}
+
+func countCompletedDirectories(rows []UploadDirectoryProgress) int {
+	completed := 0
+	for _, row := range rows {
+		if row.Total > 0 && row.Uploaded+row.Skipped == row.Total {
+			completed++
+		}
+	}
+	return completed
+}
+
+func (s *UploadService) directoriesLocked(status string) []UploadDirectoryProgress {
 	result := make([]UploadDirectoryProgress, 0, len(s.mappings))
 	for _, m := range s.mappings {
 		row := UploadDirectoryProgress{Key: uploadDirectoryKey(m), Kind: m.Kind, LocalPath: m.LocalPath, RemotePath: m.Path}
@@ -134,7 +170,7 @@ func (s *UploadService) Directories(status string) []UploadDirectoryProgress {
 				finished = false
 			}
 			processedBytes += min(file.Size, file.UploadedBytes)
-			if file.State == "completed" || file.State == "cleanup" {
+			if file.State == "completed" {
 				row.Uploaded++
 				processed++
 			} else if file.State == "skipped" {
@@ -181,15 +217,21 @@ func (s *UploadService) Directories(status string) []UploadDirectoryProgress {
 		}
 		result = append(result, row)
 	}
+	sort.SliceStable(result, func(i, j int) bool {
+		if result[i].QueuedAt == "" && result[j].QueuedAt == "" {
+			return false
+		}
+		if result[i].QueuedAt != result[j].QueuedAt {
+			return result[i].QueuedAt < result[j].QueuedAt
+		}
+		return result[i].Key < result[j].Key
+	})
 	return result
 }
 
-// uploadQueueBefore orders unfinished replacement work first, then files by the time they entered the queue.
+// uploadQueueBefore orders tasks by their first queue time in ascending order.
 // Equal queue times use the record key so the order stays stable. Historical records without QueuedAt use UpdatedAt.
 func uploadQueueBefore(left, right domain.UploadRecord) bool {
-	if pending := left.State == "pending"; pending != (right.State == "pending") {
-		return !pending
-	}
 	if leftTime, rightTime := uploadQueueTime(left), uploadQueueTime(right); leftTime != rightTime {
 		return leftTime < rightTime
 	}
@@ -208,7 +250,7 @@ func uploadListStatus(state string) string {
 	switch state {
 	case "uploading", "transferring", "verifying", "retrying", "uploaded", "backing_up", "committing", "restoring", "cleanup", "discarding":
 		return "running"
-	case "waiting":
+	case "waiting", "locked":
 		return "waiting"
 	case "paused":
 		return "paused"
@@ -274,8 +316,6 @@ func uploadProgressActions(state string) map[string]bool {
 		actions["stop"] = true
 		actions["start"] = true
 	case "failed":
-		actions["pause"] = true
-		actions["stop"] = true
 		actions["retry"] = true
 	case "blocked":
 		actions["pause"] = true

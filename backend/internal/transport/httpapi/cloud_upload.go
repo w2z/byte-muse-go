@@ -27,7 +27,7 @@ func uploadControl(service *application.UploadService) http.HandlerFunc {
 		switch body.Scope {
 		case "":
 			switch body.Action {
-			case "pause", "stop", "clear_completed", "resume", "delete_all", "scan":
+			case "pause", "stop", "clear_completed", "resume", "delete_all", "retry_all", "scan":
 			default:
 				writeError(w, 400, "invalid_request", "无效的上传任务操作")
 				return
@@ -101,7 +101,7 @@ func uploadDirectoriesProgress(service *application.UploadService) http.HandlerF
 		if !ok {
 			return
 		}
-		writeJSON(w, 200, map[string]any{"items": service.Directories(status)})
+		writeJSON(w, 200, service.DirectoryPage(status))
 	}
 }
 

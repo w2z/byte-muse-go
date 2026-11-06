@@ -7,9 +7,25 @@ import (
 	"fmt"
 	"path"
 	"strings"
+
+	"bytemuse/backend/internal/platform/pan115"
 )
 
 var errUploadAttention = errors.New("需处理：远端文件身份无法确认")
+var errUploadFileLocked = errors.New("该文件正在被占用")
+var errUploadRemoteMissing = errors.New("远端文件不存在或已删除")
+
+// isUploadRemoteMissingError only classifies 115's 20018 as a deleted object
+// when its message actually describes a missing object. The same code is also
+// returned for rate limiting and must never reset a durable upload.
+func isUploadRemoteMissingError(err error) bool {
+	var apiErr *pan115.APIError
+	if !errors.As(err, &apiErr) || apiErr.Code != 20018 {
+		return false
+	}
+	message := strings.ToLower(strings.TrimSpace(apiErr.Message))
+	return strings.Contains(message, "不存在") || strings.Contains(message, "已删除") || strings.Contains(message, "not found") || strings.Contains(message, "deleted")
+}
 
 // matchesUpload requires content evidence for path-based providers and an exact ID for 115.
 func matchesUpload(r *domain.UploadRecord, e uploadEntry, old bool) bool {
@@ -99,6 +115,9 @@ func (s *UploadService) commitUpload(ctx context.Context, remote uploadRemote, r
 			return r.State, errUploadAttention
 		case "uploaded":
 			if !hasStage || !matchesUpload(r, stage, false) {
+				if !hasStage && !hasTarget && !hasBackup {
+					return r.State, errUploadRemoteMissing
+				}
 				return r.State, errUploadAttention
 			}
 			if r.Policy == "keep_both" {
@@ -137,6 +156,9 @@ func (s *UploadService) commitUpload(ctx context.Context, remote uploadRemote, r
 				}
 			} else {
 				if !hasTarget || !matchesUpload(r, target, true) {
+					if !hasTarget && !hasBackup && !hasStage {
+						return r.State, errUploadRemoteMissing
+					}
 					return r.State, errUploadAttention
 				}
 				if err = remote.Rename(ctx, r.Parent, target, r.Backup); err != nil {
@@ -159,6 +181,9 @@ func (s *UploadService) commitUpload(ctx context.Context, remote uploadRemote, r
 				continue
 			}
 			if !hasTarget || !matchesUpload(r, target, false) {
+				if !hasTarget && !hasStage && !hasBackup {
+					return r.State, errUploadRemoteMissing
+				}
 				return r.State, errUploadAttention
 			}
 			r.State = "cleanup"
@@ -167,6 +192,9 @@ func (s *UploadService) commitUpload(ctx context.Context, remote uploadRemote, r
 			}
 		case "cleanup":
 			if !hasTarget || !matchesUpload(r, target, false) {
+				if !hasTarget && !hasStage && !hasBackup {
+					return r.State, errUploadRemoteMissing
+				}
 				return r.State, errUploadAttention
 			}
 			if hasBackup {
