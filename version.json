@@ -1,16 +1,20 @@
 {
-  "version": "0.1.194",
-  "commit": "61a4b04505b20a194b63ac1891d9402444764d2a",
-  "short_commit": "61a4b04",
-  "built_at": "2026-11-06T17:11:20Z",
+  "version": "0.1.195",
+  "commit": "3872d90782ca4f531fa505bb988cbd639800fa4e",
+  "short_commit": "3872d90",
+  "built_at": "2026-11-06T17:15:56Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.194",
-    "sha-61a4b04",
+    "0.1.195",
+    "sha-3872d90",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.195",
+      "message": "成功进度显示绿色并将错误说明改为红色"
+    },
     {
       "version": "0.1.194",
       "message": "显示任务时间并支持分类清空和三次自动重试"
