@@ -1,16 +1,20 @@
 {
-  "version": "0.1.188",
-  "commit": "4d0afafdc744010fc8a763bdff82bc51f6dc555f",
-  "short_commit": "4d0afaf",
-  "built_at": "2026-11-03T15:17:49Z",
+  "version": "0.1.189",
+  "commit": "25ff42cf58ad51ab2ca21194053f90eacaf5e993",
+  "short_commit": "25ff42c",
+  "built_at": "2026-11-06T10:09:54Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.188",
-    "sha-4d0afaf",
+    "0.1.189",
+    "sha-25ff42c",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.189",
+      "message": "添加目录列表后的立即扫描上传"
+    },
     {
       "version": "0.1.188",
       "message": "补充可授权的分页影片列表查询"
