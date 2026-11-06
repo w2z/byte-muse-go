@@ -1,16 +1,20 @@
 {
-  "version": "0.1.191",
-  "commit": "316943bc9b1d86e6c2116d60548de85637bbce03",
-  "short_commit": "316943b",
-  "built_at": "2026-11-06T10:29:43Z",
+  "version": "0.1.192",
+  "commit": "eb99561a64d6707bce4e3a28d5dad2e372f26fea",
+  "short_commit": "eb99561",
+  "built_at": "2026-11-06T12:06:44Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.191",
-    "sha-316943b",
+    "0.1.192",
+    "sha-eb99561",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.192",
+      "message": "将目录映射的上传按钮固定在删除按钮左侧"
+    },
     {
       "version": "0.1.191",
       "message": "增加目录和文件任务的行内控制"
