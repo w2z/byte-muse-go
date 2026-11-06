@@ -126,7 +126,17 @@ func (s *UploadService) Run(ctx context.Context) {
 			}
 		}
 		now := time.Now()
-		if enabled && (dirty || !now.Before(nextScan)) {
+		// A scan request forces one discovery pass. With monitoring off, manualUpload finishes that batch.
+		s.mu.Lock()
+		scanNow := s.scanRequested
+		if scanNow {
+			s.scanRequested = false
+			if !enabled {
+				s.manualUpload = true
+			}
+		}
+		s.mu.Unlock()
+		if scanNow || (enabled && (dirty || !now.Before(nextScan))) {
 			dirty = false
 			nextScan = now.Add(30 * time.Second)
 			for _, m := range mappings {
@@ -176,6 +186,15 @@ func (s *UploadService) Run(ctx context.Context) {
 				}
 			}
 		}
+		s.mu.RLock()
+		manual := s.manualUpload
+		s.mu.RUnlock()
+		if enabled && manual {
+			s.mu.Lock()
+			s.manualUpload = false
+			s.mu.Unlock()
+			manual = false
+		}
 		if busy == "" {
 			records, listErr := s.store.PendingCommits(ctx)
 			if listErr != nil {
@@ -205,7 +224,7 @@ func (s *UploadService) Run(ctx context.Context) {
 							continue
 						}
 						sourceExists := uploadUnchanged(uploadLocalFile{Absolute: r.Source, Size: r.Size, Modified: r.Modified})
-						if sourceExists && (!enabled || s.mode == "paused") {
+						if sourceExists && ((!enabled && !manual) || s.mode == "paused") {
 							continue
 						}
 						allowed := false
@@ -240,6 +259,16 @@ func (s *UploadService) Run(ctx context.Context) {
 				}
 			}
 		}
+		if manual && busy == "" {
+			pending, pendingErr := s.store.PendingCommits(ctx)
+			if pendingErr != nil {
+				s.update(func(st *UploadStatus) { st.Error = pendingErr.Error() })
+			} else if !uploadBatchActive(pending) {
+				s.mu.Lock()
+				s.manualUpload = false
+				s.mu.Unlock()
+			}
+		}
 		if err = s.refreshUploadView(ctx); err != nil {
 			s.update(func(st *UploadStatus) { st.Error = err.Error() })
 		}
@@ -254,6 +283,13 @@ func (s *UploadService) Run(ctx context.Context) {
 			s.mu.RUnlock()
 			if !allowed {
 				command.reply <- ErrUploadControl
+				continue
+			}
+			if command.action == "scan" {
+				s.mu.Lock()
+				s.scanRequested = true
+				s.mu.Unlock()
+				command.reply <- nil
 				continue
 			}
 			if command.action != "clear_completed" {

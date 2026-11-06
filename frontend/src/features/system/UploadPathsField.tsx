@@ -1,7 +1,7 @@
-import { Button, Input, Modal, Select } from "@arco-design/web-react";
-import { IconDelete, IconFolder } from "@arco-design/web-react/icon";
-import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { Button, Input, Modal, Select, Tooltip } from "@arco-design/web-react";
+import { IconDelete, IconFolder, IconUpload } from "@arco-design/web-react/icon";
+import { useRef, useState } from "react";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { apiRequest } from "../../shared/api/client";
 import { Pan115DirectoryPicker } from "./Pan115DirectoryPicker";
 import { StrmDirectoryPicker } from "./StrmPathsField";
@@ -48,11 +48,7 @@ export function UploadMonitorStatus() {
   return (
     <div className="settings-field-description" role="status">
       <div>
-        {status.state === "paused" ? "任务已暂停" : status.state === "stopped" ? "当前批次已停止" : status.state === "failed" ? "监控启动失败" : status.enabled
-          ? status.state === "uploading"
-            ? "正在上传"
-            : "正在监控"
-          : "监控已关闭"}{" "}
+        {uploadPhaseLabel(status)}{" "}
         · 已处理 {status.processed}/{status.total}（{percent}%），上传{" "}
         {status.uploaded}，跳过 {status.skipped}，异常任务 {status.failed}
       </div>
@@ -60,6 +56,16 @@ export function UploadMonitorStatus() {
       {status.error ? <div>最近错误：{status.error}</div> : null}
     </div>
   );
+}
+
+/** 上传阶段文案。手动扫描在监控关闭时仍显示扫描或上传，不能写成监控已关闭。 */
+function uploadPhaseLabel(status: { enabled: boolean; state: string }) {
+  if (status.state === "paused") return "任务已暂停";
+  if (status.state === "stopped") return "当前批次已停止";
+  if (status.state === "failed") return "监控启动失败";
+  if (status.state === "uploading") return "正在上传";
+  if (status.state === "watching") return status.enabled ? "正在监控" : "正在扫描";
+  return "监控已关闭";
 }
 
 /** 构造服务器目录面包屑，兼容 Linux 根目录及 Windows 盘符。 */
@@ -79,10 +85,25 @@ function uploadCrumbs(path: string) {
 export function UploadPathsField({
   value,
   onChange,
+  hasUnsavedUploadSettings = false,
+  onUpload,
 }: {
   value: UploadMapping[];
   onChange: (next: UploadMapping[]) => void;
+  /** 目录或同名策略相对已保存配置有改动；点击上传只提示保存，不提交扫描。 */
+  hasUnsavedUploadSettings?: boolean;
+  /** 按已保存映射立即扫描并上传。调用方负责成功、失败提示。 */
+  onUpload?: () => Promise<void>;
 }) {
+  const onUploadRef = useRef(onUpload);
+  onUploadRef.current = onUpload;
+  const actions = useQuery({
+    queryKey: ["cloud-upload-status"],
+    queryFn: () => apiRequest<{ actions?: { scan?: boolean } }>("/cloud-upload/status"),
+    refetchInterval: 2000,
+  });
+  const upload = useMutation({ mutationFn: () => onUploadRef.current?.() ?? Promise.resolve() });
+  const canScan = actions.data?.actions?.scan === true;
   const [picking, setPicking] = useState<{
     index: number;
     local: boolean;
@@ -150,18 +171,33 @@ export function UploadPathsField({
           />
         </div>
       ))}
-      <Button
-        onClick={() =>
-          onChange([
-            ...value,
-            { kind: "115", id: "", path: "", local_path: "" },
-          ])
-        }
-      >
-        添加目录
-      </Button>
+      <div className="settings-pan115-actions">
+        <Tooltip content="上传文件">
+          <span>
+            <Button
+              aria-label="上传文件"
+              htmlType="button"
+              icon={<IconUpload />}
+              loading={upload.isPending}
+              disabled={upload.isPending || (!hasUnsavedUploadSettings && !canScan)}
+              onClick={() => upload.mutate()}
+            />
+          </span>
+        </Tooltip>
+        <Button
+          htmlType="button"
+          onClick={() =>
+            onChange([
+              ...value,
+              { kind: "115", id: "", path: "", local_path: "" },
+            ])
+          }
+        >
+          添加目录
+        </Button>
+      </div>
       <span className="settings-field-description">
-        本地目录指服务所在主机或容器内的目录。首次开启会上传已有文件，后续自动处理新增及变化的文件，并保留子目录结构。
+        本地目录指服务所在主机或容器内的目录。上传图标按已保存映射立即扫描并上传，不改变监控开关；开启监控后还会持续处理新增及变化的文件。未保存的修改不会参与本次上传。
       </span>
       <Modal
         title={picking?.local ? "选择本地目录" : "选择网盘目录"}

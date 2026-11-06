@@ -21,6 +21,17 @@ func uploadTerminal(state string) bool {
 	return state == "completed" || state == "skipped" || state == "stopped" || state == "discarded"
 }
 
+// uploadBatchActive reports unfinished work that should continue after a manual scan.
+// Identity conflicts stay visible but never retry on their own.
+func uploadBatchActive(records []domain.UploadRecord) bool {
+	for _, record := range records {
+		if record.ErrorKind != "attention" {
+			return true
+		}
+	}
+	return false
+}
+
 // Control serializes queue commands with discovery and waits for durable acknowledgement.
 func (s *UploadService) Control(ctx context.Context, action string) error {
 	s.mu.RLock()
@@ -55,7 +66,14 @@ func (s *UploadService) uploadActionsLocked() map[string]bool {
 			completed = true
 		}
 	}
-	return map[string]bool{"pause": s.ready && s.status.Enabled && s.mode == "running" && active, "stop": s.ready && active && s.mode != "stopping" && s.mode != "stopped", "resume": s.ready && s.status.Enabled && s.mode == "paused", "clear_completed": s.ready && completed, "delete_all": s.ready && visible && s.mode != "deleting"}
+	return map[string]bool{
+		"pause":           s.ready && s.status.Enabled && s.mode == "running" && active,
+		"stop":            s.ready && active && s.mode != "stopping" && s.mode != "stopped",
+		"resume":          s.ready && s.status.Enabled && s.mode == "paused",
+		"clear_completed": s.ready && completed,
+		"delete_all":      s.ready && visible && s.mode != "deleting",
+		"scan":            s.ready && len(s.mappings) > 0 && s.mode != "paused" && s.mode != "stopping" && s.mode != "deleting",
+	}
 }
 
 // applyUploadControl retains hidden deduplication receipts and unfinished recovery records.
@@ -169,7 +187,7 @@ func (s *UploadService) refreshUploadView(ctx context.Context) error {
 				f.State = "waiting"
 				if s.mode == "paused" {
 					f.State = "paused"
-				} else if !st.Enabled {
+				} else if !st.Enabled && !s.manualUpload {
 					f.State = "stopped"
 				}
 			}
@@ -210,7 +228,7 @@ func (s *UploadService) refreshUploadView(ctx context.Context) error {
 	}
 	if st.Current == "" {
 		st.State = "watching"
-		if !st.Enabled {
+		if !st.Enabled && !s.manualUpload {
 			st.State = "disabled"
 		}
 		if s.mode != "running" {

@@ -116,3 +116,18 @@ func TestUploadPagingRejectsInvalidBounds(t *testing.T) {
 		t.Fatalf("empty page: %d", response.Code)
 	}
 }
+
+// TestUploadScanActionAvailability accepts the manual scan command without treating it as an unknown action.
+func TestUploadScanActionAvailability(t *testing.T) {
+	service := application.NewUploadService(nil, nil, nil, nil)
+	response := httptest.NewRecorder()
+	uploadControl(service)(response, httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"action":"scan"}`)))
+	if response.Code != http.StatusConflict {
+		t.Fatalf("scan: %d %s", response.Code, response.Body.String())
+	}
+	response = httptest.NewRecorder()
+	uploadControl(service)(response, httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"action":"rescan"}`)))
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("unknown: %d", response.Code)
+	}
+}

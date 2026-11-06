@@ -21,7 +21,7 @@ func uploadControl(service *application.UploadService) http.HandlerFunc {
 			return
 		}
 		switch body.Action {
-		case "pause", "stop", "clear_completed", "resume", "delete_all":
+		case "pause", "stop", "clear_completed", "resume", "delete_all", "scan":
 		default:
 			writeError(w, 400, "invalid_request", "无效的上传任务操作")
 			return

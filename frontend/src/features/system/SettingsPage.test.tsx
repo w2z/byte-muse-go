@@ -237,6 +237,7 @@ describe("设置页字段布局", () => {
     });
     renderSettings();await user.click(await screen.findByRole("tab",{name:"网盘"}));await user.click(screen.getByRole("tab",{name:"网盘上传"}));
     expect(screen.getByRole("radio",{name:"跳过"})).toBeChecked();
+    expect(screen.getByRole("button", { name: "上传文件" })).toBeDisabled();
     await user.click(screen.getByRole("radio",{name:"保留两者"}));await user.click(screen.getByRole("button",{name:"保存设置"}));await waitFor(()=>expect(values.CLOUD_UPLOAD_CONFLICT).toBe("keep_both"));
     expect(screen.getByRole("columnheader",{name:"已上传/总个数"})).toBeInTheDocument();
     const tables = screen.getByLabelText("上传任务列表");
@@ -249,6 +250,36 @@ describe("设置页字段布局", () => {
     await user.click(screen.getByRole("tab",{name:"文件列表"}));
     expect(screen.getByRole("columnheader",{name:"文件路径"})).toBeInTheDocument();
     expect(screen.queryByRole("columnheader",{name:"已上传/总个数"})).not.toBeInTheDocument();
+  });
+  it("目录选择列表后的上传图标按已保存配置扫描，未保存时不提交", async () => {
+    const user = userEvent.setup();
+    const posts: unknown[] = [];
+    vi.mocked(apiRequest).mockImplementation(async (path, options) => {
+      if (path === "/cloud-upload/status") return { enabled: false, state: "disabled", actions: { scan: true } };
+      if (path === "/cloud-upload/control" && options?.method === "POST") {
+        posts.push(JSON.parse(String(options.body)));
+        return { enabled: false, state: "watching" };
+      }
+      if (String(path).startsWith("/cloud-upload/")) return { items: [], total: 0 };
+      return { database_driver: "sqlite", values: { CLOUD_UPLOAD_PATHS: "[]", CLOUD_UPLOAD_ENABLE: "false", CLOUD_UPLOAD_CONFLICT: "skip" }, configured: {} };
+    });
+    renderSettings();
+    await user.click(await screen.findByRole("tab", { name: "网盘" }));
+    await user.click(screen.getByRole("tab", { name: "网盘上传" }));
+    const upload = await screen.findByRole("button", { name: "上传文件" });
+    const add = screen.getByRole("button", { name: "添加目录" });
+    expect(upload.compareDocumentPosition(add) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(upload).not.toHaveTextContent("上传");
+    await waitFor(() => expect(upload).toBeEnabled());
+    await user.hover(upload);
+    expect(await screen.findByRole("tooltip")).toHaveTextContent("上传文件");
+    await user.click(upload);
+    await waitFor(() => expect(posts).toEqual([{ action: "scan" }]));
+    expect(await screen.findByText("已开始扫描并上传")).toBeInTheDocument();
+    await user.click(add);
+    await user.click(upload);
+    expect(await screen.findByText("请先保存设置后再上传")).toBeInTheDocument();
+    expect(posts).toHaveLength(1);
   });
   it("下载媒体默认关闭，编辑后缀并保存后关闭仍保留标签", async () => {
     const user = userEvent.setup();

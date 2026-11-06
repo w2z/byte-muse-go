@@ -89,6 +89,56 @@ func TestUploadMonitorDiscoveryAndStop(t *testing.T) {
 	}
 }
 
+// TestManualUploadScanWithoutMonitoring starts one saved-directory pass without enabling continuous monitoring.
+func TestManualUploadScanWithoutMonitoring(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "file.txt"), []byte("abc"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal([]UploadMapping{{Kind: "115", ID: "0", Path: "/", LocalPath: root}})
+	store := uploadMemoryStore{}
+	s := &UploadService{store: store, settings: func(context.Context) (map[string]string, error) {
+		return map[string]string{"CLOUD_UPLOAD_ENABLE": "false", "CLOUD_UPLOAD_PATHS": string(raw), "CLOUD_UPLOAD_CONFLICT": "skip"}, nil
+	}, provider: func(context.Context, string) (uploadRemote, error) {
+		return nil, errors.New("test provider offline")
+	}}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() { defer close(done); s.Run(ctx) }()
+	wait := func(check func() bool) {
+		t.Helper()
+		deadline := time.Now().Add(12 * time.Second)
+		for !check() {
+			if time.Now().After(deadline) {
+				t.Fatal("manual scan timed out")
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
+	wait(func() bool { return s.Status().Actions["scan"] })
+	if s.Files(1, 20).Total != 0 || s.Status().Enabled {
+		t.Fatal("disabled monitoring discovered files")
+	}
+	if err := s.Control(ctx, "scan"); err != nil {
+		t.Fatal(err)
+	}
+	wait(func() bool { return s.Files(1, 20).Total == 1 })
+	wait(func() bool {
+		files := s.Files(1, 20)
+		return files.Total == 1 && files.Items[0].State == "failed" && strings.Contains(files.Items[0].Error, "test provider offline")
+	})
+	if s.Status().Enabled {
+		t.Fatal("manual scan enabled monitoring")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("monitor did not stop")
+	}
+}
+
 // TestUploadProgressWaitsForVerification keeps bytes and completed object counts distinct.
 func TestUploadProgressWaitsForVerification(t *testing.T) {
 	m := UploadMapping{Kind: "115", ID: "0", Path: "/", LocalPath: t.TempDir()}

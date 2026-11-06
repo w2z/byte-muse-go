@@ -54,6 +54,10 @@ type UploadService struct {
 	commands chan uploadCommand
 	ready    bool
 	mode     string
+	// scanRequested asks the scheduler for one immediate discovery pass.
+	scanRequested bool
+	// manualUpload finishes that pass while continuous monitoring remains off.
+	manualUpload bool
 }
 
 // NewUploadService reuses existing provider accounts; it never enables monitoring implicitly.

@@ -1412,6 +1412,30 @@ export function SettingsPage() {
     applyEditor(restored);
   };
 
+  const uploadSettingsUnsaved = baselineRef.current != null && (
+    !sameEditorValue(editor.CLOUD_UPLOAD_PATHS, baselineRef.current.CLOUD_UPLOAD_PATHS ?? [])
+    || !sameEditorValue(String(editor.CLOUD_UPLOAD_CONFLICT ?? "skip"), String(baselineRef.current.CLOUD_UPLOAD_CONFLICT ?? "skip"))
+  );
+  /** 使用已保存的目录映射和同名策略立即扫描上传；草稿需先保存，避免上传与界面不一致。 */
+  const startCloudUpload = async () => {
+    if (uploadSettingsUnsaved) {
+      message.error("请先保存设置后再上传");
+      return;
+    }
+    try {
+      await apiRequest("/cloud-upload/control", { method: "POST", body: JSON.stringify({ action: "scan" }) });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["cloud-upload-status"] }),
+        queryClient.invalidateQueries({ queryKey: ["upload-directory-progress"] }),
+        queryClient.invalidateQueries({ queryKey: ["upload-file-progress"] }),
+      ]);
+      message.success("已开始扫描并上传");
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : "扫描上传失败");
+      throw error;
+    }
+  };
+
   const renderField = (field: SettingField, group: SettingGroup) => {
     if (field.key === "MCP_ALLOWED_TOOLS") return (
       <div className="settings-field settings-field-wide" key={field.key}>
@@ -1505,7 +1529,7 @@ export function SettingsPage() {
         </div>
       );
     }
-    if (field.kind === "upload-paths") return <div className="settings-field settings-field-wide" key={field.key}><span className="settings-field-label">{field.label}</span><UploadPathsField value={uploadPaths} onChange={setUploadPaths}/></div>;
+    if (field.kind === "upload-paths") return <div className="settings-field settings-field-wide" key={field.key}><span className="settings-field-label">{field.label}</span><UploadPathsField value={uploadPaths} onChange={setUploadPaths} hasUnsavedUploadSettings={uploadSettingsUnsaved} onUpload={startCloudUpload}/></div>;
     if (field.key === "CLOUD_UPLOAD_CONFLICT") return <div className="settings-field settings-field-wide" key={field.key}><span className="settings-field-label">{field.label}</span><Radio.Group aria-label={field.label} value={draft[field.key] || "skip"} onChange={(value)=>setValue(field.key,value)} options={field.options}/></div>;
     if (field.kind === "json") {
       return (
