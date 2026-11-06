@@ -1,16 +1,20 @@
 {
-  "version": "0.1.192",
-  "commit": "eb99561a64d6707bce4e3a28d5dad2e372f26fea",
-  "short_commit": "eb99561",
-  "built_at": "2026-11-06T12:06:44Z",
+  "version": "0.1.193",
+  "commit": "5f2e4daabf107fe932c6a568bf26070b7cedd0cb",
+  "short_commit": "5f2e4da",
+  "built_at": "2026-11-06T12:32:36Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.192",
-    "sha-eb99561",
+    "0.1.193",
+    "sha-5f2e4da",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.193",
+      "message": "在文件列表显示本地路径和网盘路径"
+    },
     {
       "version": "0.1.192",
       "message": "将目录映射的上传按钮固定在删除按钮左侧"
