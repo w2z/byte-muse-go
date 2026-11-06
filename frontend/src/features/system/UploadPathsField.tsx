@@ -104,6 +104,20 @@ export function UploadPathsField({
   });
   const upload = useMutation({ mutationFn: () => onUploadRef.current?.() ?? Promise.resolve() });
   const canScan = actions.data?.actions?.scan === true;
+  const uploadButton = (name: string) => (
+    <Tooltip content="上传文件">
+      <span className="settings-upload-trigger">
+        <Button
+          aria-label={name}
+          htmlType="button"
+          icon={<IconUpload />}
+          loading={upload.isPending}
+          disabled={upload.isPending || (!hasUnsavedUploadSettings && !canScan)}
+          onClick={() => upload.mutate()}
+        />
+      </span>
+    </Tooltip>
+  );
   const [picking, setPicking] = useState<{
     index: number;
     local: boolean;
@@ -129,6 +143,7 @@ export function UploadPathsField({
       {value.map((item, index) => (
         <div className="settings-upload-mapping" key={index}>
           <Input
+            className="settings-upload-local"
             aria-label={`本地目录 ${index + 1}`}
             readOnly
             value={item.local_path}
@@ -142,6 +157,7 @@ export function UploadPathsField({
             }
           />
           <Select
+            className="settings-upload-kind"
             aria-label={`网盘类型 ${index + 1}`}
             value={item.kind}
             options={[
@@ -151,6 +167,7 @@ export function UploadPathsField({
             onChange={(kind) => update(index, { kind, id: "", path: "" })}
           />
           <Input
+            className="settings-upload-remote"
             aria-label={`网盘目录 ${index + 1}`}
             readOnly
             value={item.path}
@@ -163,27 +180,19 @@ export function UploadPathsField({
               />
             }
           />
-          <Button
-            aria-label={`删除目录映射 ${index + 1}`}
-            icon={<IconDelete />}
-            status="danger"
-            onClick={() => onChange(value.filter((_, i) => i !== index))}
-          />
+          <div className="settings-upload-mapping-actions">
+            {uploadButton(`上传文件 ${index + 1}`)}
+            <Button
+              aria-label={`删除目录映射 ${index + 1}`}
+              icon={<IconDelete />}
+              status="danger"
+              onClick={() => onChange(value.filter((_, i) => i !== index))}
+            />
+          </div>
         </div>
       ))}
       <div className="settings-pan115-actions">
-        <Tooltip content="上传文件">
-          <span>
-            <Button
-              aria-label="上传文件"
-              htmlType="button"
-              icon={<IconUpload />}
-              loading={upload.isPending}
-              disabled={upload.isPending || (!hasUnsavedUploadSettings && !canScan)}
-              onClick={() => upload.mutate()}
-            />
-          </span>
-        </Tooltip>
+        {value.length === 0 ? uploadButton("上传文件") : null}
         <Button
           htmlType="button"
           onClick={() =>

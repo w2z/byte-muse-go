@@ -277,7 +277,9 @@ describe("设置页字段布局", () => {
     await waitFor(() => expect(posts).toEqual([{ action: "scan" }]));
     expect(await screen.findByText("已开始扫描并上传")).toBeInTheDocument();
     await user.click(add);
-    await user.click(upload);
+    const rowUpload = screen.getByRole("button", { name: "上传文件 1" });
+    expect(rowUpload.compareDocumentPosition(screen.getByRole("button", { name: "删除目录映射 1" })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    await user.click(rowUpload);
     expect(await screen.findByText("请先保存设置后再上传")).toBeInTheDocument();
     expect(posts).toHaveLength(1);
   });
