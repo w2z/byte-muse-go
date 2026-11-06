@@ -1,16 +1,20 @@
 {
-  "version": "0.1.196",
-  "commit": "067c1b5e93a1023f9e300a434afc64829f4c4a56",
-  "short_commit": "067c1b5",
-  "built_at": "2026-11-06T17:29:39Z",
+  "version": "0.1.197",
+  "commit": "853ccdbe0a6c69244cee97b7861490ae2c4e2c68",
+  "short_commit": "853ccdb",
+  "built_at": "2026-11-06T20:23:15Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.196",
-    "sha-067c1b5",
+    "0.1.197",
+    "sha-853ccdb",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.197",
+      "message": "修复远端删除重传与占用跳过并完善任务控制和状态展示"
+    },
     {
       "version": "0.1.196",
       "message": "缩短临时文件名并修正115身份回查"
