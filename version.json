@@ -1,16 +1,20 @@
 {
-  "version": "0.1.189",
-  "commit": "25ff42cf58ad51ab2ca21194053f90eacaf5e993",
-  "short_commit": "25ff42c",
-  "built_at": "2026-11-06T10:09:54Z",
+  "version": "0.1.190",
+  "commit": "9afb1be431f5c3ae6e9ca098c46ad74df04e6c90",
+  "short_commit": "9afb1be",
+  "built_at": "2026-11-06T10:12:35Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.189",
-    "sha-25ff42c",
+    "0.1.190",
+    "sha-9afb1be",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.190",
+      "message": "隐藏尚未产生任务的保存目录"
+    },
     {
       "version": "0.1.189",
       "message": "添加目录列表后的立即扫描上传"
