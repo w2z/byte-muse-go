@@ -180,6 +180,32 @@ func TestUploadDirectoriesHideSavedMappingsWithoutTasks(t *testing.T) {
 	}
 }
 
+func TestUploadFileListShowsLocalAndRemotePaths(t *testing.T) {
+	store := uploadMemoryStore{
+		"nested":   {Key: "nested", Kind: "115", Root: "1", LocalRoot: `E:\media`, RemotePath: "/电影", Relative: "A/a.mkv", Source: `E:\media\A\a.mkv`, State: "pending"},
+		"renamed":  {Key: "renamed", Kind: "115", Root: "1", LocalRoot: `E:\media`, RemotePath: "/电影", Relative: "b.mkv", Target: "b (1).mkv", Source: `E:\media\b.mkv`, State: "pending"},
+		"fallback": {Key: "fallback", Kind: "cd2", Root: "/cd", LocalRoot: "/data", Relative: "c.mkv", Source: "/data/c.mkv", State: "pending"},
+	}
+	s := &UploadService{store: store, mode: "running", files: map[string]UploadFileProgress{}, mappings: []UploadMapping{{Kind: "cd2", ID: "/cd", Path: "/cloud", LocalPath: "/data"}}}
+	s.status.Enabled = true
+	if err := s.refreshUploadView(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]UploadFileProgress{}
+	for _, item := range s.Files(1, 10).Items {
+		got[item.Key] = item
+	}
+	if got["nested"].Path != `E:\media\A\a.mkv` || got["nested"].RemotePath != "/电影/A/a.mkv" {
+		t.Fatalf("nested: %+v", got["nested"])
+	}
+	if got["renamed"].RemotePath != "/电影/b (1).mkv" {
+		t.Fatalf("renamed: %+v", got["renamed"])
+	}
+	if got["fallback"].Path != "/data/c.mkv" || got["fallback"].RemotePath != "/cloud/c.mkv" {
+		t.Fatalf("fallback: %+v", got["fallback"])
+	}
+}
+
 // TestUploadRetriesPartialStage verifies interrupted transfers can recover without changing the old target.
 func TestUploadRetriesPartialStage(t *testing.T) {
 	root := t.TempDir()

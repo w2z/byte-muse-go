@@ -3,6 +3,7 @@ package application
 import (
 	"crypto/sha256"
 	"fmt"
+	"path"
 	"sort"
 	"time"
 )
@@ -14,6 +15,7 @@ type UploadFileProgress struct {
 	Key           string          `json:"key"`
 	DirectoryKey  string          `json:"directory_key"`
 	Path          string          `json:"path"`
+	RemotePath    string          `json:"remote_path"`
 	Size          int64           `json:"size"`
 	UploadedBytes int64           `json:"uploaded_bytes"`
 	Progress      float64         `json:"progress"`
@@ -141,6 +143,27 @@ func (s *UploadService) Directories() []UploadDirectoryProgress {
 			row.Progress = min(99.9, row.Progress)
 		}
 		result = append(result, row)
+	}
+	return result
+}
+
+// uploadRemoteFilePath builds the cloud display path from the mapped directory and relative file.
+// target replaces only the final file name after a keep-both reservation; an empty target keeps the local name.
+func uploadRemoteFilePath(remoteDir, relative, target string) string {
+	name := target
+	if name == "" {
+		name = path.Base(relative)
+	}
+	if name == "." || name == "/" {
+		name = ""
+	}
+	dir := path.Dir(relative)
+	if dir == "." {
+		dir = ""
+	}
+	result := path.Join(remoteDir, dir, name)
+	if result == "." {
+		return ""
 	}
 	return result
 }

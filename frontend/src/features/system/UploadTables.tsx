@@ -21,6 +21,7 @@ type DirectoryRow = {
 type FileRow = {
   key: string;
   path: string;
+  remote_path?: string;
   size: number;
   progress: number;
   speed: number;
@@ -170,9 +171,10 @@ export function UploadTables() {
             loading={files.isPending}
             data={files.data?.items ?? []}
             pagination={false}
-            scroll={{ x: 1200 }}
+            scroll={{ x: 1500 }}
             columns={[
-              { title: "文件路径", dataIndex: "path", width: 300 },
+              { title: "本地路径", dataIndex: "path", width: 300 },
+              { title: "网盘路径", dataIndex: "remote_path", width: 300 },
               {
                 title: "文件大小",
                 dataIndex: "size",

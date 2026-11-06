@@ -312,6 +312,16 @@ func (s *UploadService) refreshUploadView(ctx context.Context) error {
 		f := s.files[r.Key]
 		f.Key = r.Key
 		f.Path = r.Source
+		remoteDir := r.RemotePath
+		if remoteDir == "" {
+			for _, mapping := range s.mappings {
+				if mapping.Kind == r.Kind && mapping.ID == r.Root && mapping.LocalPath == r.LocalRoot {
+					remoteDir = mapping.Path
+					break
+				}
+			}
+		}
+		f.RemotePath = uploadRemoteFilePath(remoteDir, r.Relative, r.Target)
 		f.Size = r.Size
 		f.DirectoryKey = uploadDirectoryKey(UploadMapping{Kind: r.Kind, ID: r.Root, LocalPath: r.LocalRoot})
 		f.Retries = r.Retries
