@@ -1,16 +1,20 @@
 {
-  "version": "0.1.190",
-  "commit": "9afb1be431f5c3ae6e9ca098c46ad74df04e6c90",
-  "short_commit": "9afb1be",
-  "built_at": "2026-11-06T10:12:35Z",
+  "version": "0.1.191",
+  "commit": "316943bc9b1d86e6c2116d60548de85637bbce03",
+  "short_commit": "316943b",
+  "built_at": "2026-11-06T10:29:43Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.190",
-    "sha-9afb1be",
+    "0.1.191",
+    "sha-316943b",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.191",
+      "message": "增加目录和文件任务的行内控制"
+    },
     {
       "version": "0.1.190",
       "message": "隐藏尚未产生任务的保存目录"
