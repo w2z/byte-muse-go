@@ -1,16 +1,20 @@
 {
-  "version": "0.1.193",
-  "commit": "5f2e4daabf107fe932c6a568bf26070b7cedd0cb",
-  "short_commit": "5f2e4da",
-  "built_at": "2026-11-06T12:32:36Z",
+  "version": "0.1.194",
+  "commit": "61a4b04505b20a194b63ac1891d9402444764d2a",
+  "short_commit": "61a4b04",
+  "built_at": "2026-11-06T17:11:20Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.193",
-    "sha-5f2e4da",
+    "0.1.194",
+    "sha-61a4b04",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.194",
+      "message": "显示任务时间并支持分类清空和三次自动重试"
+    },
     {
       "version": "0.1.193",
       "message": "在文件列表显示本地路径和网盘路径"
