@@ -1,16 +1,20 @@
 {
-  "version": "0.1.195",
-  "commit": "3872d90782ca4f531fa505bb988cbd639800fa4e",
-  "short_commit": "3872d90",
-  "built_at": "2026-11-06T17:15:56Z",
+  "version": "0.1.196",
+  "commit": "067c1b5e93a1023f9e300a434afc64829f4c4a56",
+  "short_commit": "067c1b5",
+  "built_at": "2026-11-06T17:29:39Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.195",
-    "sha-3872d90",
+    "0.1.196",
+    "sha-067c1b5",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.196",
+      "message": "缩短临时文件名并修正115身份回查"
+    },
     {
       "version": "0.1.195",
       "message": "成功进度显示绿色并将错误说明改为红色"
