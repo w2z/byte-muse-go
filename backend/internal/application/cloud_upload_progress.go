@@ -78,7 +78,8 @@ func (s *UploadService) Files(page, size int) UploadFilePage {
 	return UploadFilePage{Items: items[start:end], Total: total, Page: page, PageSize: size}
 }
 
-// Directories aggregates the current mapping snapshots, preserving empty configured directories.
+// Directories aggregates mappings that already have upload tasks.
+// Saving a mapping alone does not create a row; queued, active, failed, and finished files do.
 func (s *UploadService) Directories() []UploadDirectoryProgress {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -106,6 +107,9 @@ func (s *UploadService) Directories() []UploadDirectoryProgress {
 			} else if file.Error != "" {
 				row.Failed++
 			}
+		}
+		if row.Total == 0 {
+			continue
 		}
 		if row.Size > 0 {
 			row.Progress = float64(processedBytes) * 100 / float64(row.Size)

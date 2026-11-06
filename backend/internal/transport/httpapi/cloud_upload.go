@@ -59,7 +59,7 @@ func uploadStatus(service *application.UploadService) http.HandlerFunc {
 	}
 }
 
-// uploadDirectoriesProgress returns one row per configured mapping.
+// uploadDirectoriesProgress returns mappings that already have queued, active, or finished files.
 func uploadDirectoriesProgress(service *application.UploadService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if service == nil {

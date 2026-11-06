@@ -165,6 +165,21 @@ func TestUploadProgressWaitsForVerification(t *testing.T) {
 	}
 }
 
+// TestUploadDirectoriesHideSavedMappingsWithoutTasks keeps a saved mapping out of the directory table until files are queued or finished.
+func TestUploadDirectoriesHideSavedMappingsWithoutTasks(t *testing.T) {
+	idle := UploadMapping{Kind: "115", ID: "0", Path: "/", LocalPath: t.TempDir()}
+	queued := UploadMapping{Kind: "cd2", ID: "/videos", Path: "/videos", LocalPath: t.TempDir()}
+	done := UploadMapping{Kind: "115", ID: "9", Path: "/done", LocalPath: t.TempDir()}
+	s := &UploadService{mappings: []UploadMapping{idle, queued, done}, files: map[string]UploadFileProgress{
+		"queued": {DirectoryKey: uploadDirectoryKey(queued), Path: "new.mkv", Size: 8, State: "waiting"},
+		"done":   {DirectoryKey: uploadDirectoryKey(done), Path: "old.mkv", Size: 8, State: "completed", Progress: 100},
+	}}
+	rows := s.Directories()
+	if len(rows) != 2 || rows[0].LocalPath != queued.LocalPath || rows[0].Total != 1 || rows[1].LocalPath != done.LocalPath || rows[1].Uploaded != 1 {
+		t.Fatalf("%+v", rows)
+	}
+}
+
 // TestUploadRetriesPartialStage verifies interrupted transfers can recover without changing the old target.
 func TestUploadRetriesPartialStage(t *testing.T) {
 	root := t.TempDir()
