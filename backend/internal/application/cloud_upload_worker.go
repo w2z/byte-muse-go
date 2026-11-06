@@ -205,7 +205,7 @@ func (s *UploadService) process(ctx context.Context, m UploadMapping, f uploadLo
 		if queuedAt == "" {
 			queuedAt = time.Now().UTC().Format(time.RFC3339Nano)
 		}
-		record = &domain.UploadRecord{Key: key, Kind: m.Kind, Root: m.ID, LocalRoot: m.LocalPath, Relative: f.Relative, Source: f.Absolute, Size: f.Size, Modified: f.Modified, Policy: policy, Parent: parent, Target: name, Stage: ".bytemuse-upload-" + key, Backup: ".bytemuse-backup-" + key, State: "pending", QueuedAt: queuedAt}
+		record = &domain.UploadRecord{Key: key, Kind: m.Kind, Root: m.ID, LocalRoot: m.LocalPath, Relative: f.Relative, Source: f.Absolute, Size: f.Size, Modified: f.Modified, Policy: policy, Parent: parent, Target: name, Stage: name + ".bytemuse-go-tmp", Backup: ".bytemuse-backup-" + key, State: "pending", QueuedAt: queuedAt}
 		if exists && existing.Directory {
 			return "", fmt.Errorf("目标已存在同名目录: %s", name)
 		}
@@ -271,10 +271,10 @@ func (s *UploadService) process(ctx context.Context, m UploadMapping, f uploadLo
 		}
 		existing, exists := findUploadEntry(entries, record.Stage)
 		if exists {
-			if record.StageID != "" && m.Kind == "115" && existing.ID != record.StageID {
+			if record.StageID != "" && m.Kind == "115" && !matchesUpload(record, existing, false) {
 				return "", errUploadAttention
 			}
-			if record.StageID == "" {
+			if record.StageID == "" || (m.Kind == "115" && existing.ID != record.StageID) {
 				record.StageID = existing.ID
 				record.StageSHA1, record.StageSize = existing.SHA1, existing.Size
 				if e = save(); e != nil {

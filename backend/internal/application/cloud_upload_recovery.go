@@ -21,7 +21,7 @@ func matchesUpload(r *domain.UploadRecord, e uploadEntry, old bool) bool {
 		return false
 	}
 	if r.Kind == "115" && id != "" && e.ID != id {
-		return false
+		return hash != "" && e.SHA1 != "" && strings.EqualFold(hash, e.SHA1)
 	}
 	if hash != "" && e.SHA1 != "" {
 		return strings.EqualFold(hash, e.SHA1)

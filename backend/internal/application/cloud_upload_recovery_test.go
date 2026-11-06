@@ -1,6 +1,7 @@
 package application
 
 import (
+	"bytemuse/backend/internal/domain"
 	"context"
 	"os"
 	"path/filepath"
@@ -65,6 +66,25 @@ func TestUploadKeepBothReselectsOccupiedName(t *testing.T) {
 	}
 	if string(r.files["film (2).mkv"]) != "new video" || string(r.files["film (1).mkv"]) != "another file" {
 		t.Fatal(r.files)
+	}
+}
+
+func TestUploadUsesShortSourceBasedStageName(t *testing.T) {
+	s, m, f, _, store := recoveryFixture(t)
+	if _, err := s.process(context.Background(), m, f, "overwrite"); err != nil {
+		t.Fatal(err)
+	}
+	record := store[uploadKey(m, f, "overwrite")]
+	if record.Stage != "film.mkv.bytemuse-go-tmp" {
+		t.Fatalf("stage=%q", record.Stage)
+	}
+}
+
+func TestUploadMatches115EntryByContentWhenRemoteIDChanges(t *testing.T) {
+	record := domain.UploadRecord{Kind: "115", Size: 3, StageID: "old-id", SHA1: "abc123"}
+	entry := uploadEntry{ID: "new-id", Size: 3, SHA1: "ABC123"}
+	if !matchesUpload(&record, entry, false) {
+		t.Fatal("same content should identify the uploaded object when 115 changes its listing ID")
 	}
 }
 
