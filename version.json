@@ -1,16 +1,20 @@
 {
-  "version": "0.1.210",
-  "commit": "ca58d518adbabe4acb9a157afd00d2c1c8c824ad",
-  "short_commit": "ca58d51",
-  "built_at": "2026-11-07T12:21:36Z",
+  "version": "0.1.211",
+  "commit": "f8c0f6d850513a06cbcf39e8f5e07d51ee197e95",
+  "short_commit": "f8c0f6d",
+  "built_at": "2026-11-07T12:44:41Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.210",
-    "sha-ca58d51",
+    "0.1.211",
+    "sha-f8c0f6d",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.211",
+      "message": "边扫描边展示并调度上传任务"
+    },
     {
       "version": "0.1.210",
       "message": "清理移动后的空目录并分离校验进度"
