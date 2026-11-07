@@ -258,3 +258,17 @@ func TestUploadStopDoesNotRecreateDeletedParent(t *testing.T) {
 		t.Fatal("stop recreated remote data")
 	}
 }
+
+func TestUploadDeletedParentReplacesLegacyStageName(t *testing.T) {
+	service, mapping, file, _, store := recoveryFixture(t)
+	key := uploadKey(mapping, file, "overwrite")
+	store[key] = domain.UploadRecord{Key: key, State: "committing", Kind: "115", Parent: "deleted", Intent: "run", Stage: ".bytemuse-upload-" + key, Size: file.Size, Modified: file.Modified, Source: file.Absolute, Relative: file.Relative, Policy: "overwrite"}
+	remote := &uploadRecreateRemote{entries: map[string][]uploadEntry{"0": nil}}
+	service.provider = func(context.Context, string) (uploadRemote, error) { return remote, nil }
+	if state, err := service.process(context.Background(), mapping, file, "overwrite"); err != nil || state != "completed" {
+		t.Fatalf("state=%s err=%v", state, err)
+	}
+	if store[key].Stage != "film.mkv.bytemuse-go-tmp" {
+		t.Fatalf("deleted attempt reused legacy stage: %s", store[key].Stage)
+	}
+}

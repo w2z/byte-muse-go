@@ -305,3 +305,14 @@ func TestUploadDeleteCleanupHasFiniteRetryBudget(t *testing.T) {
 		t.Fatal("delete cleanup retries forever")
 	}
 }
+
+func TestUploadRetryAllRestartsVisibleLegacyDeleteFailures(t *testing.T) {
+	store := uploadMemoryStore{"legacy": {Key: "legacy", State: "committing", Intent: "delete", Error: "115 错误 20018：文件不存在或已删除。", Retries: 3}}
+	service := &UploadService{store: store, mode: "stopped"}
+	if err := service.applyUploadControl(context.Background(), "retry_all"); err != nil {
+		t.Fatal(err)
+	}
+	if record := store["legacy"]; record.Intent != "run" || record.Retries != 0 || record.Error != "" {
+		t.Fatalf("explicit retry retained old delete intent: %+v", record)
+	}
+}

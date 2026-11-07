@@ -207,7 +207,7 @@ func (s *UploadService) applyUploadControl(ctx context.Context, action string) e
 				r.Hidden = true
 			}
 		case "retry_all":
-			if r.Hidden || uploadTerminal(r.State) || r.Intent == "delete" || r.ErrorKind == "locked" {
+			if r.Hidden || uploadTerminal(r.State) || r.ErrorKind == "locked" {
 				continue
 			}
 			s.mu.RLock()

@@ -191,6 +191,7 @@ func (s *UploadService) process(ctx context.Context, m UploadMapping, f uploadLo
 		if resultErr != nil && !errors.Is(resultErr, context.Canceled) {
 			if errors.Is(resultErr, errUploadRemoteMissing) {
 				record.Parent = ""
+				record.Stage = ""
 				record.StageID, record.StageSHA1, record.StageSize = "", "", 0
 				record.OldID, record.OldSHA1, record.OldSize = "", "", 0
 				if record.Intent == "delete" || record.Intent == "stop" {
@@ -278,6 +279,7 @@ func (s *UploadService) process(ctx context.Context, m UploadMapping, f uploadLo
 		if _, listErr := remote.List(ctx, record.Parent); listErr != nil {
 			if isUploadRemoteMissingError(listErr) {
 				record.Parent, record.StageID, record.StageSHA1, record.StageSize = "", "", "", 0
+				record.Stage = ""
 				record.OldID, record.OldSHA1, record.OldSize = "", "", 0
 				if record.Intent == "delete" || record.Intent == "stop" {
 					record.State = "stopped"
@@ -320,7 +322,7 @@ func (s *UploadService) process(ctx context.Context, m UploadMapping, f uploadLo
 			record.QueuedAt = time.Now().UTC().Format(time.RFC3339Nano)
 		}
 		record.Parent, record.Target = parent, name
-		if record.Stage == "" {
+		if record.StageID == "" {
 			record.Stage = name + ".bytemuse-go-tmp"
 		}
 		record.Backup = ".bytemuse-backup-" + key
