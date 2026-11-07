@@ -604,6 +604,18 @@ func TestUploadOutcomeFiltersCombineSkippedAndChanged(t *testing.T) {
 	}
 }
 
+func TestUploadDirectoryProgressExcludesVerification(t *testing.T) {
+	mapping := UploadMapping{Kind: "115", ID: "0", LocalPath: "/videos"}
+	key := uploadDirectoryKey(mapping)
+	service := &UploadService{mappings: []UploadMapping{mapping}, files: map[string]UploadFileProgress{
+		"verifying": {DirectoryKey: key, State: "verifying", Size: 100, UploadedBytes: 80, Progress: 80},
+		"done":      {DirectoryKey: key, State: "completed", Size: 100, UploadedBytes: 100, Progress: 100},
+	}}
+	if rows := service.Directories(""); len(rows) != 1 || rows[0].Progress != 50 {
+		t.Fatalf("verification counted as uploaded: %+v", rows)
+	}
+}
+
 // TestUploadRetriesPartialStage verifies interrupted transfers can recover without changing the old target.
 func TestUploadRetriesPartialStage(t *testing.T) {
 	root := t.TempDir()

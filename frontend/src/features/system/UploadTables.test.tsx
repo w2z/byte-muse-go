@@ -77,7 +77,8 @@ it("目录和文件行按钮按范围提交，目录操作由服务作用于其�
  await userEvent.click(await screen.findByRole("tab", { name: "文件列表 (0/1)" }));
  expect(screen.getByRole("columnheader", { name: "路径" })).toBeInTheDocument();
  expect(await screen.findByText("网盘路径: /cloud/a.mkv")).toBeInTheDocument();
- expect(screen.getByText("已校验 1.0 KiB / 2.0 KiB")).toBeInTheDocument();
+ expect(screen.queryByText("已校验 1.0 KiB / 2.0 KiB")).not.toBeInTheDocument();
+ expect(screen.getByText("正在校验文件 (50%)").closest("tr")?.querySelector(".arco-progress")).toBeNull();
  expect(screen.getByText("正在校验文件 (50%)")).toHaveClass("settings-upload-verifying");
  expect(screen.queryByRole("button", { name: "开始文件 /videos/a.mkv" })).not.toBeInTheDocument();
  expect(screen.queryByRole("button", { name: "重新上传文件 /videos/a.mkv" })).not.toBeInTheDocument();

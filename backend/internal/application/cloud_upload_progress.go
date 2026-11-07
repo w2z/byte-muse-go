@@ -166,7 +166,9 @@ func (s *UploadService) directoriesLocked(status string) []UploadDirectoryProgre
 			} else {
 				finished = false
 			}
-			processedBytes += min(file.Size, file.UploadedBytes)
+			if file.State != "verifying" {
+				processedBytes += min(file.Size, file.UploadedBytes)
+			}
 			if file.State == "completed" {
 				row.Uploaded++
 				processed++

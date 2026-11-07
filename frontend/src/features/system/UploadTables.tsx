@@ -86,14 +86,12 @@ function fileProgressStatus(state: string): "success" | "error" | undefined {
   if (state === "completed" || state === "skipped") return "success";
   return undefined;
 }
-/** 校验阶段单独显示已读取字节，避免进度条停留在 0 时无法区分是否仍在计算。 */
+/** 校验百分比只在状态说明显示，上传进度列不混用校验字节。 */
 function fileProgress(row: FileRow) {
+  if (row.state === "verifying") return "—";
   return (
     <div>
       {uploadProgress(row.progress, fileProgressStatus(row.state))}
-      {row.state === "verifying" ? (
-        <div>已校验 {bytes(row.uploaded_bytes ?? 0)} / {bytes(row.size)}</div>
-      ) : null}
     </div>
   );
 }

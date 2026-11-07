@@ -5,7 +5,35 @@ package application
 import (
 	"golang.org/x/sys/windows"
 	"os"
+	"path/filepath"
 )
+
+// removeUploadEmptyDirectory deletes only an identity-checked directory handle; nonempty directories remain intact.
+func removeUploadEmptyDirectory(root *os.Root, directory string) error {
+	name, err := windows.UTF16PtrFromString(filepath.Join(root.Name(), directory))
+	if err != nil {
+		return err
+	}
+	handle, err := windows.CreateFile(name, windows.GENERIC_READ|windows.DELETE, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE, nil, windows.OPEN_EXISTING, windows.FILE_FLAG_BACKUP_SEMANTICS|windows.FILE_FLAG_OPEN_REPARSE_POINT, 0)
+	if err != nil {
+		return err
+	}
+	folder := os.NewFile(uintptr(handle), directory)
+	defer folder.Close()
+	opened, err := folder.Stat()
+	if err != nil {
+		return err
+	}
+	current, err := root.Lstat(directory)
+	if err != nil {
+		return err
+	}
+	if !opened.IsDir() || current.Mode()&os.ModeSymlink != 0 || !os.SameFile(opened, current) {
+		return os.ErrInvalid
+	}
+	deleteDirectory := byte(1)
+	return windows.SetFileInformationByHandle(handle, windows.FileDispositionInfo, &deleteDirectory, 1)
+}
 
 // uploadRemovalHandle holds a writer/delete-exclusive handle and deletes that exact file, never a replacement path.
 func uploadRemovalHandle(path string, _ *os.Root, _ string) (*os.File, func() error, func(), error) {

@@ -3,6 +3,7 @@ package application
 import (
 	"bytemuse/backend/internal/domain"
 	"context"
+	"crypto/sha1"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +13,80 @@ import (
 	"testing"
 	"time"
 )
+
+func TestUploadMovePrunesOnlyEmptyParents(t *testing.T) {
+	for _, keepSibling := range []bool{false, true} {
+		t.Run(fmt.Sprint(keepSibling), func(t *testing.T) {
+			root := t.TempDir()
+			parent := filepath.Join(root, "album", "disc")
+			if err := os.MkdirAll(parent, 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(filepath.Join(root, "album", "empty", "nested"), 0700); err != nil {
+				t.Fatal(err)
+			}
+			content := []byte("content")
+			source := filepath.Join(parent, "file.txt")
+			if err := os.WriteFile(source, content, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if keepSibling {
+				if err := os.WriteFile(filepath.Join(root, "album", "keep.txt"), content, 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			info, err := os.Stat(source)
+			if err != nil {
+				t.Fatal(err)
+			}
+			record := &domain.UploadRecord{Mode: "move", LocalRoot: root, Relative: "album/disc/file.txt", Source: source, Size: info.Size(), Modified: info.ModTime().UnixNano(), SHA1: fmt.Sprintf("%x", sha1.Sum(content)), StageID: "verified"}
+			for attempt := 0; attempt < 2; attempt++ {
+				if err := removeUploadedSource(context.Background(), record); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := os.Stat(parent); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("empty directory remains: %v", err)
+			}
+			_, err = os.Stat(filepath.Join(root, "album"))
+			if keepSibling && err != nil || !keepSibling && !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("parent protection: %v", err)
+			}
+			if _, err := os.Stat(root); err != nil {
+				t.Fatal("mapping root removed", err)
+			}
+		})
+	}
+}
+
+func TestUploadMoveRecoversEmptyDirectoryCleanup(t *testing.T) {
+	root := t.TempDir()
+	directory := filepath.Join(root, "album")
+	if err := os.Mkdir(directory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	record := &domain.UploadRecord{Mode: "move", LocalRoot: root, Relative: "album/file.txt", Source: filepath.Join(directory, "file.txt"), SHA1: "verified", StageID: "verified"}
+	if err := removeUploadedSource(context.Background(), record); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(directory); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("missing source did not clean empty parent", err)
+	}
+	if err := os.WriteFile(directory, []byte("replacement"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	opened, err := os.OpenRoot(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer opened.Close()
+	if err := pruneUploadedParents(context.Background(), opened, "album/file.txt"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(directory); err != nil {
+		t.Fatal("replacement file removed", err)
+	}
+}
 
 // TestUploadMoveOnlyDeletesVerifiedSource covers copy compatibility, skip protection and idempotent move receipts.
 func TestUploadMoveOnlyDeletesVerifiedSource(t *testing.T) {
