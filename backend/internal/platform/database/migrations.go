@@ -98,7 +98,19 @@ func MigrationPlan(dialect Dialect) []Migration {
 	default:
 		return nil
 	}
-	return append(plan, settingsMigration(dialect), activeSubscriptionMigration(dialect), defaultSettingsMigration(dialect), systemLogsMigration(dialect), logRetentionSettingMigration(dialect), cleanupCanceledSubscriptionsMigration(dialect), catalogQueryIndexesMigration(dialect), downloaderAndBypassSettingsMigration(dialect), collectionMigration(dialect), collectionQueueMigration(dialect), mediaTypeMigration(dialect), subscriptionDownloadMigration(dialect), downloadTransferMigration(dialect), ptSiteSettingsMigration(dialect), siteAuthSettingsMigration(dialect), tagSubscriptionMigration(dialect), bypassProxySettingMigration(dialect), actorSubscriptionMigration(dialect), translationModelSettingsMigration(dialect), notificationSettingsMigration(dialect), tagAliasMigration(dialect), pan115AccountMigration(dialect), pan115ScanPathsSettingMigration(dialect), strmSettingsMigration(dialect), downloadOriginMigration(dialect), dropUnusedJavdbHostSettingMigration(dialect), actorAliasesMigration(dialect), dropUnusedPhotoCacheSettingMigration(dialect), strmRootSettingMigration(dialect), subscriptionScanMigration(dialect), pan115CookieSettingMigration(dialect), scanTasksMigration(dialect), strmDownloadSettingsMigration(dialect), strmEmbyMediaSettingsMigration(dialect), cloudUploadMigration(dialect), taskCheckpointsMigration(dialect), downloadURLMigration(dialect), strmFilesMigration(dialect), subscriptionPresenceMigration(dialect), staleFailedTransferStatusMigration(dialect), mediaPlotMigration(dialect), cloudUploadExecutionMigration(dialect))
+	return append(plan, settingsMigration(dialect), activeSubscriptionMigration(dialect), defaultSettingsMigration(dialect), systemLogsMigration(dialect), logRetentionSettingMigration(dialect), cleanupCanceledSubscriptionsMigration(dialect), catalogQueryIndexesMigration(dialect), downloaderAndBypassSettingsMigration(dialect), collectionMigration(dialect), collectionQueueMigration(dialect), mediaTypeMigration(dialect), subscriptionDownloadMigration(dialect), downloadTransferMigration(dialect), ptSiteSettingsMigration(dialect), siteAuthSettingsMigration(dialect), tagSubscriptionMigration(dialect), bypassProxySettingMigration(dialect), actorSubscriptionMigration(dialect), translationModelSettingsMigration(dialect), notificationSettingsMigration(dialect), tagAliasMigration(dialect), pan115AccountMigration(dialect), pan115ScanPathsSettingMigration(dialect), strmSettingsMigration(dialect), downloadOriginMigration(dialect), dropUnusedJavdbHostSettingMigration(dialect), actorAliasesMigration(dialect), dropUnusedPhotoCacheSettingMigration(dialect), strmRootSettingMigration(dialect), subscriptionScanMigration(dialect), pan115CookieSettingMigration(dialect), scanTasksMigration(dialect), strmDownloadSettingsMigration(dialect), strmEmbyMediaSettingsMigration(dialect), cloudUploadMigration(dialect), taskCheckpointsMigration(dialect), downloadURLMigration(dialect), strmFilesMigration(dialect), subscriptionPresenceMigration(dialect), staleFailedTransferStatusMigration(dialect), mediaPlotMigration(dialect), cloudUploadExecutionMigration(dialect), catalogPerformanceMigration(dialect))
+}
+
+// catalogPerformanceMigration adds lookup indexes without rewriting historical rows; rollback keeps them.
+func catalogPerformanceMigration(dialect Dialect) Migration {
+	upper := "UPPER(code)"
+	if dialect == DialectMySQL {
+		upper = "(UPPER(code))"
+	}
+	return Migration{Version: 47, Name: "catalog_query_performance", Statements: []string{
+		"CREATE INDEX idx_media_upper_code ON media (" + upper + ")",
+		"CREATE INDEX idx_download_tasks_media_latest ON download_tasks (media_id,updated_at DESC,id ASC)",
+	}}
 }
 
 // strmFilesMigration 新增受管文件归属，不回填历史文件；回退保留表即可。

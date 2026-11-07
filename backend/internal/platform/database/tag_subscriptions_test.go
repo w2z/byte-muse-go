@@ -86,6 +86,14 @@ func TestTagSubscriptions(t *testing.T) {
 	if e != nil || total != 0 || len(items) != 0 {
 		t.Fatalf("active=%v %d %v", items, total, e)
 	}
+	items, total, e = r.ListTags(ctx, ports.TagListQuery{Search: "制服", Limit: 1})
+	if e != nil || total < 2 || len(items) != 1 || items[0].Name != "制服" || items[0].MediaCount != 4 {
+		t.Fatalf("deduplication: %v total=%d err=%v", items, total, e)
+	}
+	_, emptyTotal, e := r.ListTags(ctx, ports.TagListQuery{Search: "制服", Limit: 1, Offset: total + 1})
+	if e != nil || emptyTotal != total {
+		t.Fatalf("empty page total=%d want=%d err=%v", emptyTotal, total, e)
+	}
 	var count int
 	s.SQLDB().QueryRow("SELECT COUNT(*) FROM subscriptions").Scan(&count)
 	if count != 1 {

@@ -93,7 +93,7 @@ func (s *UploadService) processDirectUpload(ctx context.Context, remote uploadRe
 		if record.Kind == "cd2" && record.OldID != "" {
 			return record.State, fmt.Errorf("CloudDrive2 无法按独立文件 ID 保留旧文件，原名直传不执行破坏性覆盖；请选择保留两者")
 		}
-		if err = remote.Upload(ctx, record.Parent, record.Target, file, source.Size); err != nil {
+		if err = remote.Upload(ctx, record.Parent, record.Target, file, source.Size, record.SHA1); err != nil {
 			return record.State, err
 		}
 		domain.ReportUploadProgress(ctx, source.Size, source.Size, "uploading")

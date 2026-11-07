@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha1"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"github.com/aliyun/aliyun-oss-go-sdk/oss"
@@ -104,11 +105,21 @@ func uploadHash(ctx context.Context, f *os.File, offset, length int64, report bo
 }
 
 // Upload uses 115 instant-upload verification followed by bounded OSS multipart transfers when needed.
-// The caller owns the open file and must verify the final remote object before reporting completion.
-func (c *Client) Upload(ctx context.Context, token, parent, name string, f *os.File, size int64) error {
-	hash, err := uploadHash(ctx, f, 0, size, true)
-	if err != nil {
-		return err
+// The caller supplies a SHA1 for the guarded source version, or empty to hash locally, and verifies the remote result.
+func (c *Client) Upload(ctx context.Context, token, parent, name string, f *os.File, size int64, sourceSHA1 string) error {
+	var hash string
+	var err error
+	if sourceSHA1 != "" {
+		hash = strings.ToUpper(sourceSHA1)
+		decoded, decodeErr := hex.DecodeString(hash)
+		if decodeErr != nil || len(decoded) != sha1.Size {
+			return fmt.Errorf("上传 SHA1 无效")
+		}
+	} else {
+		hash, err = uploadHash(ctx, f, 0, size, true)
+		if err != nil {
+			return err
+		}
 	}
 	pre, err := uploadHash(ctx, f, 0, min(size, 128*1024), false)
 	if err != nil {

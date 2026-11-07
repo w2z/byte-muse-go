@@ -688,14 +688,14 @@ type uploadOrderedRemote struct {
 	order  []string
 }
 
-func (remote *uploadOrderedRemote) Upload(ctx context.Context, parent, name string, file *os.File, size int64) error {
+func (remote *uploadOrderedRemote) Upload(ctx context.Context, parent, name string, file *os.File, size int64, sourceSHA1 string) error {
 	remote.order = append(remote.order, name)
 	if strings.HasPrefix(name, "b.") {
 		if err := remote.writer.Close(); err != nil {
 			return err
 		}
 	}
-	return remote.uploadMemoryRemote.Upload(ctx, parent, name, file, size)
+	return remote.uploadMemoryRemote.Upload(ctx, parent, name, file, size, sourceSHA1)
 }
 
 func TestUploadRemoteMissingClassificationDoesNotTreatRateLimitAsDeleted(t *testing.T) {
@@ -866,7 +866,7 @@ func (r *uploadRecreateRemote) Mkdir(_ context.Context, parent, name string) (st
 	}
 	return id, nil
 }
-func (r *uploadRecreateRemote) Upload(_ context.Context, parent, name string, file *os.File, size int64) error {
+func (r *uploadRecreateRemote) Upload(_ context.Context, parent, name string, file *os.File, size int64, _ string) error {
 	r.uploaded = parent + ":" + name
 	body, err := io.ReadAll(io.NewSectionReader(file, 0, size))
 	if err != nil {
@@ -897,7 +897,7 @@ func (r *uploadMemoryRemote) List(context.Context, string) ([]uploadEntry, error
 func (r *uploadMemoryRemote) Mkdir(context.Context, string, string) (string, error) {
 	return "", errors.New("unexpected mkdir")
 }
-func (r *uploadMemoryRemote) Upload(_ context.Context, _, name string, f *os.File, size int64) error {
+func (r *uploadMemoryRemote) Upload(_ context.Context, _, name string, f *os.File, size int64, _ string) error {
 	r.uploads++
 	if r.failUpload {
 		return errors.New("transfer failed")

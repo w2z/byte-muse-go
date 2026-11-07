@@ -21,7 +21,7 @@ type uploadEntry struct {
 type uploadRemote interface {
 	List(context.Context, string) ([]uploadEntry, error)
 	Mkdir(context.Context, string, string) (string, error)
-	Upload(context.Context, string, string, *os.File, int64) error
+	Upload(context.Context, string, string, *os.File, int64, string) error
 	Rename(context.Context, string, uploadEntry, string) error
 	Delete(context.Context, string, uploadEntry) error
 }
@@ -57,7 +57,7 @@ func (remote *uploadPreparationRemote) Mkdir(ctx context.Context, parent, name s
 
 type uploadPanAPI interface {
 	CreateFolder(context.Context, string, string, string) (string, error)
-	Upload(context.Context, string, string, string, *os.File, int64) error
+	Upload(context.Context, string, string, string, *os.File, int64, string) error
 	Rename(context.Context, string, string, string) error
 	Delete(context.Context, string, string, string) error
 }
@@ -95,12 +95,12 @@ func (r uploadPanRemote) Mkdir(ctx context.Context, parent, name string) (string
 	err := r.s.withToken(ctx, func(token string) error { var e error; id, e = r.api.CreateFolder(ctx, token, parent, name); return e })
 	return id, err
 }
-func (r uploadPanRemote) Upload(ctx context.Context, parent, name string, f *os.File, size int64) error {
+func (r uploadPanRemote) Upload(ctx context.Context, parent, name string, f *os.File, size int64, sourceSHA1 string) error {
 	token, err := r.s.accessToken(ctx, false)
 	if err != nil {
 		return err
 	}
-	return r.api.Upload(ctx, token, parent, name, f, size)
+	return r.api.Upload(ctx, token, parent, name, f, size, sourceSHA1)
 }
 func (r uploadPanRemote) Rename(ctx context.Context, parent string, e uploadEntry, name string) error {
 	return r.s.withToken(ctx, func(token string) error { return r.api.Rename(ctx, token, e.ID, name) })
@@ -126,7 +126,7 @@ func (r uploadCDRemote) Mkdir(ctx context.Context, parent, name string) (string,
 	err := r.c.CreateFolder(ctx, parent, name)
 	return path.Join(parent, name), err
 }
-func (r uploadCDRemote) Upload(ctx context.Context, parent, name string, f *os.File, size int64) error {
+func (r uploadCDRemote) Upload(ctx context.Context, parent, name string, f *os.File, size int64, _ string) error {
 	return r.c.Upload(ctx, parent, name, f, size)
 }
 func (r uploadCDRemote) Rename(ctx context.Context, parent string, e uploadEntry, name string) error {

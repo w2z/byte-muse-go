@@ -25,8 +25,39 @@ func TestUploadInstant(t *testing.T) {
 		}
 		writeJSON(t, w, `{"state":true,"code":0,"data":{"status":2,"file_id":"99"}}`)
 	})
-	if err = c.Upload(context.Background(), "token", "12", "file", f, 3); err != nil {
+	if err = c.Upload(context.Background(), "token", "12", "file", f, 3, ""); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestUploadReusesSHA1(t *testing.T) {
+	file, err := os.Create(filepath.Join(t.TempDir(), "file"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	_, _ = file.WriteString("abc")
+	verifications := 0
+	ctx := domain.WithUploadProgress(context.Background(), func(_, _ int64, phase string) {
+		if phase == "verifying" {
+			verifications++
+		}
+	})
+	client := newTestClient(t, func(writer http.ResponseWriter, request *http.Request) {
+		_ = request.ParseForm()
+		if request.FormValue("fileid") != "A9993E364706816ABA3E25717850C26C9CD0D89D" || request.FormValue("preid") != "A9993E364706816ABA3E25717850C26C9CD0D89D" {
+			t.Errorf("invalid hashes: %v", request.Form)
+		}
+		writeJSON(t, writer, `{"state":true,"code":0,"data":{"status":2}}`)
+	})
+	if err = client.Upload(ctx, "token", "12", "file", file, 3, "a9993e364706816aba3e25717850c26c9cd0d89d"); err != nil {
+		t.Fatal(err)
+	}
+	if verifications != 0 {
+		t.Fatalf("rehashed source %d times", verifications)
+	}
+	if err = client.Upload(ctx, "token", "12", "file", file, 3, "invalid"); err == nil {
+		t.Fatal("accepted malformed SHA1")
 	}
 }
 
@@ -56,7 +87,7 @@ func TestUploadHashProgressCoversOnlyWholeFile(t *testing.T) {
 	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(t, w, `{"state":true,"code":0,"data":{"status":2,"file_id":"99"}}`)
 	})
-	if err = c.Upload(ctx, "token", "12", "file", f, int64(len(content))); err != nil {
+	if err = c.Upload(ctx, "token", "12", "file", f, int64(len(content)), ""); err != nil {
 		t.Fatal(err)
 	}
 	if lastPhase != "uploading" {

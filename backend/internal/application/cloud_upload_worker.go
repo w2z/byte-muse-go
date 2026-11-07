@@ -521,7 +521,7 @@ func (s *UploadService) process(ctx context.Context, m UploadMapping, f uploadLo
 			}
 		}
 		if !exists {
-			e = remote.Upload(ctx, record.Parent, record.Stage, file, f.Size)
+			e = remote.Upload(ctx, record.Parent, record.Stage, file, f.Size, record.SHA1)
 			if e != nil {
 				// Capture an uncertain upload's private object before cancellation returns to the queue.
 				inspect, stop := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)

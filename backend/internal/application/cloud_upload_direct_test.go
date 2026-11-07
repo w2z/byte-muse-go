@@ -23,13 +23,16 @@ type directUploadRemote struct {
 func (remote *directUploadRemote) List(context.Context, string) ([]uploadEntry, error) {
 	return append([]uploadEntry(nil), remote.entries...), nil
 }
-func (remote *directUploadRemote) Upload(_ context.Context, _, name string, file *os.File, size int64) error {
+func (remote *directUploadRemote) Upload(_ context.Context, _, name string, file *os.File, size int64, sourceSHA1 string) error {
 	remote.names = append(remote.names, name)
 	body, err := io.ReadAll(io.NewSectionReader(file, 0, size))
 	if err != nil {
 		return err
 	}
 	hash := fmt.Sprintf("%x", sha1.Sum(body))
+	if sourceSHA1 != hash {
+		return fmt.Errorf("source SHA1 not forwarded: %s", sourceSHA1)
+	}
 	if remote.corrupt {
 		hash = "incorrect"
 	}

@@ -178,7 +178,7 @@ type uploadBlockingRemote struct {
 	release chan struct{}
 }
 
-func (remote *uploadBlockingRemote) Upload(ctx context.Context, _ string, name string, _ *os.File, _ int64) error {
+func (remote *uploadBlockingRemote) Upload(ctx context.Context, _ string, name string, _ *os.File, _ int64, _ string) error {
 	remote.started <- name
 	select {
 	case <-ctx.Done():

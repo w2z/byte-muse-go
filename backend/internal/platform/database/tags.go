@@ -37,7 +37,7 @@ func trimTagSQL(d Dialect, expression string) string {
 func tagMediaCTE(d Dialect) string {
 	if d == DialectPostgres {
 		name := trimTagSQL(d, "part")
-		return "WITH tagged AS (SELECT DISTINCT lm.media_id," + name + " AS name FROM legacy_media_metadata lm CROSS JOIN LATERAL unnest(string_to_array(COALESCE(lm.genres,''),',')) AS part WHERE " + name + "<>'')"
+		return "WITH tagged AS (SELECT lm.media_id,names.name FROM legacy_media_metadata lm CROSS JOIN LATERAL (SELECT DISTINCT " + name + " AS name FROM unnest(string_to_array(COALESCE(lm.genres,''),',')) AS part WHERE " + name + "<>'') names)"
 	}
 	if d == DialectMySQL {
 		return "WITH RECURSIVE parts(media_id,name,rest) AS (SELECT lm.media_id,CAST('' AS CHAR(65535)),CONCAT(lm.genres,',') FROM legacy_media_metadata lm WHERE lm.genres IS NOT NULL AND lm.genres<>'' UNION ALL SELECT media_id," + trimTagSQL(d, "SUBSTRING(rest,1,INSTR(rest,',')-1)") + ",SUBSTRING(rest,INSTR(rest,',')+1) FROM parts WHERE rest<>''),tagged AS (SELECT DISTINCT media_id,name FROM parts WHERE name<>'')"
@@ -75,7 +75,7 @@ func (r *TagRepository) SearchMedia(ctx context.Context, name string, limit, off
 
 // tagCTE 合并无影片的源站标签、未知分类名称与仍有订阅规则的标签。
 func (r *TagRepository) tagCTE() string {
-	return tagMediaCTE(r.dialect) + ",tag_counts AS (SELECT t.name,COUNT(DISTINCT t.media_id) AS media_count FROM tagged t JOIN media m ON m.id=t.media_id GROUP BY t.name),tag_names AS (SELECT name FROM tag_catalog UNION SELECT name FROM tag_counts UNION SELECT name FROM tag_subscriptions),catalog AS (SELECT n.name,COALESCE(c.category,'未分类') AS category,COALESCE(t.media_count,0) AS media_count,s.limit_date FROM tag_names n LEFT JOIN tag_catalog c ON c.name=n.name LEFT JOIN tag_counts t ON t.name=n.name LEFT JOIN tag_subscriptions s ON s.name=n.name)"
+	return tagMediaCTE(r.dialect) + ",tag_counts AS (SELECT t.name,COUNT(*) AS media_count FROM tagged t JOIN media m ON m.id=t.media_id GROUP BY t.name),tag_names AS (SELECT name FROM tag_catalog UNION SELECT name FROM tag_counts UNION SELECT name FROM tag_subscriptions),catalog AS (SELECT n.name,COALESCE(c.category,'未分类') AS category,COALESCE(t.media_count,0) AS media_count,s.limit_date FROM tag_names n LEFT JOIN tag_catalog c ON c.name=n.name LEFT JOIN tag_counts t ON t.name=n.name LEFT JOIN tag_subscriptions s ON s.name=n.name)"
 }
 
 // ListTags 使用服务端分页过滤订阅状态、名称与类型；计数与列表共享一致快照。
@@ -99,36 +99,33 @@ func (r *TagRepository) ListTags(ctx context.Context, q ports.TagListQuery) ([]p
 	if q.Subscription == "none" {
 		where += " AND limit_date IS NULL"
 	}
-	tx, e := r.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable, ReadOnly: true})
-	if e != nil {
-		return nil, 0, e
-	}
-	defer tx.Rollback()
 	cte := r.tagCTE()
 	var total int
-	if e = tx.QueryRowContext(ctx, cte+" SELECT COUNT(*) FROM catalog"+where, args...).Scan(&total); e != nil {
-		return nil, 0, e
-	}
 	args = append(args, q.Limit, q.Offset)
-	rows, e := tx.QueryContext(ctx, cte+" SELECT name,category,media_count,limit_date FROM catalog"+where+" ORDER BY media_count DESC,name ASC LIMIT "+placeholder(r.dialect, len(args)-1)+" OFFSET "+placeholder(r.dialect, len(args)), args...)
+	query := cte + ",filtered AS (SELECT * FROM catalog" + where + "),page AS (SELECT * FROM filtered ORDER BY media_count DESC,name ASC LIMIT " + placeholder(r.dialect, len(args)-1) + " OFFSET " + placeholder(r.dialect, len(args)) + ") SELECT totals.total,page.name,page.category,page.media_count,page.limit_date FROM (SELECT COUNT(*) AS total FROM filtered) totals LEFT JOIN page ON 1=1 ORDER BY page.media_count DESC,page.name ASC"
+	rows, e := r.db.QueryContext(ctx, query, args...)
 	if e != nil {
 		return nil, 0, e
 	}
 	items := []ports.Tag{}
 	for rows.Next() {
-		var item ports.Tag
-		if e = rows.Scan(&item.Name, &item.Category, &item.MediaCount, &item.LimitDate); e != nil {
+		var name, category, limitDate sql.NullString
+		var count sql.NullInt64
+		if e = rows.Scan(&total, &name, &category, &count, &limitDate); e != nil {
 			rows.Close()
 			return nil, 0, e
 		}
-		items = append(items, item)
+		if name.Valid {
+			item := ports.Tag{Name: name.String, Category: category.String, MediaCount: int(count.Int64)}
+			if limitDate.Valid {
+				item.LimitDate = &limitDate.String
+			}
+			items = append(items, item)
+		}
 	}
 	e = rows.Err()
 	rows.Close()
 	if e != nil {
-		return nil, 0, e
-	}
-	if e = tx.Commit(); e != nil {
 		return nil, 0, e
 	}
 	return items, total, nil

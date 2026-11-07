@@ -10,6 +10,60 @@ import (
 	"time"
 )
 
+func TestCatalogPerformanceMigration(t *testing.T) {
+	for _, upgrade := range []bool{false, true} {
+		t.Run(fmt.Sprint(upgrade), func(t *testing.T) {
+			ctx := context.Background()
+			store, err := Open(ctx, Config{Dialect: DialectSQLite, SQLitePath: filepath.Join(t.TempDir(), "indexes.db")})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer store.Close()
+			if upgrade {
+				if err = ensureMigrationTable(ctx, store.SQLDB(), DialectSQLite); err != nil {
+					t.Fatal(err)
+				}
+				for _, migration := range MigrationPlan(DialectSQLite) {
+					if migration.Version < 47 {
+						if err = applyMigration(ctx, store.SQLDB(), DialectSQLite, migration); err != nil {
+							t.Fatal(err)
+						}
+					}
+				}
+				insertCatalogTestMedia(t, store, "old", "abc-1", "preserved")
+				if _, err = store.SQLDB().Exec("CREATE INDEX idx_download_tasks_media_latest ON download_tasks(id)"); err != nil {
+					t.Fatal(err)
+				}
+				if err = store.Migrate(ctx); err == nil {
+					t.Fatal("expected conflicting index to roll back migration")
+				}
+				var partial int
+				if err = store.SQLDB().QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE name='idx_media_upper_code'").Scan(&partial); err != nil || partial != 0 {
+					t.Fatalf("partial migration retained: %d %v", partial, err)
+				}
+				if _, err = store.SQLDB().Exec("DROP INDEX idx_download_tasks_media_latest"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for attempt := 0; attempt < 2; attempt++ {
+				if err = store.Migrate(ctx); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var count int
+			if err = store.SQLDB().QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name IN ('idx_media_upper_code','idx_download_tasks_media_latest')").Scan(&count); err != nil || count != 2 {
+				t.Fatalf("indexes=%d err=%v", count, err)
+			}
+			if upgrade {
+				var code string
+				if err = store.SQLDB().QueryRow("SELECT code FROM media WHERE id='old'").Scan(&code); err != nil || code != "abc-1" {
+					t.Fatalf("history changed: %s %v", code, err)
+				}
+			}
+		})
+	}
+}
+
 // TestCloudUploadExecutionMigration checks clean initialization, upgrade, replay and preservation of task snapshots.
 func TestCloudUploadExecutionMigration(t *testing.T) {
 	for _, upgrade := range []bool{false, true} {
