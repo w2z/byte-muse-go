@@ -1,16 +1,20 @@
 {
-  "version": "0.1.206",
-  "commit": "c720e0bffabc6bd045734a4837f8cd0dac4b312d",
-  "short_commit": "c720e0b",
-  "built_at": "2026-11-07T11:09:15Z",
+  "version": "0.1.207",
+  "commit": "0088ef51a1eb7521c39af0c9d1313ba8eb5ae1c3",
+  "short_commit": "0088ef5",
+  "built_at": "2026-11-07T11:18:12Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.206",
-    "sha-c720e0b",
+    "0.1.207",
+    "sha-0088ef5",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.207",
+      "message": "调整任务工具栏与状态摘要布局"
+    },
     {
       "version": "0.1.206",
       "message": "合并跳过与变化状态筛选"
