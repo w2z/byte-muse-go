@@ -246,7 +246,7 @@ describe("设置页字段布局", () => {
     await user.click(screen.getByRole("radio",{name:"保留两者"}));await user.click(screen.getByRole("button",{name:"保存设置"}));await waitFor(()=>expect(values.CLOUD_UPLOAD_CONFLICT).toBe("keep_both"));
     expect(values.CLOUD_UPLOAD_MODE).toBe("move");
     expect(values.CLOUD_UPLOAD_CONCURRENCY).toBe("3");
-    expect(screen.getByRole("columnheader",{name:"已上传/总个数"})).toBeInTheDocument();
+    expect(screen.getByRole("columnheader",{name:"成功/总个数"})).toBeInTheDocument();
     const tables = screen.getByLabelText("上传任务列表");
     const toggle = screen.getByRole("switch", { name: "开启目录监控" });
     const divider = tables.closest(".settings-group-section")?.querySelector(".arco-divider");
@@ -256,7 +256,7 @@ describe("设置页字段布局", () => {
     expect(tables.compareDocumentPosition(screen.getByRole("button", { name: "保存设置" }))).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
     await user.click(screen.getByRole("tab",{name:/^文件列表/}));
     expect(screen.getByRole("columnheader",{name:"路径"})).toBeInTheDocument();
-    expect(screen.queryByRole("columnheader",{name:"已上传/总个数"})).not.toBeInTheDocument();
+    expect(screen.queryByRole("columnheader",{name:"成功/总个数"})).not.toBeInTheDocument();
   });
   it("目录选择列表后的上传图标按已保存配置扫描，未保存时不提交", async () => {
     const user = userEvent.setup();

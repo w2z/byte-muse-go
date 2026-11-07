@@ -577,6 +577,33 @@ func TestUploadStatusFilterKeepsDirectoryTotals(t *testing.T) {
 	}
 }
 
+func TestUploadOutcomeFiltersCombineSkippedAndChanged(t *testing.T) {
+	mapping := UploadMapping{Kind: "115", ID: "0", LocalPath: "/videos"}
+	key := uploadDirectoryKey(mapping)
+	service := &UploadService{mappings: []UploadMapping{mapping}, files: map[string]UploadFileProgress{
+		"done":    {Key: "done", DirectoryKey: key, State: "completed"},
+		"skip":    {Key: "skip", DirectoryKey: key, State: "skipped"},
+		"changed": {Key: "changed", DirectoryKey: key, State: "discarded"},
+	}}
+	if page := service.Files(1, 20, "completed"); page.Total != 2 || page.Completed != 2 {
+		t.Fatalf("success excludes skipped: %+v", page)
+	}
+	if page := service.Files(1, 20, "failed"); page.Total != 1 || page.Items[0].Key != "changed" {
+		t.Fatalf("failure excludes changed: %+v", page)
+	}
+	if rows := service.Directories("failed"); len(rows) != 1 || rows[0].Failed != 1 {
+		t.Fatalf("directory failure count: %+v", rows)
+	}
+	if !uploadClearMatches(domain.UploadRecord{State: "discarded"}, "clear_failed") || !uploadListClearActions(service.files)["clear_failed_files"] {
+		t.Fatal("changed failure cannot be cleared")
+	}
+	for _, status := range []string{"skipped", "changed"} {
+		if UploadListStatusAllowed(status) {
+			t.Fatalf("obsolete filter accepted: %s", status)
+		}
+	}
+}
+
 // TestUploadRetriesPartialStage verifies interrupted transfers can recover without changing the old target.
 func TestUploadRetriesPartialStage(t *testing.T) {
 	root := t.TempDir()

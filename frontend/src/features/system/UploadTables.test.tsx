@@ -8,6 +8,18 @@ import {UploadTables} from "./UploadTables";
 import {apiRequest} from "../../shared/api/client";
 vi.mock("../../shared/api/client",()=>({apiRequest:vi.fn()}));
 afterEach(cleanup);
+it("筛选只保留成功失败，跳过文件显示成功",async()=>{
+ const client=new QueryClient({defaultOptions:{queries:{retry:false}}});
+ vi.mocked(apiRequest).mockImplementation(async(path)=>String(path).startsWith("/cloud-upload/files")?{items:[{key:"skip",path:"/video",state:"skipped",size:1,progress:100,speed:0,error:""}],total:1,task_total:1,completed:1}:{items:[],total:0,actions:{}});
+ render(<QueryClientProvider client={client}><UploadTables/></QueryClientProvider>);
+ await userEvent.click(await screen.findByRole("tab",{name:"文件列表 (1/1)"}));
+ expect((await screen.findByText("成功")).closest(".arco-tag")).toHaveClass("arco-tag-green");
+ await userEvent.click(screen.getByRole("combobox",{name:"文件状态"}));
+ expect(screen.queryByRole("option",{name:"已跳过"})).not.toBeInTheDocument();
+ expect(screen.queryByRole("option",{name:"已变化"})).not.toBeInTheDocument();
+ expect(screen.getByRole("option",{name:"成功"})).toBeInTheDocument();
+ client.clear();
+});
 it("无任务时隐藏数量，筛选为空但仍有任务时保留全局数量",async()=>{
  const client=new QueryClient({defaultOptions:{queries:{retry:false}}});
  vi.mocked(apiRequest).mockResolvedValue({items:[],total:0,task_total:0,completed:0});

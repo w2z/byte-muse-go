@@ -127,7 +127,7 @@ func uploadListClearActions(files map[string]UploadFileProgress) map[string]bool
 			completedFiles = true
 			row.done++
 		}
-		if file.State == "failed" {
+		if file.State == "failed" || file.State == "discarded" {
 			failedFiles = true
 			row.failed++
 		}
@@ -340,7 +340,7 @@ func uploadClearMatches(record domain.UploadRecord, action string) bool {
 	if action == "clear_completed" {
 		return record.State == "completed" || record.State == "skipped"
 	}
-	return record.State == "failed" || uploadRetriesExhausted(record)
+	return record.State == "failed" || record.State == "discarded" || uploadRetriesExhausted(record)
 }
 
 func uploadScopeMatch(record domain.UploadRecord, scope, key string) bool {
@@ -528,7 +528,7 @@ func (s *UploadService) refreshUploadView(ctx context.Context) error {
 		if uploadTerminal(r.State) {
 			st.Processed++
 		}
-		if r.Error != "" {
+		if r.Error != "" || r.State == "discarded" {
 			st.Failed++
 		}
 		st.Total++

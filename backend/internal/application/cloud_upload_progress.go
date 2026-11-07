@@ -174,7 +174,7 @@ func (s *UploadService) directoriesLocked(status string) []UploadDirectoryProgre
 				row.Skipped++
 				processed++
 				processedBytes += file.Size
-			} else if file.Error != "" {
+			} else if file.Error != "" || file.State == "discarded" {
 				row.Failed++
 			}
 			for name, enabled := range uploadProgressActions(file.State) {
@@ -274,14 +274,10 @@ func uploadListStatus(state string) string {
 		return "paused"
 	case "stopped":
 		return "stopped"
-	case "failed", "attention", "blocked":
+	case "failed", "attention", "blocked", "discarded":
 		return "failed"
-	case "completed":
+	case "completed", "skipped":
 		return "completed"
-	case "skipped":
-		return "skipped"
-	case "discarded":
-		return "changed"
 	default:
 		return ""
 	}
@@ -294,7 +290,7 @@ func uploadMatchesStatus(state, status string) bool {
 // UploadListStatusAllowed reports whether a list filter is recognized. Empty and all mean no filter.
 func UploadListStatusAllowed(status string) bool {
 	switch status {
-	case "", "all", "running", "waiting", "paused", "stopped", "failed", "completed", "skipped", "changed":
+	case "", "all", "running", "waiting", "paused", "stopped", "failed", "completed":
 		return true
 	default:
 		return false

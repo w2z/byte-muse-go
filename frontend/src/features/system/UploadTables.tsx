@@ -46,7 +46,7 @@ const states: Record<string, string> = {
   restoring: "恢复旧文件",
   cleanup: "已上传，待清理",
   discarding: "清理临时文件",
-  discarded: "源文件已变化",
+  discarded: "失败",
   attention: "需处理",
   blocked: "等待账号或权限恢复",
   stopped: "已停止",
@@ -54,8 +54,8 @@ const states: Record<string, string> = {
   transferring: "传送至 CD2",
   uploading: "上传到网盘",
   verifying: "校验中",
-  completed: "已上传",
-  skipped: "已跳过",
+  completed: "成功",
+  skipped: "成功",
   failed: "失败",
 };
 /** 将字节数格式化为二进制容量，零值也明确展示。 */
@@ -81,7 +81,7 @@ function uploadProgress(value: number, status?: "success" | "error") {
   );
 }
 function fileProgressStatus(state: string): "success" | "error" | undefined {
-  if (state === "failed") return "error";
+  if (state === "failed" || state === "discarded") return "error";
   if (state === "completed" || state === "skipped") return "success";
   return undefined;
 }
@@ -126,10 +126,11 @@ function fileState(row: FileRow) {
   }
   return (
     <span title={row.error}>
-      <Tag color={row.state === "failed" ? "red" : row.state === "completed" ? "green" : undefined}>
+      <Tag color={fileProgressStatus(row.state) === "error" ? "red" : fileProgressStatus(row.state) === "success" ? "green" : undefined}>
         {states[row.state] ?? row.state}
       </Tag>
       {row.error ? <div className="settings-upload-error">{row.error}</div> : null}
+      {row.state === "discarded" && !row.error ? <div className="settings-upload-error">源文件已变化</div> : null}
     </span>
   );
 }
@@ -144,9 +145,7 @@ const statusOptions = [
   { label: "已暂停", value: "paused" },
   { label: "已停止", value: "stopped" },
   { label: "失败", value: "failed" },
-  { label: "已完成", value: "completed" },
-  { label: "已跳过", value: "skipped" },
-  { label: "已变化", value: "changed" },
+  { label: "成功", value: "completed" },
 ];
 
 /** 目录与文件分别展示，文件使用服务端分页；后台进度每两秒刷新。 */
@@ -260,14 +259,14 @@ export function UploadTables() {
                 render: (value: number) => `${bytes(value)}/s`,
               },
               {
-                title: "已上传/总个数",
+                title: "成功/总个数",
                 width: 130,
-                render: (_, row) => `${row.uploaded}/${row.total}`,
+                render: (_, row) => `${row.uploaded + row.skipped}/${row.total}`,
               },
               {
-                title: "跳过/失败",
+                title: "失败",
                 width: 110,
-                render: (_, row) => `${row.skipped}/${row.failed}`,
+                render: (_, row) => row.failed,
               },
               { title: "添加时间", dataIndex: "queued_at", width: 180, render: formatTime },
               { title: "完成时间", dataIndex: "completed_at", width: 180, render: formatTime },
