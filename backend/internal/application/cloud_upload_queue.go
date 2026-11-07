@@ -422,6 +422,9 @@ func (s *UploadService) Run(ctx context.Context) {
 					}
 					record = &domain.UploadRecord{Key: key, Kind: m.Kind, Root: m.ID, LocalRoot: m.LocalPath, RemotePath: m.Path, Relative: f.Relative, Source: f.Absolute, Size: f.Size, Modified: f.Modified, Policy: scanPolicy, Mode: scanMode, State: "pending", UpdatedAt: time.Now().UTC().Format(time.RFC3339Nano)}
 					record.QueuedAt = record.UpdatedAt
+					if scanManual {
+						record.Intent = "run"
+					}
 					if saveErr := s.store.Save(ctx, *record); saveErr != nil {
 						s.update(func(st *UploadStatus) { st.Error = saveErr.Error() })
 						goto discoveryHandled
@@ -430,10 +433,15 @@ func (s *UploadService) Run(ctx context.Context) {
 					if len(workers) < concurrency {
 						discoveryDeadline = time.Time{}
 					}
-				} else if record.QueuedAt == "" {
-					record.QueuedAt = record.UpdatedAt
+				} else if record.QueuedAt == "" || (scanManual && !record.Hidden && !uploadTerminal(record.State) && record.Intent == "") {
+					if scanManual && !record.Hidden && !uploadTerminal(record.State) && record.Intent == "" {
+						record.Intent = "run"
+					}
 					if record.QueuedAt == "" {
-						record.QueuedAt = now.UTC().Format(time.RFC3339Nano)
+						record.QueuedAt = record.UpdatedAt
+						if record.QueuedAt == "" {
+							record.QueuedAt = now.UTC().Format(time.RFC3339Nano)
+						}
 					}
 					if saveErr := s.store.Save(ctx, *record); saveErr != nil {
 						s.update(func(st *UploadStatus) { st.Error = saveErr.Error() })

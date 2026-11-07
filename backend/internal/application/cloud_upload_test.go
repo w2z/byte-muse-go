@@ -120,6 +120,62 @@ func TestUploadDiscoveryPublishesBeforeScanCompletes(t *testing.T) {
 
 var uploadMemoryStoreMu sync.Mutex
 
+func TestManualUploadIntentSurvivesRestart(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "file.txt"), []byte("a"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal([]UploadMapping{{Kind: "115", ID: "0", Path: "/", LocalPath: root}})
+	store := uploadMemoryStore{}
+	settings := func(context.Context) (map[string]string, error) {
+		return map[string]string{"CLOUD_UPLOAD_ENABLE": "false", "CLOUD_UPLOAD_PATHS": string(raw)}, nil
+	}
+	started := make(chan struct{}, 10)
+	provider := func(ctx context.Context, _ string) (uploadRemote, error) {
+		started <- struct{}{}
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	run := func() (*UploadService, context.CancelFunc, chan struct{}) {
+		service := &UploadService{store: store, settings: settings, provider: provider}
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan struct{})
+		go func() { defer close(done); service.Run(ctx) }()
+		return service, cancel, done
+	}
+	service, cancel, done := run()
+	deadline := time.Now().Add(5 * time.Second)
+	for !service.Status().Actions["scan"] {
+		if time.Now().After(deadline) {
+			cancel()
+			<-done
+			t.Fatal("not ready")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := service.Control(context.Background(), "scan"); err != nil {
+		cancel()
+		<-done
+		t.Fatal(err)
+	}
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		cancel()
+		<-done
+		t.Fatal("manual upload not started")
+	}
+	cancel()
+	<-done
+	_, cancel, done = run()
+	defer func() { cancel(); <-done }()
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("manual queue lost execution intent on restart")
+	}
+}
+
 func (s uploadMemoryStore) List(context.Context) ([]domain.UploadRecord, error) {
 	uploadMemoryStoreMu.Lock()
 	defer uploadMemoryStoreMu.Unlock()
@@ -310,7 +366,7 @@ func TestManualUploadRestartsClearedTasks(t *testing.T) {
 				time.Sleep(10 * time.Millisecond)
 			}
 			got, _ := store.Get(ctx, key)
-			if got.Mode != "move" || got.Hidden || got.CompletedAt != "" || got.StageID != "" || got.SHA1 != "" || got.Parent != "" || got.QueuedAt == stamp || got.Intent != "" {
+			if got.Mode != "move" || got.Hidden || got.CompletedAt != "" || got.StageID != "" || got.SHA1 != "" || got.Parent != "" || got.QueuedAt == stamp || got.Intent != "run" {
 				t.Fatalf("stale execution fields: %+v", got)
 			}
 			if service.DirectoryPage("").Total != 1 {
