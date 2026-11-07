@@ -1,16 +1,20 @@
 {
-  "version": "0.1.207",
-  "commit": "0088ef51a1eb7521c39af0c9d1313ba8eb5ae1c3",
-  "short_commit": "0088ef5",
-  "built_at": "2026-11-07T11:18:12Z",
+  "version": "0.1.208",
+  "commit": "bb642c6d3cf5b8354b9b07f57944d124f0f8cbe2",
+  "short_commit": "bb642c6",
+  "built_at": "2026-11-07T11:24:28Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.207",
-    "sha-0088ef5",
+    "0.1.208",
+    "sha-bb642c6",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.208",
+      "message": "移除二级分类下的当前分组提示"
+    },
     {
       "version": "0.1.207",
       "message": "调整任务工具栏与状态摘要布局"
