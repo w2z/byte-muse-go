@@ -56,6 +56,7 @@ func (s *UploadService) processDirectUpload(ctx context.Context, remote uploadRe
 				return record.State, err
 			}
 		}
+		domain.ReportUploadProgress(ctx, 0, source.Size, "uploading")
 	}
 	verified := func(objects []uploadEntry) (uploadEntry, bool) {
 		for _, entry := range objects {
@@ -95,6 +96,7 @@ func (s *UploadService) processDirectUpload(ctx context.Context, remote uploadRe
 		if err = remote.Upload(ctx, record.Parent, record.Target, file, source.Size); err != nil {
 			return record.State, err
 		}
+		domain.ReportUploadProgress(ctx, source.Size, source.Size, "uploading")
 		entries, err = remote.List(ctx, record.Parent)
 		if err != nil {
 			return record.State, err

@@ -42,7 +42,12 @@ func TestUploadHashProgressCoversOnlyWholeFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	var reports []int64
+	var lastPhase string
 	ctx := domain.WithUploadProgress(context.Background(), func(done, total int64, phase string) {
+		lastPhase = phase
+		if phase == "uploading" {
+			return
+		}
 		if phase != "verifying" || total != int64(len(content)) {
 			t.Errorf("phase=%s done=%d total=%d", phase, done, total)
 		}
@@ -53,6 +58,9 @@ func TestUploadHashProgressCoversOnlyWholeFile(t *testing.T) {
 	})
 	if err = c.Upload(ctx, "token", "12", "file", f, int64(len(content))); err != nil {
 		t.Fatal(err)
+	}
+	if lastPhase != "uploading" {
+		t.Fatal("initialization reported as hashing")
 	}
 	if len(reports) < 3 || reports[0] != 0 || reports[len(reports)-1] != int64(len(content)) {
 		t.Fatalf("reports: %v", reports)

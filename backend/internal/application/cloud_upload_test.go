@@ -22,6 +22,45 @@ import (
 
 type uploadMemoryStore map[string]domain.UploadRecord
 
+type uploadPreparationProbe struct {
+	uploadRemote
+	lists   []string
+	created []string
+}
+
+func (remote *uploadPreparationProbe) List(_ context.Context, parent string) ([]uploadEntry, error) {
+	remote.lists = append(remote.lists, parent)
+	return []uploadEntry{}, nil
+}
+
+func (remote *uploadPreparationProbe) Mkdir(_ context.Context, parent, name string) (string, error) {
+	id := parent + "/" + name
+	remote.created = append(remote.created, id)
+	return id, nil
+}
+
+func TestUploadNewParentSkipsDescendantExistenceQueries(t *testing.T) {
+	remote := &uploadPreparationProbe{}
+	prepared := &uploadPreparationRemote{uploadRemote: remote, entries: map[string][]uploadEntry{}}
+	ctx := context.Background()
+	root, err := uploadMappingRoot(ctx, prepared, UploadMapping{Kind: "115", ID: "0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent, err := uploadParent(ctx, prepared, root, "new/child/file.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := prepared.List(ctx, parent)
+	if err != nil || len(entries) != 0 || len(remote.lists) != 1 || len(remote.created) != 2 {
+		t.Fatalf("unexpected lookups: lists=%v created=%v err=%v", remote.lists, remote.created, err)
+	}
+	fresh := &uploadPreparationRemote{uploadRemote: remote, entries: map[string][]uploadEntry{}}
+	if _, err = fresh.List(ctx, root); err != nil || len(remote.lists) != 2 {
+		t.Fatal("preparation snapshot leaked into next attempt")
+	}
+}
+
 type uploadDelayedAdmissionStore struct {
 	uploadMemoryStore
 	blocked chan struct{}
@@ -329,7 +368,12 @@ func TestUploadVerificationReportsHashedBytes(t *testing.T) {
 		t.Fatal(err, len(files))
 	}
 	var reports []int64
+	var lastPhase string
 	ctx := domain.WithUploadProgress(context.Background(), func(done, total int64, phase string) {
+		lastPhase = phase
+		if phase == "uploading" {
+			return
+		}
 		if phase != "verifying" || total != int64(len(content)) {
 			t.Errorf("progress phase=%s done=%d total=%d", phase, done, total)
 		}
@@ -339,6 +383,9 @@ func TestUploadVerificationReportsHashedBytes(t *testing.T) {
 	s := &UploadService{store: uploadMemoryStore{}, provider: func(context.Context, string) (uploadRemote, error) { return remote, nil }}
 	if _, err = s.process(ctx, m, files[0], "overwrite"); err != nil {
 		t.Fatal(err)
+	}
+	if lastPhase != "uploading" {
+		t.Fatal("verification phase remained during remote requests")
 	}
 	if len(reports) < 3 || reports[0] != 0 || reports[len(reports)-1] != int64(len(content)) {
 		t.Fatalf("verification reports: %v", reports)

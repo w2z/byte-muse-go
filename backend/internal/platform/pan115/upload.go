@@ -115,6 +115,7 @@ func (c *Client) Upload(ctx context.Context, token, parent, name string, f *os.F
 		return err
 	}
 	form := url.Values{"file_name": {name}, "file_size": {strconv.FormatInt(size, 10)}, "target": {"U_1_" + parent}, "fileid": {hash}, "preid": {pre}}
+	domain.ReportUploadProgress(ctx, 0, size, "uploading")
 	var init uploadInit
 	for attempt := 0; attempt < 2; attempt++ {
 		raw, e := c.apiCall(ctx, http.MethodPost, c.api+"/open/upload/init", token, form, "初始化上传")

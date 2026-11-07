@@ -353,15 +353,16 @@ func (s *UploadService) process(ctx context.Context, m UploadMapping, f uploadLo
 		return s.store.Save(ctx, *record)
 	}
 	if record == nil || record.Parent == "" {
-		root, e := uploadMappingRoot(ctx, remote, m)
+		preparationRemote := &uploadPreparationRemote{uploadRemote: remote, entries: map[string][]uploadEntry{}}
+		root, e := uploadMappingRoot(ctx, preparationRemote, m)
 		if e != nil {
 			return "", e
 		}
-		parent, e := uploadParent(ctx, remote, root, f.Relative)
+		parent, e := uploadParent(ctx, preparationRemote, root, f.Relative)
 		if e != nil {
 			return "", e
 		}
-		entries, e := remote.List(ctx, parent)
+		entries, e := preparationRemote.List(ctx, parent)
 		if e != nil {
 			return "", e
 		}

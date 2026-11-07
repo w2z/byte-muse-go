@@ -80,9 +80,6 @@ func (s *UploadService) Run(ctx context.Context) {
 				st.Error = ""
 			}
 		})
-		if err := s.refreshUploadView(ctx); err != nil {
-			s.update(func(st *UploadStatus) { st.Error = err.Error() })
-		}
 	}
 	stopWorkers := func(matches func(string) bool) {
 		waiting := map[string]bool{}
@@ -127,6 +124,7 @@ func (s *UploadService) Run(ctx context.Context) {
 	}
 	defer stopDiscovery()
 	observations := map[string]uploadObservation{}
+	readinessOffset := 0
 	for {
 		// A failed bulk write must replay before discovery or another file can start.
 		persisted, controlErr := s.store.Get(ctx, uploadControlKey)
@@ -222,7 +220,14 @@ func (s *UploadService) Run(ctx context.Context) {
 				sort.Slice(records, func(i, j int) bool {
 					return uploadQueueBefore(records[i], records[j])
 				})
-				for _, r := range records {
+				if readinessOffset >= len(records) {
+					readinessOffset = 0
+				}
+				checks, started := 0, false
+				observing := false
+				for index := 0; index < len(records); index++ {
+					recordIndex := (readinessOffset + index) % len(records)
+					r := records[recordIndex]
 					if len(workers) >= concurrency {
 						break
 					}
@@ -267,10 +272,23 @@ func (s *UploadService) Run(ctx context.Context) {
 							continue
 						}
 						if r.Intent != "delete" {
+							checks++
+							if checks > max(32, concurrency*4) {
+								if !started && !observing {
+									readinessOffset = recordIndex
+								}
+								break
+							}
 							info, statErr := os.Lstat(r.Source)
 							if statErr == nil && info.Mode().IsRegular() {
 								observed := uploadLocalFile{Absolute: r.Source, Size: info.Size(), Modified: info.ModTime().UnixNano()}
 								if reason := observeUploadSource(observations, observed, now, uploadSourceAccess(r.Source)); reason != "" {
+									if _, exists := observations[r.Source]; exists {
+										observing = true
+									}
+									if r.ErrorKind == "locked" && r.Error == reason {
+										continue
+									}
 									r.Error, r.ErrorKind = reason, "locked"
 									r.NextRetry = now.Add(time.Second).UTC().Format(time.RFC3339Nano)
 									if saveErr := s.store.Save(ctx, r); saveErr != nil {
@@ -323,6 +341,7 @@ func (s *UploadService) Run(ctx context.Context) {
 						continue
 					}
 					worker, stop := context.WithCancel(ctx)
+					started = true
 					workers[r.Key], working[r.Key] = stop, r
 					s.update(func(st *UploadStatus) {
 						s.active[r.Key] = true
@@ -339,6 +358,9 @@ func (s *UploadService) Run(ctx context.Context) {
 						_, err := s.process(progress, m, f, r.Policy)
 						results <- completion{r.Key, err}
 					}(r)
+				}
+				if started || checks <= max(32, concurrency*4) {
+					readinessOffset = 0
 				}
 			}
 		}

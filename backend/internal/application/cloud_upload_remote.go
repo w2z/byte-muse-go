@@ -25,6 +25,36 @@ type uploadRemote interface {
 	Rename(context.Context, string, uploadEntry, string) error
 	Delete(context.Context, string, uploadEntry) error
 }
+
+// uploadPreparationRemote caches only one serialized preparation pass. New directories start empty;
+// the worker discards this snapshot before transfer and always verifies the final remote object afresh.
+type uploadPreparationRemote struct {
+	uploadRemote
+	entries map[string][]uploadEntry
+}
+
+func (remote *uploadPreparationRemote) List(ctx context.Context, parent string) ([]uploadEntry, error) {
+	if entries, ok := remote.entries[parent]; ok {
+		return entries, nil
+	}
+	entries, err := remote.uploadRemote.List(ctx, parent)
+	if err == nil {
+		remote.entries[parent] = entries
+	}
+	return entries, err
+}
+
+func (remote *uploadPreparationRemote) Mkdir(ctx context.Context, parent, name string) (string, error) {
+	id, err := remote.uploadRemote.Mkdir(ctx, parent, name)
+	if err == nil {
+		remote.entries[id] = []uploadEntry{}
+		if entries, ok := remote.entries[parent]; ok {
+			remote.entries[parent] = append(entries, uploadEntry{ID: id, Name: name, Directory: true})
+		}
+	}
+	return id, err
+}
+
 type uploadPanAPI interface {
 	CreateFolder(context.Context, string, string, string) (string, error)
 	Upload(context.Context, string, string, string, *os.File, int64) error

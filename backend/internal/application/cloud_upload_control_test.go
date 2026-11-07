@@ -3,6 +3,7 @@ package application
 import (
 	"bytemuse/backend/internal/domain"
 	"context"
+	"fmt"
 	"testing"
 	"time"
 )
@@ -274,6 +275,9 @@ func TestUploadListClearFollowsSelectedTab(t *testing.T) {
 	}
 }
 func TestUploadPresentationPreservesLivePhaseAndPause(t *testing.T) {
+	if got := uploadPresentationState(domain.UploadRecord{State: "pending"}, "waiting", true, "running", true, false); got != "uploading" {
+		t.Fatalf("active preparation hidden as %s", got)
+	}
 	for _, phase := range []string{"verifying", "uploading", "transferring"} {
 		if got := uploadPresentationState(domain.UploadRecord{State: "pending"}, phase, true, "running", true, false); got != phase {
 			t.Fatalf("phase %s became %s", phase, got)
@@ -285,6 +289,22 @@ func TestUploadPresentationPreservesLivePhaseAndPause(t *testing.T) {
 	}
 	if got := uploadPresentationState(domain.UploadRecord{State: "pending"}, "failed", true, "running", true, false); got == "failed" {
 		t.Fatal("manual retry retained stale failed state")
+	}
+}
+
+func TestUploadRunningFilterIncludesAllActivePreparations(t *testing.T) {
+	store := uploadMemoryStore{}
+	service := &UploadService{store: store, mode: "running", manualUpload: true, active: map[string]bool{}}
+	for index := 0; index < 5; index++ {
+		key := fmt.Sprint(index)
+		store[key] = domain.UploadRecord{Key: key, State: "pending"}
+		service.active[key] = true
+	}
+	if err := service.refreshUploadView(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := service.Files(1, 20, "running").Total; got != 5 {
+		t.Fatalf("active workers displayed: %d", got)
 	}
 }
 

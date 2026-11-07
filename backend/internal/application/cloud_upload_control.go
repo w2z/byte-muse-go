@@ -577,6 +577,9 @@ func uploadPresentationState(r domain.UploadRecord, liveState string, current bo
 		return liveState
 	}
 	if r.State == "pending" {
+		if current {
+			return "uploading"
+		}
 		if uploadIndividuallyPaused(r, mode) {
 			return "paused"
 		}
