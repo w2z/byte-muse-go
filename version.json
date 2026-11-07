@@ -1,16 +1,20 @@
 {
-  "version": "0.1.211",
-  "commit": "f8c0f6d850513a06cbcf39e8f5e07d51ee197e95",
-  "short_commit": "f8c0f6d",
-  "built_at": "2026-11-07T12:44:41Z",
+  "version": "0.1.212",
+  "commit": "3a5c4b886a40b1abc3693b2cca262e556ee16bd8",
+  "short_commit": "3a5c4b8",
+  "built_at": "2026-11-07T12:54:05Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.211",
-    "sha-f8c0f6d",
+    "0.1.212",
+    "sha-3a5c4b8",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.212",
+      "message": "复用新建目录检查并减少队列调度等待"
+    },
     {
       "version": "0.1.211",
       "message": "边扫描边展示并调度上传任务"
