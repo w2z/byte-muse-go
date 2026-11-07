@@ -1,16 +1,20 @@
 {
-  "version": "0.1.205",
-  "commit": "691759284028415f7123ef005063b516d662207c",
-  "short_commit": "6917592",
-  "built_at": "2026-11-07T10:51:51Z",
+  "version": "0.1.206",
+  "commit": "c720e0bffabc6bd045734a4837f8cd0dac4b312d",
+  "short_commit": "c720e0b",
+  "built_at": "2026-11-07T11:09:15Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.205",
-    "sha-6917592",
+    "0.1.206",
+    "sha-c720e0b",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.206",
+      "message": "合并跳过与变化状态筛选"
+    },
     {
       "version": "0.1.205",
       "message": "恢复清空任务后的手动上传并隐藏空计数"
