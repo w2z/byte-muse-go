@@ -45,6 +45,41 @@ func matchesUpload(r *domain.UploadRecord, e uploadEntry, old bool) bool {
 	return r.Kind == "115" && id != "" && e.ID == id
 }
 
+func consolidate115Stages(ctx context.Context, remote uploadRemote, r *domain.UploadRecord, entries []uploadEntry) error {
+	if r.Kind != "115" || r.Stage == "" {
+		return nil
+	}
+	stages := make([]uploadEntry, 0, 1)
+	for _, entry := range entries {
+		if entry.Name != r.Stage {
+			continue
+		}
+		if entry.Directory || entry.Size != r.Size || (entry.SHA1 != "" && r.SHA1 != "" && !strings.EqualFold(entry.SHA1, r.SHA1)) {
+			return errUploadAttention
+		}
+		stages = append(stages, entry)
+	}
+	if len(stages) < 2 {
+		return nil
+	}
+	keep := 0
+	for index := range stages {
+		if stages[index].ID == r.StageID {
+			keep = index
+			break
+		}
+	}
+	for index, entry := range stages {
+		if index == keep {
+			continue
+		}
+		if err := remote.Delete(ctx, r.Parent, entry); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // selectUploadName excludes persisted reservations as well as visible remote entries.
 func (s *UploadService) selectUploadName(ctx context.Context, r *domain.UploadRecord, entries []uploadEntry) error {
 	reserved := map[string]bool{}
@@ -79,6 +114,15 @@ func (s *UploadService) commitUpload(ctx context.Context, remote uploadRemote, r
 		entries, err := remote.List(ctx, r.Parent)
 		if err != nil {
 			return r.State, err
+		}
+		if err = consolidate115Stages(ctx, remote, r, entries); err != nil {
+			return r.State, err
+		}
+		if r.Kind == "115" {
+			entries, err = remote.List(ctx, r.Parent)
+			if err != nil {
+				return r.State, err
+			}
 		}
 		for _, name := range []string{r.Stage, r.Target, r.Backup} {
 			count := 0

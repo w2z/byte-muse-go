@@ -386,7 +386,7 @@ func TestUploadQueueRechecksLockedFileAfterNextCompletion(t *testing.T) {
 	if service.Files(1, 20, "").Completed != 3 {
 		t.Fatalf("queue did not complete: %+v", service.Files(1, 20, ""))
 	}
-	if strings.Join(remote.order, ",") != "b.bin.bytemuse-go-tmp,a.bin.bytemuse-go-tmp,c.bin.bytemuse-go-tmp" {
+	if strings.Join(remote.order, ",") != "b.bytemuse-go-tmp,a.bytemuse-go-tmp,c.bytemuse-go-tmp" {
 		t.Fatalf("locked task waited for queue drain: %v", remote.order)
 	}
 }
@@ -399,7 +399,7 @@ type uploadOrderedRemote struct {
 
 func (remote *uploadOrderedRemote) Upload(ctx context.Context, parent, name string, file *os.File, size int64) error {
 	remote.order = append(remote.order, name)
-	if strings.HasPrefix(name, "b.bin.") {
+	if strings.HasPrefix(name, "b.") {
 		if err := remote.writer.Close(); err != nil {
 			return err
 		}
@@ -502,10 +502,12 @@ func (s uploadMemoryStore) Save(_ context.Context, r domain.UploadRecord) error 
 
 type uploadMemoryRemote struct {
 	files              map[string][]byte
+	extra              []uploadEntry
 	failUpload         bool
 	loseRenameResponse bool
 	failDelete         bool
 	uploads            int
+	deleted            int
 	afterUpload        func()
 	loseDeleteResponse bool
 }
@@ -552,6 +554,7 @@ func (r *uploadMemoryRemote) List(context.Context, string) ([]uploadEntry, error
 	for name, body := range r.files {
 		out = append(out, uploadEntry{ID: fmt.Sprintf("%x", sha1.Sum(body)), Name: name, Size: int64(len(body)), SHA1: fmt.Sprintf("%x", sha1.Sum(body))})
 	}
+	out = append(out, r.extra...)
 	return out, nil
 }
 func (r *uploadMemoryRemote) Mkdir(context.Context, string, string) (string, error) {
@@ -570,6 +573,12 @@ func (r *uploadMemoryRemote) Upload(_ context.Context, _, name string, f *os.Fil
 	return err
 }
 func (r *uploadMemoryRemote) Rename(_ context.Context, _ string, e uploadEntry, name string) error {
+	for index := range r.extra {
+		if r.extra[index].ID == e.ID {
+			r.extra[index].Name = name
+			return nil
+		}
+	}
 	r.files[name] = r.files[e.Name]
 	delete(r.files, e.Name)
 	if r.loseRenameResponse {
@@ -581,6 +590,13 @@ func (r *uploadMemoryRemote) Rename(_ context.Context, _ string, e uploadEntry, 
 func (r *uploadMemoryRemote) Delete(_ context.Context, _ string, e uploadEntry) error {
 	if r.failDelete {
 		return errors.New("delete unavailable")
+	}
+	for index := range r.extra {
+		if r.extra[index].ID == e.ID {
+			r.extra = append(r.extra[:index], r.extra[index+1:]...)
+			r.deleted++
+			return nil
+		}
 	}
 	delete(r.files, e.Name)
 	if r.loseDeleteResponse {

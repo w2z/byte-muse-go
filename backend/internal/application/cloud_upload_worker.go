@@ -95,6 +95,13 @@ func uploadUnchanged(f uploadLocalFile) bool {
 	return err == nil && info.Mode().IsRegular() && info.Size() == f.Size && info.ModTime().UnixNano() == f.Modified
 }
 
+func uploadStageName(kind, target string) string {
+	if kind == "115" {
+		target = strings.TrimSuffix(target, path.Ext(target))
+	}
+	return target + ".bytemuse-go-tmp"
+}
+
 // uploadParent recreates only missing relative subdirectories, checking for file/folder conflicts.
 func uploadParent(ctx context.Context, remote uploadRemote, root, relative string) (string, error) {
 	parent := root
@@ -323,7 +330,7 @@ func (s *UploadService) process(ctx context.Context, m UploadMapping, f uploadLo
 		}
 		record.Parent, record.Target = parent, name
 		if record.StageID == "" {
-			record.Stage = name + ".bytemuse-go-tmp"
+			record.Stage = uploadStageName(m.Kind, name)
 		}
 		record.Backup = ".bytemuse-backup-" + key
 		if exists && existing.Directory {
