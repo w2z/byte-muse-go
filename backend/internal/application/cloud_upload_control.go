@@ -180,6 +180,9 @@ func (s *UploadService) applyUploadControl(ctx context.Context, action string) e
 		if r.State == "control" {
 			continue
 		}
+		if !uploadTerminal(r.State) {
+			freezeUploadQueueTime(&r)
+		}
 		switch action {
 		case "clear_completed":
 			if r.State == "completed" || r.State == "skipped" {
@@ -352,6 +355,9 @@ func uploadScopeMatch(record domain.UploadRecord, scope, key string) bool {
 // Start overrides a queue pause, and also runs the selection while monitoring is off.
 // scheduled reports whether a normal pending file would run without an individual run intent.
 func transformUploadControl(record domain.UploadRecord, action, mode string, scheduled bool) (domain.UploadRecord, bool) {
+	if !uploadTerminal(record.State) || (record.State == "stopped" && (action == "start" || action == "retry")) {
+		freezeUploadQueueTime(&record)
+	}
 	if (action == "pause" || action == "stop") && uploadRetriesExhausted(record) {
 		return record, false
 	}

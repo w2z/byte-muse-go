@@ -319,6 +319,52 @@ func TestUploadQueueStartsInAscendingEnqueueOrder(t *testing.T) {
 	}
 }
 
+func TestUploadQueueAndListShareTieBreakAndChronologicalTime(t *testing.T) {
+	for _, stamps := range [][2]string{
+		{"2026-11-07T01:00:00Z", "2026-11-07T01:00:00Z"},
+		{"2026-11-07T01:00:00Z", "2026-11-07T01:00:00.1Z"},
+		{"2026-11-07T09:00:00+08:00", "2026-11-07T01:00:01Z"},
+	} {
+		first := domain.UploadRecord{Key: "z", Source: "/a", QueuedAt: stamps[0]}
+		second := domain.UploadRecord{Key: "a", Source: "/z", QueuedAt: stamps[1]}
+		service := &UploadService{files: map[string]UploadFileProgress{
+			first.Key:  {Key: first.Key, Path: first.Source, QueuedAt: first.QueuedAt},
+			second.Key: {Key: second.Key, Path: second.Source, QueuedAt: second.QueuedAt},
+		}}
+		if !uploadQueueBefore(first, second) || uploadQueueBefore(second, first) || service.Files(1, 20, "").Items[0].Key != first.Key {
+			t.Fatalf("queue/list order diverges: %v", stamps)
+		}
+	}
+}
+
+func TestUploadStartingStoppedLegacyTaskKeepsQueuePosition(t *testing.T) {
+	original := "2026-11-06T01:02:03Z"
+	record, ok := transformUploadControl(domain.UploadRecord{Key: "legacy", State: "stopped", UpdatedAt: original}, "start", "running", true)
+	if !ok || record.QueuedAt != original || record.UpdatedAt == original {
+		t.Fatalf("start moved historical task: %+v", record)
+	}
+}
+
+func TestUploadLegacyQueueTimeSurvivesProcessingAndRestart(t *testing.T) {
+	service, mapping, file, remote, store := recoveryFixture(t)
+	key := uploadKey(mapping, file, "overwrite")
+	original := "2026-11-06T01:02:03Z"
+	store[key] = domain.UploadRecord{Key: key, Kind: "115", State: "pending", Source: file.Absolute, Size: file.Size, Modified: file.Modified, UpdatedAt: original}
+	remote.failUpload = true
+	_, _ = service.process(context.Background(), mapping, file, "overwrite")
+	if store[key].QueuedAt != original {
+		t.Fatalf("first processing moved task: %+v", store[key])
+	}
+	remote.failUpload = false
+	restarted := &UploadService{store: store, provider: service.provider}
+	if _, err := restarted.process(context.Background(), mapping, file, "overwrite"); err != nil {
+		t.Fatal(err)
+	}
+	if store[key].QueuedAt != original {
+		t.Fatal("restart moved task")
+	}
+}
+
 func TestUploadQueueRetriesLockedFileBeforeQueueDrain(t *testing.T) {
 	first := domain.UploadRecord{Key: "first", State: "pending", QueuedAt: "2026-11-07T01:00:00Z"}
 	second := domain.UploadRecord{Key: "second", State: "pending", QueuedAt: "2026-11-07T02:00:00Z"}
@@ -366,9 +412,9 @@ func TestUploadQueueRechecksLockedFileAfterNextCompletion(t *testing.T) {
 		t.Fatal(err)
 	}
 	store := uploadMemoryStore{}
-	for index, file := range files {
+	stamp := time.Now().Add(-20 * time.Second).UTC().Format(time.RFC3339Nano)
+	for _, file := range files {
 		key := uploadKey(mapping, file, "overwrite")
-		stamp := time.Now().Add(time.Duration(index-20) * time.Second).UTC().Format(time.RFC3339Nano)
 		store[key] = domain.UploadRecord{Key: key, Kind: "115", Root: "0", LocalRoot: root, RemotePath: "/", Source: file.Absolute, Relative: file.Relative, Size: file.Size, Modified: file.Modified, State: "pending", Policy: "overwrite", Intent: "run", QueuedAt: stamp, UpdatedAt: stamp}
 	}
 	remote := &uploadOrderedRemote{uploadMemoryRemote: uploadMemoryRemote{files: map[string][]byte{}}, writer: writer}

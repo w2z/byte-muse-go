@@ -98,13 +98,10 @@ func (s *UploadService) Files(page, size int, status string) UploadFilePage {
 		items = append(items, item)
 	}
 	sort.Slice(items, func(i, j int) bool {
-		if items[i].QueuedAt != items[j].QueuedAt {
-			return items[i].QueuedAt < items[j].QueuedAt
-		}
-		if items[i].Path != items[j].Path {
-			return items[i].Path < items[j].Path
-		}
-		return items[i].Key < items[j].Key
+		return uploadQueueBefore(
+			domain.UploadRecord{QueuedAt: items[i].QueuedAt, Source: items[i].Path, Key: items[i].Key},
+			domain.UploadRecord{QueuedAt: items[j].QueuedAt, Source: items[j].Path, Key: items[j].Key},
+		)
 	})
 	total := len(items)
 	start := min((page-1)*size, total)
@@ -230,12 +227,33 @@ func (s *UploadService) directoriesLocked(status string) []UploadDirectoryProgre
 }
 
 // uploadQueueBefore orders tasks by their first queue time in ascending order.
-// Equal queue times use the record key so the order stays stable. Historical records without QueuedAt use UpdatedAt.
+// Execution and presentation share timestamp, source path, then key ordering.
+// Historical records without QueuedAt use UpdatedAt until their next authorized processing freezes it.
 func uploadQueueBefore(left, right domain.UploadRecord) bool {
-	if leftTime, rightTime := uploadQueueTime(left), uploadQueueTime(right); leftTime != rightTime {
-		return leftTime < rightTime
+	leftStamp, rightStamp := uploadQueueTime(left), uploadQueueTime(right)
+	leftTime, leftErr := time.Parse(time.RFC3339Nano, leftStamp)
+	rightTime, rightErr := time.Parse(time.RFC3339Nano, rightStamp)
+	if leftErr == nil && rightErr == nil {
+		if !leftTime.Equal(rightTime) {
+			return leftTime.Before(rightTime)
+		}
+	} else if leftStamp != rightStamp {
+		return leftStamp < rightStamp
+	}
+	if left.Source != right.Source {
+		return left.Source < right.Source
 	}
 	return left.Key < right.Key
+}
+
+// freezeUploadQueueTime preserves the previously displayed historical timestamp before a mutable update.
+func freezeUploadQueueTime(record *domain.UploadRecord) {
+	if record.QueuedAt == "" {
+		record.QueuedAt = record.UpdatedAt
+		if record.QueuedAt == "" {
+			record.QueuedAt = time.Now().UTC().Format(time.RFC3339Nano)
+		}
+	}
 }
 
 func uploadQueueTime(record domain.UploadRecord) string {

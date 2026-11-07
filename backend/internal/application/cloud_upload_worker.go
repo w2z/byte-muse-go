@@ -178,6 +178,9 @@ func (s *UploadService) process(ctx context.Context, m UploadMapping, f uploadLo
 	if err != nil {
 		return "", err
 	}
+	if record != nil && !uploadTerminal(record.State) {
+		freezeUploadQueueTime(record)
+	}
 	defer func() {
 		if record == nil {
 			return

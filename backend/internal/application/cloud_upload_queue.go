@@ -181,7 +181,7 @@ func (s *UploadService) Run(ctx context.Context) {
 							s.mode = "running"
 							s.mu.Unlock()
 						}
-						record = &domain.UploadRecord{Key: key, Kind: m.Kind, Root: m.ID, LocalRoot: m.LocalPath, RemotePath: m.Path, Relative: f.Relative, Source: f.Absolute, Size: f.Size, Modified: f.Modified, Policy: policy, State: "pending", UpdatedAt: now.UTC().Format(time.RFC3339Nano)}
+						record = &domain.UploadRecord{Key: key, Kind: m.Kind, Root: m.ID, LocalRoot: m.LocalPath, RemotePath: m.Path, Relative: f.Relative, Source: f.Absolute, Size: f.Size, Modified: f.Modified, Policy: policy, State: "pending", UpdatedAt: time.Now().UTC().Format(time.RFC3339Nano)}
 						record.QueuedAt = record.UpdatedAt
 						if saveErr := s.store.Save(ctx, *record); saveErr != nil {
 							s.update(func(st *UploadStatus) { st.Error = saveErr.Error() })
@@ -222,6 +222,13 @@ func (s *UploadService) Run(ctx context.Context) {
 					return uploadQueueBefore(records[i], records[j])
 				})
 				for _, r := range records {
+					if r.QueuedAt == "" {
+						freezeUploadQueueTime(&r)
+						if saveErr := s.store.Save(ctx, r); saveErr != nil {
+							s.update(func(st *UploadStatus) { st.Error = saveErr.Error() })
+							continue
+						}
+					}
 					if !uploadRetryDue(r, now) {
 						continue
 					}
