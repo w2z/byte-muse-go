@@ -254,7 +254,7 @@ describe("设置页字段布局", () => {
     expect(toggle.compareDocumentPosition(divider!)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
     expect(divider!.compareDocumentPosition(tables)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
     expect(tables.compareDocumentPosition(screen.getByRole("button", { name: "保存设置" }))).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
-    await user.click(screen.getByRole("tab",{name:/文件列表 \(/}));
+    await user.click(screen.getByRole("tab",{name:/^文件列表/}));
     expect(screen.getByRole("columnheader",{name:"路径"})).toBeInTheDocument();
     expect(screen.queryByRole("columnheader",{name:"已上传/总个数"})).not.toBeInTheDocument();
   });

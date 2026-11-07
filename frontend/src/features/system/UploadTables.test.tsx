@@ -8,6 +8,18 @@ import {UploadTables} from "./UploadTables";
 import {apiRequest} from "../../shared/api/client";
 vi.mock("../../shared/api/client",()=>({apiRequest:vi.fn()}));
 afterEach(cleanup);
+it("无任务时隐藏数量，筛选为空但仍有任务时保留全局数量",async()=>{
+ const client=new QueryClient({defaultOptions:{queries:{retry:false}}});
+ vi.mocked(apiRequest).mockResolvedValue({items:[],total:0,task_total:0,completed:0});
+ render(<QueryClientProvider client={client}><UploadTables/></QueryClientProvider>);
+ expect(await screen.findByRole("tab",{name:"目录列表"})).toBeInTheDocument();
+ expect(screen.getByRole("tab",{name:"文件列表"})).toBeInTheDocument();
+ vi.mocked(apiRequest).mockImplementation(async(path)=>String(path).startsWith("/cloud-upload/directories")?{items:[],total:2,completed:1}:{items:[],total:0,task_total:3,completed:1});
+ await client.invalidateQueries();
+ expect(await screen.findByRole("tab",{name:"目录列表 (1/2)"})).toBeInTheDocument();
+ expect(screen.getByRole("tab",{name:"文件列表 (1/3)"})).toBeInTheDocument();
+ client.clear();
+});
 it("所有控制按钮默认禁用，状态返回后只启用服务端允许的动作",async()=>{
  const client=new QueryClient({defaultOptions:{queries:{retry:false}}});
  let resolveStatus:(value:unknown)=>void=()=>{};

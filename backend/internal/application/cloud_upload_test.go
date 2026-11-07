@@ -158,6 +158,81 @@ func TestManualUploadScanWithoutMonitoring(t *testing.T) {
 	}
 }
 
+// TestManualUploadRestartsClearedTasks keeps automatic deduplication but admits an explicit new batch.
+func TestManualUploadRestartsClearedTasks(t *testing.T) {
+	for _, previousState := range []string{"completed", "skipped", "stopped", "pending"} {
+		t.Run(previousState, func(t *testing.T) {
+			root := t.TempDir()
+			if err := os.WriteFile(filepath.Join(root, "file.txt"), []byte("abc"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			mapping := UploadMapping{Kind: "115", ID: "0", Path: "/", LocalPath: root}
+			files, err := uploadSnapshot(context.Background(), mapping)
+			if err != nil {
+				t.Fatal(err)
+			}
+			file := files[0]
+			key := uploadKey(mapping, file, "overwrite")
+			stamp := time.Now().Add(-time.Hour).UTC().Format(time.RFC3339Nano)
+			record := domain.UploadRecord{Key: key, Kind: "115", Root: "0", LocalRoot: root, RemotePath: "/", Source: file.Absolute, Relative: file.Relative, Size: file.Size, Modified: file.Modified, Policy: "overwrite", State: previousState, Hidden: true, Intent: "delete", Mode: "copy", QueuedAt: stamp, CompletedAt: stamp, UpdatedAt: stamp, Parent: "old-parent", StageID: "old-id", SHA1: "old-hash", Retries: 3, Error: "old error"}
+			store := uploadMemoryStore{key: record, uploadControlKey: {Key: uploadControlKey, State: "control", Intent: "stopped"}}
+			raw, _ := json.Marshal([]UploadMapping{mapping})
+			service := &UploadService{store: store, settings: func(context.Context) (map[string]string, error) {
+				return map[string]string{"CLOUD_UPLOAD_PATHS": string(raw), "CLOUD_UPLOAD_ENABLE": "true", "CLOUD_UPLOAD_CONFLICT": "overwrite", "CLOUD_UPLOAD_MODE": "move"}, nil
+			}, provider: func(context.Context, string) (uploadRemote, error) { return nil, errors.New("test provider offline") }}
+			ctx, cancel := context.WithCancel(context.Background())
+			done := make(chan struct{})
+			go func() { defer close(done); service.Run(ctx) }()
+			defer func() { cancel(); <-done }()
+			deadline := time.Now().Add(5 * time.Second)
+			for !service.Status().Actions["scan"] {
+				if time.Now().After(deadline) {
+					t.Fatal("not ready")
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			time.Sleep(100 * time.Millisecond)
+			if service.Files(1, 20, "").Total != 0 {
+				t.Fatal("automatic discovery revived a cleared task")
+			}
+			if err = service.Control(ctx, "scan"); err != nil {
+				t.Fatal(err)
+			}
+			if previousState == "pending" {
+				time.Sleep(100 * time.Millisecond)
+				got, _ := store.Get(ctx, key)
+				if !got.Hidden || got.StageID != "old-id" {
+					t.Fatal("unfinished recovery receipt reset")
+				}
+				return
+			}
+			deadline = time.Now().Add(5 * time.Second)
+			for service.Files(1, 20, "").Total != 1 {
+				if time.Now().After(deadline) {
+					t.Fatal("manual scan did not restore task")
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			got, _ := store.Get(ctx, key)
+			if got.Mode != "move" || got.Hidden || got.CompletedAt != "" || got.StageID != "" || got.SHA1 != "" || got.Parent != "" || got.QueuedAt == stamp || got.Intent != "" {
+				t.Fatalf("stale execution fields: %+v", got)
+			}
+			if service.DirectoryPage("").Total != 1 {
+				t.Fatal("directory task absent")
+			}
+			queuedAt := got.QueuedAt
+			if err = service.Control(ctx, "scan"); err != nil {
+				t.Fatal(err)
+			}
+			time.Sleep(100 * time.Millisecond)
+			got, _ = store.Get(ctx, key)
+			if got.QueuedAt != queuedAt {
+				t.Fatal("repeated scan reset visible task")
+			}
+		})
+	}
+}
+
 // TestUploadProgressWaitsForVerification keeps bytes and completed object counts distinct.
 func TestUploadProgressWaitsForVerification(t *testing.T) {
 	m := UploadMapping{Kind: "115", ID: "0", Path: "/", LocalPath: t.TempDir()}

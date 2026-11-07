@@ -201,8 +201,10 @@ export function UploadTables() {
       ),
     refetchInterval: 2000,
   });
-  const directoryLabel = `目录列表 (${directories.data?.completed ?? 0}/${directories.data?.total ?? 0})`;
-  const fileLabel = `文件列表 (${files.data?.completed ?? 0}/${files.data?.task_total ?? files.data?.total ?? 0})`;
+  const directoryTotal = directories.data?.total ?? 0;
+  const fileTotal = files.data?.task_total ?? files.data?.total ?? 0;
+  const directoryLabel = directoryTotal > 0 ? `目录列表 (${directories.data?.completed ?? 0}/${directoryTotal})` : "目录列表";
+  const fileLabel = fileTotal > 0 ? `文件列表 (${files.data?.completed ?? 0}/${fileTotal})` : "文件列表";
   const filter = tab === "files" ? (
     <Select className="settings-upload-status-select" aria-label="文件状态" value={fileStatus} options={statusOptions} onChange={(value) => { setFileStatus(String(value)); setPage(1); }} />
   ) : (

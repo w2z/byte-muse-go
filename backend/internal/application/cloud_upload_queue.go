@@ -194,12 +194,16 @@ func (s *UploadService) Run(ctx context.Context) {
 				}
 				for _, f := range files {
 					key := uploadKey(m, f, policy)
+						if _, active := workers[key]; active {
+							continue
+						}
 					record, getErr := s.store.Get(ctx, key)
 					if getErr != nil {
 						s.update(func(st *UploadStatus) { st.Error = getErr.Error() })
 						continue
 					}
-					if record == nil {
+					// Only an explicit scan may re-admit a cleared terminal task. Recovery receipts and visible tasks remain intact.
+					if record == nil || (scanNow && record.Hidden && uploadTerminal(record.State)) {
 						if s.mode == "stopped" {
 							if saveErr := s.store.Save(ctx, domain.UploadRecord{Key: uploadControlKey, State: "control", Intent: "running"}); saveErr != nil {
 								s.update(func(st *UploadStatus) { st.Error = saveErr.Error() })
