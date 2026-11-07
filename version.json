@@ -1,16 +1,20 @@
 {
-  "version": "0.1.208",
-  "commit": "bb642c6d3cf5b8354b9b07f57944d124f0f8cbe2",
-  "short_commit": "bb642c6",
-  "built_at": "2026-11-07T11:24:28Z",
+  "version": "0.1.209",
+  "commit": "0c5b1dbeaf44c2e7af17ca3c18810ce81057cc91",
+  "short_commit": "0c5b1db",
+  "built_at": "2026-11-07T12:06:13Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.208",
-    "sha-bb642c6",
+    "0.1.209",
+    "sha-0c5b1db",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.209",
+      "message": "补充跳过说明并延伸标签栏底线"
+    },
     {
       "version": "0.1.208",
       "message": "移除二级分类下的当前分组提示"
