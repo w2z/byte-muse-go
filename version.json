@@ -1,16 +1,20 @@
 {
-  "version": "0.1.201",
-  "commit": "89a3cf53d5dd26c24798c208cf8f1afddfaf28b4",
-  "short_commit": "89a3cf5",
-  "built_at": "2026-11-07T08:38:31Z",
+  "version": "0.1.202",
+  "commit": "b674f2189825f16c5142481adc4d74a55b72205c",
+  "short_commit": "b674f21",
+  "built_at": "2026-11-07T08:57:10Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.201",
-    "sha-89a3cf5",
+    "0.1.202",
+    "sha-b674f21",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.202",
+      "message": "按占用与稳定采样调度并消除重复加锁"
+    },
     {
       "version": "0.1.201",
       "message": "改为原名直传并校验后清理旧文件"
