@@ -95,9 +95,11 @@ func uploadUnchanged(f uploadLocalFile) bool {
 	return err == nil && info.Mode().IsRegular() && info.Size() == f.Size && info.ModTime().UnixNano() == f.Modified
 }
 
+// uploadStageName preserves 115's immutable extension so the stage can be renamed to the final target.
 func uploadStageName(kind, target string) string {
 	if kind == "115" {
-		target = strings.TrimSuffix(target, path.Ext(target))
+		extension := path.Ext(target)
+		return strings.TrimSuffix(target, extension) + ".bytemuse-go-tmp" + extension
 	}
 	return target + ".bytemuse-go-tmp"
 }
@@ -206,8 +208,11 @@ func (s *UploadService) process(ctx context.Context, m UploadMapping, f uploadLo
 					record.Hidden = record.Intent == "delete"
 				} else {
 					record.State = "pending"
+					record.Error = resultErr.Error()
 				}
-				resultErr = nil
+				if record.Intent == "delete" || record.Intent == "stop" {
+					resultErr = nil
+				}
 			} else {
 				record.Error = resultErr.Error()
 			}
@@ -333,6 +338,9 @@ func (s *UploadService) process(ctx context.Context, m UploadMapping, f uploadLo
 			record.Stage = uploadStageName(m.Kind, name)
 		}
 		record.Backup = ".bytemuse-backup-" + key
+		if m.Kind == "115" {
+			record.Backup += path.Ext(name)
+		}
 		if exists && existing.Directory {
 			return "", fmt.Errorf("目标已存在同名目录: %s", name)
 		}

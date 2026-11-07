@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -386,7 +387,7 @@ func TestUploadQueueRechecksLockedFileAfterNextCompletion(t *testing.T) {
 	if service.Files(1, 20, "").Completed != 3 {
 		t.Fatalf("queue did not complete: %+v", service.Files(1, 20, ""))
 	}
-	if strings.Join(remote.order, ",") != "b.bytemuse-go-tmp,a.bytemuse-go-tmp,c.bytemuse-go-tmp" {
+	if strings.Join(remote.order, ",") != "b.bytemuse-go-tmp.bin,a.bytemuse-go-tmp.bin,c.bytemuse-go-tmp.bin" {
 		t.Fatalf("locked task waited for queue drain: %v", remote.order)
 	}
 }
@@ -505,6 +506,7 @@ type uploadMemoryRemote struct {
 	extra              []uploadEntry
 	failUpload         bool
 	loseRenameResponse bool
+	preserveExtension  bool
 	failDelete         bool
 	uploads            int
 	deleted            int
@@ -573,6 +575,9 @@ func (r *uploadMemoryRemote) Upload(_ context.Context, _, name string, f *os.Fil
 	return err
 }
 func (r *uploadMemoryRemote) Rename(_ context.Context, _ string, e uploadEntry, name string) error {
+	if r.preserveExtension {
+		name = strings.TrimSuffix(name, path.Ext(name)) + path.Ext(e.Name)
+	}
 	for index := range r.extra {
 		if r.extra[index].ID == e.ID {
 			r.extra[index].Name = name

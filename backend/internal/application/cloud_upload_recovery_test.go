@@ -76,25 +76,37 @@ func TestUploadUsesShortSourceBasedStageName(t *testing.T) {
 		t.Fatal(err)
 	}
 	record := store[uploadKey(m, f, "overwrite")]
-	if record.Stage != "film.bytemuse-go-tmp" {
+	if record.Stage != "film.bytemuse-go-tmp.mkv" {
 		t.Fatalf("stage=%q", record.Stage)
 	}
 }
 
-func TestUploadConsolidatesDuplicate115Stages(t *testing.T) {
+func TestUpload115ReplacementPreservesImmutableExtensions(t *testing.T) {
+	service, mapping, file, remote, store := recoveryFixture(t)
+	remote.preserveExtension = true
+	state, err := service.process(context.Background(), mapping, file, "overwrite")
+	if err != nil || state != "completed" || string(remote.files["film.mkv"]) != "new video" || len(remote.files) != 1 {
+		t.Fatalf("state=%s err=%v files=%v", state, err, remote.files)
+	}
+	if remote.uploads != 1 || store[uploadKey(mapping, file, "overwrite")].Retries != 0 {
+		t.Fatal("replacement repeated upload or failed verification")
+	}
+}
+
+func TestUploadPreservesDuplicate115Stages(t *testing.T) {
 	s, m, f, remote, store := recoveryFixture(t)
 	remote.extra = []uploadEntry{
-		{ID: "stage-1", Name: "film.bytemuse-go-tmp", Size: f.Size},
-		{ID: "stage-2", Name: "film.bytemuse-go-tmp", Size: f.Size},
+		{ID: "stage-1", Name: "film.bytemuse-go-tmp.mkv", Size: f.Size},
+		{ID: "stage-2", Name: "film.bytemuse-go-tmp.mkv", Size: f.Size},
 	}
-	if state, err := s.process(context.Background(), m, f, "overwrite"); err != nil || state != "completed" {
+	if state, err := s.process(context.Background(), m, f, "overwrite"); err == nil || state == "completed" {
 		t.Fatalf("state=%s err=%v", state, err)
 	}
-	if len(remote.extra) != 1 || remote.deleted != 1 || remote.extra[0].Name != "film.mkv" {
-		t.Fatalf("duplicate stages were not consolidated: extra=%v deleted=%d", remote.extra, remote.deleted)
+	if len(remote.extra) != 2 || remote.deleted != 0 {
+		t.Fatalf("unknown duplicate stages deleted: extra=%v deleted=%d", remote.extra, remote.deleted)
 	}
 	record := store[uploadKey(m, f, "overwrite")]
-	if record.State != "completed" || len(remote.extra) != 1 || remote.extra[0].Name != "film.mkv" {
+	if record.State == "completed" || string(remote.files["film.mkv"]) != "old video" {
 		t.Fatalf("state=%s files=%v extra=%v", record.State, remote.files, remote.extra)
 	}
 }
@@ -249,8 +261,8 @@ func TestUploadRetryAfterRemoteObjectsDeleted(t *testing.T) {
 	if err := service.applyScopedUploadControl(context.Background(), "retry", "file", key); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.process(context.Background(), mapping, file, "overwrite"); err != nil {
-		t.Fatal(err)
+	if _, err := service.process(context.Background(), mapping, file, "overwrite"); err == nil {
+		t.Fatal("missing remote objects must consume the retry budget")
 	}
 	if store[key].State != "pending" || store[key].Parent != "" {
 		t.Fatalf("missing objects were not reset: %+v", store[key])
@@ -286,7 +298,7 @@ func TestUploadDeletedParentReplacesLegacyStageName(t *testing.T) {
 	if state, err := service.process(context.Background(), mapping, file, "overwrite"); err != nil || state != "completed" {
 		t.Fatalf("state=%s err=%v", state, err)
 	}
-	if store[key].Stage != "film.bytemuse-go-tmp" {
+	if store[key].Stage != "film.bytemuse-go-tmp.mkv" {
 		t.Fatalf("deleted attempt reused legacy stage: %s", store[key].Stage)
 	}
 }
