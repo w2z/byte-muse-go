@@ -22,6 +22,63 @@ import (
 
 type uploadMemoryStore map[string]domain.UploadRecord
 
+type uploadDelayedAdmissionStore struct {
+	uploadMemoryStore
+	blocked chan struct{}
+	release chan struct{}
+	saves   atomic.Int32
+}
+
+func (store *uploadDelayedAdmissionStore) Save(ctx context.Context, record domain.UploadRecord) error {
+	if record.State == "pending" && store.saves.Add(1) == 2 {
+		close(store.blocked)
+		select {
+		case <-store.release:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return store.uploadMemoryStore.Save(ctx, record)
+}
+
+func TestUploadDiscoveryPublishesBeforeScanCompletes(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"a.txt", "b.txt"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte("a"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	raw, _ := json.Marshal([]UploadMapping{{Kind: "115", ID: "0", Path: "/", LocalPath: root}})
+	store := &uploadDelayedAdmissionStore{uploadMemoryStore: uploadMemoryStore{}, blocked: make(chan struct{}), release: make(chan struct{})}
+	started := make(chan struct{}, 8)
+	service := &UploadService{store: store, settings: func(context.Context) (map[string]string, error) {
+		return map[string]string{"CLOUD_UPLOAD_ENABLE": "true", "CLOUD_UPLOAD_PATHS": string(raw)}, nil
+	}, provider: func(context.Context, string) (uploadRemote, error) {
+		started <- struct{}{}
+		return nil, errors.New("test offline")
+	}}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { defer close(done); service.Run(ctx) }()
+	defer func() { cancel(); close(store.release); <-done }()
+	select {
+	case <-store.blocked:
+	case <-time.After(5 * time.Second):
+		t.Fatal("scan did not reach second file")
+	}
+	if service.Files(1, 20, "").Total != 1 || service.DirectoryPage("").Total != 1 || service.Status().Total != 1 {
+		t.Fatal("first persisted file hidden until entire scan finishes")
+	}
+	select {
+	case <-started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("upload waited for remaining scan admission")
+	}
+	if service.Status().Actions["scan"] {
+		t.Fatal("duplicate scan enabled during discovery")
+	}
+}
+
 var uploadMemoryStoreMu sync.Mutex
 
 func (s uploadMemoryStore) List(context.Context) ([]domain.UploadRecord, error) {

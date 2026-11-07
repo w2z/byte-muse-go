@@ -59,6 +59,7 @@ type UploadService struct {
 	mode        string
 	// scanRequested asks the scheduler for one immediate discovery pass.
 	scanRequested bool
+	scanning      bool
 	// manualUpload finishes that pass while continuous monitoring remains off.
 	manualUpload bool
 }

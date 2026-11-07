@@ -74,7 +74,7 @@ func (s *UploadService) ControlScope(ctx context.Context, action, scope, key str
 
 // uploadActionsLocked is shared by HTTP preconditions and button availability.
 func (s *UploadService) uploadActionsLocked() map[string]bool {
-	active, completed, visible := false, false, false
+	active, completed, visible := s.scanning, false, false
 	for _, f := range s.files {
 		visible = true
 		if !uploadTerminal(f.State) && f.State != "failed" {
@@ -91,7 +91,7 @@ func (s *UploadService) uploadActionsLocked() map[string]bool {
 		"clear_completed": s.ready && completed,
 		"delete_all":      s.ready && visible && s.mode != "deleting",
 		"retry_all":       s.ready && hasUploadErrors(s.files),
-		"scan":            s.ready && len(s.mappings) > 0 && s.mode != "paused" && s.mode != "stopping" && s.mode != "deleting",
+		"scan":            s.ready && !s.scanning && !s.scanRequested && len(s.mappings) > 0 && s.mode != "paused" && s.mode != "stopping" && s.mode != "deleting",
 	}
 	if s.ready {
 		for name, enabled := range uploadListClearActions(s.files) {
@@ -541,7 +541,7 @@ func (s *UploadService) refreshUploadView(ctx context.Context) error {
 	}
 	if st.Current == "" {
 		st.State = "watching"
-		if !st.Enabled && !s.manualUpload {
+		if !st.Enabled && !s.manualUpload && !s.scanning {
 			st.State = "disabled"
 		}
 		if s.mode != "running" {

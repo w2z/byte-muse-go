@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"github.com/fsnotify/fsnotify"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -109,6 +108,24 @@ func (s *UploadService) Run(ctx context.Context) {
 	uploadMode := "copy"
 	concurrency := 5
 	var mappings []UploadMapping
+	var discovery <-chan uploadDiscovery
+	var cancelDiscovery context.CancelFunc
+	var scanManual bool
+	var scanPolicy, scanMode string
+	stopDiscovery := func() {
+		if cancelDiscovery != nil {
+			cancelDiscovery()
+		}
+		for discovery != nil {
+			if _, ok := <-discovery; !ok {
+				discovery = nil
+			}
+		}
+		s.mu.Lock()
+		s.scanning = false
+		s.mu.Unlock()
+	}
+	defer stopDiscovery()
 	observations := map[string]uploadObservation{}
 	for {
 		// A failed bulk write must replay before discovery or another file can start.
@@ -138,6 +155,7 @@ func (s *UploadService) Run(ctx context.Context) {
 			}
 			next := values["CLOUD_UPLOAD_ENABLE"] + values["CLOUD_UPLOAD_PATHS"] + values["CLOUD_UPLOAD_CONFLICT"]
 			if signature != next {
+				stopDiscovery()
 				stopAll()
 				signature = next
 				dirty = true
@@ -167,68 +185,19 @@ func (s *UploadService) Run(ctx context.Context) {
 			}
 		}
 		s.mu.Unlock()
-		if scanNow || (enabled && (dirty || !now.Before(nextScan))) {
+		if discovery == nil && (scanNow || (enabled && s.mode == "running" && (dirty || !now.Before(nextScan)))) {
 			dirty = false
 			nextScan = now.Add(30 * time.Second)
-			for _, m := range mappings {
-				if watch != nil {
-					_ = filepath.WalkDir(m.LocalPath, func(p string, d fs.DirEntry, err error) error {
-						if ctx.Err() != nil {
-							return ctx.Err()
-						}
-						if err != nil {
-							return err
-						}
-						if d.IsDir() && !knownDirs[p] {
-							if watch.Add(p) == nil {
-								knownDirs[p] = true
-							}
-						}
-						return nil
-					})
-				}
-				files, scanErr := uploadSnapshot(ctx, m)
-				if scanErr != nil {
-					s.update(func(st *UploadStatus) { st.Error = scanErr.Error() })
-					continue
-				}
-				for _, f := range files {
-					key := uploadKey(m, f, policy)
-						if _, active := workers[key]; active {
-							continue
-						}
-					record, getErr := s.store.Get(ctx, key)
-					if getErr != nil {
-						s.update(func(st *UploadStatus) { st.Error = getErr.Error() })
-						continue
-					}
-					// Only an explicit scan may re-admit a cleared terminal task. Recovery receipts and visible tasks remain intact.
-					if record == nil || (scanNow && record.Hidden && uploadTerminal(record.State)) {
-						if s.mode == "stopped" {
-							if saveErr := s.store.Save(ctx, domain.UploadRecord{Key: uploadControlKey, State: "control", Intent: "running"}); saveErr != nil {
-								s.update(func(st *UploadStatus) { st.Error = saveErr.Error() })
-								continue
-							}
-							s.mu.Lock()
-							s.mode = "running"
-							s.mu.Unlock()
-						}
-						record = &domain.UploadRecord{Key: key, Kind: m.Kind, Root: m.ID, LocalRoot: m.LocalPath, RemotePath: m.Path, Relative: f.Relative, Source: f.Absolute, Size: f.Size, Modified: f.Modified, Policy: policy, Mode: uploadMode, State: "pending", UpdatedAt: time.Now().UTC().Format(time.RFC3339Nano)}
-						record.QueuedAt = record.UpdatedAt
-						if saveErr := s.store.Save(ctx, *record); saveErr != nil {
-							s.update(func(st *UploadStatus) { st.Error = saveErr.Error() })
-						}
-					} else if record.QueuedAt == "" {
-						record.QueuedAt = record.UpdatedAt
-						if record.QueuedAt == "" {
-							record.QueuedAt = now.UTC().Format(time.RFC3339Nano)
-						}
-						if saveErr := s.store.Save(ctx, *record); saveErr != nil {
-							s.update(func(st *UploadStatus) { st.Error = saveErr.Error() })
-						}
-					}
-				}
-			}
+			scanManual = scanNow
+			scanPolicy, scanMode = policy, uploadMode
+			scanContext, cancel := context.WithCancel(ctx)
+			cancelDiscovery = cancel
+			stream := make(chan uploadDiscovery, 1)
+			discovery = stream
+			s.mu.Lock()
+			s.scanning = true
+			s.mu.Unlock()
+			go discoverUploadFiles(scanContext, append([]UploadMapping(nil), mappings...), stream)
 		}
 		s.mu.RLock()
 		manual := s.manualUpload
@@ -373,7 +342,7 @@ func (s *UploadService) Run(ctx context.Context) {
 				}
 			}
 		}
-		if manual && len(workers) == 0 {
+		if manual && len(workers) == 0 && discovery == nil {
 			pending, pendingErr := s.store.PendingCommits(ctx)
 			if pendingErr != nil {
 				s.update(func(st *UploadStatus) { st.Error = pendingErr.Error() })
@@ -386,9 +355,73 @@ func (s *UploadService) Run(ctx context.Context) {
 		if err = s.refreshUploadView(ctx); err != nil {
 			s.update(func(st *UploadStatus) { st.Error = err.Error() })
 		}
+		discoveryDeadline := time.Now().Add(250 * time.Millisecond)
+	waitForUploadEvent:
 		select {
 		case <-ctx.Done():
 			return
+		case event, ok := <-discovery:
+			if !ok {
+				discovery = nil
+				s.mu.Lock()
+				s.scanning = false
+				s.mu.Unlock()
+				continue
+			}
+			if event.err != nil {
+				s.update(func(st *UploadStatus) { st.Error = event.err.Error() })
+				continue
+			}
+			if event.directory != "" {
+				if watch != nil && !knownDirs[event.directory] && watch.Add(event.directory) == nil {
+					knownDirs[event.directory] = true
+				}
+			} else {
+				m, f := event.mapping, event.file
+				key := uploadKey(m, f, scanPolicy)
+				if _, active := workers[key]; active {
+					goto discoveryHandled
+				}
+				record, getErr := s.store.Get(ctx, key)
+				if getErr != nil {
+					s.update(func(st *UploadStatus) { st.Error = getErr.Error() })
+					goto discoveryHandled
+				}
+				// Only an explicit scan may re-admit a cleared terminal task. Recovery receipts and visible tasks remain intact.
+				if record == nil || (scanManual && record.Hidden && uploadTerminal(record.State)) {
+					if s.mode == "stopped" {
+						if saveErr := s.store.Save(ctx, domain.UploadRecord{Key: uploadControlKey, State: "control", Intent: "running"}); saveErr != nil {
+							s.update(func(st *UploadStatus) { st.Error = saveErr.Error() })
+							goto discoveryHandled
+						}
+						s.mu.Lock()
+						s.mode = "running"
+						s.mu.Unlock()
+					}
+					record = &domain.UploadRecord{Key: key, Kind: m.Kind, Root: m.ID, LocalRoot: m.LocalPath, RemotePath: m.Path, Relative: f.Relative, Source: f.Absolute, Size: f.Size, Modified: f.Modified, Policy: scanPolicy, Mode: scanMode, State: "pending", UpdatedAt: time.Now().UTC().Format(time.RFC3339Nano)}
+					record.QueuedAt = record.UpdatedAt
+					if saveErr := s.store.Save(ctx, *record); saveErr != nil {
+						s.update(func(st *UploadStatus) { st.Error = saveErr.Error() })
+						goto discoveryHandled
+					}
+					s.publishDiscoveredUpload(*record)
+					if len(workers) < concurrency {
+						discoveryDeadline = time.Time{}
+					}
+				} else if record.QueuedAt == "" {
+					record.QueuedAt = record.UpdatedAt
+					if record.QueuedAt == "" {
+						record.QueuedAt = now.UTC().Format(time.RFC3339Nano)
+					}
+					if saveErr := s.store.Save(ctx, *record); saveErr != nil {
+						s.update(func(st *UploadStatus) { st.Error = saveErr.Error() })
+					}
+				}
+			}
+		discoveryHandled:
+			if time.Now().Before(discoveryDeadline) {
+				goto waitForUploadEvent
+			}
 		case result := <-results:
 			finish(result)
 		case command := <-s.commands:
@@ -405,6 +438,10 @@ func (s *UploadService) Run(ctx context.Context) {
 			if !allowed {
 				command.reply <- ErrUploadControl
 				continue
+			}
+			if command.action == "stop" || command.action == "delete_all" || command.action == "pause" {
+				stopDiscovery()
+				dirty = true
 			}
 			if command.action == "scan" {
 				s.mu.Lock()

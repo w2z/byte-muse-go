@@ -71,6 +71,25 @@ func uploadDirectoryKey(m UploadMapping) string {
 	return fmt.Sprintf("%x", sha256.Sum256([]byte(m.Kind+"\x00"+m.ID+"\x00"+m.LocalPath)))
 }
 
+// publishDiscoveredUpload exposes a durably queued file immediately, without rereading the entire growing queue.
+func (s *UploadService) publishDiscoveredUpload(record domain.UploadRecord) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.files == nil {
+		s.files = map[string]UploadFileProgress{}
+	}
+	if _, exists := s.files[record.Key]; exists || record.Hidden {
+		return
+	}
+	s.files[record.Key] = UploadFileProgress{
+		Key: record.Key, DirectoryKey: uploadDirectoryKey(UploadMapping{Kind: record.Kind, ID: record.Root, LocalPath: record.LocalRoot}),
+		Path: record.Source, RemotePath: uploadRemoteFilePath(record.RemotePath, record.Relative, record.Target), Size: record.Size,
+		QueuedAt: uploadQueueTime(record), MaxRetries: uploadMaxAutoRetries,
+		State: uploadPresentationState(record, "", false, s.mode, s.status.Enabled, s.manualUpload),
+	}
+	s.status.Total++
+}
+
 // Files returns one status group in ascending queue time and normalizes idle speeds to zero.
 // An empty status returns every file. Filtering happens before sorting and pagination.
 func (s *UploadService) Files(page, size int, status string) UploadFilePage {
