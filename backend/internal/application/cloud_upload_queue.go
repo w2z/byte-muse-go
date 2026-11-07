@@ -86,6 +86,7 @@ func (s *UploadService) Run(ctx context.Context) {
 	enabled := false
 	policy := "skip"
 	var mappings []UploadMapping
+	observations := map[string]uploadObservation{}
 	for {
 		// A failed bulk write must replay before discovery or another file can start.
 		persisted, controlErr := s.store.Get(ctx, uploadControlKey)
@@ -241,14 +242,26 @@ func (s *UploadService) Run(ctx context.Context) {
 						if !allowed && sourceExists && r.Intent != "delete" {
 							continue
 						}
-						if r.Intent != "delete" && uploadFileLocked(r.Source) {
-							r.Error = "该文件正在被占用"
-							r.ErrorKind = "locked"
-							r.NextRetry = now.Add(time.Second).UTC().Format(time.RFC3339Nano)
-							if saveErr := s.store.Save(ctx, r); saveErr != nil {
-								s.update(func(st *UploadStatus) { st.Error = saveErr.Error() })
+						if r.Intent != "delete" {
+							info, statErr := os.Lstat(r.Source)
+							if statErr == nil && info.Mode().IsRegular() {
+								observed := uploadLocalFile{Absolute: r.Source, Size: info.Size(), Modified: info.ModTime().UnixNano()}
+								if reason := observeUploadSource(observations, observed, now, uploadSourceAccess(r.Source)); reason != "" {
+									r.Error, r.ErrorKind = reason, "locked"
+									r.NextRetry = now.Add(time.Second).UTC().Format(time.RFC3339Nano)
+									if saveErr := s.store.Save(ctx, r); saveErr != nil {
+										s.update(func(st *UploadStatus) { st.Error = saveErr.Error() })
+									}
+									continue
+								}
 							}
-							continue
+							if r.ErrorKind == "locked" {
+								r.Error, r.ErrorKind, r.NextRetry = "", "", ""
+								if saveErr := s.store.Save(ctx, r); saveErr != nil {
+									s.update(func(st *UploadStatus) { st.Error = saveErr.Error() })
+									continue
+								}
+							}
 						}
 						if r.Intent != "delete" && !sourceExists {
 							info, statErr := os.Lstat(r.Source)
@@ -279,12 +292,6 @@ func (s *UploadService) Run(ctx context.Context) {
 								if saveErr := s.store.Save(ctx, r); saveErr != nil {
 									s.update(func(st *UploadStatus) { st.Error = saveErr.Error() })
 								}
-								continue
-							}
-						}
-						if r.Error == "" {
-							discovered, _ := time.Parse(time.RFC3339Nano, r.UpdatedAt)
-							if now.Sub(discovered) < 5*time.Second {
 								continue
 							}
 						}

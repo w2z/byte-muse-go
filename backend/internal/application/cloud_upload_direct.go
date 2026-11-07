@@ -11,7 +11,7 @@ import (
 
 // processDirectUpload uploads the final name and verifies content before deleting a recorded old ID.
 // Stage equals Target marks direct receipts; legacy stages are never inferred to be owned or deleted.
-func (s *UploadService) processDirectUpload(ctx context.Context, remote uploadRemote, record *domain.UploadRecord, mapping UploadMapping, source uploadLocalFile, save func() error) (string, error) {
+func (s *UploadService) processDirectUpload(ctx context.Context, remote uploadRemote, record *domain.UploadRecord, mapping UploadMapping, source uploadLocalFile, sourceGuarded bool, save func() error) (string, error) {
 	if record.Intent == "stop" || record.Intent == "delete" || record.State == "discarding" {
 		record.State = "stopped"
 		record.Hidden = record.Intent == "delete"
@@ -23,11 +23,13 @@ func (s *UploadService) processDirectUpload(ctx context.Context, remote uploadRe
 	}
 	var file *os.File
 	if record.State == "pending" {
-		release, lockErr := uploadSourceGuard(source.Absolute)
-		if lockErr != nil {
-			return record.State, lockErr
+		if !sourceGuarded {
+			release, lockErr := uploadSourceGuard(source.Absolute)
+			if lockErr != nil {
+				return record.State, lockErr
+			}
+			defer release()
 		}
-		defer release()
 		root, openErr := os.OpenRoot(mapping.LocalPath)
 		if openErr != nil {
 			return record.State, openErr
@@ -65,6 +67,9 @@ func (s *UploadService) processDirectUpload(ctx context.Context, remote uploadRe
 	}
 	installed, found := verified(entries)
 	if !found && record.State == "pending" {
+		if !uploadUnchanged(source) {
+			return record.State, fmt.Errorf("文件校验期间发生变化，停止本次上传")
+		}
 		if record.Policy == "keep_both" {
 			if _, occupied := findUploadEntry(entries, record.Target); occupied {
 				if err = s.selectUploadName(ctx, record, entries); err != nil {

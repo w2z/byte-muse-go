@@ -50,7 +50,7 @@ const states: Record<string, string> = {
   attention: "需处理",
   blocked: "等待账号或权限恢复",
   stopped: "已停止",
-  waiting: "等待文件稳定",
+  waiting: "等待中",
   transferring: "传送至 CD2",
   uploading: "上传到网盘",
   verifying: "校验中",

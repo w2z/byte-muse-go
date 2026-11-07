@@ -364,7 +364,7 @@ func (s *UploadService) process(ctx context.Context, m UploadMapping, f uploadLo
 		record.RemotePath = m.Path
 	}
 	if record.Stage == record.Target {
-		return s.processDirectUpload(ctx, remote, record, m, f, save)
+		return s.processDirectUpload(ctx, remote, record, m, f, sourceGuarded, save)
 	}
 	if record.State == "pending" && !uploadUnchanged(f) {
 		record.State = "discarding"

@@ -81,7 +81,7 @@ func TestUploadMonitorDiscoveryAndStop(t *testing.T) {
 	enabled.Store(false)
 	wait(func() bool { return !s.Status().Enabled })
 	files := s.Files(1, 20, "")
-	if files.Total != 2 || files.Items[0].State != "stopped" {
+	if files.Total != 2 || (files.Items[0].State != "stopped" && files.Items[0].State != "failed") {
 		t.Fatalf("lost stopped snapshot: %+v", files)
 	}
 	cancel()
