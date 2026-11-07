@@ -542,7 +542,6 @@ button.code-card-still-cell:hover img { opacity: .85; }
 .setting-unavailable { padding: 4px 7px; color: var(--muted) !important; background: rgba(155,168,167,.1); border-radius: 4px; }
 .settings-readonly-badge { padding: 7px 10px; color: var(--ink-2); background: var(--hover); border: 1px solid var(--line); border-radius: 4px; font: var(--app-font-weight) 10px var(--app-font-family); }
 .settings-form-shell { flex: 1 1 auto; min-width: 0; width: 100%; padding: 20px 20px 24px; }
-.settings-save-scope { margin: 0 0 16px; color: var(--muted); font-size: 12px; line-height: 20px; overflow-wrap: anywhere; }
 .settings-crawler-connection { display: flex; flex-wrap: wrap; gap: 12px; }
 .settings-crawler-connection > .settings-field { flex: 1 1 240px; }
 .settings-action-heading { border-top: 1px solid var(--line); padding-top: 20px; }

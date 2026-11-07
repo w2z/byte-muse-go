@@ -33,6 +33,18 @@ function renderSettings() {
 }
 
 describe("设置页字段布局", () => {
+  it("二级分类下不再显示当前分组提示", async () => {
+    const user = userEvent.setup();
+    renderSettings();
+    await screen.findByRole("tab", { name: "站点" });
+    expect(screen.queryByText(/当前分组：/)).not.toBeInTheDocument();
+    await user.click(screen.getByRole("tab", { name: "AI 模型" }));
+    expect(screen.queryByText(/当前分组：/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/保存与重置作用于本分组/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "保存设置" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "重置" })).toBeInTheDocument();
+  });
+
   it("MCP 默认关闭，保存开启后显示服务端生成的令牌，重置恢复已保存开关", async () => {
     const user = userEvent.setup();
     let values: Record<string, string> = { MCP_ENABLE: "false", MCP_TOKEN: "", EXTERNAL_DOMAIN: "https://i0.wp.com" };

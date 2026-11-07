@@ -1907,10 +1907,6 @@ export function SettingsPage() {
             </Tabs>
           </div>
           <div className="settings-form-shell">
-            <p className="settings-save-scope">
-              当前分组：{activeGroup.title} · {hasChanges ? "有未保存的修改" : "未修改"}。保存与重置作用于本分组{activeTabs.length ? "（包含全部页签）" : ""}。
-              {currentPayload.TRANSLATION_ENGINE !== undefined && draft.TRANSLATION_ENGINE !== baselineValue("TRANSLATION_ENGINE") ? "翻译引擎的关联调整也会随保存提交。" : ""}
-            </p>
             {activeTabs.length > 0 && activeTab ? (
               <div className="settings-model-tabs">
                 <Tabs
