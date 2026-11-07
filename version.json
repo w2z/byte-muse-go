@@ -1,16 +1,20 @@
 {
-  "version": "0.1.197",
-  "commit": "853ccdbe0a6c69244cee97b7861490ae2c4e2c68",
-  "short_commit": "853ccdb",
-  "built_at": "2026-11-06T20:23:15Z",
+  "version": "0.1.198",
+  "commit": "e1932af57d58ea8df044467234234e213b94823d",
+  "short_commit": "e1932af",
+  "built_at": "2026-11-07T07:32:58Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.197",
-    "sha-853ccdb",
+    "0.1.198",
+    "sha-e1932af",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.198",
+      "message": "恢复旧失败任务重试并重置失效临时文件名"
+    },
     {
       "version": "0.1.197",
       "message": "修复远端删除重传与占用跳过并完善任务控制和状态展示"
