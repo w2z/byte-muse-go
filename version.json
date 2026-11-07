@@ -1,16 +1,20 @@
 {
-  "version": "0.1.212",
-  "commit": "3a5c4b886a40b1abc3693b2cca262e556ee16bd8",
-  "short_commit": "3a5c4b8",
-  "built_at": "2026-11-07T12:54:05Z",
+  "version": "0.1.213",
+  "commit": "5f1658e15d8ba8f9332b4a884c43c297c2439b5f",
+  "short_commit": "5f1658e",
+  "built_at": "2026-11-07T13:07:49Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.212",
-    "sha-3a5c4b8",
+    "0.1.213",
+    "sha-5f1658e",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.213",
+      "message": "持久化手动队列运行意图以支持重启续传"
+    },
     {
       "version": "0.1.212",
       "message": "复用新建目录检查并减少队列调度等待"
