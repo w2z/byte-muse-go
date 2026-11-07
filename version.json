@@ -1,16 +1,20 @@
 {
-  "version": "0.1.203",
-  "commit": "daaa1d791340cc5a13d4f33477dc8389eb452b0f",
-  "short_commit": "daaa1d7",
-  "built_at": "2026-11-07T09:09:32Z",
+  "version": "0.1.204",
+  "commit": "bb634bef913c681f5d12781e3520ec3ca87fe047",
+  "short_commit": "bb634be",
+  "built_at": "2026-11-07T09:50:23Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.203",
-    "sha-daaa1d7",
+    "0.1.204",
+    "sha-bb634be",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.204",
+      "message": "增加复制移动模式与可调上传并发"
+    },
     {
       "version": "0.1.203",
       "message": "统一队列与列表顺序并固定入队时间"
