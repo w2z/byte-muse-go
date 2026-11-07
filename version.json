@@ -1,16 +1,20 @@
 {
-  "version": "0.1.202",
-  "commit": "b674f2189825f16c5142481adc4d74a55b72205c",
-  "short_commit": "b674f21",
-  "built_at": "2026-11-07T08:57:10Z",
+  "version": "0.1.203",
+  "commit": "daaa1d791340cc5a13d4f33477dc8389eb452b0f",
+  "short_commit": "daaa1d7",
+  "built_at": "2026-11-07T09:09:32Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.202",
-    "sha-b674f21",
+    "0.1.203",
+    "sha-daaa1d7",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.203",
+      "message": "统一队列与列表顺序并固定入队时间"
+    },
     {
       "version": "0.1.202",
       "message": "按占用与稳定采样调度并消除重复加锁"
