@@ -88,6 +88,38 @@ func (r *UploadRepository) Save(ctx context.Context, record domain.UploadRecord)
 	return err
 }
 
+// HideCompleted updates only the hidden flag of selected successful receipts in one transaction.
+// State guards preserve pending tasks; bounded key batches avoid parameter limits across dialects.
+func (r *UploadRepository) HideCompleted(ctx context.Context, keys []string) error {
+	if len(keys) == 0 {
+		return nil
+	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	expression := "json_set(snapshot, '$.hidden', json('true'))"
+	if r.dialect == DialectPostgres {
+		expression = "jsonb_set(snapshot::jsonb, '{hidden}', 'true'::jsonb)::text"
+	}
+	if r.dialect == DialectMySQL {
+		expression = "JSON_SET(snapshot, '$.hidden', CAST('true' AS JSON))"
+	}
+	for start := 0; start < len(keys); start += 400 {
+		batch := keys[start:min(start+400, len(keys))]
+		args := make([]any, len(batch))
+		for index, key := range batch {
+			args[index] = key
+		}
+		query := "UPDATE cloud_upload_records SET snapshot=" + expression + " WHERE state IN ('completed','skipped') AND record_key IN (" + strings.TrimSuffix(strings.Repeat("?,", len(batch)), ",") + ")"
+		if _, err = tx.ExecContext(ctx, (&CollectionRepository{dialect: r.dialect}).q(query), args...); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 // PendingCommits returns unfinished transfers and recovery work independently of the source snapshot.
 func (r *UploadRepository) PendingCommits(ctx context.Context) ([]domain.UploadRecord, error) {
 	return r.readRecords(ctx, "SELECT snapshot FROM cloud_upload_records WHERE state NOT IN ('completed','skipped','stopped','discarded','control')")

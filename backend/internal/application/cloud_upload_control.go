@@ -280,6 +280,13 @@ func (s *UploadService) applyListClear(ctx context.Context, action, scope string
 	if action != "clear_completed" && action != "clear_failed" {
 		return ErrUploadControl
 	}
+	if action == "clear_completed" {
+		if store, ok := s.store.(interface {
+			HideCompleted(context.Context, []string) error
+		}); ok {
+			return s.clearCompletedView(ctx, scope, store.HideCompleted)
+		}
+	}
 	records, err := s.store.List(ctx)
 	if err != nil {
 		return err
@@ -333,6 +340,48 @@ func (s *UploadService) applyListClear(ctx context.Context, action, scope string
 		}
 	}
 	return s.refreshUploadView(ctx)
+}
+
+// clearCompletedView selects only visible successful tasks and publishes removal after durable commit.
+// It runs on the scheduler, excluding concurrent admission/retry and preserving all upload receipts.
+func (s *UploadService) clearCompletedView(ctx context.Context, scope string, hide func(context.Context, []string) error) error {
+	s.mu.RLock()
+	blocked := map[string]bool{}
+	for _, file := range s.files {
+		if file.State != "completed" && file.State != "skipped" {
+			blocked[file.DirectoryKey] = true
+		}
+	}
+	keys := []string{}
+	for key, file := range s.files {
+		if (file.State == "completed" || file.State == "skipped") && !s.active[key] && (scope == "files" || !blocked[file.DirectoryKey]) {
+			keys = append(keys, key)
+		}
+	}
+	s.mu.RUnlock()
+	if len(keys) == 0 {
+		return ErrUploadControl
+	}
+	if err := hide(ctx, keys); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, key := range keys {
+		file := s.files[key]
+		delete(s.files, key)
+		s.status.Total--
+		s.status.Processed--
+		if file.State == "completed" {
+			s.status.Uploaded--
+		} else {
+			s.status.Skipped--
+		}
+		if file.Error != "" {
+			s.status.Failed--
+		}
+	}
+	return nil
 }
 
 // uploadClearMatches reports whether one visible record belongs to a clear operation.

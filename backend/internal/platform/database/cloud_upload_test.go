@@ -7,6 +7,40 @@ import (
 	"testing"
 )
 
+func TestUploadHideCompletedPreservesReceiptsAndPending(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, Config{Dialect: DialectSQLite, SQLitePath: filepath.Join(t.TempDir(), "clear.db")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err = store.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	repo := NewUploadRepository(store.SQLDB(), DialectSQLite)
+	for _, state := range []string{"completed", "skipped", "pending"} {
+		if err = repo.Save(ctx, domain.UploadRecord{Key: state, State: state, StageID: "receipt", SHA1: "hash"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for attempt := 0; attempt < 2; attempt++ {
+		if err = repo.HideCompleted(ctx, []string{"completed", "skipped", "pending", "missing"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, state := range []string{"completed", "skipped", "pending"} {
+		record, err := repo.Get(ctx, state)
+		if err != nil || record.Hidden != (state != "pending") || record.StageID != "receipt" || record.SHA1 != "hash" || record.State != state {
+			t.Fatalf("record=%+v err=%v", record, err)
+		}
+	}
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	if err = repo.HideCompleted(canceled, []string{"completed"}); err == nil {
+		t.Fatal("canceled transaction succeeded")
+	}
+}
+
 // TestUploadMigration covers fresh installs, previous-version upgrades and repeat runs preserving saved state.
 func TestUploadMigration(t *testing.T) {
 	for _, upgrade := range []bool{false, true} {

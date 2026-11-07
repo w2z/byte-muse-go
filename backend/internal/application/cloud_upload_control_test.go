@@ -3,10 +3,59 @@ package application
 import (
 	"bytemuse/backend/internal/domain"
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
 )
+
+type uploadFastClearStore struct {
+	uploadMemoryStore
+	err error
+}
+
+func (store *uploadFastClearStore) List(context.Context) ([]domain.UploadRecord, error) {
+	return nil, errors.New("unexpected full queue read")
+}
+func (store *uploadFastClearStore) HideCompleted(ctx context.Context, keys []string) error {
+	if store.err != nil {
+		return store.err
+	}
+	for _, key := range keys {
+		record, _ := store.Get(ctx, key)
+		record.Hidden = true
+		if err := store.Save(ctx, *record); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func TestUploadFastClearCommitsBeforeUpdatingView(t *testing.T) {
+	store := &uploadFastClearStore{uploadMemoryStore: uploadMemoryStore{
+		"done": {Key: "done", State: "completed", StageID: "receipt"}, "waiting": {Key: "waiting", State: "pending"}, "skip": {Key: "skip", State: "skipped"},
+	}, err: errors.New("write failed")}
+	service := &UploadService{store: store, status: UploadStatus{Total: 3, Processed: 2, Uploaded: 1, Skipped: 1}, files: map[string]UploadFileProgress{
+		"done": {Key: "done", DirectoryKey: "mixed", State: "completed"}, "waiting": {Key: "waiting", DirectoryKey: "mixed", State: "waiting"}, "skip": {Key: "skip", DirectoryKey: "done", State: "skipped"},
+	}}
+	ctx := context.Background()
+	if err := service.applyListClear(ctx, "clear_completed", "files"); err == nil || len(service.files) != 3 {
+		t.Fatal("failed commit changed view")
+	}
+	store.err = nil
+	if err := service.applyListClear(ctx, "clear_completed", "directories"); err != nil {
+		t.Fatal(err)
+	}
+	if len(service.files) != 2 || !store.uploadMemoryStore["skip"].Hidden || store.uploadMemoryStore["done"].Hidden {
+		t.Fatal("directory scope changed mixed directory")
+	}
+	if err := service.applyListClear(ctx, "clear_completed", "files"); err != nil {
+		t.Fatal(err)
+	}
+	if len(service.files) != 1 || service.status.Total != 1 || service.status.Processed != 0 || store.uploadMemoryStore["done"].StageID != "receipt" {
+		t.Fatal("clear did not preserve pending task and receipt")
+	}
+}
 
 func TestUploadControlsPreserveReceiptsAndRecoverMode(t *testing.T) {
 	store := uploadMemoryStore{"done": {Key: "done", State: "completed"}, "wait": {Key: "wait", State: "pending"}}
