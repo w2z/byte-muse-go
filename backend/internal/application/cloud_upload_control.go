@@ -214,9 +214,9 @@ func (s *UploadService) applyUploadControl(ctx context.Context, action string) e
 				continue
 			}
 			s.mu.RLock()
-			current := s.status.Current
+			current := s.active[r.Key] || s.status.Current == r.Key
 			s.mu.RUnlock()
-			if r.Key == current {
+			if current {
 				continue
 			}
 			if r.Error == "" && r.ErrorKind == "" && r.State != "failed" && r.State != "blocked" && r.State != "attention" {
@@ -510,8 +510,9 @@ func (s *UploadService) refreshUploadView(ctx context.Context) error {
 		if f.CompletedAt == "" && (r.State == "completed" || r.State == "skipped") {
 			f.CompletedAt = r.UpdatedAt
 		}
-		f.State = uploadPresentationState(r, f.State, st.Current == r.Key, s.mode, st.Enabled, s.manualUpload)
-		if st.Current != r.Key {
+		current := s.active[r.Key] || st.Current == r.Key
+		f.State = uploadPresentationState(r, f.State, current, s.mode, st.Enabled, s.manualUpload)
+		if !current {
 			f.Speed = 0
 		}
 		if r.State == "completed" {

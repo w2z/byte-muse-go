@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -17,7 +19,9 @@ import (
 func (s *UploadService) Run(ctx context.Context) {
 	s.mu.Lock()
 	s.commands = make(chan uploadCommand)
+	s.wake = make(chan struct{}, 1)
 	s.mode = "running"
+	s.active = make(map[string]bool)
 	s.mu.Unlock()
 	control, err := s.store.Get(ctx, uploadControlKey)
 	if err != nil {
@@ -55,14 +59,22 @@ func (s *UploadService) Run(ctx context.Context) {
 		key string
 		err error
 	}
-	results := make(chan completion, 1)
-	busy := ""
-	var cancel context.CancelFunc
+	results := make(chan completion, 32)
+	workers := map[string]context.CancelFunc{}
+	working := map[string]domain.UploadRecord{}
 	finish := func(result completion) {
-		busy = ""
-		cancel = nil
+		delete(workers, result.key)
+		delete(working, result.key)
 		s.update(func(st *UploadStatus) {
+			delete(s.active, result.key)
 			st.Current = ""
+			var first domain.UploadRecord
+			for _, record := range working {
+				if st.Current == "" || uploadQueueBefore(record, first) {
+					first = record
+					st.Current = record.Key
+				}
+			}
 			if result.err != nil {
 				st.Error = result.err.Error()
 			} else {
@@ -73,18 +85,29 @@ func (s *UploadService) Run(ctx context.Context) {
 			s.update(func(st *UploadStatus) { st.Error = err.Error() })
 		}
 	}
-	stopWorker := func() {
-		if cancel != nil {
-			cancel()
-			finish(<-results)
+	stopWorkers := func(matches func(string) bool) {
+		waiting := map[string]bool{}
+		for key, cancel := range workers {
+			if matches(key) {
+				cancel()
+				waiting[key] = true
+			}
+		}
+		for len(waiting) > 0 {
+			result := <-results
+			delete(waiting, result.key)
+			finish(result)
 		}
 	}
-	defer stopWorker()
+	stopAll := func() { stopWorkers(func(string) bool { return true }) }
+	defer stopAll()
 	signature := ""
 	nextScan := time.Time{}
 	dirty := true
 	enabled := false
 	policy := "skip"
+	uploadMode := "copy"
+	concurrency := 5
 	var mappings []UploadMapping
 	observations := map[string]uploadObservation{}
 	for {
@@ -108,9 +131,14 @@ func (s *UploadService) Run(ctx context.Context) {
 		if e != nil {
 			s.update(func(st *UploadStatus) { st.Error = e.Error() })
 		} else {
+			concurrency = uploadConcurrency(values["CLOUD_UPLOAD_CONCURRENCY"])
+			uploadMode = "copy"
+			if values["CLOUD_UPLOAD_MODE"] == "move" {
+				uploadMode = "move"
+			}
 			next := values["CLOUD_UPLOAD_ENABLE"] + values["CLOUD_UPLOAD_PATHS"] + values["CLOUD_UPLOAD_CONFLICT"]
 			if signature != next {
-				stopWorker()
+				stopAll()
 				signature = next
 				dirty = true
 				mappings, e = parseUploadMappings(values["CLOUD_UPLOAD_PATHS"])
@@ -181,7 +209,7 @@ func (s *UploadService) Run(ctx context.Context) {
 							s.mode = "running"
 							s.mu.Unlock()
 						}
-						record = &domain.UploadRecord{Key: key, Kind: m.Kind, Root: m.ID, LocalRoot: m.LocalPath, RemotePath: m.Path, Relative: f.Relative, Source: f.Absolute, Size: f.Size, Modified: f.Modified, Policy: policy, State: "pending", UpdatedAt: time.Now().UTC().Format(time.RFC3339Nano)}
+						record = &domain.UploadRecord{Key: key, Kind: m.Kind, Root: m.ID, LocalRoot: m.LocalPath, RemotePath: m.Path, Relative: f.Relative, Source: f.Absolute, Size: f.Size, Modified: f.Modified, Policy: policy, Mode: uploadMode, State: "pending", UpdatedAt: time.Now().UTC().Format(time.RFC3339Nano)}
 						record.QueuedAt = record.UpdatedAt
 						if saveErr := s.store.Save(ctx, *record); saveErr != nil {
 							s.update(func(st *UploadStatus) { st.Error = saveErr.Error() })
@@ -207,7 +235,7 @@ func (s *UploadService) Run(ctx context.Context) {
 			s.mu.Unlock()
 			manual = false
 		}
-		if busy == "" {
+		if len(workers) < concurrency {
 			records, listErr := s.store.PendingCommits(ctx)
 			if listErr != nil {
 				s.update(func(st *UploadStatus) { st.Error = listErr.Error() })
@@ -222,6 +250,22 @@ func (s *UploadService) Run(ctx context.Context) {
 					return uploadQueueBefore(records[i], records[j])
 				})
 				for _, r := range records {
+					if len(workers) >= concurrency {
+						break
+					}
+					if _, active := workers[r.Key]; active {
+						continue
+					}
+					conflict := false
+					for _, active := range working {
+						if uploadTasksConflict(active, r) {
+							conflict = true
+							break
+						}
+					}
+					if conflict {
+						continue
+					}
 					if r.QueuedAt == "" {
 						freezeUploadQueueTime(&r)
 						if saveErr := s.store.Save(ctx, r); saveErr != nil {
@@ -305,10 +349,15 @@ func (s *UploadService) Run(ctx context.Context) {
 					} else if uploadIndividuallyPaused(r, s.mode) && r.State == "uploaded" {
 						continue
 					}
-					busy = r.Key
 					worker, stop := context.WithCancel(ctx)
-					cancel = stop
-					s.update(func(st *UploadStatus) { st.Current = r.Key; st.State = "uploading" })
+					workers[r.Key], working[r.Key] = stop, r
+					s.update(func(st *UploadStatus) {
+						s.active[r.Key] = true
+						if st.Current == "" {
+							st.Current = r.Key
+						}
+						st.State = "uploading"
+					})
 					go func(r domain.UploadRecord) {
 						defer stop()
 						progress := domain.WithUploadProgress(worker, func(done, total int64, phase string) { s.reportBytes(r.Key, done, total, phase) })
@@ -317,11 +366,10 @@ func (s *UploadService) Run(ctx context.Context) {
 						_, err := s.process(progress, m, f, r.Policy)
 						results <- completion{r.Key, err}
 					}(r)
-					break
 				}
 			}
 		}
-		if manual && busy == "" {
+		if manual && len(workers) == 0 {
 			pending, pendingErr := s.store.PendingCommits(ctx)
 			if pendingErr != nil {
 				s.update(func(st *UploadStatus) { st.Error = pendingErr.Error() })
@@ -341,8 +389,8 @@ func (s *UploadService) Run(ctx context.Context) {
 			finish(result)
 		case command := <-s.commands:
 			if command.scope != "" {
-				if command.action != "start" && command.action != "retry" && command.action != "clear_completed" && command.action != "clear_failed" && uploadCommandTargetsBusy(ctx, s, busy, command) {
-					stopWorker()
+				if command.action != "clear_completed" && command.action != "clear_failed" {
+					stopWorkers(func(key string) bool { return uploadCommandTargetsBusy(ctx, s, key, command) })
 				}
 				command.reply <- s.applyScopedUploadControl(ctx, command.action, command.scope, command.key)
 				continue
@@ -362,7 +410,7 @@ func (s *UploadService) Run(ctx context.Context) {
 				continue
 			}
 			if command.action != "clear_completed" && command.action != "retry_all" {
-				stopWorker()
+				stopAll()
 			}
 			command.reply <- s.applyUploadControl(ctx, command.action)
 		case _, ok := <-events:
@@ -379,8 +427,32 @@ func (s *UploadService) Run(ctx context.Context) {
 				watchErrors = nil
 			}
 		case <-ticker.C:
+		case <-s.wake:
 		}
 	}
+}
+
+// uploadConcurrency applies the same safe default to absent, cleared and invalid persisted settings.
+func uploadConcurrency(raw string) int {
+	count, err := strconv.Atoi(raw)
+	if err != nil || count < 1 || count > 32 {
+		return 5
+	}
+	return count
+}
+
+// uploadTasksConflict prevents concurrent versions and overlapping mapping destinations from replacing each other.
+// Keep-both reservations and directory creation additionally share the preparation lock.
+func uploadTasksConflict(left, right domain.UploadRecord) bool {
+	if filepath.Clean(left.Source) == filepath.Clean(right.Source) {
+		return true
+	}
+	if left.Kind != right.Kind {
+		return false
+	}
+	leftPath := filepath.ToSlash(filepath.Join(left.RemotePath, left.Relative))
+	rightPath := filepath.ToSlash(filepath.Join(right.RemotePath, right.Relative))
+	return strings.EqualFold(leftPath, rightPath) || (left.Root == right.Root && strings.EqualFold(left.Relative, right.Relative))
 }
 
 func uploadFileLocked(path string) bool {

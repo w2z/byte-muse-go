@@ -353,6 +353,7 @@ func (c *Commands) Serve(ctx context.Context) error {
 	}
 	defer pan115Service.Close()
 	uploadService := application.NewUploadService(settingsValues(settingsService), database.NewUploadRepository(store.SQLDB(), database.Dialect(c.config.DatabaseDriver)), pan115Service, application.NewCloudDriveSettings(settingsValues(settingsService)))
+	settingsService.SetUploadNotifier(uploadService.SettingsChanged)
 	uploadCtx, cancelUpload := context.WithCancel(ctx)
 	uploadDone := make(chan struct{})
 	go func() { defer close(uploadDone); uploadService.Run(uploadCtx) }()

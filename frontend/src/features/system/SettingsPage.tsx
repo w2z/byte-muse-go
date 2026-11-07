@@ -557,7 +557,9 @@ const groups: SettingGroup[] = [
     title: "网盘上传",
     fields: [
       { key: "CLOUD_UPLOAD_PATHS", label: "目录选择", kind: "upload-paths" },
+      { key: "CLOUD_UPLOAD_MODE", label: "上传模式", kind: "enum", options: [{ value: "copy", label: "复制" }, { value: "move", label: "移动" }], description: "复制保留本地文件；移动仅在上传校验成功后删除未改变的源文件。只影响新加入队列的任务。" },
       { key: "CLOUD_UPLOAD_CONFLICT", label: "同名文件处理", kind: "enum", options: [{ value: "skip", label: "跳过" }, { value: "overwrite", label: "覆盖" }, { value: "keep_both", label: "保留两者" }] },
+      { key: "CLOUD_UPLOAD_CONCURRENCY", label: "上传任务数量", kind: "int", unit: "个", description: "同时上传 1–32 个文件，默认 5。保存后立即调整；调小不打断正在上传的文件。" },
       { key: "CLOUD_UPLOAD_ENABLE", label: "开启目录监控", kind: "bool", description: "保存后生效。关闭页面不影响后台监控；关闭开关将停止新上传。" },
     ],
   },
@@ -947,7 +949,7 @@ function settingsSnapshot(values: Record<string, string>): EditorSnapshot {
   for (const group of groups) {
     for (const field of groupFields(group)) {
       if (isStructuredField(field.kind)) continue;
-      const raw = values[field.key] ?? (field.key === "MCP_ALLOWED_TOOLS" ? "[]" : field.key === strmDownloadExtensionsKey ? defaultDownloadExtensions : field.key === "CLOUD_UPLOAD_CONFLICT" ? "skip" : "");
+      const raw = values[field.key] ?? (field.key === "MCP_ALLOWED_TOOLS" ? "[]" : field.key === strmDownloadExtensionsKey ? defaultDownloadExtensions : field.key === "CLOUD_UPLOAD_CONFLICT" ? "skip" : field.key === "CLOUD_UPLOAD_MODE" ? "copy" : field.key === "CLOUD_UPLOAD_CONCURRENCY" ? "5" : "");
       next[field.key] = field.kind === "bool" ? raw === "true" : raw;
       if (field.siteAuth) {
         next[field.siteAuth.modeKey] = values[field.siteAuth.modeKey] === "cookie" ? "cookie" : "key";
@@ -1415,6 +1417,8 @@ export function SettingsPage() {
   const uploadSettingsUnsaved = baselineRef.current != null && (
     !sameEditorValue(editor.CLOUD_UPLOAD_PATHS, baselineRef.current.CLOUD_UPLOAD_PATHS ?? [])
     || !sameEditorValue(String(editor.CLOUD_UPLOAD_CONFLICT ?? "skip"), String(baselineRef.current.CLOUD_UPLOAD_CONFLICT ?? "skip"))
+    || !sameEditorValue(String(editor.CLOUD_UPLOAD_MODE ?? "copy"), String(baselineRef.current.CLOUD_UPLOAD_MODE ?? "copy"))
+    || !sameEditorValue(String(editor.CLOUD_UPLOAD_CONCURRENCY ?? "5"), String(baselineRef.current.CLOUD_UPLOAD_CONCURRENCY ?? "5"))
   );
   /** 使用已保存的目录映射和同名策略立即扫描上传；草稿需先保存，避免上传与界面不一致。 */
   const startCloudUpload = async () => {
@@ -1531,6 +1535,7 @@ export function SettingsPage() {
     }
     if (field.kind === "upload-paths") return <div className="settings-field settings-field-wide" key={field.key}><span className="settings-field-label">{field.label}</span><UploadPathsField value={uploadPaths} savedValue={Array.isArray(baselineRef.current?.CLOUD_UPLOAD_PATHS) ? baselineRef.current.CLOUD_UPLOAD_PATHS as UploadMapping[] : []} onChange={setUploadPaths} hasUnsavedUploadSettings={uploadSettingsUnsaved} onUpload={startCloudUpload}/></div>;
     if (field.key === "CLOUD_UPLOAD_CONFLICT") return <div className="settings-field settings-field-wide" key={field.key}><span className="settings-field-label">{field.label}</span><Radio.Group aria-label={field.label} value={draft[field.key] || "skip"} onChange={(value)=>setValue(field.key,value)} options={field.options}/></div>;
+    if (field.key === "CLOUD_UPLOAD_MODE") return <div className="settings-field settings-field-wide" key={field.key}><span className="settings-field-label">{field.label}</span><Radio.Group aria-label={field.label} value={draft[field.key] || "copy"} onChange={(value)=>setValue(field.key,value)} options={field.options}/><span className="settings-field-description">{field.description}</span></div>;
     if (field.kind === "json") {
       return (
         <div className="settings-field settings-field-wide" key={field.key}>
@@ -1804,7 +1809,8 @@ export function SettingsPage() {
             <Input type="number"
               id={filterId(field.key)}
               value={value}
-              min={0}
+              min={field.key === "CLOUD_UPLOAD_CONCURRENCY" ? 1 : 0}
+              max={field.key === "CLOUD_UPLOAD_CONCURRENCY" ? 32 : undefined}
               addAfter={field.unit}
               placeholder={placeholder}
               onChange={(nextValue) => setValue(field.key, nextValue === undefined ? "" : String(nextValue))}

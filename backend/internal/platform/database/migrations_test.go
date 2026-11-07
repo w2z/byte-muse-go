@@ -10,6 +10,64 @@ import (
 	"time"
 )
 
+// TestCloudUploadExecutionMigration checks clean initialization, upgrade, replay and preservation of task snapshots.
+func TestCloudUploadExecutionMigration(t *testing.T) {
+	for _, upgrade := range []bool{false, true} {
+		t.Run(fmt.Sprint(upgrade), func(t *testing.T) {
+			ctx := context.Background()
+			store, err := Open(ctx, Config{Dialect: DialectSQLite, SQLitePath: filepath.Join(t.TempDir(), "upload.db")})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer store.Close()
+			if upgrade {
+				if err = ensureMigrationTable(ctx, store.SQLDB(), DialectSQLite); err != nil {
+					t.Fatal(err)
+				}
+				for _, migration := range MigrationPlan(DialectSQLite) {
+					if migration.Version < 46 {
+						if err = applyMigration(ctx, store.SQLDB(), DialectSQLite, migration); err != nil {
+							t.Fatal(err)
+						}
+					}
+				}
+				if _, err = store.SQLDB().ExecContext(ctx, `INSERT INTO cloud_upload_records(record_key,state,snapshot) VALUES('old','completed','{"state":"completed"}')`); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err = store.Migrate(ctx); err != nil {
+				t.Fatal(err)
+			}
+			for key, expected := range map[string]string{"CLOUD_UPLOAD_MODE": "copy", "CLOUD_UPLOAD_CONCURRENCY": "5"} {
+				var value string
+				if err = store.SQLDB().QueryRowContext(ctx, "SELECT setting_value FROM app_settings WHERE setting_key=?", key).Scan(&value); err != nil || value != expected {
+					t.Fatalf("%s %s %v", key, value, err)
+				}
+			}
+			if _, err = store.SQLDB().ExecContext(ctx, "UPDATE app_settings SET setting_value='move' WHERE setting_key='CLOUD_UPLOAD_MODE'"); err != nil {
+				t.Fatal(err)
+			}
+			if err = store.Migrate(ctx); err != nil {
+				t.Fatal(err)
+			}
+			for _, statement := range cloudUploadExecutionMigration(DialectSQLite).Statements {
+				if _, err = store.SQLDB().ExecContext(ctx, statement); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var value string
+			if err = store.SQLDB().QueryRowContext(ctx, "SELECT setting_value FROM app_settings WHERE setting_key='CLOUD_UPLOAD_MODE'").Scan(&value); err != nil || value != "move" {
+				t.Fatalf("choice lost: %s %v", value, err)
+			}
+			if upgrade {
+				if err = store.SQLDB().QueryRowContext(ctx, "SELECT snapshot FROM cloud_upload_records WHERE record_key='old'").Scan(&value); err != nil || value != `{"state":"completed"}` {
+					t.Fatalf("historical task changed: %s %v", value, err)
+				}
+			}
+		})
+	}
+}
+
 // TestDownloadURLMigration 验证旧任务保持 NULL、新值跨重启保留，空库及重复迁移一致。
 func TestDownloadURLMigration(t *testing.T) {
 	for _, upgrade := range []bool{false, true} {

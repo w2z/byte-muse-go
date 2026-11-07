@@ -96,10 +96,12 @@ type settingSpec struct {
 // writableSettings 是可写配置项的唯一权威清单，key 与旧版 template.env、对标站 /config 完全一致。
 // 顺序按对标站设置页的分组排列，便于逐组核对。
 var writableSettings = map[string]settingSpec{
-	"CLOUD_UPLOAD_PATHS":    {kind: settingJSONArray},
-	"CLOUD_UPLOAD_ENABLE":   {kind: settingBool},
-	"CLOUD_UPLOAD_CONFLICT": {kind: settingEnum, allowed: []string{"skip", "overwrite", "keep_both"}},
-	"PAN115_EVENT_ENABLE":   {kind: settingBool},
+	"CLOUD_UPLOAD_PATHS":       {kind: settingJSONArray},
+	"CLOUD_UPLOAD_ENABLE":      {kind: settingBool},
+	"CLOUD_UPLOAD_CONFLICT":    {kind: settingEnum, allowed: []string{"skip", "overwrite", "keep_both"}},
+	"CLOUD_UPLOAD_MODE":        {kind: settingEnum, allowed: []string{"copy", "move"}},
+	"CLOUD_UPLOAD_CONCURRENCY": {kind: settingInt},
+	"PAN115_EVENT_ENABLE":      {kind: settingBool},
 	// 站点
 	"MTEAM_API_KEY":      {secret: true, kind: settingText},
 	"PTT_COOKIE":         {secret: true, kind: settingText},
@@ -270,6 +272,7 @@ type SettingsService struct {
 	databaseDriver  string
 	secrets         *secretCipher
 	scheduleApplier ScheduleApplier
+	uploadNotifier  func()
 }
 
 // ScheduleApplier 把最新设置中的定时任务表达式同步到调度器。返回值表示本次同步是否成功，
@@ -280,6 +283,9 @@ type ScheduleApplier func(values map[string]string) error
 func (s *SettingsService) SetScheduleApplier(applier ScheduleApplier) {
 	s.scheduleApplier = applier
 }
+
+// SetUploadNotifier installs the post-save upload scheduler wakeup before requests are served.
+func (s *SettingsService) SetUploadNotifier(notify func()) { s.uploadNotifier = notify }
 
 // NewSettingsService builds a settings service. The session secret also protects persisted application secrets.
 func NewSettingsService(repository ports.SettingsRepository, databaseDriver string, secret string) (*SettingsService, error) {
@@ -344,6 +350,10 @@ func (s *SettingsService) Get(ctx context.Context) (domain.SystemSettings, error
 	}
 	raw, _ := json.Marshal(names)
 	result.Values["MCP_ALLOWED_TOOLS"] = string(raw)
+	if result.Values["CLOUD_UPLOAD_MODE"] != "move" {
+		result.Values["CLOUD_UPLOAD_MODE"] = "copy"
+	}
+	result.Values["CLOUD_UPLOAD_CONCURRENCY"] = strconv.Itoa(uploadConcurrency(result.Values["CLOUD_UPLOAD_CONCURRENCY"]))
 	return result, nil
 }
 
@@ -539,6 +549,14 @@ func (s *SettingsService) Update(ctx context.Context, values map[string]string) 
 			log.Printf("warning: apply schedule after settings save failed: %v", err)
 		}
 	}
+	if s.uploadNotifier != nil {
+		for key := range values {
+			if strings.HasPrefix(key, "CLOUD_UPLOAD_") {
+				s.uploadNotifier()
+				break
+			}
+		}
+	}
 	return saved, nil
 }
 
@@ -610,6 +628,9 @@ func validateSettingValue(key string, spec settingSpec, value string) error {
 		number, err := strconv.Atoi(value)
 		if err != nil || number < 0 {
 			return invalid("需要是非负整数")
+		}
+		if key == "CLOUD_UPLOAD_CONCURRENCY" && (number < 1 || number > 32) {
+			return invalid("需要是 1 到 32 的整数")
 		}
 		if key == "PTT_UID" && (number == 0 || strings.Trim(value, "0123456789") != "") {
 			return invalid("需要是正整数用户 ID")

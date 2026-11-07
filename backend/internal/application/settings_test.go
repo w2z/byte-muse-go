@@ -15,6 +15,26 @@ type settingsRepositoryStub struct {
 	items []ports.StoredSetting
 }
 
+func TestUploadModeAndConcurrencySettings(t *testing.T) {
+	svc, _ := NewSettingsService(&settingsMemoryRepository{}, "sqlite", strings.Repeat("x", 32))
+	for _, values := range []map[string]string{
+		{"CLOUD_UPLOAD_MODE": "copy", "CLOUD_UPLOAD_CONCURRENCY": "5"},
+		{"CLOUD_UPLOAD_MODE": "move", "CLOUD_UPLOAD_CONCURRENCY": "32"},
+	} {
+		if _, err := svc.Update(context.Background(), values); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, values := range []map[string]string{
+		{"CLOUD_UPLOAD_MODE": "delete"}, {"CLOUD_UPLOAD_CONCURRENCY": "0"},
+		{"CLOUD_UPLOAD_CONCURRENCY": "33"}, {"CLOUD_UPLOAD_CONCURRENCY": "1.5"},
+	} {
+		if _, err := svc.Update(context.Background(), values); !errors.Is(err, ErrInvalidSetting) {
+			t.Fatalf("accepted %v: %v", values, err)
+		}
+	}
+}
+
 // TestMCPPermissionsBounds 验证契约允许的最大数组可完整保存，越界请求不产生部分写入。
 func TestMCPPermissionsBounds(t *testing.T) {
 	repo := &settingsMemoryRepository{}

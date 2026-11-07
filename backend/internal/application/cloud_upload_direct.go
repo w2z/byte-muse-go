@@ -72,11 +72,14 @@ func (s *UploadService) processDirectUpload(ctx context.Context, remote uploadRe
 		}
 		if record.Policy == "keep_both" {
 			if _, occupied := findUploadEntry(entries, record.Target); occupied {
-				if err = s.selectUploadName(ctx, record, entries); err != nil {
-					return record.State, err
+				s.preparation.Lock()
+				err = s.selectUploadName(ctx, record, entries)
+				if err == nil {
+					record.Stage = record.Target
+					err = save()
 				}
-				record.Stage = record.Target
-				if err = save(); err != nil {
+				s.preparation.Unlock()
+				if err != nil {
 					return record.State, err
 				}
 			}
@@ -132,6 +135,8 @@ func (s *UploadService) processDirectUpload(ctx context.Context, remote uploadRe
 			}
 		}
 	}
-	record.State = "completed"
+	if record.Mode != "move" {
+		record.State = "completed"
+	}
 	return record.State, save()
 }

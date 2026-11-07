@@ -32,6 +32,22 @@ func cloudUploadMigration(dialect Dialect) Migration {
 	return Migration{Version: 39, Name: "cloud_upload", Statements: statements}
 }
 
+// cloudUploadExecutionMigration seeds non-secret string settings without rewriting tasks or user choices.
+// Missing/empty mode means copy; concurrency defaults to five. Rollback retains these additive settings.
+func cloudUploadExecutionMigration(dialect Dialect) Migration {
+	var statements []string
+	for _, seed := range []struct{ key, value string }{{"CLOUD_UPLOAD_MODE", "copy"}, {"CLOUD_UPLOAD_CONCURRENCY", "5"}} {
+		query := fmt.Sprintf("INSERT INTO app_settings (setting_key,setting_value,is_secret,updated_at) VALUES (%s,%s,FALSE,%s)", sqlLiteral(seed.key), sqlLiteral(seed.value), currentTimestampExpression(dialect))
+		if dialect == DialectMySQL {
+			query = strings.Replace(query, "INSERT INTO", "INSERT IGNORE INTO", 1)
+		} else {
+			query += " ON CONFLICT(setting_key) DO NOTHING"
+		}
+		statements = append(statements, query)
+	}
+	return Migration{Version: 46, Name: "cloud_upload_execution", Statements: statements}
+}
+
 // UploadRepository stores upload records in the application's versioned database.
 type UploadRepository struct {
 	db      *sql.DB

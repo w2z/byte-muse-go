@@ -42,13 +42,15 @@ type UploadRecord struct {
 	Size       int64  `json:"size"`
 	Modified   int64  `json:"modified"`
 	Policy     string `json:"policy"`
-	State      string `json:"state"`
-	Parent     string `json:"parent"`
-	Target     string `json:"target"`
-	Stage      string `json:"stage"`
-	Backup     string `json:"backup"`
-	SHA1       string `json:"sha1"`
-	Error      string `json:"error"`
+	// Mode snapshots copy/move at admission; empty historical records mean copy, never retroactive deletion.
+	Mode   string `json:"mode"`
+	State  string `json:"state"`
+	Parent string `json:"parent"`
+	Target string `json:"target"`
+	Stage  string `json:"stage"`
+	Backup string `json:"backup"`
+	SHA1   string `json:"sha1"`
+	Error  string `json:"error"`
 	// QueuedAt is the UTC RFC3339Nano time a file first entered the queue.
 	// It stays fixed across retries and controls. Empty means a record written before ordered queueing; callers use UpdatedAt.
 	QueuedAt string `json:"queued_at"`

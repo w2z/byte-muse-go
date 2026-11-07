@@ -42,18 +42,21 @@ type UploadStatus struct {
 	Actions   map[string]bool `json:"actions"`
 }
 
-// UploadService owns one cancellable watcher/worker and serializes remote writes for all mappings.
+// UploadService owns the scheduler and bounded workers; preparation serializes directory creation and name reservations.
 type UploadService struct {
-	settings func(context.Context) (map[string]string, error)
-	store    UploadStore
-	provider func(context.Context, string) (uploadRemote, error)
-	mu       sync.RWMutex
-	status   UploadStatus
-	files    map[string]UploadFileProgress
-	mappings []UploadMapping
-	commands chan uploadCommand
-	ready    bool
-	mode     string
+	settings    func(context.Context) (map[string]string, error)
+	store       UploadStore
+	provider    func(context.Context, string) (uploadRemote, error)
+	mu          sync.RWMutex
+	preparation sync.Mutex
+	active      map[string]bool
+	status      UploadStatus
+	files       map[string]UploadFileProgress
+	mappings    []UploadMapping
+	commands    chan uploadCommand
+	wake        chan struct{}
+	ready       bool
+	mode        string
 	// scanRequested asks the scheduler for one immediate discovery pass.
 	scanRequested bool
 	// manualUpload finishes that pass while continuous monitoring remains off.
@@ -77,6 +80,18 @@ func (s *UploadService) Status() UploadStatus {
 	return status
 }
 func (s *UploadService) update(f func(*UploadStatus)) { s.mu.Lock(); defer s.mu.Unlock(); f(&s.status) }
+
+// SettingsChanged wakes the scheduler after committed settings without canceling active transfers.
+func (s *UploadService) SettingsChanged() {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.wake != nil {
+		select {
+		case s.wake <- struct{}{}:
+		default:
+		}
+	}
+}
 
 // uploadKey binds an attempt to its source version, destination and conflict policy.
 func uploadKey(m UploadMapping, f uploadLocalFile, policy string) string {
@@ -260,12 +275,18 @@ func (s *UploadService) process(ctx context.Context, m UploadMapping, f uploadLo
 		return record.State, nil
 	}
 	sourceGuarded := false
+	var releaseSource func()
 	if record == nil || record.State == "pending" {
 		release, lockErr := uploadSourceGuard(f.Absolute)
 		if lockErr != nil {
 			return "", lockErr
 		}
-		defer release()
+		releaseSource = release
+		defer func() {
+			if releaseSource != nil {
+				releaseSource()
+			}
+		}()
 		sourceGuarded = true
 		if record != nil && record.ErrorKind == "locked" {
 			record.Error, record.ErrorKind, record.NextRetry = "", "", ""
@@ -281,6 +302,15 @@ func (s *UploadService) process(ctx context.Context, m UploadMapping, f uploadLo
 	if policy != "skip" && policy != "overwrite" && policy != "keep_both" {
 		return "", fmt.Errorf("同名文件处理方式无效")
 	}
+	s.preparation.Lock()
+	preparing := true
+	finishPreparation := func() {
+		if preparing {
+			preparing = false
+			s.preparation.Unlock()
+		}
+	}
+	defer finishPreparation()
 	if m.Kind == "115" && record != nil && record.Parent != "" && record.Stage != record.Target && record.Intent != "delete" && record.Intent != "stop" {
 		entries, listErr := remote.List(ctx, record.Parent)
 		if listErr == nil {
@@ -366,8 +396,21 @@ func (s *UploadService) process(ctx context.Context, m UploadMapping, f uploadLo
 	if record.RemotePath == "" {
 		record.RemotePath = m.Path
 	}
+	finishPreparation()
 	if record.Stage == record.Target {
-		return s.processDirectUpload(ctx, remote, record, m, f, sourceGuarded, save)
+		state, err = s.processDirectUpload(ctx, remote, record, m, f, sourceGuarded, save)
+		if err != nil || state != "cleanup" || record.Mode != "move" {
+			return state, err
+		}
+		if releaseSource != nil {
+			releaseSource()
+			releaseSource = nil
+		}
+		if err = removeUploadedSource(ctx, record); err != nil {
+			return record.State, err
+		}
+		record.State = "completed"
+		return record.State, save()
 	}
 	if record.State == "pending" && !uploadUnchanged(f) {
 		record.State = "discarding"

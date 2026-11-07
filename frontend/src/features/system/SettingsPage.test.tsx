@@ -237,8 +237,15 @@ describe("设置页字段布局", () => {
     });
     renderSettings();await user.click(await screen.findByRole("tab",{name:"网盘"}));await user.click(screen.getByRole("tab",{name:"网盘上传"}));
     expect(screen.getByRole("radio",{name:"跳过"})).toBeChecked();
+    expect(screen.getByRole("radio",{name:"复制"})).toBeChecked();
+    expect(screen.getByLabelText("上传任务数量")).toHaveValue(5);
     expect(screen.getByRole("button", { name: "上传文件" })).toBeDisabled();
+    await user.click(screen.getByRole("radio", { name: "移动" }));
+    await user.clear(screen.getByLabelText("上传任务数量"));
+    await user.type(screen.getByLabelText("上传任务数量"), "3");
     await user.click(screen.getByRole("radio",{name:"保留两者"}));await user.click(screen.getByRole("button",{name:"保存设置"}));await waitFor(()=>expect(values.CLOUD_UPLOAD_CONFLICT).toBe("keep_both"));
+    expect(values.CLOUD_UPLOAD_MODE).toBe("move");
+    expect(values.CLOUD_UPLOAD_CONCURRENCY).toBe("3");
     expect(screen.getByRole("columnheader",{name:"已上传/总个数"})).toBeInTheDocument();
     const tables = screen.getByLabelText("上传任务列表");
     const toggle = screen.getByRole("switch", { name: "开启目录监控" });

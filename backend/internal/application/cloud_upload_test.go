@@ -14,6 +14,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -21,7 +22,11 @@ import (
 
 type uploadMemoryStore map[string]domain.UploadRecord
 
+var uploadMemoryStoreMu sync.Mutex
+
 func (s uploadMemoryStore) List(context.Context) ([]domain.UploadRecord, error) {
+	uploadMemoryStoreMu.Lock()
+	defer uploadMemoryStoreMu.Unlock()
 	result := []domain.UploadRecord{}
 	for _, r := range s {
 		result = append(result, r)
@@ -30,6 +35,8 @@ func (s uploadMemoryStore) List(context.Context) ([]domain.UploadRecord, error) 
 }
 
 func (s uploadMemoryStore) PendingCommits(context.Context) ([]domain.UploadRecord, error) {
+	uploadMemoryStoreMu.Lock()
+	defer uploadMemoryStoreMu.Unlock()
 	result := []domain.UploadRecord{}
 	for _, r := range s {
 		if !uploadTerminal(r.State) && r.State != "control" {
@@ -40,6 +47,8 @@ func (s uploadMemoryStore) PendingCommits(context.Context) ([]domain.UploadRecor
 }
 
 func (s uploadMemoryStore) Get(_ context.Context, key string) (*domain.UploadRecord, error) {
+	uploadMemoryStoreMu.Lock()
+	defer uploadMemoryStoreMu.Unlock()
 	v, ok := s[key]
 	if !ok {
 		return nil, nil
@@ -420,7 +429,7 @@ func TestUploadQueueRechecksLockedFileAfterNextCompletion(t *testing.T) {
 	remote := &uploadOrderedRemote{uploadMemoryRemote: uploadMemoryRemote{files: map[string][]byte{}}, writer: writer}
 	raw, _ := json.Marshal([]UploadMapping{mapping})
 	service := &UploadService{store: store, settings: func(context.Context) (map[string]string, error) {
-		return map[string]string{"CLOUD_UPLOAD_ENABLE": "false", "CLOUD_UPLOAD_PATHS": string(raw), "CLOUD_UPLOAD_CONFLICT": "overwrite"}, nil
+		return map[string]string{"CLOUD_UPLOAD_ENABLE": "false", "CLOUD_UPLOAD_PATHS": string(raw), "CLOUD_UPLOAD_CONFLICT": "overwrite", "CLOUD_UPLOAD_CONCURRENCY": "1"}, nil
 	}, provider: func(context.Context, string) (uploadRemote, error) { return remote, nil }}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
@@ -543,6 +552,8 @@ func TestUploadInitializationPreservesRetryBudget(t *testing.T) {
 	}
 }
 func (s uploadMemoryStore) Save(_ context.Context, r domain.UploadRecord) error {
+	uploadMemoryStoreMu.Lock()
+	defer uploadMemoryStoreMu.Unlock()
 	s[r.Key] = r
 	return nil
 }
