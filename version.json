@@ -1,16 +1,20 @@
 {
-  "version": "0.1.198",
-  "commit": "e1932af57d58ea8df044467234234e213b94823d",
-  "short_commit": "e1932af",
-  "built_at": "2026-11-07T07:32:58Z",
+  "version": "0.1.199",
+  "commit": "cf46ec5ce02c663e6c462026b08c27c9b6004528",
+  "short_commit": "cf46ec5",
+  "built_at": "2026-11-07T08:15:28Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.198",
-    "sha-e1932af",
+    "0.1.199",
+    "sha-cf46ec5",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.199",
+      "message": "修正115临时文件名并收敛重复任务"
+    },
     {
       "version": "0.1.198",
       "message": "恢复旧失败任务重试并重置失效临时文件名"
