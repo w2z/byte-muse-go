@@ -1,16 +1,20 @@
 {
-  "version": "0.1.209",
-  "commit": "0c5b1dbeaf44c2e7af17ca3c18810ce81057cc91",
-  "short_commit": "0c5b1db",
-  "built_at": "2026-11-07T12:06:13Z",
+  "version": "0.1.210",
+  "commit": "ca58d518adbabe4acb9a157afd00d2c1c8c824ad",
+  "short_commit": "ca58d51",
+  "built_at": "2026-11-07T12:21:36Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.209",
-    "sha-0c5b1db",
+    "0.1.210",
+    "sha-ca58d51",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.210",
+      "message": "清理移动后的空目录并分离校验进度"
+    },
     {
       "version": "0.1.209",
       "message": "补充跳过说明并延伸标签栏底线"
