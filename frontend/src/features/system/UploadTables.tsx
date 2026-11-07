@@ -130,6 +130,7 @@ function fileState(row: FileRow) {
       <Tag color={fileProgressStatus(row.state) === "error" ? "red" : fileProgressStatus(row.state) === "success" ? "green" : undefined}>
         {states[row.state] ?? row.state}
       </Tag>
+      {row.state === "skipped" ? <div className="settings-upload-skipped"><Tooltip content="已存在相同的文件，跳过上传"><span tabIndex={0}>(跳过)</span></Tooltip></div> : null}
       {row.error ? <div className="settings-upload-error">{row.error}</div> : null}
       {row.state === "discarded" && !row.error ? <div className="settings-upload-error">源文件已变化</div> : null}
     </span>
@@ -221,10 +222,10 @@ export function UploadTables() {
         onChange={setTab}
         animation={false}
         aria-label="上传任务列表"
+        extra={<div className="settings-upload-summary"><UploadMonitorStatus /></div>}
         renderTabHeader={(props, DefaultTabHeader) => <>
           <div className="settings-upload-header">
             <DefaultTabHeader {...props} />
-            <div className="settings-upload-summary"><UploadMonitorStatus /></div>
           </div>
           <div className="settings-upload-toolbar"><span>状态</span>{filter}{actions}</div>
         </>}

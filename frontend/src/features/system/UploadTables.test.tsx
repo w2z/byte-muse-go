@@ -14,10 +14,22 @@ it("筛选只保留成功失败，跳过文件显示成功",async()=>{
  render(<QueryClientProvider client={client}><UploadTables/></QueryClientProvider>);
  await userEvent.click(await screen.findByRole("tab",{name:"文件列表 (1/1)"}));
  expect((await screen.findByText("成功")).closest(".arco-tag")).toHaveClass("arco-tag-green");
+ await userEvent.hover(screen.getByText("(跳过)"));
+ expect(await screen.findByText("已存在相同的文件，跳过上传")).toBeInTheDocument();
  await userEvent.click(screen.getByRole("combobox",{name:"文件状态"}));
  expect(screen.queryByRole("option",{name:"已跳过"})).not.toBeInTheDocument();
  expect(screen.queryByRole("option",{name:"已变化"})).not.toBeInTheDocument();
  expect(screen.getByRole("option",{name:"成功"})).toBeInTheDocument();
+ client.clear();
+});
+it("状态摘要使用标签栏右侧区域且不显示当前文件", async () => {
+ const client = new QueryClient({defaultOptions:{queries:{retry:false}}});
+ vi.mocked(apiRequest).mockImplementation(async(path)=>path==="/cloud-upload/status"?{enabled:true,state:"uploading",total:1,processed:0,uploaded:0,skipped:0,failed:0,current:"/videos/current.mkv",error:"最近一次错误",actions:{}}:{items:[],total:0});
+ render(<QueryClientProvider client={client}><UploadTables/></QueryClientProvider>);
+ const summary = await screen.findByText(/已处理 0\/1/);
+ expect(summary.closest(".arco-tabs-header-nav")).toBeTruthy();
+ expect(screen.queryByText(/当前文件：/)).not.toBeInTheDocument();
+ expect(screen.getByText("最近错误：最近一次错误")).toBeInTheDocument();
  client.clear();
 });
 it("无任务时隐藏数量，筛选为空但仍有任务时保留全局数量",async()=>{
