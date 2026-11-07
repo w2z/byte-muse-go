@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { apiRequest } from "../../shared/api/client";
 import { ListPagination } from "../../shared/ui/ListPagination";
+import { UploadMonitorStatus } from "./UploadPathsField";
 
 type DirectoryRow = {
   key: string;
@@ -148,7 +149,7 @@ const statusOptions = [
   { label: "成功", value: "completed" },
 ];
 
-/** 目录与文件分别展示，文件使用服务端分页；后台进度每两秒刷新。 */
+/** 目录与文件分别展示；标签右侧显示实况，下方操作栏随当前列表切换，后台每两秒刷新。 */
 export function UploadTables() {
   const client = useQueryClient();
   const [tab, setTab] = useState("directories");
@@ -220,7 +221,13 @@ export function UploadTables() {
         onChange={setTab}
         animation={false}
         aria-label="上传任务列表"
-        renderTabHeader={(props, DefaultTabHeader)=><div className="settings-upload-header"><DefaultTabHeader {...props}/><div className="settings-upload-header-actions"><span>状态</span>{filter}{actions}</div></div>}
+        renderTabHeader={(props, DefaultTabHeader) => <>
+          <div className="settings-upload-header">
+            <DefaultTabHeader {...props} />
+            <div className="settings-upload-summary"><UploadMonitorStatus /></div>
+          </div>
+          <div className="settings-upload-toolbar"><span>状态</span>{filter}{actions}</div>
+        </>}
       >
         <Tabs.TabPane key="directories" title={directoryLabel}>
           {directories.error ? (

@@ -99,7 +99,10 @@ it("按当前列表清空，并在三次失败后显示重新上传", async () =
  expect(await screen.findByText("正在重试 (2/3)；远端文件身份无法确认")).toBeInTheDocument();
  expect(screen.getByRole("tab", { name: "文件列表 (0/2)" })).toBeInTheDocument();
  expect(screen.getByRole("combobox", { name: "文件状态" })).toBeInTheDocument();
- expect(screen.getByRole("combobox", { name: "文件状态" }).closest(".settings-upload-header-actions")).toBeTruthy();
+ const toolbar = screen.getByRole("combobox", { name: "文件状态" }).closest(".settings-upload-toolbar");
+ expect(toolbar).toBeTruthy();
+ expect(toolbar?.contains(screen.getByRole("button", { name: "全部重试" }))).toBe(true);
+ expect(document.querySelector(".settings-upload-header")?.contains(toolbar)).toBe(false);
  expect(screen.queryByRole("button", { name: "暂停文件 /videos/a.mkv" })).not.toBeInTheDocument();
  expect(screen.queryByRole("button", { name: "停止文件 /videos/a.mkv" })).not.toBeInTheDocument();
  expect(screen.queryByText("状态", { selector: ".settings-upload-filter span" })).not.toBeInTheDocument();

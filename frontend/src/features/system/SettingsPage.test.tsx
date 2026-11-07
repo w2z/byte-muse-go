@@ -248,6 +248,8 @@ describe("设置页字段布局", () => {
     expect(values.CLOUD_UPLOAD_CONCURRENCY).toBe("3");
     expect(screen.getByRole("columnheader",{name:"成功/总个数"})).toBeInTheDocument();
     const tables = screen.getByLabelText("上传任务列表");
+    expect(screen.queryByText("保存后生效。关闭页面不影响后台监控；关闭开关将停止新上传。")).not.toBeInTheDocument();
+    expect((await screen.findByText(/已处理 0\/0/)).closest(".settings-upload-summary")).toBeTruthy();
     const toggle = screen.getByRole("switch", { name: "开启目录监控" });
     const divider = tables.closest(".settings-group-section")?.querySelector(".arco-divider");
     expect(divider).toBeTruthy();

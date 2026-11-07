@@ -9,7 +9,7 @@ import { PageState } from "../../shared/ui/PageState";
 import { useFeedbackMessage } from "../../shared/ui/FeedbackMessage";
 import { Pan115LoginPanel } from "./Pan115LoginPanel";
 import { MCPClientConfigs, MCPPermissionsField, MCPTokenInput } from "./MCPSettings";
-import { UploadPathsField, UploadMonitorStatus, type UploadMapping } from "./UploadPathsField";
+import { UploadPathsField, type UploadMapping } from "./UploadPathsField";
 import { UploadTables } from "./UploadTables";
 import { Pan115LibraryScanAction, Pan115ScanPathsField, type Pan115ScanPath } from "./Pan115ScanPathsField";
 import {
@@ -560,7 +560,7 @@ const groups: SettingGroup[] = [
       { key: "CLOUD_UPLOAD_MODE", label: "上传模式", kind: "enum", options: [{ value: "copy", label: "复制" }, { value: "move", label: "移动" }], description: "复制保留本地文件；移动仅在上传校验成功后删除未改变的源文件。只影响新加入队列的任务。" },
       { key: "CLOUD_UPLOAD_CONFLICT", label: "同名文件处理", kind: "enum", options: [{ value: "skip", label: "跳过" }, { value: "overwrite", label: "覆盖" }, { value: "keep_both", label: "保留两者" }] },
       { key: "CLOUD_UPLOAD_CONCURRENCY", label: "上传任务数量", kind: "int", unit: "个", description: "同时上传 1–32 个文件，默认 5。保存后立即调整；调小不打断正在上传的文件。" },
-      { key: "CLOUD_UPLOAD_ENABLE", label: "开启目录监控", kind: "bool", description: "保存后生效。关闭页面不影响后台监控；关闭开关将停止新上传。" },
+      { key: "CLOUD_UPLOAD_ENABLE", label: "开启目录监控", kind: "bool" },
     ],
   },
   {
@@ -1945,7 +1945,6 @@ export function SettingsPage() {
                     <MCPClientConfigs endpoint={`${window.location.origin}/api/v1/mcp`} savedToken={savedSnapshot.values.MCP_TOKEN ?? ""} />
                   </>
                 ) : null}
-                {activeGroup.code === "cloud-upload" ? <div className="settings-field settings-field-wide"><UploadMonitorStatus /></div> : null}
                 {activeGroup.strmGenerate || activeGroup.pan115Scan ? (
                   <div className="settings-action-heading">
                     <h3 className="settings-field-section">立即执行</h3>
