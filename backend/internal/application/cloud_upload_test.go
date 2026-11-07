@@ -387,7 +387,7 @@ func TestUploadQueueRechecksLockedFileAfterNextCompletion(t *testing.T) {
 	if service.Files(1, 20, "").Completed != 3 {
 		t.Fatalf("queue did not complete: %+v", service.Files(1, 20, ""))
 	}
-	if strings.Join(remote.order, ",") != "b.bytemuse-go-tmp.bin,a.bytemuse-go-tmp.bin,c.bytemuse-go-tmp.bin" {
+	if strings.Join(remote.order, ",") != "b.bin,a.bin,c.bin" {
 		t.Fatalf("locked task waited for queue drain: %v", remote.order)
 	}
 }
@@ -465,12 +465,12 @@ func TestUploadRetriesPartialStage(t *testing.T) {
 		t.Fatal("expected failure")
 	}
 	record := store[uploadKey(m, files[0], "overwrite")]
-	remote.files[record.Stage] = []byte("partial")
+	remote.files["unrelated-partial"] = []byte("partial")
 	remote.failUpload = false
 	if _, err = s.process(context.Background(), m, files[0], "overwrite"); err != nil {
 		t.Fatal(err)
 	}
-	if len(remote.files) != 1 || string(remote.files["film.mkv"]) != "new video" {
+	if len(remote.files) != 2 || string(remote.files["film.mkv"]) != "new video" || string(remote.files["unrelated-partial"]) != "partial" || record.Stage != "film.mkv" {
 		t.Fatal(remote.files)
 	}
 }
@@ -535,9 +535,13 @@ func (r *uploadRecreateRemote) Mkdir(_ context.Context, parent, name string) (st
 	}
 	return id, nil
 }
-func (r *uploadRecreateRemote) Upload(_ context.Context, parent, name string, _ *os.File, _ int64) error {
+func (r *uploadRecreateRemote) Upload(_ context.Context, parent, name string, file *os.File, size int64) error {
 	r.uploaded = parent + ":" + name
-	r.entries[parent] = append(r.entries[parent], uploadEntry{ID: name, Name: name, Size: 9})
+	body, err := io.ReadAll(io.NewSectionReader(file, 0, size))
+	if err != nil {
+		return err
+	}
+	r.entries[parent] = append(r.entries[parent], uploadEntry{ID: name, Name: name, Size: size, SHA1: fmt.Sprintf("%x", sha1.Sum(body))})
 	return nil
 }
 func (r *uploadRecreateRemote) Rename(_ context.Context, parent string, entry uploadEntry, name string) error {
@@ -667,8 +671,8 @@ func TestUploadFailurePreservesOriginal(t *testing.T) {
 	}
 	remote.failUpload = false
 	remote.loseRenameResponse = true
-	if _, err := s.process(context.Background(), m, files[0], "overwrite"); err == nil {
-		t.Fatal("expected uncertain rename")
+	if state, err := s.process(context.Background(), m, files[0], "overwrite"); err != nil || state != "completed" {
+		t.Fatalf("direct upload must not rename: %s %v", state, err)
 	}
 	if err := os.Remove(files[0].Absolute); err != nil {
 		t.Fatal(err)

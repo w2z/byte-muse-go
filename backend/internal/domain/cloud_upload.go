@@ -17,7 +17,8 @@ func ReportUploadProgress(ctx context.Context, transferred, total int64, phase s
 }
 
 // UploadRecord persists one source version and its remote commit stages, making retries and restarts resumable.
-// Stage is an owned temporary object; Backup is retained until the replacement has been verified.
+// Stage equals Target for direct uploads; StageID identifies the verified final object.
+// Distinct Stage and Backup names belong only to legacy replacement recovery.
 type UploadRecord struct {
 	// Optional snapshot fields default to zero for records written before recovery controls.
 	RemotePath string `json:"remote_path"`

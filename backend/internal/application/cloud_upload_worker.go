@@ -95,15 +95,6 @@ func uploadUnchanged(f uploadLocalFile) bool {
 	return err == nil && info.Mode().IsRegular() && info.Size() == f.Size && info.ModTime().UnixNano() == f.Modified
 }
 
-// uploadStageName preserves 115's immutable extension so the stage can be renamed to the final target.
-func uploadStageName(kind, target string) string {
-	if kind == "115" {
-		extension := path.Ext(target)
-		return strings.TrimSuffix(target, extension) + ".bytemuse-go-tmp" + extension
-	}
-	return target + ".bytemuse-go-tmp"
-}
-
 // uploadParent recreates only missing relative subdirectories, checking for file/folder conflicts.
 func uploadParent(ctx context.Context, remote uploadRemote, root, relative string) (string, error) {
 	parent := root
@@ -287,6 +278,21 @@ func (s *UploadService) process(ctx context.Context, m UploadMapping, f uploadLo
 	if policy != "skip" && policy != "overwrite" && policy != "keep_both" {
 		return "", fmt.Errorf("同名文件处理方式无效")
 	}
+	if m.Kind == "115" && record != nil && record.Parent != "" && record.Stage != record.Target && record.Intent != "delete" && record.Intent != "stop" {
+		entries, listErr := remote.List(ctx, record.Parent)
+		if listErr == nil {
+			for _, entry := range entries {
+				if entry.Name == record.Backup || (record.OldID != "" && entry.ID == record.OldID && entry.Name != record.Target) {
+					return record.State, fmt.Errorf("%w：旧任务备份需恢复，保留文件不自动清理", errUploadAttention)
+				}
+			}
+			record.Parent, record.Stage, record.StageID = "", "", ""
+			record.OldID, record.OldSHA1, record.OldSize = "", "", 0
+			record.State = "pending"
+		} else if !isUploadRemoteMissingError(listErr) {
+			return record.State, listErr
+		}
+	}
 	if record != nil && record.Kind == "115" && record.Parent != "" {
 		if _, listErr := remote.List(ctx, record.Parent); listErr != nil {
 			if isUploadRemoteMissingError(listErr) {
@@ -334,13 +340,6 @@ func (s *UploadService) process(ctx context.Context, m UploadMapping, f uploadLo
 			record.QueuedAt = time.Now().UTC().Format(time.RFC3339Nano)
 		}
 		record.Parent, record.Target = parent, name
-		if record.StageID == "" {
-			record.Stage = uploadStageName(m.Kind, name)
-		}
-		record.Backup = ".bytemuse-backup-" + key
-		if m.Kind == "115" {
-			record.Backup += path.Ext(name)
-		}
 		if exists && existing.Directory {
 			return "", fmt.Errorf("目标已存在同名目录: %s", name)
 		}
@@ -353,12 +352,19 @@ func (s *UploadService) process(ctx context.Context, m UploadMapping, f uploadLo
 				return "", e
 			}
 		}
+		record.Stage, record.Backup = record.Target, ""
+		if exists && policy == "overwrite" {
+			record.OldID, record.OldSHA1, record.OldSize = existing.ID, existing.SHA1, existing.Size
+		}
 		if e = save(); e != nil {
 			return "", e
 		}
 	}
 	if record.RemotePath == "" {
 		record.RemotePath = m.Path
+	}
+	if record.Stage == record.Target {
+		return s.processDirectUpload(ctx, remote, record, m, f, save)
 	}
 	if record.State == "pending" && !uploadUnchanged(f) {
 		record.State = "discarding"

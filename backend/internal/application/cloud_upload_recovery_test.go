@@ -28,7 +28,7 @@ func recoveryFixture(t *testing.T) (*UploadService, UploadMapping, uploadLocalFi
 }
 
 func TestUploadCleanupFailureIsDurableAndNeverReuploads(t *testing.T) {
-	s, m, f, r, store := recoveryFixture(t)
+	s, m, f, r, store := legacyRecoveryFixture(t)
 	r.failDelete = true
 	state, err := s.process(context.Background(), m, f, "overwrite")
 	if err == nil || state != "cleanup" {
@@ -76,7 +76,7 @@ func TestUploadUsesShortSourceBasedStageName(t *testing.T) {
 		t.Fatal(err)
 	}
 	record := store[uploadKey(m, f, "overwrite")]
-	if record.Stage != "film.bytemuse-go-tmp.mkv" {
+	if record.Stage != "film.mkv" || record.Backup != "" {
 		t.Fatalf("stage=%q", record.Stage)
 	}
 }
@@ -99,14 +99,14 @@ func TestUploadPreservesDuplicate115Stages(t *testing.T) {
 		{ID: "stage-1", Name: "film.bytemuse-go-tmp.mkv", Size: f.Size},
 		{ID: "stage-2", Name: "film.bytemuse-go-tmp.mkv", Size: f.Size},
 	}
-	if state, err := s.process(context.Background(), m, f, "overwrite"); err == nil || state == "completed" {
+	if state, err := s.process(context.Background(), m, f, "overwrite"); err != nil || state != "completed" {
 		t.Fatalf("state=%s err=%v", state, err)
 	}
 	if len(remote.extra) != 2 || remote.deleted != 0 {
 		t.Fatalf("unknown duplicate stages deleted: extra=%v deleted=%d", remote.extra, remote.deleted)
 	}
 	record := store[uploadKey(m, f, "overwrite")]
-	if record.State == "completed" || string(remote.files["film.mkv"]) != "old video" {
+	if record.State != "completed" || string(remote.files["film.mkv"]) != "new video" {
 		t.Fatalf("state=%s files=%v extra=%v", record.State, remote.files, remote.extra)
 	}
 }
@@ -143,7 +143,7 @@ func TestUploadMatches115EntryByContentWhenRemoteIDChanges(t *testing.T) {
 }
 
 func TestUploadCleanupPreservesUnexpectedBackup(t *testing.T) {
-	s, m, f, r, store := recoveryFixture(t)
+	s, m, f, r, store := legacyRecoveryFixture(t)
 	r.failDelete = true
 	_, _ = s.process(context.Background(), m, f, "overwrite")
 	record := store[uploadKey(m, f, "overwrite")]
@@ -158,7 +158,7 @@ func TestUploadCleanupPreservesUnexpectedBackup(t *testing.T) {
 }
 
 func TestUploadLostStageRestoresOriginalName(t *testing.T) {
-	s, m, f, r, store := recoveryFixture(t)
+	s, m, f, r, store := legacyRecoveryFixture(t)
 	r.loseRenameResponse = true
 	_, _ = s.process(context.Background(), m, f, "overwrite")
 	record := store[uploadKey(m, f, "overwrite")]
@@ -231,7 +231,7 @@ func TestUploadSourceChangedCleansOldStageBeforeNewVersion(t *testing.T) {
 }
 
 func TestUploadUncertainDeleteReconcilesWithoutReupload(t *testing.T) {
-	s, m, f, r, _ := recoveryFixture(t)
+	s, m, f, r, _ := legacyRecoveryFixture(t)
 	r.loseDeleteResponse = true
 	if state, err := s.process(context.Background(), m, f, "overwrite"); state != "cleanup" || err == nil {
 		t.Fatalf("%s %v", state, err)
@@ -245,7 +245,7 @@ func TestUploadUncertainDeleteReconcilesWithoutReupload(t *testing.T) {
 }
 
 func TestUploadRetryAfterRemoteObjectsDeleted(t *testing.T) {
-	service, mapping, file, remote, store := recoveryFixture(t)
+	service, mapping, file, remote, store := legacyRecoveryFixture(t)
 	remote.failDelete = true
 	if _, err := service.process(context.Background(), mapping, file, "overwrite"); err == nil {
 		t.Fatal("expected cleanup failure")
@@ -298,7 +298,16 @@ func TestUploadDeletedParentReplacesLegacyStageName(t *testing.T) {
 	if state, err := service.process(context.Background(), mapping, file, "overwrite"); err != nil || state != "completed" {
 		t.Fatalf("state=%s err=%v", state, err)
 	}
-	if store[key].Stage != "film.bytemuse-go-tmp.mkv" {
+	if store[key].Stage != "film.mkv" {
 		t.Fatalf("deleted attempt reused legacy stage: %s", store[key].Stage)
 	}
+}
+
+// legacyRecoveryFixture keeps pre-direct CD2 receipts recoverable without creating new temporary uploads.
+func legacyRecoveryFixture(t *testing.T) (*UploadService, UploadMapping, uploadLocalFile, *uploadMemoryRemote, uploadMemoryStore) {
+	service, mapping, file, remote, store := recoveryFixture(t)
+	mapping.Kind = "cd2"
+	key := uploadKey(mapping, file, "overwrite")
+	store[key] = domain.UploadRecord{Key: key, Kind: "cd2", Parent: "0", Target: "film.mkv", Stage: "legacy-stage", Backup: "legacy-backup", State: "pending", Policy: "overwrite", Source: file.Absolute, Relative: file.Relative, Size: file.Size, Modified: file.Modified}
+	return service, mapping, file, remote, store
 }
