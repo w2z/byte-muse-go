@@ -1,16 +1,20 @@
 {
-  "version": "0.1.204",
-  "commit": "bb634bef913c681f5d12781e3520ec3ca87fe047",
-  "short_commit": "bb634be",
-  "built_at": "2026-11-07T09:50:23Z",
+  "version": "0.1.205",
+  "commit": "691759284028415f7123ef005063b516d662207c",
+  "short_commit": "6917592",
+  "built_at": "2026-11-07T10:51:51Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.204",
-    "sha-bb634be",
+    "0.1.205",
+    "sha-6917592",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.205",
+      "message": "恢复清空任务后的手动上传并隐藏空计数"
+    },
     {
       "version": "0.1.204",
       "message": "增加复制移动模式与可调上传并发"
