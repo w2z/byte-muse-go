@@ -15,6 +15,29 @@ import (
 // pngSignature 是 PNG 文件头，用于让 http.DetectContentType 识别二维码图片。
 var pngSignature = []byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A}
 
+func TestUploadRetryErrorTimeFormat(t *testing.T) {
+	until := time.Date(2026, 11, 2, 15, 3, 5, 0, time.FixedZone("UTC+8", 8*60*60))
+	cause := errors.New("115 错误 770004：已达到当前访问上限，请稍后再试")
+	for _, item := range []struct {
+		name  string
+		cause error
+		want  string
+	}{
+		{"with cause", cause, "115 请求冷却中，等待自动重试：115 错误 770004：已达到当前访问上限，请稍后再试（下次尝试 2026-11-02 15:03:05）"},
+		{"without cause", nil, "115 请求冷却中，等待自动重试（下次尝试 2026-11-02 15:03:05）"},
+	} {
+		t.Run(item.name, func(t *testing.T) {
+			retry := &UploadRetryError{Until: until, Cause: item.cause}
+			if got := retry.Error(); got != item.want {
+				t.Fatalf("Error() = %q, want %q", got, item.want)
+			}
+			if retry.Until != until || retry.Unwrap() != item.cause {
+				t.Fatal("formatting changed retry deadline or cause")
+			}
+		})
+	}
+}
+
 func TestUploadWorkerRequestsBypassFixedAdmission(t *testing.T) {
 	entered := make(chan struct{}, 5)
 	release := make(chan struct{})

@@ -239,7 +239,7 @@ func (err *UploadRetryError) Error() string {
 	if err.Cause != nil {
 		message += "：" + err.Cause.Error()
 	}
-	return fmt.Sprintf("%s（下次尝试 %s）", message, err.Until.Format(time.RFC3339))
+	return fmt.Sprintf("%s（下次尝试 %s）", message, err.Until.Format(time.DateTime))
 }
 
 func (err *UploadRetryError) Unwrap() error { return err.Cause }
