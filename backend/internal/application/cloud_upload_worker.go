@@ -211,7 +211,11 @@ func (s *UploadService) process(ctx context.Context, m UploadMapping, f uploadLo
 		if !errors.Is(resultErr, context.Canceled) {
 			record.Error, record.ErrorKind, record.NextRetry = "", "", ""
 		}
-		if resultErr != nil && !errors.Is(resultErr, context.Canceled) {
+		var deferred *pan115.UploadRetryError
+		if errors.As(resultErr, &deferred) {
+			record.Error, record.ErrorKind = deferred.Error(), "cooldown"
+			record.NextRetry = deferred.Until.UTC().Format(time.RFC3339Nano)
+		} else if resultErr != nil && !errors.Is(resultErr, context.Canceled) {
 			if errors.Is(resultErr, errUploadRemoteMissing) {
 				record.Parent = ""
 				record.Stage = ""

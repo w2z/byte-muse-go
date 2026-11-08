@@ -2,12 +2,43 @@ package application
 
 import (
 	"bytemuse/backend/internal/domain"
+	"bytemuse/backend/internal/platform/pan115"
 	"context"
 	"errors"
 	"fmt"
 	"testing"
 	"time"
 )
+
+func TestUploadCooldownPersistsWithoutConsumingRetries(t *testing.T) {
+	service, mapping, file, _, store := recoveryFixture(t)
+	until := time.Now().Add(time.Minute)
+	service.store = uploadCooldownStore{uploadMemoryStore: store, err: &pan115.UploadRetryError{Until: until, Cause: &pan115.APIError{Code: 770004, Message: "请求过于频繁"}}}
+	_, err := service.process(context.Background(), mapping, file, "overwrite")
+	if err == nil {
+		t.Fatal("cooldown lost")
+	}
+	record := store[uploadKey(mapping, file, "overwrite")]
+	if record.ErrorKind != "cooldown" || record.Retries != 0 || record.NextRetry == "" || record.Error == "" {
+		t.Fatalf("record=%+v", record)
+	}
+	if uploadRetryDue(record, time.Now()) || !uploadRetryDue(record, until.Add(time.Second)) {
+		t.Fatal("cooldown schedule ignored")
+	}
+	if state := uploadPresentationState(record, "uploading", false, "running", false, false); state != "waiting" {
+		t.Fatal(state)
+	}
+	if err = service.refreshUploadView(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if service.Status().Failed != 0 {
+		t.Fatal("cooldown counted as failure")
+	}
+}
+
+type uploadCooldownStore struct { uploadMemoryStore; err error }
+func (store uploadCooldownStore) Get(ctx context.Context, key string) (*domain.UploadRecord, error) { return store.uploadMemoryStore.Get(ctx,key) }
+func (store uploadCooldownStore) Save(ctx context.Context, record domain.UploadRecord) error { if record.State == "pending" && store.err != nil { _ = store.uploadMemoryStore.Save(ctx,record); return store.err }; return store.uploadMemoryStore.Save(ctx,record) }
 
 type uploadFastClearStore struct {
 	uploadMemoryStore

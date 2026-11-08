@@ -41,7 +41,7 @@ func uploadBatchActive(records []domain.UploadRecord) bool {
 
 // uploadRetriesExhausted reports a non-blocked failure that has used all automatic attempts.
 func uploadRetriesExhausted(record domain.UploadRecord) bool {
-	return record.Error != "" && record.ErrorKind != "blocked" && record.ErrorKind != "locked" && record.Retries >= uploadMaxAutoRetries
+	return record.Error != "" && record.ErrorKind != "blocked" && record.ErrorKind != "locked" && record.ErrorKind != "cooldown" && record.Retries >= uploadMaxAutoRetries
 }
 
 // Control serializes queue commands with discovery and waits for durable acknowledgement.
@@ -606,7 +606,7 @@ func (s *UploadService) mergeUploadView(records []domain.UploadRecord, full bool
 		f.Error = r.Error
 		f.CompletedAt = r.CompletedAt
 		f.processed = uploadTerminal(r.State)
-		f.failed = r.Error != "" || r.State == "discarded"
+		f.failed = (r.Error != "" && r.ErrorKind != "locked" && r.ErrorKind != "cooldown") || r.State == "discarded"
 		if f.CompletedAt == "" && (r.State == "completed" || r.State == "skipped") {
 			f.CompletedAt = r.UpdatedAt
 		}
@@ -628,7 +628,7 @@ func (s *UploadService) mergeUploadView(records []domain.UploadRecord, full bool
 		if uploadTerminal(r.State) {
 			st.Processed++
 		}
-		if r.Error != "" || r.State == "discarded" {
+		if f.failed {
 			st.Failed++
 		}
 		st.Total++
@@ -662,7 +662,7 @@ func uploadPresentationState(r domain.UploadRecord, liveState string, current bo
 	if (r.State == "pending" || r.State == "uploaded") && uploadIndividuallyPaused(r, mode) {
 		return "paused"
 	}
-	if r.ErrorKind == "locked" {
+	if r.ErrorKind == "locked" || r.ErrorKind == "cooldown" {
 		return "waiting"
 	}
 	if r.ErrorKind == "blocked" {
@@ -704,7 +704,7 @@ func uploadRetryDue(r domain.UploadRecord, now time.Time) bool {
 	if uploadRetriesExhausted(r) {
 		return false
 	}
-	if r.ErrorKind != "blocked" {
+	if r.ErrorKind != "blocked" && r.ErrorKind != "cooldown" {
 		return true
 	}
 	next, err := time.Parse(time.RFC3339Nano, r.NextRetry)

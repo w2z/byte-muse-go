@@ -197,7 +197,7 @@ func (s *UploadService) directoriesLocked(status string) []UploadDirectoryProgre
 				row.Skipped++
 				processed++
 				processedBytes += file.Size
-			} else if file.Error != "" || file.State == "discarded" {
+			} else if file.failed || file.State == "discarded" || (file.Error != "" && file.State != "waiting") {
 				row.Failed++
 			}
 			for name, enabled := range uploadProgressActions(file.State) {

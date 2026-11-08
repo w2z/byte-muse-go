@@ -168,10 +168,11 @@ type Client struct {
 
 	// mu 保护下面三个截止时间：nextCall 与 nextPlay 是各链路的下次可发起时间，
 	// retryAt 是命中限流后的全局冷却截止时间，所有链路共享。
-	mu       sync.Mutex
-	nextCall time.Time
-	nextPlay time.Time
-	retryAt  time.Time
+	mu         sync.Mutex
+	nextCall   time.Time
+	nextPlay   time.Time
+	retryAt    time.Time
+	retryCause error
 }
 
 // New 创建协议客户端；client 为空时使用内置超时。
@@ -212,29 +213,36 @@ func (c *Client) Close() {
 // 返回的释放函数必须调用，否则并发槽不会归还。
 func (c *Client) admit(ctx context.Context) (func(), error) {
 	if worker, _ := ctx.Value(uploadWorkerKey{}).(bool); worker {
-		for {
-			if err := ctx.Err(); err != nil {
-				return nil, err
-			}
-			c.mu.Lock()
-			wait := time.Until(c.retryAt)
-			c.mu.Unlock()
-			if wait <= 0 {
-				return func() {}, nil
-			}
-			timer := time.NewTimer(wait)
-			select {
-			case <-timer.C:
-			case <-ctx.Done():
-				timer.Stop()
-				return nil, ctx.Err()
-			}
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		if time.Now().Before(c.retryAt) {
+			return nil, &UploadRetryError{Until: c.retryAt, Cause: c.retryCause}
+		}
+		return func() {}, nil
 	}
 	return c.admitWith(ctx, c.gap, &c.nextCall)
 }
 
 type uploadWorkerKey struct{}
+
+// UploadRetryError returns provider backoff to the scheduler without occupying a transfer worker.
+type UploadRetryError struct {
+	Until time.Time
+	Cause error
+}
+
+func (err *UploadRetryError) Error() string {
+	message := "115 请求冷却中，等待自动重试"
+	if err.Cause != nil {
+		message += "：" + err.Cause.Error()
+	}
+	return fmt.Sprintf("%s（下次尝试 %s）", message, err.Until.Format(time.RFC3339))
+}
+
+func (err *UploadRetryError) Unwrap() error { return err.Cause }
 
 // WithUploadWorker delegates request concurrency and pacing to a bounded upload worker.
 // Only task-owned sequential requests may use it; provider cooldown and retry behavior remain shared.
@@ -395,6 +403,22 @@ func callValue[T any](c *Client, ctx context.Context, method string, attempt fun
 			return value, nil
 		}
 		if external, _ := ctx.Value(externalRetryKey{}).(bool); external {
+			return zero, err
+		}
+		if worker, _ := ctx.Value(uploadWorkerKey{}).(bool); worker {
+			var deferred *UploadRetryError
+			if errors.As(err, &deferred) {
+				return zero, err
+			}
+			if wait, retryable := c.retryDelay(method, err, 1); retryable {
+				c.mu.Lock()
+				if until := time.Now().Add(wait); until.After(c.retryAt) {
+					c.retryAt, c.retryCause = until, err
+				}
+				deferred = &UploadRetryError{Until: c.retryAt, Cause: err}
+				c.mu.Unlock()
+				return zero, deferred
+			}
 			return zero, err
 		}
 		wait, retryable := c.retryDelay(method, err, index)

@@ -60,21 +60,30 @@ func TestUploadWorkerRequestsBypassFixedAdmission(t *testing.T) {
 
 func TestUploadWorkerHonorsCooldownAndCancellation(t *testing.T) {
 	client := New(nil)
-	client.extendCooldown(60 * time.Millisecond)
-	start := time.Now()
-	release, err := client.admit(WithUploadWorker(context.Background()))
-	if err != nil {
-		t.Fatal(err)
-	}
-	release()
-	if time.Since(start) < 60*time.Millisecond {
-		t.Fatal("provider cooldown bypassed")
-	}
 	client.extendCooldown(time.Minute)
-	ctx, cancel := context.WithTimeout(WithUploadWorker(context.Background()), 30*time.Millisecond)
-	defer cancel()
-	if _, err = client.admit(ctx); !errors.Is(err, context.DeadlineExceeded) {
+	start := time.Now()
+	_, err := client.admit(WithUploadWorker(context.Background()))
+	var deferred *UploadRetryError
+	if !errors.As(err, &deferred) || !deferred.Until.After(start) || time.Since(start) > time.Second {
+		t.Fatalf("cooldown did not return to scheduler: %v", err)
+	}
+	ctx, cancel := context.WithCancel(WithUploadWorker(context.Background()))
+	cancel()
+	if _, err = client.admit(ctx); !errors.Is(err, context.Canceled) {
 		t.Fatal(err)
+	}
+}
+
+func TestUploadRateLimitReturnsWithoutInternalSleep(t *testing.T) {
+	client := New(nil)
+	calls := 0
+	_, err := callValue(client, WithUploadWorker(context.Background()), "GET", func() (int, error) {
+		calls++
+		return 0, &APIError{Code: 770004, Message: "请求过于频繁"}
+	})
+	var deferred *UploadRetryError
+	if calls != 1 || !errors.As(err, &deferred) || deferred.Cause == nil || !deferred.Until.After(time.Now()) {
+		t.Fatalf("calls=%d err=%v", calls, err)
 	}
 }
 

@@ -2,6 +2,7 @@ package application
 
 import (
 	"bytemuse/backend/internal/domain"
+	"bytemuse/backend/internal/platform/pan115"
 	"context"
 	"errors"
 	"github.com/fsnotify/fsnotify"
@@ -68,7 +69,15 @@ func (s *UploadService) Run(ctx context.Context) {
 	results := make(chan completion, 32)
 	workers := map[string]context.CancelFunc{}
 	working := map[string]domain.UploadRecord{}
+	providerRetry := map[string]time.Time{}
 	finish := func(result completion) {
+		var deferred *pan115.UploadRetryError
+		if errors.As(result.err, &deferred) {
+			kind := working[result.key].Kind
+			if deferred.Until.After(providerRetry[kind]) {
+				providerRetry[kind] = deferred.Until
+			}
+		}
 		delete(workers, result.key)
 		delete(working, result.key)
 		s.update(func(st *UploadStatus) {
@@ -238,6 +247,9 @@ func (s *UploadService) Run(ctx context.Context) {
 				for index := 0; index < len(records); index++ {
 					recordIndex := (readinessOffset + index) % len(records)
 					r := records[recordIndex]
+					if now.Before(providerRetry[r.Kind]) {
+						continue
+					}
 					if _, active := workers[r.Key]; active {
 						continue
 					}
