@@ -1,16 +1,20 @@
 {
-  "version": "0.1.224",
-  "commit": "e0578743e6686d3eb2cfe71d38fde13b1c9c8e41",
-  "short_commit": "e057874",
-  "built_at": "2026-11-08T15:20:34Z",
+  "version": "0.1.225",
+  "commit": "142fb7a44c349c06adacab09f371f15f021a32e6",
+  "short_commit": "142fb7a",
+  "built_at": "2026-11-08T16:48:18Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.224",
-    "sha-e057874",
+    "0.1.225",
+    "sha-142fb7a",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.225",
+      "message": "按范围持久化控制指令避免逐条恢复任务"
+    },
     {
       "version": "0.1.224",
       "message": "持久化多个同名旧文件快照并安全恢复覆盖"
