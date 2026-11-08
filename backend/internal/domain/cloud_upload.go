@@ -4,6 +4,16 @@ import "context"
 
 type uploadProgressKey struct{}
 
+// UploadDirective is a durable pause/start command. Sequence is scheduler-ordered, not wall-clock time.
+// Empty Scope targets the queue; directory/file Target contains the existing progress key.
+type UploadDirective struct {
+	Scope         string `json:"scope"`
+	Target        string `json:"target"`
+	Action        string `json:"action"`
+	Sequence      uint64 `json:"sequence"`
+	StartSequence uint64 `json:"start_sequence,omitempty"`
+}
+
 // UploadOldFile records the immutable identity of one file approved for replacement.
 type UploadOldFile struct {
 	ID   string `json:"id"`
@@ -33,6 +43,10 @@ func ReportUploadProgress(ctx context.Context, transferred, total int64, phase s
 // Stage equals Target for direct uploads; StageID identifies the verified final object.
 // Distinct Stage and Backup names belong only to legacy replacement recovery.
 type UploadRecord struct {
+	// ControlSequence defaults to zero for legacy tasks; ordinary progress updates never advance it.
+	ControlSequence uint64 `json:"control_sequence,omitempty"`
+	// Directive is present only on control rows, not file receipts; nil preserves legacy semantics.
+	Directive *UploadDirective `json:"directive,omitempty"`
 	// Optional snapshot fields default to zero for records written before recovery controls.
 	RemotePath string `json:"remote_path"`
 	StageID    string `json:"stage_id"`

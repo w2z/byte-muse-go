@@ -37,7 +37,7 @@ func newUploadQueueStore(ctx context.Context, durable UploadStore) (*uploadQueue
 }
 
 func uploadQueued(record domain.UploadRecord) bool {
-	return record.State != "control" && !uploadTerminal(record.State)
+	return record.State != "control" && (!uploadTerminal(record.State) || (record.State == "stopped" && !record.Hidden))
 }
 
 func (store *uploadQueueStore) Get(ctx context.Context, key string) (*domain.UploadRecord, error) {

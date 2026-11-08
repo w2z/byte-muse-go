@@ -24,17 +24,14 @@ func (s *UploadService) Run(ctx context.Context) {
 	}
 	s.store = queue
 	defer func() { s.store = durable }()
+	restored, _ := queue.List(ctx)
+	s.restoreUploadDirectives(restored)
 	s.mu.Lock()
 	s.commands = make(chan uploadCommand)
 	s.wake = make(chan struct{}, 1)
 	s.mode = "running"
 	s.active = make(map[string]bool)
-	for _, record := range queue.records {
-		if uploadQueued(record) && record.Intent == "run" && !uploadRetriesExhausted(record) {
-			s.manualUpload = true
-			break
-		}
-	}
+	s.manualUpload = false
 	s.mu.Unlock()
 	control, err := s.store.Get(ctx, uploadControlKey)
 	if err != nil {
@@ -249,7 +246,7 @@ func (s *UploadService) Run(ctx context.Context) {
 			} else {
 				recovering := map[string]bool{}
 				for _, r := range records {
-					if r.State != "pending" {
+					if r.State != "pending" && !uploadTerminal(r.State) {
 						recovering[r.Kind+"\x00"+r.Root+"\x00"+r.Source] = true
 					}
 				}
@@ -260,7 +257,10 @@ func (s *UploadService) Run(ctx context.Context) {
 				observing := false
 				for index := 0; index < len(records); index++ {
 					recordIndex := (readinessOffset + index) % len(records)
-					r := records[recordIndex]
+					r := s.effectiveUploadRecord(records[recordIndex])
+					if uploadTerminal(r.State) {
+						continue
+					}
 					if now.Before(providerRetry[r.Kind]) {
 						continue
 					}
@@ -276,13 +276,6 @@ func (s *UploadService) Run(ctx context.Context) {
 					}
 					if conflict {
 						continue
-					}
-					if r.QueuedAt == "" {
-						freezeUploadQueueTime(&r)
-						if saveErr := s.store.Save(ctx, r); saveErr != nil {
-							s.update(func(st *UploadStatus) { st.Error = saveErr.Error() })
-							continue
-						}
 					}
 					if !uploadRetryDue(r, now) {
 						continue
@@ -504,7 +497,7 @@ func (s *UploadService) Run(ctx context.Context) {
 			finish(result)
 		case command := <-s.commands:
 			if command.scope != "" {
-				if command.action != "clear_completed" && command.action != "clear_failed" {
+				if command.action == "pause" || command.action == "stop" || command.action == "delete" {
 					stopWorkers(func(key string) bool { return uploadCommandTargetsBusy(ctx, s, key, command) })
 				}
 				command.reply <- s.applyScopedUploadControl(ctx, command.action, command.scope, command.key)

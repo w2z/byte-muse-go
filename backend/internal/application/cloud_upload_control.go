@@ -32,7 +32,7 @@ func uploadTerminal(state string) bool {
 // Failures that have used the automatic attempts stay visible but do not keep the manual batch running.
 func uploadBatchActive(records []domain.UploadRecord) bool {
 	for _, record := range records {
-		if !uploadRetriesExhausted(record) {
+		if record.State != "control" && !uploadTerminal(record.State) && !uploadRetriesExhausted(record) {
 			return true
 		}
 	}
@@ -50,7 +50,7 @@ func (s *UploadService) Control(ctx context.Context, action string) error {
 }
 
 // ControlScope serializes one queue, directory, or file command.
-// An empty scope preserves whole-queue behavior. directory applies one action to every file task in that directory.
+// An empty scope controls the queue. Directory pause/start writes one directive shared by its file tasks.
 func (s *UploadService) ControlScope(ctx context.Context, action, scope, key string) error {
 	s.mu.RLock()
 	ready, ch := s.ready, s.commands
@@ -85,9 +85,9 @@ func (s *UploadService) uploadActionsLocked() map[string]bool {
 		}
 	}
 	actions := map[string]bool{
-		"pause":           s.ready && s.status.Enabled && s.mode == "running" && active,
+		"pause":           s.ready && active && (s.mode == "running" || hasRunnableUploadView(s.files)),
 		"stop":            s.ready && active && s.mode != "stopping" && s.mode != "stopped",
-		"resume":          s.ready && s.status.Enabled && s.mode == "paused",
+		"resume":          s.ready && s.mode == "paused",
 		"clear_completed": s.ready && completed,
 		"delete_all":      s.ready && visible && s.mode != "deleting",
 		"retry_all":       s.ready && hasUploadErrors(s.files),
@@ -152,6 +152,9 @@ func uploadListClearActions(files map[string]UploadFileProgress) map[string]bool
 // applyUploadControl retains hidden deduplication receipts and unfinished recovery records.
 // Queue intent is persisted first so interrupted bulk controls replay before discovery.
 func (s *UploadService) applyUploadControl(ctx context.Context, action string) error {
+	if action == "pause" || action == "resume" {
+		return s.applyUploadDirective(ctx, action, "", "")
+	}
 	records, err := s.store.List(ctx)
 	if err != nil {
 		return err
@@ -169,17 +172,27 @@ func (s *UploadService) applyUploadControl(ctx context.Context, action string) e
 	default:
 		return ErrUploadControl
 	}
-	control := domain.UploadRecord{Key: uploadControlKey, State: "control", Intent: mode, Target: action}
+	sequence := s.nextUploadControlSequence()
+	control := domain.UploadRecord{Key: uploadControlKey, State: "control", Intent: mode, Target: action, ControlSequence: sequence}
+	s.mu.RLock()
+	if command, ok := s.directives[uploadControlKey]; ok && action != "stop" && action != "delete_all" {
+		control.Directive = &command
+	}
+	s.mu.RUnlock()
 	if err = s.store.Save(ctx, control); err != nil {
 		return err
 	}
 	s.mu.Lock()
 	s.mode = mode
+	if action == "stop" || action == "delete_all" {
+		delete(s.directives, uploadControlKey)
+	}
 	s.mu.Unlock()
 	for _, r := range records {
 		if r.State == "control" {
 			continue
 		}
+		r = s.effectiveUploadRecord(r)
 		if !uploadTerminal(r.State) {
 			freezeUploadQueueTime(&r)
 		}
@@ -230,6 +243,9 @@ func (s *UploadService) applyUploadControl(ctx context.Context, action string) e
 			r.Hidden = true
 			r.Error, r.ErrorKind, r.NextRetry = "", "", ""
 		}
+		if action == "stop" || action == "delete_all" || action == "retry_all" {
+			r.ControlSequence = sequence
+		}
 		if err = s.store.Save(ctx, r); err != nil {
 			return err
 		}
@@ -241,7 +257,7 @@ func (s *UploadService) applyUploadControl(ctx context.Context, action string) e
 	return s.refreshUploadView(ctx)
 }
 
-// applyScopedUploadControl changes only the selected file or every file in the selected directory.
+// applyScopedUploadControl persists pause/start once; destructive controls still reconcile individual receipts.
 // It does not change the queue-wide pause, stop, or monitoring mode.
 func (s *UploadService) applyScopedUploadControl(ctx context.Context, action, scope, key string) error {
 	if scope == "files" || scope == "directories" {
@@ -250,19 +266,24 @@ func (s *UploadService) applyScopedUploadControl(ctx context.Context, action, sc
 	if (scope != "file" && scope != "directory") || strings.TrimSpace(key) == "" {
 		return ErrUploadControl
 	}
+	if action == "start" || action == "pause" {
+		return s.applyUploadDirective(ctx, action, scope, key)
+	}
 	records, err := s.store.List(ctx)
 	if err != nil {
 		return err
 	}
 	changed := false
+	sequence := s.nextUploadControlSequence()
 	for _, record := range records {
 		if record.State == "control" || record.Hidden || !uploadScopeMatch(record, scope, key) {
 			continue
 		}
-		next, ok := transformUploadControl(record, action, s.mode, s.status.Enabled || s.manualUpload)
+		next, ok := transformUploadControl(s.effectiveUploadRecord(record), action, s.mode, s.status.Enabled || s.manualUpload)
 		if !ok {
 			continue
 		}
+		next.ControlSequence = sequence
 		if err = s.store.Save(ctx, next); err != nil {
 			return err
 		}
@@ -560,6 +581,7 @@ func (s *UploadService) mergeUploadView(records []domain.UploadRecord, full bool
 		st.Total, st.Processed, st.Uploaded, st.Skipped, st.Failed = 0, 0, 0, 0, 0
 	}
 	for _, r := range records {
+		r = s.effectiveUploadRecordLocked(r)
 		if !full {
 			if previous, exists := s.files[r.Key]; exists {
 				st.Total--
@@ -642,11 +664,12 @@ func (s *UploadService) mergeUploadView(records []domain.UploadRecord, full bool
 		}
 	}
 	if st.Current == "" {
+		runnable := hasRunnableUploadView(s.files)
 		st.State = "watching"
-		if !st.Enabled && !s.manualUpload && !s.scanning {
+		if !st.Enabled && !s.manualUpload && !s.scanning && !runnable {
 			st.State = "disabled"
 		}
-		if s.mode != "running" {
+		if s.mode != "running" && !runnable {
 			st.State = s.mode
 		}
 	}

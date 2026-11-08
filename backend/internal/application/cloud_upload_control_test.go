@@ -4,8 +4,11 @@ import (
 	"bytemuse/backend/internal/domain"
 	"bytemuse/backend/internal/platform/pan115"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -43,6 +46,158 @@ func TestUploadCooldownPersistsWithoutConsumingRetries(t *testing.T) {
 type uploadFastClearStore struct {
 	uploadMemoryStore
 	err error
+}
+
+type uploadControlWriteCounter struct {
+	uploadMemoryStore
+	writes int
+	fail   bool
+}
+
+func (store *uploadControlWriteCounter) Save(ctx context.Context, record domain.UploadRecord) error {
+	store.writes++
+	if store.fail {
+		return errors.New("control commit failed")
+	}
+	return store.uploadMemoryStore.Save(ctx, record)
+}
+
+func TestUploadDirectoryStartWritesOneControlForLargeQueue(t *testing.T) {
+	store := &uploadControlWriteCounter{uploadMemoryStore: uploadMemoryStore{}}
+	mapping := UploadMapping{Kind: "115", ID: "root", LocalPath: "/media"}
+	for index := 0; index < 70000; index++ {
+		key := fmt.Sprint(index)
+		store.uploadMemoryStore[key] = domain.UploadRecord{Key: key, Kind: "115", Root: "root", LocalRoot: "/media", State: "pending", Intent: "pause", QueuedAt: "2026-11-01T00:00:00Z"}
+	}
+	service := &UploadService{store: store, mode: "paused"}
+	if err := service.applyScopedUploadControl(context.Background(), "start", "directory", uploadDirectoryKey(mapping)); err != nil {
+		t.Fatal(err)
+	}
+	if store.writes != 1 {
+		t.Fatalf("directory start wrote %d records for 70000 tasks", store.writes)
+	}
+	t.Logf("70000 tasks: directory start persisted %d control row", store.writes)
+	if store.uploadMemoryStore["0"].Intent != "pause" {
+		t.Fatal("directory command rewrote file task")
+	}
+	if page := service.Files(1, 1, "waiting"); page.Total != 70000 {
+		t.Fatalf("running projection missing: %d", page.Total)
+	}
+}
+
+func TestUploadStoppedRecordsDoNotKeepManualBatchActive(t *testing.T) {
+	records := []domain.UploadRecord{{State: "stopped"}, {State: "completed"}, {State: "control"}}
+	if uploadBatchActive(records) {
+		t.Fatal("terminal tasks kept manual batch active")
+	}
+	records = append(records, domain.UploadRecord{State: "pending", Intent: "run"})
+	if !uploadBatchActive(records) {
+		t.Fatal("pending manual task did not keep batch active")
+	}
+}
+
+func TestUploadDirectivesOrderRestartAndFailure(t *testing.T) {
+	ctx := context.Background()
+	store := &uploadControlWriteCounter{uploadMemoryStore: uploadMemoryStore{
+		"a":       {Key: "a", Kind: "115", Root: "1", LocalRoot: "/a", State: "pending", Intent: "run"},
+		"b":       {Key: "b", Kind: "115", Root: "1", LocalRoot: "/a", State: "pending", Intent: "run"},
+		"other":   {Key: "other", Kind: "115", Root: "2", LocalRoot: "/b", State: "pending", Intent: "run"},
+		"done":    {Key: "done", Kind: "115", Root: "1", LocalRoot: "/a", State: "completed", StageID: "receipt"},
+		"failed":  {Key: "failed", Kind: "115", Root: "1", LocalRoot: "/a", State: "pending", Error: "failure", Retries: 3},
+		"stopped": {Key: "stopped", Kind: "115", Root: "2", LocalRoot: "/b", State: "stopped", Intent: "stop"},
+	}}
+	service := &UploadService{store: store, mode: "running"}
+	directory := uploadDirectoryKey(UploadMapping{Kind: "115", ID: "1", LocalPath: "/a"})
+	if err := service.applyUploadControl(ctx, "pause"); err != nil {
+		t.Fatal(err)
+	}
+	if service.effectiveUploadRecord(store.uploadMemoryStore["a"]).Intent != "pause" {
+		t.Fatal("global pause did not supersede manual run")
+	}
+	if err := service.applyScopedUploadControl(ctx, "start", "directory", directory); err != nil {
+		t.Fatal(err)
+	}
+	if service.effectiveUploadRecord(store.uploadMemoryStore["a"]).Intent != "run" || service.effectiveUploadRecord(store.uploadMemoryStore["other"]).Intent != "pause" {
+		t.Fatal("directory start escaped scope")
+	}
+	if err := service.applyScopedUploadControl(ctx, "pause", "file", "a"); err != nil {
+		t.Fatal(err)
+	}
+	if service.effectiveUploadRecord(store.uploadMemoryStore["a"]).Intent != "pause" || service.effectiveUploadRecord(store.uploadMemoryStore["b"]).Intent != "run" {
+		t.Fatal("file pause escaped scope")
+	}
+	if store.writes != 3 {
+		t.Fatalf("three commands wrote %d rows", store.writes)
+	}
+	before := service.effectiveUploadRecord(store.uploadMemoryStore["a"])
+	store.fail = true
+	if err := service.applyScopedUploadControl(ctx, "start", "file", "a"); err == nil {
+		t.Fatal("failed commit accepted")
+	}
+	if after := service.effectiveUploadRecord(store.uploadMemoryStore["a"]); after.Intent != before.Intent || after.ControlSequence != before.ControlSequence {
+		t.Fatal("failed commit changed state")
+	}
+	store.fail = false
+	raw, _ := json.Marshal(store.uploadMemoryStore)
+	var restored uploadMemoryStore
+	if err := json.Unmarshal(raw, &restored); err != nil {
+		t.Fatal(err)
+	}
+	restarted := &UploadService{store: restored, mode: "paused"}
+	records, _ := restored.List(ctx)
+	restarted.restoreUploadDirectives(records)
+	if restarted.effectiveUploadRecord(restored["a"]).Intent != "pause" || restarted.effectiveUploadRecord(restored["b"]).Intent != "run" {
+		t.Fatal("restart lost command priority")
+	}
+	if err := restarted.applyUploadControl(ctx, "resume"); err != nil {
+		t.Fatal(err)
+	}
+	if restarted.effectiveUploadRecord(restored["a"]).Intent != "run" {
+		t.Fatal("later global resume lost priority")
+	}
+	if restarted.effectiveUploadRecord(restored["stopped"]).State != "stopped" {
+		t.Fatal("global resume restarted a stopped task without explicit start")
+	}
+	if got := restarted.effectiveUploadRecord(restored["done"]); got.State != "completed" || got.StageID != "receipt" {
+		t.Fatal("completed task restarted")
+	}
+	if got := restarted.effectiveUploadRecord(restored["failed"]); got.Retries != 3 || got.Intent == "run" {
+		t.Fatal("failed task retried by start")
+	}
+}
+
+func TestUploadDirectoryDirectiveRunsAfterRestartWithGlobalPause(t *testing.T) {
+	ctx := context.Background()
+	mapping := UploadMapping{Kind: "115", ID: "0", LocalPath: t.TempDir(), Path: "/"}
+	name := filepath.Join(mapping.LocalPath, "file.txt")
+	if err := os.WriteFile(name, []byte("a"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	info, _ := os.Stat(name)
+	file := uploadLocalFile{Absolute: name, Relative: "file.txt", Size: 1, Modified: info.ModTime().UnixNano()}
+	key := uploadKey(mapping, file, "skip")
+	store := uploadMemoryStore{key: {Key: key, Kind: "115", Root: "0", LocalRoot: mapping.LocalPath, RemotePath: "/", Relative: file.Relative, Source: name, Size: 1, Modified: file.Modified, Policy: "skip", State: "stopped", Intent: "stop"}}
+	service := &UploadService{store: store, mode: "running"}
+	if err := service.applyUploadControl(ctx, "pause"); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.applyScopedUploadControl(ctx, "start", "directory", uploadDirectoryKey(mapping)); err != nil {
+		t.Fatal(err)
+	}
+	remote := &uploadBlockingRemote{started: make(chan string, 2), release: make(chan struct{})}
+	raw, _ := json.Marshal([]UploadMapping{mapping})
+	restarted := &UploadService{store: store, settings: func(context.Context) (map[string]string, error) {
+		return map[string]string{"CLOUD_UPLOAD_PATHS": string(raw), "CLOUD_UPLOAD_ENABLE": "false"}, nil
+	}, provider: func(context.Context, string) (uploadRemote, error) { return remote, nil }}
+	run, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() { defer close(done); restarted.Run(run) }()
+	defer func() { cancel(); <-done }()
+	select {
+	case <-remote.started:
+	case <-time.After(8 * time.Second):
+		t.Fatalf("persisted directory start did not resume: status=%+v files=%+v", restarted.Status(), restarted.Files(1, 5, ""))
+	}
 }
 
 func (store *uploadFastClearStore) List(context.Context) ([]domain.UploadRecord, error) {
@@ -161,7 +316,7 @@ func TestScopedUploadControlChangesOnlySelectedFiles(t *testing.T) {
 	if err := s.applyScopedUploadControl(ctx, "pause", "file", "a1"); err != nil {
 		t.Fatal(err)
 	}
-	if store["a1"].Intent != "pause" || store["a2"].Intent != "" || store["b1"].State != "pending" || s.mode != "running" {
+	if s.effectiveUploadRecord(store["a1"]).Intent != "pause" || store["a1"].Intent != "" || store["a2"].Intent != "" || store["b1"].State != "pending" || s.mode != "running" {
 		t.Fatalf("file pause leaked: %+v mode=%s", store, s.mode)
 	}
 	if err := s.applyScopedUploadControl(ctx, "stop", "directory", directory); err != nil {
@@ -173,14 +328,14 @@ func TestScopedUploadControlChangesOnlySelectedFiles(t *testing.T) {
 	if err := s.applyScopedUploadControl(ctx, "start", "directory", directory); err != nil {
 		t.Fatal(err)
 	}
-	if store["a1"].State != "pending" || store["a1"].Intent != "" || store["a2"].State != "pending" || store["b1"].State != "pending" {
+	if s.effectiveUploadRecord(store["a1"]).State != "pending" || s.effectiveUploadRecord(store["a1"]).Intent != "run" || s.effectiveUploadRecord(store["a2"]).State != "pending" || store["b1"].State != "pending" {
 		t.Fatalf("directory start leaked: %+v", store)
 	}
 	store["a3"] = domain.UploadRecord{Key: "a3", Kind: "115", Root: "1", LocalRoot: "/a", State: "uploaded"}
 	if err := s.applyScopedUploadControl(ctx, "pause", "directory", directory); err != nil {
 		t.Fatal(err)
 	}
-	if store["a1"].Intent != "pause" || store["a2"].Intent != "pause" || store["a3"].Intent != "pause" || store["a3"].State != "uploaded" || store["b1"].Intent != "" {
+	if s.effectiveUploadRecord(store["a1"]).Intent != "pause" || s.effectiveUploadRecord(store["a2"]).Intent != "pause" || s.effectiveUploadRecord(store["a3"]).Intent != "pause" || store["a3"].State != "uploaded" || store["b1"].Intent != "" {
 		t.Fatalf("directory pause missed uploaded file: %+v", store)
 	}
 	paused := false
@@ -196,7 +351,7 @@ func TestScopedUploadControlChangesOnlySelectedFiles(t *testing.T) {
 	if err := s.applyScopedUploadControl(ctx, "start", "directory", directory); err != nil {
 		t.Fatal(err)
 	}
-	if store["a1"].Intent != "run" || store["a2"].Intent != "run" || store["a3"].Intent != "run" || store["b1"].Intent != "" || s.mode != "running" {
+	if s.effectiveUploadRecord(store["a1"]).Intent != "run" || s.effectiveUploadRecord(store["a2"]).Intent != "run" || s.effectiveUploadRecord(store["a3"]).Intent != "run" || store["b1"].Intent != "" || s.mode != "running" {
 		t.Fatalf("unmonitored directory start leaked: %+v mode=%s", store, s.mode)
 	}
 	if err := s.applyScopedUploadControl(ctx, "delete", "file", "b1"); err != nil {

@@ -44,20 +44,22 @@ type UploadStatus struct {
 
 // UploadService owns bounded workers; only same-child creation and name reservations serialize.
 type UploadService struct {
-	settings       func(context.Context) (map[string]string, error)
-	store          UploadStore
-	provider       func(context.Context, string) (uploadRemote, error)
-	mu             sync.RWMutex
-	preparation    sync.Mutex
-	directoryCache uploadDirectoryCache
-	active         map[string]bool
-	status         UploadStatus
-	files          map[string]UploadFileProgress
-	mappings       []UploadMapping
-	commands       chan uploadCommand
-	wake           chan struct{}
-	ready          bool
-	mode           string
+	settings        func(context.Context) (map[string]string, error)
+	store           UploadStore
+	provider        func(context.Context, string) (uploadRemote, error)
+	mu              sync.RWMutex
+	preparation     sync.Mutex
+	directoryCache  uploadDirectoryCache
+	directives      map[string]domain.UploadDirective
+	controlSequence uint64
+	active          map[string]bool
+	status          UploadStatus
+	files           map[string]UploadFileProgress
+	mappings        []UploadMapping
+	commands        chan uploadCommand
+	wake            chan struct{}
+	ready           bool
+	mode            string
 	// scanRequested asks the scheduler for one immediate discovery pass.
 	scanRequested bool
 	scanning      bool
@@ -197,6 +199,10 @@ func (s *UploadService) process(ctx context.Context, m UploadMapping, f uploadLo
 	record, err := s.store.Get(ctx, key)
 	if err != nil {
 		return "", err
+	}
+	if record != nil {
+		effective := s.effectiveUploadRecord(*record)
+		record = &effective
 	}
 	if record != nil && !uploadTerminal(record.State) {
 		freezeUploadQueueTime(record)

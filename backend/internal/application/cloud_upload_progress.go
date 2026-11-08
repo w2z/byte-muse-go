@@ -77,6 +77,7 @@ func uploadDirectoryKey(m UploadMapping) string {
 func (s *UploadService) publishDiscoveredUpload(record domain.UploadRecord) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	record = s.effectiveUploadRecordLocked(record)
 	if s.files == nil {
 		s.files = map[string]UploadFileProgress{}
 	}
