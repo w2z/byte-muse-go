@@ -29,6 +29,12 @@ func (s *UploadService) Run(ctx context.Context) {
 	s.wake = make(chan struct{}, 1)
 	s.mode = "running"
 	s.active = make(map[string]bool)
+	for _, record := range queue.records {
+		if uploadQueued(record) && record.Intent == "run" && !uploadRetriesExhausted(record) {
+			s.manualUpload = true
+			break
+		}
+	}
 	s.mu.Unlock()
 	control, err := s.store.Get(ctx, uploadControlKey)
 	if err != nil {
@@ -70,6 +76,14 @@ func (s *UploadService) Run(ctx context.Context) {
 	workers := map[string]context.CancelFunc{}
 	working := map[string]domain.UploadRecord{}
 	providerRetry := map[string]time.Time{}
+	for _, record := range queue.records {
+		if record.ErrorKind == "cooldown" {
+			until, _ := time.Parse(time.RFC3339Nano, record.NextRetry)
+			if until.After(providerRetry[record.Kind]) {
+				providerRetry[record.Kind] = until
+			}
+		}
+	}
 	finish := func(result completion) {
 		var deferred *pan115.UploadRetryError
 		if errors.As(result.err, &deferred) {

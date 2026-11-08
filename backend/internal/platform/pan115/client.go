@@ -410,7 +410,7 @@ func callValue[T any](c *Client, ctx context.Context, method string, attempt fun
 			if errors.As(err, &deferred) {
 				return zero, err
 			}
-			if wait, retryable := c.retryDelay(method, err, 1); retryable {
+			if wait, retryable := c.retryDelay(method, err, 1); retryable && isRateLimitError(err) {
 				c.mu.Lock()
 				if until := time.Now().Add(wait); until.After(c.retryAt) {
 					c.retryAt, c.retryCause = until, err
@@ -433,6 +433,9 @@ func callValue[T any](c *Client, ctx context.Context, method string, attempt fun
 			return zero, err
 		}
 		c.extendCooldown(wait)
+		c.mu.Lock()
+		c.retryCause = err
+		c.mu.Unlock()
 		reportCooldown(ctx, wait)
 	}
 }

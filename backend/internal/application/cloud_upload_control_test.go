@@ -13,7 +13,11 @@ import (
 func TestUploadCooldownPersistsWithoutConsumingRetries(t *testing.T) {
 	service, mapping, file, _, store := recoveryFixture(t)
 	until := time.Now().Add(time.Minute)
-	service.store = uploadCooldownStore{uploadMemoryStore: store, err: &pan115.UploadRetryError{Until: until, Cause: &pan115.APIError{Code: 770004, Message: "请求过于频繁"}}}
+	key := uploadKey(mapping, file, "overwrite")
+	store[key] = domain.UploadRecord{Key: key, Kind: mapping.Kind, Root: mapping.ID, LocalRoot: mapping.LocalPath, Source: file.Absolute, Relative: file.Relative, Size: file.Size, Modified: file.Modified, Policy: "overwrite", State: "pending", Intent: "run"}
+	service.provider = func(context.Context, string) (uploadRemote, error) {
+		return nil, &pan115.UploadRetryError{Until: until, Cause: &pan115.APIError{Code: 770004, Message: "请求过于频繁"}}
+	}
 	_, err := service.process(context.Background(), mapping, file, "overwrite")
 	if err == nil {
 		t.Fatal("cooldown lost")
@@ -35,10 +39,6 @@ func TestUploadCooldownPersistsWithoutConsumingRetries(t *testing.T) {
 		t.Fatal("cooldown counted as failure")
 	}
 }
-
-type uploadCooldownStore struct { uploadMemoryStore; err error }
-func (store uploadCooldownStore) Get(ctx context.Context, key string) (*domain.UploadRecord, error) { return store.uploadMemoryStore.Get(ctx,key) }
-func (store uploadCooldownStore) Save(ctx context.Context, record domain.UploadRecord) error { if record.State == "pending" && store.err != nil { _ = store.uploadMemoryStore.Save(ctx,record); return store.err }; return store.uploadMemoryStore.Save(ctx,record) }
 
 type uploadFastClearStore struct {
 	uploadMemoryStore
