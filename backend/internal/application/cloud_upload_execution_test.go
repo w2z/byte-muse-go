@@ -249,6 +249,7 @@ func TestUploadPreparationParallelAndCompletionRefills(t *testing.T) {
 			t.Fatal("five transfers did not start")
 		}
 	}
+	time.Sleep(2200 * time.Millisecond)
 	remote.release <- struct{}{}
 	select {
 	case name := <-remote.started:

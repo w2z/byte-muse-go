@@ -180,6 +180,9 @@ func (s *UploadService) Run(ctx context.Context) {
 					s.status.Error = e.Error()
 				}
 				s.mu.Unlock()
+				if viewErr := s.refreshUploadView(ctx); viewErr != nil {
+					s.update(func(status *UploadStatus) { status.Error = viewErr.Error() })
+				}
 			}
 		}
 		now := time.Now()
