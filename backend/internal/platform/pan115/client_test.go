@@ -7,12 +7,76 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
 
 // pngSignature 是 PNG 文件头，用于让 http.DetectContentType 识别二维码图片。
 var pngSignature = []byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A}
+
+func TestUploadWorkerRequestsBypassFixedAdmission(t *testing.T) {
+	entered := make(chan struct{}, 5)
+	release := make(chan struct{})
+	unblock := sync.OnceFunc(func() { close(release) })
+	client := newTestClient(t, func(writer http.ResponseWriter, request *http.Request) {
+		entered <- struct{}{}
+		select {
+		case <-release:
+		case <-request.Context().Done():
+		}
+		writeJSON(t, writer, `{"state":true,"code":0,"data":{"file_id":"child"}}`)
+	})
+	client.gap = time.Hour
+	client.nextCall = time.Now()
+	client.slots <- struct{}{}
+	defer func() { <-client.slots }()
+	ctx, cancel := context.WithTimeout(WithUploadWorker(context.Background()), 3*time.Second)
+	defer cancel()
+	defer unblock()
+	results := make(chan error, 5)
+	for index := 0; index < 5; index++ {
+		go func() { _, err := client.CreateFolder(ctx, "token", "0", "child"); results <- err }()
+	}
+	for index := 0; index < 5; index++ {
+		select {
+		case <-entered:
+		case <-ctx.Done():
+			t.Fatal("upload requests blocked by fixed slots or pacing")
+		}
+	}
+	unblock()
+	for index := 0; index < 5; index++ {
+		if err := <-results; err != nil {
+			t.Fatal(err)
+		}
+	}
+	normal, stop := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer stop()
+	if _, err := client.admit(normal); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("normal admission changed: %v", err)
+	}
+}
+
+func TestUploadWorkerHonorsCooldownAndCancellation(t *testing.T) {
+	client := New(nil)
+	client.extendCooldown(60 * time.Millisecond)
+	start := time.Now()
+	release, err := client.admit(WithUploadWorker(context.Background()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	release()
+	if time.Since(start) < 60*time.Millisecond {
+		t.Fatal("provider cooldown bypassed")
+	}
+	client.extendCooldown(time.Minute)
+	ctx, cancel := context.WithTimeout(WithUploadWorker(context.Background()), 30*time.Millisecond)
+	defer cancel()
+	if _, err = client.admit(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal(err)
+	}
+}
 
 // TestExternalRetryDoesNotCoolOtherStages leaves retry scheduling to independent task queues.
 func TestExternalRetryDoesNotCoolOtherStages(t *testing.T) {

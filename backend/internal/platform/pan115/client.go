@@ -28,7 +28,8 @@ const (
 	apiBase      = "https://proapi.115.com"
 )
 
-// 请求节流参数：相邻请求间隔 400ms（2.5 请求/秒）且严格串行，单个响应体上限 4MiB。
+// 默认请求节流参数：相邻请求间隔 400ms 且严格串行，单个响应体上限 4MiB。
+// 上传 worker 由用户设置限制并发，跳过固定节流，但仍遵守服务端限流后的冷却。
 //
 // 115 对开放接口的突发并发极其敏感：参考实现（MoviePilot、MeBox）实测 3 QPS 可长期稳定，
 // 提到 8 QPS 会被阿里云 WAF 拦截并返回 405 阻断页，随后整体吞吐反而更低。
@@ -210,7 +211,35 @@ func (c *Client) Close() {
 // admit 取得一次普通请求配额：先占用并发槽，再等待全局冷却与最小间隔。
 // 返回的释放函数必须调用，否则并发槽不会归还。
 func (c *Client) admit(ctx context.Context) (func(), error) {
+	if worker, _ := ctx.Value(uploadWorkerKey{}).(bool); worker {
+		for {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			c.mu.Lock()
+			wait := time.Until(c.retryAt)
+			c.mu.Unlock()
+			if wait <= 0 {
+				return func() {}, nil
+			}
+			timer := time.NewTimer(wait)
+			select {
+			case <-timer.C:
+			case <-ctx.Done():
+				timer.Stop()
+				return nil, ctx.Err()
+			}
+		}
+	}
 	return c.admitWith(ctx, c.gap, &c.nextCall)
+}
+
+type uploadWorkerKey struct{}
+
+// WithUploadWorker delegates request concurrency and pacing to a bounded upload worker.
+// Only task-owned sequential requests may use it; provider cooldown and retry behavior remain shared.
+func WithUploadWorker(ctx context.Context) context.Context {
+	return context.WithValue(ctx, uploadWorkerKey{}, true)
 }
 
 // admitWith 是 admit 的通用实现：把最小间隔与「下次可发起时间」参数化，
