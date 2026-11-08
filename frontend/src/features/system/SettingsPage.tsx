@@ -514,6 +514,13 @@ const groups: SettingGroup[] = [
     pan115Scan: true,
     fields: [
       {
+        key: "PAN115_OPEN_APP",
+        label: "开放应用",
+        kind: "enum",
+        options: [{ value: "openlist", label: "OpenList" }, { value: "clouddrive2", label: "CloudDrive2" }],
+        description: "OpenList（100197303）或 CloudDrive2（100195313）。保存后用于下一次扫码；已有绑定不会自动切换，需解除绑定后重新扫码。Cookie 扫码不受影响。",
+      },
+      {
         key: "PAN115_COOKIE",
         label: "115 Cookie",
         kind: "textarea",
@@ -951,6 +958,7 @@ function settingsSnapshot(values: Record<string, string>): EditorSnapshot {
       if (isStructuredField(field.kind)) continue;
       const raw = values[field.key] ?? (field.key === "MCP_ALLOWED_TOOLS" ? "[]" : field.key === strmDownloadExtensionsKey ? defaultDownloadExtensions : field.key === "CLOUD_UPLOAD_CONFLICT" ? "skip" : field.key === "CLOUD_UPLOAD_MODE" ? "copy" : field.key === "CLOUD_UPLOAD_CONCURRENCY" ? "5" : "");
       next[field.key] = field.kind === "bool" ? raw === "true" : raw;
+      if (field.key === "PAN115_OPEN_APP" && !raw) next[field.key] = "openlist";
       if (field.siteAuth) {
         next[field.siteAuth.modeKey] = values[field.siteAuth.modeKey] === "cookie" ? "cookie" : "key";
         next[field.siteAuth.keyField] = values[field.siteAuth.keyField] ?? "";
@@ -1927,7 +1935,10 @@ export function SettingsPage() {
             <section className="settings-group-section">
               <div className="settings-fields">
                 {activeGroup.pan115Login ? (
-                  <Pan115LoginPanel onCookie={(cookie) => setValue("PAN115_COOKIE", cookie)} />
+                  <Pan115LoginPanel
+                    onCookie={(cookie) => setValue("PAN115_COOKIE", cookie)}
+                    openAppUnsaved={update.isPending || String(draft.PAN115_OPEN_APP || "openlist") !== (savedSnapshot.values.PAN115_OPEN_APP || "openlist")}
+                  />
                 ) : null}
                 {renderFieldSequence(activeFields)}
                 {activeGroup.code === "mcp" ? (

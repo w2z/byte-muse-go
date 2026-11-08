@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"bytemuse/backend/internal/domain"
 	"bytemuse/backend/internal/platform/pan115"
 	"bytemuse/backend/internal/ports"
 )
@@ -14,6 +15,7 @@ import (
 // pan115ClientStub 记录调用并返回预设结果，使扫码、刷新与离线受理可在无网络环境下验证。
 type pan115ClientStub struct {
 	login       *pan115.Login
+	loginApp    string
 	loginState  pan115.LoginState
 	cookieLogin *pan115.CookieLogin
 	cookieState pan115.LoginState
@@ -52,7 +54,8 @@ type pan115ClientStub struct {
 	downloadCalls int
 }
 
-func (s *pan115ClientStub) BeginLogin(context.Context) (*pan115.Login, error) {
+func (s *pan115ClientStub) BeginLogin(_ context.Context, app string) (*pan115.Login, error) {
+	s.loginApp = app
 	if s.login == nil {
 		return &pan115.Login{}, nil
 	}
@@ -237,6 +240,53 @@ func newPan115TestService(t *testing.T, repo ports.Pan115AccountRepository, clie
 
 // TestPan115ScanLoginStoresEncryptedTokens 验证扫码授权后令牌以密文落库，
 // 且重复轮询返回同一账号快照、不再重复换取令牌。
+func TestPan115StartLoginUsesSavedApplication(t *testing.T) {
+	client := &pan115ClientStub{}
+	values := map[string]string{"PAN115_OPEN_APP": "clouddrive2"}
+	var loadErr error
+	service := newPan115TestService(t, &pan115MemoryAccounts{}, client, func(context.Context) (map[string]string, error) { return values, loadErr }, strings.Repeat("x", 32))
+	for _, app := range []string{"openlist", ""} {
+		values["PAN115_OPEN_APP"] = app
+		if _, err := service.StartLogin(context.Background()); err != nil || client.loginApp != app {
+			t.Fatalf("selected=%s used=%s err=%v", app, client.loginApp, err)
+		}
+	}
+	values["PAN115_OPEN_APP"] = "clouddrive2"
+	client.loginApp = ""
+	if session, err := service.StartLogin(context.Background(), "https://example.test"); err != nil || session.AuthURL == "" || client.loginApp != "" {
+		t.Fatalf("cloud drive selected app was not opened as authorization url: %+v err=%v", session, err)
+	}
+	values["PAN115_OPEN_APP"] = "unknown"
+	if _, err := service.StartLogin(context.Background()); !errors.Is(err, ErrPan115InvalidInput) {
+		t.Fatalf("invalid selection: %v", err)
+	}
+	loadErr = errors.New("settings unavailable")
+	if _, err := service.StartLogin(context.Background()); !errors.Is(err, loadErr) {
+		t.Fatalf("settings failure ignored: %v", err)
+	}
+}
+
+func TestPan115CloudDriveAuthorizationCallbackStoresTokens(t *testing.T) {
+	secret := strings.Repeat("x", 32)
+	client := &pan115ClientStub{
+		account: pan115.Account{ID: "100", Name: "CloudDrive 用户"},
+	}
+	service := newPan115TestService(t, &pan115MemoryAccounts{}, client, func(context.Context) (map[string]string, error) {
+		return map[string]string{"PAN115_OPEN_APP": "clouddrive2"}, nil
+	}, secret)
+	session, err := service.StartLogin(context.Background(), "https://example.test")
+	if err != nil || session.AuthURL == "" || client.loginApp != "" {
+		t.Fatalf("cloud drive login url = %+v err=%v", session, err)
+	}
+	result, err := service.CompleteAuthorization(context.Background(), session.SessionID, "access-1", "refresh-1", "7200")
+	if err != nil || result.Status != domain.Pan115LoginAuthorized || result.Account == nil {
+		t.Fatalf("callback result = %+v err=%v", result, err)
+	}
+	if got, err := service.LoginStatus(context.Background(), session.SessionID); err != nil || got.Status != domain.Pan115LoginAuthorized {
+		t.Fatalf("completed status = %+v err=%v", got, err)
+	}
+}
+
 func TestPan115ScanLoginStoresEncryptedTokens(t *testing.T) {
 	secret := strings.Repeat("x", 32)
 	secrets, err := newSecretCipher(secret)

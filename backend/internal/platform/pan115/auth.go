@@ -16,6 +16,32 @@ import (
 // openListAppID 是扫码登录使用的公开应用标识。
 const openListAppID = "100197303"
 
+const cloudDriveRedirectURI = "https://redirect115.zhenyunpan.com"
+
+// CloudDriveAuthorizeURL builds the authorization-code entry used by CloudDrive2.
+// The redirect service returns the authorized tokens to the state URL after the user confirms access.
+func CloudDriveAuthorizeURL(state string) string {
+	query := url.Values{
+		"client_id":     {"100195313"},
+		"redirect_uri":  {cloudDriveRedirectURI},
+		"response_type": {"code"},
+		"state":         {state},
+	}
+	return "https://passportapi.115.com/open/authorize?" + query.Encode()
+}
+
+// OpenAppID resolves the supported application selection; an unset setting preserves existing authorization.
+func OpenAppID(app string) (string, error) {
+	switch app {
+	case "", "openlist":
+		return openListAppID, nil
+	case "clouddrive2":
+		return "100195313", nil
+	default:
+		return "", fmt.Errorf("115 开放应用无效")
+	}
+}
+
 // LoginState 是一次扫码登录对外可见的状态。
 type LoginState string
 
@@ -44,8 +70,12 @@ type Tokens struct {
 	ExpiresAt    time.Time
 }
 
-// BeginLogin 申请设备码并取回登录二维码 PNG。
-func (c *Client) BeginLogin(ctx context.Context) (*Login, error) {
+// BeginLogin uses the selected application only for this authorization session, never mutating the shared client.
+func (c *Client) BeginLogin(ctx context.Context, app string) (*Login, error) {
+	appID, err := OpenAppID(app)
+	if err != nil {
+		return nil, err
+	}
 	random := make([]byte, 48)
 	if _, err := rand.Read(random); err != nil {
 		return nil, fmt.Errorf("生成 115 PKCE 校验值失败: %w", err)
@@ -59,7 +89,7 @@ func (c *Client) BeginLogin(ctx context.Context) (*Login, error) {
 		Time int64  `json:"time"`
 		Sign string `json:"sign"`
 	}](ctx, c, http.MethodPost, c.passport+"/open/authDeviceCode", url.Values{
-		"client_id":             {openListAppID},
+		"client_id":             {appID},
 		"code_challenge":        {challenge},
 		"code_challenge_method": {"sha256"},
 	})

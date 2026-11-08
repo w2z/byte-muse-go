@@ -191,7 +191,8 @@ var writableSettings = map[string]settingSpec{
 	"CLOUDNAS_SAVEPATH": {kind: settingText},
 
 	// 115 网盘：OpenAPI 令牌由扫码绑定管理并单独落库；Cookie 是生活事件与扫码换取共用的唯一凭据，
-	// 这里只保存 Cookie、离线下载的目标目录与扫描目录。
+	// 开放应用选择仅影响下一次扫码，不改写已有绑定令牌。
+	"PAN115_OPEN_APP":         {kind: settingEnum, allowed: []string{"openlist", "clouddrive2"}},
 	"PAN115_COOKIE":           {secret: true, kind: settingText},
 	"PAN115_SAVE_PATH":        {kind: settingText},
 	pan115ScanPathsSettingKey: {kind: settingJSONArray},
@@ -328,6 +329,9 @@ func (s *SettingsService) Get(ctx context.Context) (domain.SystemSettings, error
 		result.Values[item.Key] = item.Value
 	}
 	// 未保存过开关的旧库保持 BT 搜索启用，无需回填历史设置。
+	if result.Values["PAN115_OPEN_APP"] == "" {
+		result.Values["PAN115_OPEN_APP"] = "openlist"
+	}
 	if result.Values["EXCLUDE_BT"] != "true" {
 		result.Values["EXCLUDE_BT"] = "false"
 	}

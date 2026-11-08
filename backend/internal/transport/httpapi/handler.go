@@ -74,8 +74,9 @@ type Dependencies struct {
 
 // publicAuthPaths 是不要求既有会话即可访问的认证入口：登录本身，以及用过期会话换取新会话的续签。
 var publicAuthPaths = map[string]struct{}{
-	"/api/v1/auth/login":   {},
-	"/api/v1/auth/refresh": {},
+	"/api/v1/pan115/login/callback": {},
+	"/api/v1/auth/login":            {},
+	"/api/v1/auth/refresh":          {},
 	// 企业微信回调由平台服务器直接请求，没有会话；安全性由回调签名与 AES 解密保证。
 	"/api/v1/message": {},
 	// MCP 在自己的处理器中执行专用令牌鉴权，不能复用浏览器会话。
@@ -139,6 +140,7 @@ func New(dependencies Dependencies) http.Handler {
 		router.Get("/system/upgrade", systemUpgradeStatus(dependencies.Upgrade))
 		router.Post("/system/upgrade", systemUpgrade(dependencies.Upgrade))
 		router.Post("/pan115/login/sessions", startPan115Login(dependencies.Pan115))
+		router.Get("/pan115/login/callback", pan115LoginCallback(dependencies.Pan115))
 		router.Get("/pan115/login/sessions/{sessionId}", pan115LoginStatus(dependencies.Pan115))
 		router.Delete("/pan115/login/sessions/{sessionId}", cancelPan115Login(dependencies.Pan115))
 		router.Post("/pan115/cookie/login/sessions", startPan115CookieLogin(dependencies.Pan115))

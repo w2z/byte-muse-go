@@ -8,7 +8,7 @@ import { useFeedbackMessage } from "../../shared/ui/FeedbackMessage";
 type Pan115LoginStatus = "waiting" | "scanned" | "authorized" | "expired" | "canceled";
 
 /** 扫码会话启动结果；qr_code 是后端直接返回的 PNG data URL，前端不再自行生成二维码。 */
-type Pan115LoginSession = { session_id: string; qr_code: string; expires_at: string };
+type Pan115LoginSession = { session_id: string; qr_code: string; auth_url?: string; expires_at: string };
 
 /** 单个容量数值；115 未返回格式化文本时回退字节数展示。 */
 type Pan115SpaceAmount = { size: number; formatted: string };
@@ -76,6 +76,8 @@ function channelLabel(value: string): string {
  */
 type Pan115LoginPanelProps = {
   onCookie: (cookie: string) => void;
+  /** Prevent authorizing the saved application while a different application remains in the settings draft. */
+  openAppUnsaved?: boolean;
 };
 
 const accountQueryKey = ["pan115-account"] as const;
@@ -136,7 +138,7 @@ function MeterRow({ label, value, percent }: { label: string; value: string; per
  * 115 网盘账号面板：扫码绑定、展示已绑定账号与容量、解除绑定。
  * 只负责 115 账号生命周期；离线下载目录等配置仍由设置表单统一保存。
  */
-export function Pan115LoginPanel({ onCookie }: Pan115LoginPanelProps) {
+export function Pan115LoginPanel({ onCookie, openAppUnsaved = false }: Pan115LoginPanelProps) {
   const [session, setSession] = useState<Pan115LoginSession | null>(null);
   const [channel, setChannel] = useState<Pan115CookieClientType>("alipaymini");
   const [cookieSession, setCookieSession] = useState<Pan115CookieSession | null>(null);
@@ -153,7 +155,10 @@ export function Pan115LoginPanel({ onCookie }: Pan115LoginPanelProps) {
 
   const start = useMutation({
     mutationFn: () => apiRequest<Pan115LoginSession>("/pan115/login/sessions", { method: "POST" }),
-    onSuccess: (result) => setSession(result),
+    onSuccess: (result) => {
+      setSession(result);
+      if (result.auth_url) window.location.assign(result.auth_url);
+    },
     onError: (error: Error) => messageRef.current.error(error.message),
   });
 
@@ -183,11 +188,11 @@ export function Pan115LoginPanel({ onCookie }: Pan115LoginPanelProps) {
 
   // 会话结束时作废二维码：离开页面或重新获取都不会让旧二维码继续可扫。
   useEffect(() => {
-    if (sessionID === null) return;
+    if (sessionID === null || session?.auth_url) return;
     return () => {
       void apiRequest<void>(`/pan115/login/sessions/${sessionID}`, { method: "DELETE" }).catch(() => undefined);
     };
-  }, [sessionID]);
+  }, [sessionID, session?.auth_url]);
 
   const loginStatus = status.data?.status ?? null;
   const authorizedName = status.data?.account?.name ?? "";
@@ -304,11 +309,12 @@ export function Pan115LoginPanel({ onCookie }: Pan115LoginPanelProps) {
       ) : (
         <div className="settings-pan115-block">
           <div className="settings-pan115-actions">
-            <Button type="primary" loading={start.isPending} disabled={start.isPending} onClick={() => start.mutate()}>
+            <Button type="primary" loading={start.isPending} disabled={start.isPending || openAppUnsaved} onClick={() => start.mutate()}>
               扫码登录
             </Button>
           </div>
           <span className="settings-field-description">使用 115 手机客户端扫码授权，令牌加密保存在本地，可随时解除绑定。</span>
+          {openAppUnsaved ? <span className="settings-field-description">请先保存开放应用选择，再扫码登录。</span> : null}
         </div>
       )}
       {/* Cookie 扫码独立于账号绑定：它换取生活事件等接口所需的 Cookie，与 OpenAPI 令牌互不影响。 */}
@@ -351,9 +357,17 @@ export function Pan115LoginPanel({ onCookie }: Pan115LoginPanelProps) {
       >
         {session ? (
           <div className="settings-pan115-block settings-pan115-login">
-            <img className="settings-pan115-qrcode" src={session.qr_code} alt="115 登录二维码" />
+            {session.auth_url ? (
+              <span className="settings-field-description">已打开 CloudDrive2 授权页面，请在新页面完成授权后返回本页。</span>
+            ) : (
+              <img className="settings-pan115-qrcode" src={session.qr_code} alt="115 登录二维码" />
+            )}
             <span className="settings-field-description">
-              {retrying ? "网络异常，正在重试…" : statusText[loginStatus ?? "waiting"]}
+              {retrying
+                ? "网络异常，正在重试…"
+                : session.auth_url
+                  ? "请在新打开的 115 授权页面完成授权"
+                  : statusText[loginStatus ?? "waiting"]}
               {failed ? "，请重新获取二维码" : ""}
             </span>
             {status.isError ? (
@@ -361,7 +375,7 @@ export function Pan115LoginPanel({ onCookie }: Pan115LoginPanelProps) {
             ) : null}
             <div className="settings-pan115-actions">
               {failed ? (
-                <Button type="primary" loading={start.isPending} disabled={start.isPending} onClick={() => start.mutate()}>
+                <Button type="primary" loading={start.isPending} disabled={start.isPending || openAppUnsaved} onClick={() => start.mutate()}>
                   重新获取二维码
                 </Button>
               ) : (

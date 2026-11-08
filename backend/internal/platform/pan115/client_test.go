@@ -201,32 +201,43 @@ func TestLoginStatusSendsSignatureAsQuery(t *testing.T) {
 
 // TestBeginLoginRequiresPNGQRCode 验证设备码字段校验与二维码内容类型校验。
 func TestBeginLoginRequiresPNGQRCode(t *testing.T) {
-	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case strings.HasSuffix(r.URL.Path, "/open/authDeviceCode"):
-			if err := r.ParseForm(); err != nil {
-				t.Errorf("解析表单失败: %v", err)
+	for _, selected := range []struct{ app, id string }{{"", "100197303"}, {"openlist", "100197303"}, {"clouddrive2", "100195313"}} {
+		t.Run(selected.app, func(t *testing.T) {
+			client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case strings.HasSuffix(r.URL.Path, "/open/authDeviceCode"):
+					if err := r.ParseForm(); err != nil {
+						t.Errorf("解析表单失败: %v", err)
+					}
+					if r.PostForm.Get("client_id") != selected.id || r.PostForm.Get("code_challenge_method") != "sha256" {
+						t.Errorf("设备码请求缺少公开应用标识或校验方法: %v", r.PostForm)
+					}
+					writeJSON(t, w, `{"state":1,"code":0,"data":{"uid":"uid-1","time":1700000000,"sign":"sign-1"}}`)
+				case strings.HasSuffix(r.URL.Path, "/api/1.0/web/1.0/qrcode"):
+					if r.URL.Query().Get("uid") != "uid-1" {
+						t.Errorf("二维码请求未携带 uid: %s", r.URL.RawQuery)
+					}
+					w.Header().Set("Content-Type", "image/png")
+					_, _ = w.Write(pngSignature)
+				default:
+					http.NotFound(w, r)
+				}
+			})
+			login, err := client.BeginLogin(context.Background(), selected.app)
+			if err != nil {
+				t.Fatalf("开始登录失败: %v", err)
 			}
-			if r.PostForm.Get("client_id") != openListAppID || r.PostForm.Get("code_challenge_method") != "sha256" {
-				t.Errorf("设备码请求缺少公开应用标识或校验方法: %v", r.PostForm)
+			if string(login.QRCode) != string(pngSignature) {
+				t.Fatalf("二维码内容 = %v，期望 PNG 头", login.QRCode)
 			}
-			writeJSON(t, w, `{"state":1,"code":0,"data":{"uid":"uid-1","time":1700000000,"sign":"sign-1"}}`)
-		case strings.HasSuffix(r.URL.Path, "/api/1.0/web/1.0/qrcode"):
-			if r.URL.Query().Get("uid") != "uid-1" {
-				t.Errorf("二维码请求未携带 uid: %s", r.URL.RawQuery)
-			}
-			w.Header().Set("Content-Type", "image/png")
-			_, _ = w.Write(pngSignature)
-		default:
-			http.NotFound(w, r)
-		}
-	})
-	login, err := client.BeginLogin(context.Background())
-	if err != nil {
-		t.Fatalf("开始登录失败: %v", err)
+		})
 	}
-	if string(login.QRCode) != string(pngSignature) {
-		t.Fatalf("二维码内容 = %v，期望 PNG 头", login.QRCode)
+}
+
+func TestBeginLoginRejectsUnknownAppBeforeRequest(t *testing.T) {
+	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) { t.Error("invalid app sent a request") })
+	if _, err := client.BeginLogin(context.Background(), "unknown"); err == nil {
+		t.Fatal("unknown app accepted")
 	}
 }
 
@@ -235,7 +246,7 @@ func TestBeginLoginRejectsMissingDeviceCode(t *testing.T) {
 	client := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(t, w, `{"state":1,"code":0,"data":{"uid":"","time":0,"sign":""}}`)
 	})
-	if _, err := client.BeginLogin(context.Background()); err == nil {
+	if _, err := client.BeginLogin(context.Background(), ""); err == nil {
 		t.Fatal("缺少设备码字段时应当报错")
 	}
 }
@@ -249,7 +260,7 @@ func TestBeginLoginRejectsNonPNGQRCode(t *testing.T) {
 		}
 		writeJSON(t, w, `{"state":0,"code":1,"message":"boom"}`)
 	})
-	if _, err := client.BeginLogin(context.Background()); err == nil {
+	if _, err := client.BeginLogin(context.Background(), ""); err == nil {
 		t.Fatal("非 PNG 响应时应当报错")
 	}
 }

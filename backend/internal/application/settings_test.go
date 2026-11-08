@@ -15,6 +15,29 @@ type settingsRepositoryStub struct {
 	items []ports.StoredSetting
 }
 
+func TestPan115OpenAppSetting(t *testing.T) {
+	repo := &settingsMemoryRepository{}
+	service, _ := NewSettingsService(repo, "sqlite", strings.Repeat("x", 32))
+	ctx := context.Background()
+	initial, err := service.Get(ctx)
+	if err != nil || initial.Values["PAN115_OPEN_APP"] != "openlist" || len(repo.items) != 0 {
+		t.Fatalf("default app must not backfill settings: %v %v", initial.Values["PAN115_OPEN_APP"], err)
+	}
+	for _, app := range []string{"clouddrive2", "openlist", ""} {
+		got, err := service.Update(ctx, map[string]string{"PAN115_OPEN_APP": app})
+		want := app
+		if want == "" {
+			want = "openlist"
+		}
+		if err != nil || got.Values["PAN115_OPEN_APP"] != want {
+			t.Fatalf("app=%q got=%v err=%v", app, got.Values, err)
+		}
+	}
+	if _, err := service.Update(ctx, map[string]string{"PAN115_OPEN_APP": "unknown"}); !errors.Is(err, ErrInvalidSetting) {
+		t.Fatalf("invalid app accepted: %v", err)
+	}
+}
+
 func TestUploadModeAndConcurrencySettings(t *testing.T) {
 	svc, _ := NewSettingsService(&settingsMemoryRepository{}, "sqlite", strings.Repeat("x", 32))
 	for _, values := range []map[string]string{

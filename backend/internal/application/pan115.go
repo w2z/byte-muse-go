@@ -6,6 +6,8 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -49,7 +51,7 @@ var (
 // pan115API 是 115 协议客户端的应用层视图。业务规则只依赖这组能力，
 // 使扫码、刷新与离线受理可以在不访问 115 真实接口的情况下被验证。
 type pan115API interface {
-	BeginLogin(context.Context) (*pan115.Login, error)
+	BeginLogin(context.Context, string) (*pan115.Login, error)
 	BeginCookieLogin(context.Context, string) (*pan115.CookieLogin, error)
 	CookieLoginStatus(context.Context, *pan115.CookieLogin) (pan115.LoginState, error)
 	ExchangeCookie(context.Context, *pan115.CookieLogin) (string, error)
@@ -89,6 +91,7 @@ type pan115Login struct {
 	expiresAt time.Time
 	state     pan115.LoginState
 	account   *domain.Pan115Account
+	authorize bool
 }
 
 // pan115CookieLogin 保存一次 Cookie 扫码会话。扫码参数只存在于内存，
@@ -133,11 +136,14 @@ func (s *Pan115Service) Close() {
 	}
 }
 
-// StartLogin 申请设备码并返回可直接渲染的二维码。
-func (s *Pan115Service) StartLogin(ctx context.Context) (domain.Pan115LoginSession, error) {
-	login, err := s.client.BeginLogin(ctx)
+// StartLogin reads the saved application for each new session; existing tokens and in-flight sessions are unchanged.
+func (s *Pan115Service) StartLogin(ctx context.Context, baseURLs ...string) (domain.Pan115LoginSession, error) {
+	values, err := s.settings(ctx)
 	if err != nil {
 		return domain.Pan115LoginSession{}, err
+	}
+	if _, err := pan115.OpenAppID(values["PAN115_OPEN_APP"]); err != nil {
+		return domain.Pan115LoginSession{}, fmt.Errorf("%w: %v", ErrPan115InvalidInput, err)
 	}
 	sessionID, err := pan115SessionID()
 	if err != nil {
@@ -149,13 +155,32 @@ func (s *Pan115Service) StartLogin(ctx context.Context) (domain.Pan115LoginSessi
 	if len(s.logins) >= pan115LoginLimit {
 		s.dropOldestLoginLocked()
 	}
+	result := domain.Pan115LoginSession{SessionID: sessionID, ExpiresAt: expiresAt}
+	if values["PAN115_OPEN_APP"] == "clouddrive2" {
+		baseURL := ""
+		if len(baseURLs) > 0 {
+			baseURL = strings.TrimRight(baseURLs[0], "/")
+		}
+		if baseURL == "" {
+			s.mu.Unlock()
+			return domain.Pan115LoginSession{}, fmt.Errorf("%w: CloudDrive2 授权需要可访问的站点地址", ErrPan115InvalidInput)
+		}
+		state := fmt.Sprintf("%s/api/v1/pan115/login/callback?session_id=%s", baseURL, url.QueryEscape(sessionID))
+		s.logins[sessionID] = &pan115Login{expiresAt: expiresAt, state: pan115.LoginWaiting, authorize: true}
+		s.mu.Unlock()
+		result.AuthURL = pan115.CloudDriveAuthorizeURL(state)
+		return result, nil
+	}
+	s.mu.Unlock()
+	login, err := s.client.BeginLogin(ctx, values["PAN115_OPEN_APP"])
+	if err != nil {
+		return domain.Pan115LoginSession{}, err
+	}
+	s.mu.Lock()
 	s.logins[sessionID] = &pan115Login{login: login, expiresAt: expiresAt, state: pan115.LoginWaiting}
 	s.mu.Unlock()
-	return domain.Pan115LoginSession{
-		SessionID: sessionID,
-		QRCode:    "data:image/png;base64," + base64.StdEncoding.EncodeToString(login.QRCode),
-		ExpiresAt: expiresAt,
-	}, nil
+	result.QRCode = "data:image/png;base64," + base64.StdEncoding.EncodeToString(login.QRCode)
+	return result, nil
 }
 
 // LoginStatus 查询一次扫码状态；已授权时立刻换取令牌并落库，之后重复查询返回同一账号快照。
@@ -172,6 +197,9 @@ func (s *Pan115Service) LoginStatus(ctx context.Context, sessionID string) (doma
 	if time.Now().After(entry.expiresAt) {
 		s.forgetLogin(sessionID)
 		return domain.Pan115LoginResult{Status: domain.Pan115LoginExpired}, nil
+	}
+	if entry.authorize {
+		return domain.Pan115LoginResult{Status: pan115LoginState(entry.state), Account: entry.account}, nil
 	}
 	state, err := s.client.LoginStatus(ctx, entry.login)
 	if err != nil {
@@ -198,6 +226,40 @@ func (s *Pan115Service) LoginStatus(ctx context.Context, sessionID string) (doma
 		s.forgetLogin(sessionID)
 	}
 	return domain.Pan115LoginResult{Status: pan115LoginState(state)}, nil
+}
+
+// CompleteAuthorization consumes CloudDrive2's callback tokens once and saves the account binding.
+func (s *Pan115Service) CompleteAuthorization(ctx context.Context, sessionID, accessToken, refreshToken, expiresInValue string) (domain.Pan115LoginResult, error) {
+	entry, err := s.login(sessionID)
+	if err != nil {
+		return domain.Pan115LoginResult{}, err
+	}
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+	if !entry.authorize || entry.state == pan115.LoginAuthorized {
+		return domain.Pan115LoginResult{}, ErrPan115LoginUnknown
+	}
+	if time.Now().After(entry.expiresAt) {
+		return domain.Pan115LoginResult{Status: domain.Pan115LoginExpired}, nil
+	}
+	if strings.TrimSpace(accessToken) == "" || strings.TrimSpace(refreshToken) == "" {
+		return domain.Pan115LoginResult{}, fmt.Errorf("%w: CloudDrive2 未返回完整令牌", ErrPan115InvalidInput)
+	}
+	account, err := s.client.Account(ctx, accessToken)
+	if err != nil {
+		return domain.Pan115LoginResult{}, err
+	}
+	expiresIn := int64(3600)
+	if value, parseErr := strconv.ParseInt(strings.TrimSpace(expiresInValue), 10, 64); parseErr == nil && value > 0 {
+		expiresIn = value
+	}
+	tokens := pan115.Tokens{AccessToken: accessToken, RefreshToken: refreshToken, ExpiresAt: time.Now().Add(time.Duration(expiresIn) * time.Second)}
+	if err := s.saveBinding(ctx, tokens, account); err != nil {
+		return domain.Pan115LoginResult{}, err
+	}
+	view := pan115AccountView(account)
+	entry.state, entry.account = pan115.LoginAuthorized, &view
+	return domain.Pan115LoginResult{Status: domain.Pan115LoginAuthorized, Account: &view}, nil
 }
 
 // CancelLogin 结束一次扫码会话；会话不存在时同样视为已取消。

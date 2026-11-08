@@ -17,6 +17,7 @@ const (
 type Pan115LoginSession struct {
 	SessionID string    `json:"session_id"`
 	QRCode    string    `json:"qr_code"`
+	AuthURL   string    `json:"auth_url,omitempty"`
 	ExpiresAt time.Time `json:"expires_at"`
 }
 

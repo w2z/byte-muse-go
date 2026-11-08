@@ -736,6 +736,31 @@ describe("网盘设置", () => {
   beforeEach(() => vi.clearAllMocks());
   afterEach(cleanup);
 
+  it("开放应用默认 OpenList，保存 CloudDrive2 后才允许发起新扫码", async () => {
+    const user = userEvent.setup();
+    let values: Record<string, string> = {};
+    vi.mocked(apiRequest).mockImplementation(async (path, options) => {
+      if (path === "/system/settings") {
+        if (options?.method === "PUT") values = { ...values, ...JSON.parse(String(options.body)).values };
+        return { database_driver: "sqlite", values: { ...values }, configured: {} };
+      }
+      if (path === "/pan115/account") return { linked: false, account: null };
+      return null;
+    });
+    renderSettings();
+    await user.click(await screen.findByRole("tab", { name: "网盘" }));
+    expect(screen.getByRole("radio", { name: "OpenList" })).toBeChecked();
+    await user.click(screen.getByRole("radio", { name: "CloudDrive2" }));
+    expect(screen.getByRole("button", { name: "扫码登录" })).toBeDisabled();
+    expect(values.PAN115_OPEN_APP).toBeUndefined();
+    await user.click(screen.getByRole("button", { name: "保存设置" }));
+    await waitFor(() => expect(values.PAN115_OPEN_APP).toBe("clouddrive2"));
+    await waitFor(() => expect(screen.getByRole("button", { name: "扫码登录" })).toBeEnabled());
+    await user.click(screen.getByRole("radio", { name: "OpenList" }));
+    await user.click(screen.getByRole("button", { name: "重置" }));
+    expect(screen.getByRole("radio", { name: "CloudDrive2" })).toBeChecked();
+  });
+
   const boundAccount = {
     id: "1",
     name: "115 用户",

@@ -21,12 +21,28 @@ func startPan115Login(service *application.Pan115Service) http.HandlerFunc {
 			writeError(response, http.StatusServiceUnavailable, "service_unavailable", "115 网盘服务尚未就绪")
 			return
 		}
-		session, err := service.StartLogin(request.Context())
+		session, err := service.StartLogin(request.Context(), requestBaseURL(request))
 		if err != nil {
 			writePan115Error(response, err)
 			return
 		}
 		writeJSON(response, http.StatusCreated, session)
+	}
+}
+
+// pan115LoginCallback receives the CloudDrive2 redirect without logging or exposing the tokens.
+func pan115LoginCallback(service *application.Pan115Service) http.HandlerFunc {
+	return func(response http.ResponseWriter, request *http.Request) {
+		if service == nil {
+			writeError(response, http.StatusServiceUnavailable, "service_unavailable", "115 网盘服务尚未就绪")
+			return
+		}
+		_, err := service.CompleteAuthorization(request.Context(), request.URL.Query().Get("session_id"), request.URL.Query().Get("access_token"), request.URL.Query().Get("refresh_token"), request.URL.Query().Get("expires_in"))
+		if err != nil {
+			writePan115Error(response, err)
+			return
+		}
+		http.Redirect(response, request, "/settings?pan115_login=success", http.StatusSeeOther)
 	}
 }
 
