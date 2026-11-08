@@ -1,16 +1,20 @@
 {
-  "version": "0.1.218",
-  "commit": "79d0bf13860ea5166e4c0e474472d4f111094bbf",
-  "short_commit": "79d0bf1",
-  "built_at": "2026-11-08T04:35:56Z",
+  "version": "0.1.219",
+  "commit": "bedb5e08eb114c34befef4a747525d7c49ae26dc",
+  "short_commit": "bedb5e0",
+  "built_at": "2026-11-08T05:15:14Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.218",
-    "sha-79d0bf1",
+    "0.1.219",
+    "sha-bedb5e0",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.219",
+      "message": "按用户并发数执行115请求并取消固定节流"
+    },
     {
       "version": "0.1.218",
       "message": "同步配置切换状态并覆盖预检补位场景"
