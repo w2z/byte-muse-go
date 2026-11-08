@@ -1,16 +1,20 @@
 {
-  "version": "0.1.223",
-  "commit": "e6ba9dd92b6881a9257109cc7f78b03803745b7e",
-  "short_commit": "e6ba9dd",
-  "built_at": "2026-11-08T14:48:29Z",
+  "version": "0.1.224",
+  "commit": "e0578743e6686d3eb2cfe71d38fde13b1c9c8e41",
+  "short_commit": "e057874",
+  "built_at": "2026-11-08T15:20:34Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.223",
-    "sha-e6ba9dd",
+    "0.1.224",
+    "sha-e057874",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.224",
+      "message": "持久化多个同名旧文件快照并安全恢复覆盖"
+    },
     {
       "version": "0.1.223",
       "message": "共享目录缓存并跳过新建目录重复检查"
