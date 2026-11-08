@@ -1,16 +1,20 @@
 {
-  "version": "0.1.222",
-  "commit": "aa16d5d6ceff98a74216d208016b317259721431",
-  "short_commit": "aa16d5d",
-  "built_at": "2026-11-08T06:45:03Z",
+  "version": "0.1.223",
+  "commit": "e6ba9dd92b6881a9257109cc7f78b03803745b7e",
+  "short_commit": "e6ba9dd",
+  "built_at": "2026-11-08T14:48:29Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.222",
-    "sha-aa16d5d",
+    "0.1.223",
+    "sha-e6ba9dd",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.223",
+      "message": "共享目录缓存并跳过新建目录重复检查"
+    },
     {
       "version": "0.1.222",
       "message": "调整下次尝试时间的显示格式"
