@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // processDirectUpload uploads the final name and verifies content before deleting a recorded old ID.
@@ -17,7 +18,22 @@ func (s *UploadService) processDirectUpload(ctx context.Context, remote uploadRe
 		record.Hidden = record.Intent == "delete"
 		return record.State, save()
 	}
-	entries, err := remote.List(ctx, record.Parent)
+	scope := record.Kind
+	if cached, ok := remote.(uploadDirectoryRemote); ok {
+		scope = cached.kind
+	}
+	unlock, err := s.directoryCache.reserve(ctx, scope+"\x00"+record.Parent+"\x00"+record.Target)
+	if err != nil {
+		return record.State, err
+	}
+	defer func() { unlock() }()
+	var entries []uploadEntry
+	fresh := record.State != "pending" || record.OldID != "" || record.StageID != "" || record.Error != ""
+	if fresh {
+		entries, err = uploadFreshList(ctx, remote, record.Parent, time.Now())
+	} else {
+		entries, err = remote.List(ctx, record.Parent)
+	}
 	if err != nil {
 		return record.State, err
 	}
@@ -67,6 +83,13 @@ func (s *UploadService) processDirectUpload(ctx context.Context, remote uploadRe
 		return uploadEntry{}, false
 	}
 	installed, found := verified(entries)
+	if found && !fresh {
+		entries, err = uploadFreshList(ctx, remote, record.Parent, time.Now())
+		if err != nil {
+			return record.State, err
+		}
+		installed, found = verified(entries)
+	}
 	if !found && record.State == "pending" {
 		if !uploadUnchanged(source) {
 			return record.State, fmt.Errorf("文件校验期间发生变化，停止本次上传")
@@ -83,9 +106,23 @@ func (s *UploadService) processDirectUpload(ctx context.Context, remote uploadRe
 				if err != nil {
 					return record.State, err
 				}
+				unlock()
+				unlock, err = s.directoryCache.reserve(ctx, scope+"\x00"+record.Parent+"\x00"+record.Target)
+				if err != nil {
+					unlock = func() {}
+					return record.State, err
+				}
+				entries, err = remote.List(ctx, record.Parent)
+				if err != nil {
+					return record.State, err
+				}
 			}
 		}
 		for _, entry := range entries {
+			if entry.Name == record.Target && !entry.Directory && record.Policy == "skip" {
+				record.State = "skipped"
+				return record.State, save()
+			}
 			if entry.Name == record.Target && (entry.Directory || entry.ID != record.OldID) {
 				return record.State, fmt.Errorf("%w：同名文件不属于已记录的旧文件", errUploadAttention)
 			}
@@ -97,7 +134,7 @@ func (s *UploadService) processDirectUpload(ctx context.Context, remote uploadRe
 			return record.State, err
 		}
 		domain.ReportUploadProgress(ctx, source.Size, source.Size, "uploading")
-		entries, err = remote.List(ctx, record.Parent)
+		entries, err = uploadFreshList(ctx, remote, record.Parent, time.Now())
 		if err != nil {
 			return record.State, err
 		}
@@ -114,6 +151,15 @@ func (s *UploadService) processDirectUpload(ctx context.Context, remote uploadRe
 	if err = save(); err != nil {
 		return record.State, err
 	}
+	if record.OldID != "" && record.OldID != installed.ID {
+		entries, err = uploadFreshList(ctx, remote, record.Parent, time.Now())
+		if err != nil {
+			return record.State, err
+		}
+		if _, ok := verified(entries); !ok {
+			return record.State, errUploadAttention
+		}
+	}
 	for _, entry := range entries {
 		if record.OldID == "" || entry.ID != record.OldID || entry.ID == installed.ID {
 			continue
@@ -124,7 +170,7 @@ func (s *UploadService) processDirectUpload(ctx context.Context, remote uploadRe
 		if err = remote.Delete(ctx, record.Parent, entry); err != nil {
 			return record.State, err
 		}
-		check, checkErr := remote.List(ctx, record.Parent)
+		check, checkErr := uploadFreshList(ctx, remote, record.Parent, time.Now())
 		if checkErr != nil {
 			return record.State, checkErr
 		}

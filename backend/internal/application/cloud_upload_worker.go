@@ -49,7 +49,7 @@ type UploadService struct {
 	provider       func(context.Context, string) (uploadRemote, error)
 	mu             sync.RWMutex
 	preparation    sync.Mutex
-	directoryLocks [256]sync.Mutex
+	directoryCache uploadDirectoryCache
 	active         map[string]bool
 	status         UploadStatus
 	files          map[string]UploadFileProgress
@@ -308,6 +308,26 @@ func (s *UploadService) process(ctx context.Context, m UploadMapping, f uploadLo
 	if err != nil {
 		return "", err
 	}
+	preparation := remote
+	if m.Kind == "115" {
+		scope := m.Kind
+		if pan, ok := remote.(uploadPanRemote); ok {
+			account, found, loadErr := pan.s.accounts.Load(ctx)
+			if loadErr != nil {
+				return "", loadErr
+			}
+			if !found {
+				return "", ErrPan115NotLinked
+			}
+			scope += "\x00" + account.UserID
+		}
+		preparation = uploadDirectoryRemote{uploadRemote: remote, service: s, kind: scope}
+		defer func() {
+			if resultErr != nil {
+				s.directoryCache.invalidate(scope)
+			}
+		}()
+	}
 	if policy != "skip" && policy != "overwrite" && policy != "keep_both" {
 		return "", fmt.Errorf("同名文件处理方式无效")
 	}
@@ -327,8 +347,11 @@ func (s *UploadService) process(ctx context.Context, m UploadMapping, f uploadLo
 		}
 	}
 	if record != nil && record.Kind == "115" && record.Parent != "" {
-		if _, listErr := remote.List(ctx, record.Parent); listErr != nil {
+		if _, listErr := preparation.List(ctx, record.Parent); listErr != nil {
 			if isUploadRemoteMissingError(listErr) {
+				if cached, ok := preparation.(uploadDirectoryRemote); ok {
+					s.directoryCache.invalidate(cached.kind)
+				}
 				record.Parent, record.StageID, record.StageSHA1, record.StageSize = "", "", "", 0
 				record.Stage = ""
 				record.OldID, record.OldSHA1, record.OldSize = "", "", 0
@@ -358,7 +381,10 @@ func (s *UploadService) process(ctx context.Context, m UploadMapping, f uploadLo
 				s.preparation.Unlock()
 			}
 		}()
-		preparationRemote := &uploadPreparationRemote{uploadRemote: uploadDirectoryRemote{uploadRemote: remote, service: s, kind: m.Kind}, entries: map[string][]uploadEntry{}}
+		preparationRemote := preparation
+		if m.Kind != "115" {
+			preparationRemote = &uploadPreparationRemote{uploadRemote: uploadDirectoryRemote{uploadRemote: remote, service: s, kind: m.Kind}, entries: map[string][]uploadEntry{}}
+		}
 		root, e := uploadMappingRoot(ctx, preparationRemote, m)
 		if e != nil {
 			return "", e
@@ -410,7 +436,7 @@ func (s *UploadService) process(ctx context.Context, m UploadMapping, f uploadLo
 		record.RemotePath = m.Path
 	}
 	if record.Stage == record.Target {
-		state, err = s.processDirectUpload(ctx, remote, record, m, f, sourceGuarded, save)
+		state, err = s.processDirectUpload(ctx, preparation, record, m, f, sourceGuarded, save)
 		if err != nil || state != "cleanup" || record.Mode != "move" {
 			return state, err
 		}

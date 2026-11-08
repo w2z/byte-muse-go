@@ -61,6 +61,27 @@ func TestUploadNewParentSkipsDescendantExistenceQueries(t *testing.T) {
 	}
 }
 
+func TestUploadProductionPreparationSkipsNewDescendantQueries(t *testing.T) {
+	remote := &uploadPreparationProbe{}
+	service := &UploadService{}
+	prepared := uploadDirectoryRemote{uploadRemote: remote, service: service, kind: "115"}
+	ctx := context.Background()
+	root, err := uploadMappingRoot(ctx, prepared, UploadMapping{Kind: "115", ID: "0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent, err := uploadParent(ctx, prepared, root, "new/child/file.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = prepared.List(ctx, parent); err != nil {
+		t.Fatal(err)
+	}
+	if len(remote.lists) != 1 || len(remote.created) != 2 {
+		t.Fatalf("lists=%v created=%v", remote.lists, remote.created)
+	}
+}
+
 type uploadDelayedAdmissionStore struct {
 	uploadMemoryStore
 	blocked chan struct{}

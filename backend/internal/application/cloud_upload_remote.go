@@ -7,28 +7,30 @@ import (
 	"fmt"
 	"os"
 	"path"
+	"time"
 )
 
-// uploadDirectoryRemote serializes only creation of the same child, rechecking after acquiring its lock.
-// Cached identities are never reused across workers; missing/deleted parents still follow normal recovery.
+// uploadDirectoryRemote shares account-scoped preparation snapshots; verification uses uploadFreshList.
 type uploadDirectoryRemote struct {
 	uploadRemote
 	service *UploadService
 	kind    string
 }
 
-func (remote uploadDirectoryRemote) Mkdir(ctx context.Context, parent, name string) (string, error) {
-	var stripe uint32
-	for _, value := range []byte(remote.kind + "\x00" + parent + "\x00" + name) {
-		stripe = stripe*31 + uint32(value)
+func (remote uploadDirectoryRemote) List(ctx context.Context, parent string) ([]uploadEntry, error) {
+	if remote.kind == "cd2" {
+		return remote.uploadRemote.List(ctx, parent)
 	}
-	lock := &remote.service.directoryLocks[stripe%uint32(len(remote.service.directoryLocks))]
-	lock.Lock()
-	defer lock.Unlock()
-	if err := ctx.Err(); err != nil {
+	return remote.service.directoryCache.list(ctx, uploadDirectoryCacheKey{remote.kind, parent}, time.Time{}, remote.uploadRemote.List)
+}
+
+func (remote uploadDirectoryRemote) Mkdir(ctx context.Context, parent, name string) (string, error) {
+	release, err := remote.service.directoryCache.reserve(ctx, "directory\x00"+remote.kind+"\x00"+parent+"\x00"+name)
+	if err != nil {
 		return "", err
 	}
-	entries, err := remote.uploadRemote.List(ctx, parent)
+	defer release()
+	entries, err := remote.List(ctx, parent)
 	if err != nil {
 		return "", err
 	}
@@ -38,7 +40,15 @@ func (remote uploadDirectoryRemote) Mkdir(ctx context.Context, parent, name stri
 		}
 		return entry.ID, nil
 	}
-	return remote.uploadRemote.Mkdir(ctx, parent, name)
+	id, err := remote.uploadRemote.Mkdir(ctx, parent, name)
+	if err != nil {
+		remote.service.directoryCache.invalidate(remote.kind)
+		return "", err
+	}
+	if remote.kind != "cd2" {
+		remote.service.directoryCache.created(remote.kind, parent, name, id)
+	}
+	return id, nil
 }
 
 // uploadEntry is the provider-neutral identity used by conflict handling and post-write verification.

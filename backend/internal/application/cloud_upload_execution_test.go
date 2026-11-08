@@ -234,12 +234,10 @@ func TestUploadPreparationParallelAndCompletionRefills(t *testing.T) {
 	done := make(chan struct{})
 	go func() { defer close(done); service.Run(ctx) }()
 	defer func() { cancel(); <-done }()
-	for index := 0; index < 5; index++ {
-		select {
-		case <-remote.listed:
-		case <-time.After(6 * time.Second):
-			t.Fatal("preparation serialized behind another file")
-		}
+	select {
+	case <-remote.listed:
+	case <-time.After(6 * time.Second):
+		t.Fatal("shared directory preparation did not start")
 	}
 	close(remote.prepare)
 	for index := 0; index < 5; index++ {
