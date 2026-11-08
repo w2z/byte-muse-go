@@ -1,16 +1,20 @@
 {
-  "version": "0.1.221",
-  "commit": "38aff447c8d23dab586dc0b222dd2467572def17",
-  "short_commit": "38aff44",
-  "built_at": "2026-11-08T06:28:11Z",
+  "version": "0.1.222",
+  "commit": "aa16d5d6ceff98a74216d208016b317259721431",
+  "short_commit": "aa16d5d",
+  "built_at": "2026-11-08T06:45:03Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.221",
-    "sha-38aff44",
+    "0.1.222",
+    "sha-aa16d5d",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.222",
+      "message": "调整下次尝试时间的显示格式"
+    },
     {
       "version": "0.1.221",
       "message": "恢复手动批次状态并保留冷却截止时间"
