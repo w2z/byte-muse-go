@@ -1,16 +1,20 @@
 {
-  "version": "0.1.225",
-  "commit": "142fb7a44c349c06adacab09f371f15f021a32e6",
-  "short_commit": "142fb7a",
-  "built_at": "2026-11-08T16:48:18Z",
+  "version": "0.1.226",
+  "commit": "f8430c50a6558efdd352693a08852b09cb9a9a1a",
+  "short_commit": "f8430c5",
+  "built_at": "2026-11-08T17:41:39Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.225",
-    "sha-142fb7a",
+    "0.1.226",
+    "sha-f8430c5",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.226",
+      "message": "支持选择 CloudDrive2 开放应用授权"
+    },
     {
       "version": "0.1.225",
       "message": "按范围持久化控制指令避免逐条恢复任务"
