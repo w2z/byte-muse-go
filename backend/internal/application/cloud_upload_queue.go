@@ -7,7 +7,6 @@ import (
 	"github.com/fsnotify/fsnotify"
 	"os"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -16,6 +15,14 @@ import (
 // Run owns all scheduling and controls. Recovery does not depend on a surviving source or mapping.
 // Disabled monitoring stops discovery/new transfers; already-started replacements still reconcile.
 func (s *UploadService) Run(ctx context.Context) {
+	durable := s.store
+	queue, loadErr := newUploadQueueStore(ctx, durable)
+	if loadErr != nil {
+		s.update(func(status *UploadStatus) { status.State, status.Error = "failed", loadErr.Error() })
+		return
+	}
+	s.store = queue
+	defer func() { s.store = durable }()
 	s.mu.Lock()
 	s.commands = make(chan uploadCommand)
 	s.wake = make(chan struct{}, 1)
@@ -80,6 +87,9 @@ func (s *UploadService) Run(ctx context.Context) {
 				st.Error = ""
 			}
 		})
+		if record, readErr := queue.Get(ctx, result.key); readErr == nil && record != nil {
+			s.mergeUploadView([]domain.UploadRecord{*record}, false)
+		}
 	}
 	stopWorkers := func(matches func(string) bool) {
 		waiting := map[string]bool{}
@@ -206,7 +216,7 @@ func (s *UploadService) Run(ctx context.Context) {
 			s.mu.Unlock()
 			manual = false
 		}
-		if len(workers) < concurrency {
+		if len(workers) <= concurrency {
 			records, listErr := s.store.PendingCommits(ctx)
 			if listErr != nil {
 				s.update(func(st *UploadStatus) { st.Error = listErr.Error() })
@@ -217,9 +227,6 @@ func (s *UploadService) Run(ctx context.Context) {
 						recovering[r.Kind+"\x00"+r.Root+"\x00"+r.Source] = true
 					}
 				}
-				sort.Slice(records, func(i, j int) bool {
-					return uploadQueueBefore(records[i], records[j])
-				})
 				if readinessOffset >= len(records) {
 					readinessOffset = 0
 				}
@@ -228,9 +235,6 @@ func (s *UploadService) Run(ctx context.Context) {
 				for index := 0; index < len(records); index++ {
 					recordIndex := (readinessOffset + index) % len(records)
 					r := records[recordIndex]
-					if len(workers) >= concurrency {
-						break
-					}
 					if _, active := workers[r.Key]; active {
 						continue
 					}
@@ -254,14 +258,28 @@ func (s *UploadService) Run(ctx context.Context) {
 					if !uploadRetryDue(r, now) {
 						continue
 					}
+					if len(workers) >= concurrency {
+						if r.State != "pending" || r.Intent == "delete" || uploadIndividuallyPaused(r, s.mode) || (!enabled && !manual && r.Intent != "run") {
+							continue
+						}
+						checks++
+						if checks > concurrency*2 {
+							break
+						}
+						info, statErr := os.Lstat(r.Source)
+						if statErr == nil && info.Mode().IsRegular() {
+							observeUploadSource(observations, uploadLocalFile{Absolute: r.Source, Size: info.Size(), Modified: info.ModTime().UnixNano()}, now, uploadSourceAccess(r.Source))
+						}
+						continue
+					}
 					if r.State == "pending" {
 						if recovering[r.Kind+"\x00"+r.Root+"\x00"+r.Source] {
 							continue
 						}
-						sourceExists := uploadUnchanged(uploadLocalFile{Absolute: r.Source, Size: r.Size, Modified: r.Modified})
 						if r.Intent != "delete" && ((!enabled && !manual && r.Intent != "run") || uploadIndividuallyPaused(r, s.mode)) {
 							continue
 						}
+						sourceExists := uploadUnchanged(uploadLocalFile{Absolute: r.Source, Size: r.Size, Modified: r.Modified})
 						allowed := false
 						for _, m := range mappings {
 							if m.Kind == r.Kind && m.ID == r.Root && m.LocalPath == r.LocalRoot {
@@ -374,7 +392,7 @@ func (s *UploadService) Run(ctx context.Context) {
 				s.mu.Unlock()
 			}
 		}
-		if err = s.refreshUploadView(ctx); err != nil {
+		if err = s.refreshUploadChanges(ctx); err != nil {
 			s.update(func(st *UploadStatus) { st.Error = err.Error() })
 		}
 		discoveryDeadline := time.Now().Add(250 * time.Millisecond)

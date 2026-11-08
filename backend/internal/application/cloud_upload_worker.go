@@ -42,21 +42,22 @@ type UploadStatus struct {
 	Actions   map[string]bool `json:"actions"`
 }
 
-// UploadService owns the scheduler and bounded workers; preparation serializes directory creation and name reservations.
+// UploadService owns bounded workers; only same-child creation and name reservations serialize.
 type UploadService struct {
-	settings    func(context.Context) (map[string]string, error)
-	store       UploadStore
-	provider    func(context.Context, string) (uploadRemote, error)
-	mu          sync.RWMutex
-	preparation sync.Mutex
-	active      map[string]bool
-	status      UploadStatus
-	files       map[string]UploadFileProgress
-	mappings    []UploadMapping
-	commands    chan uploadCommand
-	wake        chan struct{}
-	ready       bool
-	mode        string
+	settings       func(context.Context) (map[string]string, error)
+	store          UploadStore
+	provider       func(context.Context, string) (uploadRemote, error)
+	mu             sync.RWMutex
+	preparation    sync.Mutex
+	directoryLocks [256]sync.Mutex
+	active         map[string]bool
+	status         UploadStatus
+	files          map[string]UploadFileProgress
+	mappings       []UploadMapping
+	commands       chan uploadCommand
+	wake           chan struct{}
+	ready          bool
+	mode           string
 	// scanRequested asks the scheduler for one immediate discovery pass.
 	scanRequested bool
 	scanning      bool
@@ -303,15 +304,6 @@ func (s *UploadService) process(ctx context.Context, m UploadMapping, f uploadLo
 	if policy != "skip" && policy != "overwrite" && policy != "keep_both" {
 		return "", fmt.Errorf("同名文件处理方式无效")
 	}
-	s.preparation.Lock()
-	preparing := true
-	finishPreparation := func() {
-		if preparing {
-			preparing = false
-			s.preparation.Unlock()
-		}
-	}
-	defer finishPreparation()
 	if m.Kind == "115" && record != nil && record.Parent != "" && record.Stage != record.Target && record.Intent != "delete" && record.Intent != "stop" {
 		entries, listErr := remote.List(ctx, record.Parent)
 		if listErr == nil {
@@ -353,7 +345,13 @@ func (s *UploadService) process(ctx context.Context, m UploadMapping, f uploadLo
 		return s.store.Save(ctx, *record)
 	}
 	if record == nil || record.Parent == "" {
-		preparationRemote := &uploadPreparationRemote{uploadRemote: remote, entries: map[string][]uploadEntry{}}
+		reservationLocked := false
+		defer func() {
+			if reservationLocked {
+				s.preparation.Unlock()
+			}
+		}()
+		preparationRemote := &uploadPreparationRemote{uploadRemote: uploadDirectoryRemote{uploadRemote: remote, service: s, kind: m.Kind}, entries: map[string][]uploadEntry{}}
 		root, e := uploadMappingRoot(ctx, preparationRemote, m)
 		if e != nil {
 			return "", e
@@ -383,6 +381,8 @@ func (s *UploadService) process(ctx context.Context, m UploadMapping, f uploadLo
 			return record.State, save()
 		}
 		if policy == "keep_both" {
+			s.preparation.Lock()
+			reservationLocked = true
 			if e = s.selectUploadName(ctx, record, entries); e != nil {
 				return "", e
 			}
@@ -394,11 +394,14 @@ func (s *UploadService) process(ctx context.Context, m UploadMapping, f uploadLo
 		if e = save(); e != nil {
 			return "", e
 		}
+		if reservationLocked {
+			reservationLocked = false
+			s.preparation.Unlock()
+		}
 	}
 	if record.RemotePath == "" {
 		record.RemotePath = m.Path
 	}
-	finishPreparation()
 	if record.Stage == record.Target {
 		state, err = s.processDirectUpload(ctx, remote, record, m, f, sourceGuarded, save)
 		if err != nil || state != "cleanup" || record.Mode != "move" {

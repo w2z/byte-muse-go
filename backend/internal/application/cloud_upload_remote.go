@@ -9,6 +9,38 @@ import (
 	"path"
 )
 
+// uploadDirectoryRemote serializes only creation of the same child, rechecking after acquiring its lock.
+// Cached identities are never reused across workers; missing/deleted parents still follow normal recovery.
+type uploadDirectoryRemote struct {
+	uploadRemote
+	service *UploadService
+	kind    string
+}
+
+func (remote uploadDirectoryRemote) Mkdir(ctx context.Context, parent, name string) (string, error) {
+	var stripe uint32
+	for _, value := range []byte(remote.kind + "\x00" + parent + "\x00" + name) {
+		stripe = stripe*31 + uint32(value)
+	}
+	lock := &remote.service.directoryLocks[stripe%uint32(len(remote.service.directoryLocks))]
+	lock.Lock()
+	defer lock.Unlock()
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	entries, err := remote.uploadRemote.List(ctx, parent)
+	if err != nil {
+		return "", err
+	}
+	if entry, exists := findUploadEntry(entries, name); exists {
+		if !entry.Directory {
+			return "", fmt.Errorf("网盘路径 %s 已存在同名文件", name)
+		}
+		return entry.ID, nil
+	}
+	return remote.uploadRemote.Mkdir(ctx, parent, name)
+}
+
 // uploadEntry is the provider-neutral identity used by conflict handling and post-write verification.
 type uploadEntry struct {
 	ID, Name  string
@@ -26,7 +58,7 @@ type uploadRemote interface {
 	Delete(context.Context, string, uploadEntry) error
 }
 
-// uploadPreparationRemote caches only one serialized preparation pass. New directories start empty;
+// uploadPreparationRemote caches only one preparation pass. Shared creation does not imply an empty directory;
 // the worker discards this snapshot before transfer and always verifies the final remote object afresh.
 type uploadPreparationRemote struct {
 	uploadRemote
@@ -47,7 +79,9 @@ func (remote *uploadPreparationRemote) List(ctx context.Context, parent string) 
 func (remote *uploadPreparationRemote) Mkdir(ctx context.Context, parent, name string) (string, error) {
 	id, err := remote.uploadRemote.Mkdir(ctx, parent, name)
 	if err == nil {
-		remote.entries[id] = []uploadEntry{}
+		if _, shared := remote.uploadRemote.(uploadDirectoryRemote); !shared {
+			remote.entries[id] = []uploadEntry{}
+		}
 		if entries, ok := remote.entries[parent]; ok {
 			remote.entries[parent] = append(entries, uploadEntry{ID: id, Name: name, Directory: true})
 		}

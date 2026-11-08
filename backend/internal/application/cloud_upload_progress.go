@@ -30,6 +30,8 @@ type UploadFileProgress struct {
 	updated       time.Time
 	sample        time.Time
 	sampleBytes   int64
+	processed     bool
+	failed        bool
 }
 
 // UploadDirectoryProgress aggregates one mapping, including skipped counts separately from uploaded counts.
@@ -100,7 +102,6 @@ func (s *UploadService) Files(page, size int, status string) UploadFilePage {
 		size = 20
 	}
 	s.mu.RLock()
-	defer s.mu.RUnlock()
 	items := make([]UploadFileProgress, 0, len(s.files))
 	taskTotal, completed := 0, 0
 	for _, item := range s.files {
@@ -116,6 +117,7 @@ func (s *UploadService) Files(page, size int, status string) UploadFilePage {
 		item.Actions = uploadProgressActions(item.State)
 		items = append(items, item)
 	}
+	s.mu.RUnlock()
 	sort.Slice(items, func(i, j int) bool {
 		return uploadQueueBefore(
 			domain.UploadRecord{QueuedAt: items[i].QueuedAt, Source: items[i].Path, Key: items[i].Key},

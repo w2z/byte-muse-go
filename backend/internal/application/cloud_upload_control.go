@@ -518,6 +518,37 @@ func (s *UploadService) refreshUploadView(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	s.mergeUploadView(records, true)
+	return nil
+}
+
+// refreshUploadChanges publishes only committed deltas and active phase changes between scheduler events.
+func (s *UploadService) refreshUploadChanges(ctx context.Context) error {
+	queue, ok := s.store.(*uploadQueueStore)
+	if !ok {
+		return s.refreshUploadView(ctx)
+	}
+	records := queue.takeChanges()
+	s.mu.RLock()
+	keys := make([]string, 0, len(s.active))
+	for key := range s.active {
+		keys = append(keys, key)
+	}
+	s.mu.RUnlock()
+	for _, key := range keys {
+		record, err := queue.Get(ctx, key)
+		if err != nil {
+			return err
+		}
+		if record != nil {
+			records = append(records, *record)
+		}
+	}
+	s.mergeUploadView(records, false)
+	return nil
+}
+
+func (s *UploadService) mergeUploadView(records []domain.UploadRecord, full bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.files == nil {
@@ -525,13 +556,31 @@ func (s *UploadService) refreshUploadView(ctx context.Context) error {
 	}
 	seen := map[string]bool{}
 	st := &s.status
-	st.Total = 0
-	st.Processed = 0
-	st.Uploaded = 0
-	st.Skipped = 0
-	st.Failed = 0
+	if full {
+		st.Total, st.Processed, st.Uploaded, st.Skipped, st.Failed = 0, 0, 0, 0, 0
+	}
 	for _, r := range records {
+		if !full {
+			if previous, exists := s.files[r.Key]; exists {
+				st.Total--
+				if previous.processed {
+					st.Processed--
+				}
+				if previous.State == "completed" {
+					st.Uploaded--
+				}
+				if previous.State == "skipped" {
+					st.Skipped--
+				}
+				if previous.failed {
+					st.Failed--
+				}
+			}
+		}
 		if r.State == "control" || r.Hidden {
+			if !full {
+				delete(s.files, r.Key)
+			}
 			continue
 		}
 		seen[r.Key] = true
@@ -556,6 +605,8 @@ func (s *UploadService) refreshUploadView(ctx context.Context) error {
 		f.NextRetry = r.NextRetry
 		f.Error = r.Error
 		f.CompletedAt = r.CompletedAt
+		f.processed = uploadTerminal(r.State)
+		f.failed = r.Error != "" || r.State == "discarded"
 		if f.CompletedAt == "" && (r.State == "completed" || r.State == "skipped") {
 			f.CompletedAt = r.UpdatedAt
 		}
@@ -583,9 +634,11 @@ func (s *UploadService) refreshUploadView(ctx context.Context) error {
 		st.Total++
 		s.files[r.Key] = f
 	}
-	for key := range s.files {
-		if !seen[key] {
-			delete(s.files, key)
+	if full {
+		for key := range s.files {
+			if !seen[key] {
+				delete(s.files, key)
+			}
 		}
 	}
 	if st.Current == "" {
@@ -597,7 +650,6 @@ func (s *UploadService) refreshUploadView(ctx context.Context) error {
 			st.State = s.mode
 		}
 	}
-	return nil
 }
 
 // uploadPresentationState is the single durable-to-UI state mapping. An

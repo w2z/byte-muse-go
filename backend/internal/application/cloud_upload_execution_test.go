@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -176,6 +177,92 @@ type uploadBlockingRemote struct {
 	uploadMemoryRemote
 	started chan string
 	release chan struct{}
+}
+
+type uploadParallelPreparationRemote struct {
+	uploadBlockingRemote
+	listed  chan struct{}
+	prepare chan struct{}
+	mu      sync.Mutex
+	entries []uploadEntry
+}
+
+func (remote *uploadParallelPreparationRemote) List(ctx context.Context, _ string) ([]uploadEntry, error) {
+	remote.listed <- struct{}{}
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-remote.prepare:
+		remote.mu.Lock()
+		defer remote.mu.Unlock()
+		return append([]uploadEntry(nil), remote.entries...), nil
+	}
+}
+
+func (remote *uploadParallelPreparationRemote) Upload(ctx context.Context, _ string, name string, _ *os.File, size int64, hash string) error {
+	remote.started <- name
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-remote.release:
+		remote.mu.Lock()
+		defer remote.mu.Unlock()
+		remote.entries = append(remote.entries, uploadEntry{ID: name, Name: name, Size: size, SHA1: hash})
+		return nil
+	}
+}
+
+func TestUploadPreparationParallelAndCompletionRefills(t *testing.T) {
+	mapping := UploadMapping{Kind: "115", ID: "0", Path: "/", LocalPath: t.TempDir()}
+	store := &uploadCountedStore{uploadMemoryStore: uploadMemoryStore{}}
+	for index := 0; index < 6; index++ {
+		name := filepath.Join(mapping.LocalPath, fmt.Sprintf("%02d.txt", index))
+		if err := os.WriteFile(name, []byte("a"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		info, _ := os.Stat(name)
+		file := uploadLocalFile{Absolute: name, Relative: filepath.Base(name), Size: 1, Modified: info.ModTime().UnixNano()}
+		key := uploadKey(mapping, file, "overwrite")
+		store.uploadMemoryStore[key] = domain.UploadRecord{Key: key, Kind: "115", Root: "0", LocalRoot: mapping.LocalPath, RemotePath: "/", Relative: file.Relative, Source: name, Size: 1, Modified: file.Modified, Policy: "overwrite", State: "pending", Intent: "run", QueuedAt: time.Unix(int64(index), 0).UTC().Format(time.RFC3339Nano)}
+	}
+	raw, _ := json.Marshal([]UploadMapping{mapping})
+	remote := &uploadParallelPreparationRemote{uploadBlockingRemote: uploadBlockingRemote{started: make(chan string, 16), release: make(chan struct{}, 16)}, listed: make(chan struct{}, 64), prepare: make(chan struct{})}
+	service := &UploadService{store: store, settings: func(context.Context) (map[string]string, error) {
+		return map[string]string{"CLOUD_UPLOAD_PATHS": string(raw)}, nil
+	}, provider: func(context.Context, string) (uploadRemote, error) { return remote, nil }}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { defer close(done); service.Run(ctx) }()
+	defer func() { cancel(); <-done }()
+	for index := 0; index < 5; index++ {
+		select {
+		case <-remote.listed:
+		case <-time.After(6 * time.Second):
+			t.Fatal("preparation serialized behind another file")
+		}
+	}
+	close(remote.prepare)
+	for index := 0; index < 5; index++ {
+		select {
+		case <-remote.started:
+		case <-time.After(3 * time.Second):
+			t.Fatal("five transfers did not start")
+		}
+	}
+	remote.release <- struct{}{}
+	select {
+	case name := <-remote.started:
+		if name != "05.txt" {
+			t.Fatalf("expected next queued file, got %s", name)
+		}
+	case <-time.After(1500 * time.Millisecond):
+		t.Fatal("completion did not immediately refill slot")
+	}
+	cancel()
+	<-done
+	if store.lists != 1 {
+		t.Fatalf("scheduler reloaded full database %d times", store.lists)
+	}
 }
 
 func (remote *uploadBlockingRemote) Upload(ctx context.Context, _ string, name string, _ *os.File, _ int64, _ string) error {
