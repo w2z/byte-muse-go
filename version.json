@@ -1,16 +1,20 @@
 {
-  "version": "0.1.217",
-  "commit": "7d0aafb277edac80e329f3fc7b2d0d8ead2eaaf4",
-  "short_commit": "7d0aafb",
-  "built_at": "2026-11-08T04:33:22Z",
+  "version": "0.1.218",
+  "commit": "79d0bf13860ea5166e4c0e474472d4f111094bbf",
+  "short_commit": "79d0bf1",
+  "built_at": "2026-11-08T04:35:56Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.217",
-    "sha-7d0aafb",
+    "0.1.218",
+    "sha-79d0bf1",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.218",
+      "message": "同步配置切换状态并覆盖预检补位场景"
+    },
     {
       "version": "0.1.217",
       "message": "消除全量队列读取并并行准备和及时补位"
