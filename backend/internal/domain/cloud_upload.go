@@ -4,6 +4,19 @@ import "context"
 
 type uploadProgressKey struct{}
 
+// UploadOldFile records the immutable identity of one file approved for replacement.
+type UploadOldFile struct {
+	ID   string `json:"id"`
+	SHA1 string `json:"sha1"`
+	Size int64  `json:"size"`
+}
+
+// UploadOverwriteSnapshot freezes the replacement set before direct upload.
+// A nil snapshot on UploadRecord denotes a legacy record; an empty Files list means no old files.
+type UploadOverwriteSnapshot struct {
+	Files []UploadOldFile `json:"files"`
+}
+
 // WithUploadProgress attaches a per-file byte reporter; phase distinguishes service-to-CD2 from CD2-to-cloud.
 func WithUploadProgress(ctx context.Context, report func(int64, int64, string)) context.Context {
 	return context.WithValue(ctx, uploadProgressKey{}, report)
@@ -28,20 +41,22 @@ type UploadRecord struct {
 	OldID      string `json:"old_id"`
 	OldSHA1    string `json:"old_sha1"`
 	OldSize    int64  `json:"old_size"`
-	Retries    int    `json:"retries"`
-	NextRetry  string `json:"next_retry"`
-	ErrorKind  string `json:"error_kind"`
-	Intent     string `json:"intent"`
-	Hidden     bool   `json:"hidden"`
-	Kind       string `json:"kind"`
-	Root       string `json:"root"`
-	LocalRoot  string `json:"local_root"`
-	Relative   string `json:"relative"`
-	Key        string `json:"key"`
-	Source     string `json:"source"`
-	Size       int64  `json:"size"`
-	Modified   int64  `json:"modified"`
-	Policy     string `json:"policy"`
+	// Overwrite is an optional JSON receipt, never backfilled during startup. Once set, retries cannot extend it.
+	Overwrite *UploadOverwriteSnapshot `json:"overwrite_snapshot,omitempty"`
+	Retries   int                      `json:"retries"`
+	NextRetry string                   `json:"next_retry"`
+	ErrorKind string                   `json:"error_kind"`
+	Intent    string                   `json:"intent"`
+	Hidden    bool                     `json:"hidden"`
+	Kind      string                   `json:"kind"`
+	Root      string                   `json:"root"`
+	LocalRoot string                   `json:"local_root"`
+	Relative  string                   `json:"relative"`
+	Key       string                   `json:"key"`
+	Source    string                   `json:"source"`
+	Size      int64                    `json:"size"`
+	Modified  int64                    `json:"modified"`
+	Policy    string                   `json:"policy"`
 	// Mode snapshots copy/move at admission; empty historical records mean copy, never retroactive deletion.
 	Mode   string `json:"mode"`
 	State  string `json:"state"`

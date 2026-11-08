@@ -221,6 +221,7 @@ func (s *UploadService) process(ctx context.Context, m UploadMapping, f uploadLo
 				record.Stage = ""
 				record.StageID, record.StageSHA1, record.StageSize = "", "", 0
 				record.OldID, record.OldSHA1, record.OldSize = "", "", 0
+				record.Overwrite = nil
 				if record.Intent == "delete" || record.Intent == "stop" {
 					record.State = "stopped"
 					record.Hidden = record.Intent == "delete"
@@ -341,6 +342,7 @@ func (s *UploadService) process(ctx context.Context, m UploadMapping, f uploadLo
 			}
 			record.Parent, record.Stage, record.StageID = "", "", ""
 			record.OldID, record.OldSHA1, record.OldSize = "", "", 0
+			record.Overwrite = nil
 			record.State = "pending"
 		} else if !isUploadRemoteMissingError(listErr) {
 			return record.State, listErr
@@ -355,6 +357,7 @@ func (s *UploadService) process(ctx context.Context, m UploadMapping, f uploadLo
 				record.Parent, record.StageID, record.StageSHA1, record.StageSize = "", "", "", 0
 				record.Stage = ""
 				record.OldID, record.OldSHA1, record.OldSize = "", "", 0
+				record.Overwrite = nil
 				if record.Intent == "delete" || record.Intent == "stop" {
 					record.State = "stopped"
 					record.Hidden = record.Intent == "delete"

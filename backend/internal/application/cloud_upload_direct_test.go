@@ -4,6 +4,7 @@ import (
 	"bytemuse/backend/internal/domain"
 	"context"
 	"crypto/sha1"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -13,11 +14,12 @@ import (
 
 type directUploadRemote struct {
 	uploadMemoryRemote
-	entries       []uploadEntry
-	names         []string
-	lostResponse  bool
-	deleteFailure bool
-	corrupt       bool
+	entries           []uploadEntry
+	names             []string
+	lostResponse      bool
+	deleteFailure     bool
+	corrupt           bool
+	afterDirectUpload func()
 }
 
 func (remote *directUploadRemote) List(context.Context, string) ([]uploadEntry, error) {
@@ -37,11 +39,91 @@ func (remote *directUploadRemote) Upload(_ context.Context, _, name string, file
 		hash = "incorrect"
 	}
 	remote.entries = append(remote.entries, uploadEntry{ID: fmt.Sprintf("new-%d", len(remote.names)), Name: name, Size: size, SHA1: hash})
+	if remote.afterDirectUpload != nil {
+		remote.afterDirectUpload()
+	}
 	if remote.lostResponse {
 		remote.lostResponse = false
 		return errors.New("response lost")
 	}
 	return nil
+}
+
+func TestUploadDirectMultipleOldFilesSurviveRestart(t *testing.T) {
+	service, mapping, file, _, store := recoveryFixture(t)
+	remote := &directUploadRemote{entries: []uploadEntry{
+		{ID: "old-a", Name: "film.mkv", Size: 8, SHA1: "hash-a"},
+		{ID: "old-b", Name: "film.mkv", Size: 10, SHA1: "hash-b"},
+	}, lostResponse: true}
+	service.provider = func(context.Context, string) (uploadRemote, error) { return remote, nil }
+	_, err := service.process(context.Background(), mapping, file, "overwrite")
+	if err == nil || len(remote.names) != 1 || len(remote.entries) != 3 {
+		t.Fatalf("upload should retain both originals on lost response: %v uploads=%v entries=%v", err, remote.names, remote.entries)
+	}
+	key := uploadKey(mapping, file, "overwrite")
+	raw, _ := json.Marshal(store[key])
+	var restored domain.UploadRecord
+	if err = json.Unmarshal(raw, &restored); err != nil {
+		t.Fatal(err)
+	}
+	store[key] = restored
+	restarted := &UploadService{store: store, provider: service.provider}
+	state, err := restarted.process(context.Background(), mapping, file, "overwrite")
+	if err != nil || state != "completed" || len(remote.names) != 1 || len(remote.entries) != 1 || remote.entries[0].ID != "new-1" {
+		t.Fatalf("state=%s err=%v uploads=%v entries=%v", state, err, remote.names, remote.entries)
+	}
+}
+
+func TestUploadDirectPreservesLateDuplicate(t *testing.T) {
+	service, mapping, file, _, _ := recoveryFixture(t)
+	remote := &directUploadRemote{entries: []uploadEntry{{ID: "old-a", Name: "film.mkv", Size: 8, SHA1: "hash-a"}}}
+	remote.afterDirectUpload = func() {
+		remote.entries = append(remote.entries, uploadEntry{ID: "late", Name: "film.mkv", Size: 7, SHA1: "late-hash"})
+	}
+	service.provider = func(context.Context, string) (uploadRemote, error) { return remote, nil }
+	_, err := service.process(context.Background(), mapping, file, "overwrite")
+	if !errors.Is(err, errUploadAttention) || len(remote.entries) != 3 {
+		t.Fatalf("late duplicate must not be adopted or deleted: %v %v", err, remote.entries)
+	}
+}
+
+func TestUploadDirectMultipleOldFilesRejectChangedOrUnknownIdentity(t *testing.T) {
+	for _, scenario := range []string{"missing-hash", "changed-after-upload", "partial-delete-restart"} {
+		t.Run(scenario, func(t *testing.T) {
+			service, mapping, file, _, store := recoveryFixture(t)
+			remote := &directUploadRemote{entries: []uploadEntry{
+				{ID: "old-a", Name: "film.mkv", Size: 8, SHA1: "hash-a"},
+				{ID: "old-b", Name: "film.mkv", Size: 10, SHA1: "hash-b"},
+			}}
+			if scenario == "missing-hash" {
+				remote.entries[1].SHA1 = ""
+			}
+			if scenario == "changed-after-upload" {
+				remote.afterDirectUpload = func() { remote.entries[1].SHA1 = "changed" }
+			}
+			if scenario == "partial-delete-restart" {
+				remote.deleteFailure = true
+			}
+			service.provider = func(context.Context, string) (uploadRemote, error) { return remote, nil }
+			_, err := service.process(context.Background(), mapping, file, "overwrite")
+			if err == nil || len(remote.entries) < 2 {
+				t.Fatal("unsafe success", err, remote.entries)
+			}
+			if scenario == "missing-hash" && len(remote.names) != 0 {
+				t.Fatal("uploaded without safe old identities")
+			}
+			if scenario != "partial-delete-restart" {
+				return
+			}
+			remote.entries = remote.entries[1:]
+			remote.deleteFailure = false
+			restarted := &UploadService{store: store, provider: service.provider}
+			state, err := restarted.process(context.Background(), mapping, file, "overwrite")
+			if err != nil || state != "completed" || len(remote.entries) != 1 || len(remote.names) != 1 {
+				t.Fatalf("partial cleanup not resumed safely: %s %v %v", state, err, remote.entries)
+			}
+		})
+	}
 }
 func (remote *directUploadRemote) Rename(context.Context, string, uploadEntry, string) error {
 	return errors.New("direct uploads must not rename")

@@ -361,6 +361,7 @@ func (s *UploadService) Run(ctx context.Context) {
 								replacement.Key = uploadKey(mapping, uploadLocalFile{Absolute: r.Source, Size: replacement.Size, Modified: replacement.Modified}, r.Policy)
 								replacement.Parent, replacement.Stage, replacement.StageID, replacement.SHA1 = "", "", "", ""
 								replacement.OldID, replacement.OldSHA1, replacement.StageSHA1 = "", "", ""
+								replacement.Overwrite = nil
 								replacement.Error, replacement.ErrorKind, replacement.NextRetry = "", "", ""
 								replacement.Retries = 0
 								replacement.UpdatedAt = now.UTC().Format(time.RFC3339Nano)
