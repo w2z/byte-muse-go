@@ -1,16 +1,20 @@
 {
-  "version": "0.1.220",
-  "commit": "7046a4e1c27a33603a9f6889f85fb546b1eec19e",
-  "short_commit": "7046a4e",
-  "built_at": "2026-11-08T06:21:13Z",
+  "version": "0.1.221",
+  "commit": "38aff447c8d23dab586dc0b222dd2467572def17",
+  "short_commit": "38aff44",
+  "built_at": "2026-11-08T06:28:11Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.220",
-    "sha-7046a4e",
+    "0.1.221",
+    "sha-38aff44",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.221",
+      "message": "恢复手动批次状态并保留冷却截止时间"
+    },
     {
       "version": "0.1.220",
       "message": "让115限流冷却回到队列调度"
