@@ -60,11 +60,11 @@ const states: Record<string, string> = {
   skipped: "成功",
   failed: "失败",
 };
-/** 将字节数格式化为二进制容量，零值也明确展示。 */
-function bytes(value: number) {
-  if (!Number.isFinite(value) || value <= 0) return "0 B";
+/** 将字节数格式化为二进制容量；大小列指定两位小数，速度沿用默认精度，零值也明确展示。 */
+function bytes(value: number, precision?: number) {
+  if (!Number.isFinite(value) || value <= 0) return `${(0).toFixed(precision ?? 0)} B`;
   const index = Math.max(0, Math.min(4, Math.floor(Math.log(value) / Math.log(1024))));
-  return `${(value / 1024 ** index).toFixed(index === 0 ? 0 : 1)} ${["B", "KiB", "MiB", "GiB", "TiB"][index]}`;
+  return `${(value / 1024 ** index).toFixed(precision ?? (index === 0 ? 0 : 1))} ${["B", "KiB", "MiB", "GiB", "TiB"][index]}`;
 }
 /** 将服务端 UTC 时间显示为本地时间；未完成时明确留空。 */
 function formatTime(value?: string) {
@@ -281,7 +281,7 @@ export function UploadTables() {
                 title: "文件夹大小",
                 dataIndex: "size",
                 width: 120,
-                render: bytes,
+                render: (value: number) => bytes(value, 2),
               },
               {
                 title: "上传进度",
@@ -334,7 +334,7 @@ export function UploadTables() {
                 title: "文件大小",
                 dataIndex: "size",
                 width: 120,
-                render: bytes,
+                render: (value: number) => bytes(value, 2),
               },
               {
                 title: "状态",
