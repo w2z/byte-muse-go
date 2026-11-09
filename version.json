@@ -1,16 +1,20 @@
 {
-  "version": "0.1.236",
-  "commit": "d660e1f21f2b3146df215059cea1fcadcff378d6",
-  "short_commit": "d660e1f",
-  "built_at": "2026-11-09T16:11:37Z",
+  "version": "0.1.237",
+  "commit": "fb5b35e27d13578c40f4a6a24bfff189ffe17319",
+  "short_commit": "fb5b35e",
+  "built_at": "2026-11-09T16:22:24Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.236",
-    "sha-d660e1f",
+    "0.1.237",
+    "sha-fb5b35e",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.237",
+      "message": "将上传二次确认框改为Modal消息提示样式"
+    },
     {
       "version": "0.1.236",
       "message": "缩短任务调度与进度刷新间隔"
