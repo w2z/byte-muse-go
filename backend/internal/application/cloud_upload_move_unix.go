@@ -8,6 +8,12 @@ import (
 	"path/filepath"
 )
 
+// uploadTransferGuard cannot certify immutable content on Unix: flock is advisory.
+func uploadTransferGuard(path string, _ bool) (*uploadSourceProtection, error) {
+	release, err := uploadSourceGuard(path)
+	return &uploadSourceProtection{release: release}, err
+}
+
 // removeUploadEmptyDirectory uses directory-only unlink relative to an anchored parent handle.
 func removeUploadEmptyDirectory(root *os.Root, directory string) error {
 	parent, err := root.Open(filepath.Dir(directory))

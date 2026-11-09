@@ -355,12 +355,14 @@ func (s *UploadService) process(ctx context.Context, m UploadMapping, f uploadLo
 	}
 	sourceGuarded := false
 	var releaseSource func()
+	var protection *uploadSourceProtection
 	if record == nil || record.State == "pending" {
-		release, lockErr := uploadSourceGuard(f.Absolute)
+		guard, lockErr := uploadTransferGuard(f.Absolute, record != nil && record.Mode == "move")
 		if lockErr != nil {
 			return "", lockErr
 		}
-		releaseSource = release
+		protection = guard
+		releaseSource = guard.release
 		defer func() {
 			if releaseSource != nil {
 				releaseSource()
@@ -401,7 +403,7 @@ func (s *UploadService) process(ctx context.Context, m UploadMapping, f uploadLo
 		preparation = uploadDirectoryRemote{uploadRemote: remote, service: s, kind: scope}
 		defer func() {
 			var localErr *uploadLocalPostprocessError
-			if resultErr == nil || uploadDirectoryCooldown(resultErr) || errors.As(resultErr, &localErr) {
+			if resultErr == nil || uploadDirectoryCooldown(resultErr) || errors.As(resultErr, &localErr) || errors.Is(resultErr, errLocalUploadConflict) {
 				return
 			}
 			if isUploadRemoteMissingError(resultErr) {
@@ -521,15 +523,15 @@ func (s *UploadService) process(ctx context.Context, m UploadMapping, f uploadLo
 		record.RemotePath = m.Path
 	}
 	if record.Stage == record.Target {
-		state, err = s.processDirectUpload(ctx, preparation, record, m, f, sourceGuarded, attemptStarted, save)
+		state, err = s.processDirectUpload(ctx, preparation, record, m, f, protection, attemptStarted, save)
 		if err != nil || state != "cleanup" || record.Mode != "move" {
 			return state, err
 		}
-		if releaseSource != nil {
+		if releaseSource != nil && protection.file == nil {
 			releaseSource()
 			releaseSource = nil
 		}
-		if err = removeUploadedSource(ctx, record); err != nil {
+		if err = removeUploadSourceWithProtection(ctx, record, protection); err != nil {
 			return record.State, err
 		}
 		record.State = "completed"

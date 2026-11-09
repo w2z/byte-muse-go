@@ -14,7 +14,7 @@ import (
 // processDirectUpload verifies the final object before deleting any identity in the frozen replacement set.
 // Stage equals Target marks direct receipts; legacy stages are never inferred to be owned or deleted.
 // attemptStarted excludes pre-retry snapshots without requiring a new read at every branch.
-func (s *UploadService) processDirectUpload(ctx context.Context, remote uploadRemote, record *domain.UploadRecord, mapping UploadMapping, source uploadLocalFile, sourceGuarded bool, attemptStarted time.Time, save func() error) (string, error) {
+func (s *UploadService) processDirectUpload(ctx context.Context, remote uploadRemote, record *domain.UploadRecord, mapping UploadMapping, source uploadLocalFile, protection *uploadSourceProtection, attemptStarted time.Time, save func() error) (string, error) {
 	if record.Intent == "stop" || record.Intent == "delete" || record.State == "discarding" {
 		record.State = "stopped"
 		record.Hidden = record.Intent == "delete"
@@ -42,7 +42,7 @@ func (s *UploadService) processDirectUpload(ctx context.Context, remote uploadRe
 	}
 	var file *os.File
 	if record.State == "pending" {
-		if !sourceGuarded {
+		if protection == nil {
 			release, lockErr := uploadSourceGuard(source.Absolute)
 			if lockErr != nil {
 				return record.State, lockErr
@@ -70,6 +70,16 @@ func (s *UploadService) processDirectUpload(ctx context.Context, remote uploadRe
 			record.SHA1, err = hashUploadSource(ctx, file, source.Size)
 			if err != nil {
 				return record.State, err
+			}
+			if protection != nil && protection.file != nil {
+				guarded, statErr := protection.file.Stat()
+				if statErr != nil {
+					return record.State, statErr
+				}
+				if !os.SameFile(info, guarded) {
+					return record.State, fmt.Errorf("%w：受保护文件身份改变，保留源文件", errLocalUploadConflict)
+				}
+				protection.verifiedInfo, protection.verifiedSHA1 = info, record.SHA1
 			}
 			if err = save(); err != nil {
 				return record.State, err
@@ -204,7 +214,7 @@ func (s *UploadService) processDirectUpload(ctx context.Context, remote uploadRe
 			installed, found = verified(entries)
 		}
 		if !uploadUnchanged(source) {
-			return record.State, fmt.Errorf("文件上传期间发生变化，保留远端文件等待核对")
+			return record.State, fmt.Errorf("%w：文件上传期间发生变化，保留本地与远端文件", errLocalUploadConflict)
 		}
 	}
 	if !found {

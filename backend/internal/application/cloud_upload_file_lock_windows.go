@@ -6,7 +6,25 @@ import (
 	"golang.org/x/sys/windows"
 	"os"
 	"path/filepath"
+	"sync"
 )
+
+// uploadTransferGuard retains a deletion-capable, writer-exclusive handle for move
+// attempts, so cleanup does not release protection and reopen a potentially changed file.
+func uploadTransferGuard(path string, move bool) (*uploadSourceProtection, error) {
+	if !move {
+		release, err := uploadSourceGuard(path)
+		return &uploadSourceProtection{release: release}, err
+	}
+	file, remove, release, err := uploadRemovalHandle(path, nil, "")
+	if err == windows.ERROR_SHARING_VIOLATION || err == windows.ERROR_LOCK_VIOLATION {
+		return nil, errUploadFileLocked
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &uploadSourceProtection{file: file, remove: remove, release: sync.OnceFunc(release)}, nil
+}
 
 // removeUploadEmptyDirectory deletes only an identity-checked directory handle; nonempty directories remain intact.
 func removeUploadEmptyDirectory(root *os.Root, directory string) error {

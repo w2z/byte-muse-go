@@ -363,7 +363,7 @@ func TestUploadFiveRecoveriesSharePostAttemptReadAndVerifyEachIdentity(t *testin
 			time.Sleep(time.Millisecond)
 			for index := 0; index < 5; index++ {
 				record := &domain.UploadRecord{Kind: "115", Parent: "0", Target: fmt.Sprintf("%d.txt", index), StageID: fmt.Sprint(index), SHA1: "verified-hash", Size: 3, State: "cleanup", Policy: "overwrite", Overwrite: &domain.UploadOverwriteSnapshot{}}
-				state, err := service.processDirectUpload(context.Background(), prepared, record, mapping, source, false, started, func() error { return nil })
+				state, err := service.processDirectUpload(context.Background(), prepared, record, mapping, source, nil, started, func() error { return nil })
 				if corrupt && index == 4 {
 					if !errors.Is(err, errUploadAttention) {
 						t.Fatalf("wrong SHA1 accepted: %s %v", state, err)
@@ -407,7 +407,7 @@ func TestUploadFiveCompletedWritesShareOneVerification(t *testing.T) {
 					}
 				}
 			})
-			state, err := service.processDirectUpload(progress, prepared, record, mapping, source, false, time.Now(), func() error { return nil })
+			state, err := service.processDirectUpload(progress, prepared, record, mapping, source, nil, time.Now(), func() error { return nil })
 			if err == nil && state != "completed" {
 				err = fmt.Errorf("state=%s", state)
 			}
@@ -458,7 +458,7 @@ func TestUploadIdentityChecksRejectStaleSnapshots(t *testing.T) {
 			case "move":
 				record.Mode = "move"
 			}
-			state, err := service.processDirectUpload(context.Background(), prepared, record, mapping, source, false, started, func() error { return nil })
+			state, err := service.processDirectUpload(context.Background(), prepared, record, mapping, source, nil, started, func() error { return nil })
 			if !errors.Is(err, errUploadAttention) || state == "completed" || counted.lists != 2 {
 				t.Fatalf("stale identity accepted: state=%s lists=%d err=%v", state, counted.lists, err)
 			}

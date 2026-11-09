@@ -28,7 +28,7 @@ func (e *uploadLocalPostprocessError) Error() string {
 }
 func (e *uploadLocalPostprocessError) Unwrap() error { return e.error }
 
-var errLocalUploadConflict = errors.New("本地附件与上传内容不同，保留文件等待核对")
+var errLocalUploadConflict = errors.New("本地文件与上传记录冲突，保留文件等待核对")
 
 type localUploadConflictKey struct{}
 

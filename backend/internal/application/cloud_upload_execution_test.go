@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -156,8 +157,11 @@ func TestUploadMoveRecoveryRejectsChangedSource(t *testing.T) {
 		t.Fatal(err)
 	}
 	store[key] = record
-	if _, err := service.process(context.Background(), mapping, files[0], "overwrite"); err == nil {
-		t.Fatal("changed content deleted")
+	if _, err := service.process(context.Background(), mapping, files[0], "overwrite"); !errors.Is(err, errLocalUploadConflict) {
+		t.Fatalf("changed content was not classified as a local conflict: %v", err)
+	}
+	if uploadRetryDue(store[key], time.Now()) {
+		t.Fatal("changed source scheduled for automatic retry")
 	}
 	if _, err := os.Stat(name); err != nil {
 		t.Fatal(err)
@@ -170,6 +174,102 @@ func TestUploadMoveRecoveryRejectsChangedSource(t *testing.T) {
 	}
 	if state, err := service.process(context.Background(), mapping, files[0], "overwrite"); err != nil || state != "completed" {
 		t.Fatalf("missing source recovery: %s %v", state, err)
+	}
+}
+
+// A producer that ignores advisory locks must not cause deletion of newly written content.
+func TestUploadMoveConcurrentWriter(t *testing.T) {
+	s, m, f, _, store := recoveryFixture(t)
+	key := uploadKey(m, f, "overwrite")
+	store[key] = domain.UploadRecord{Key: key, Kind: "115", Root: m.ID, LocalRoot: m.LocalPath, Source: f.Absolute, Relative: f.Relative, Size: f.Size, Modified: f.Modified, Mode: "move", Policy: "overwrite", State: "pending"}
+	remote := &receiptUploadRemote{}
+	remote.afterDirectUpload = func() {
+		writer, err := os.OpenFile(f.Absolute, os.O_WRONLY, 0)
+		if runtime.GOOS == "windows" {
+			if err == nil {
+				writer.Close()
+				t.Fatal("write protection released before cleanup")
+			}
+			return
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = writer.WriteAt([]byte("X"), 0)
+		writer.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		stamp := time.Unix(0, f.Modified)
+		if err := os.Chtimes(f.Absolute, stamp, stamp); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s.provider = func(context.Context, string) (uploadRemote, error) { return remote, nil }
+	state, err := s.process(context.Background(), m, f, "overwrite")
+	if runtime.GOOS == "windows" {
+		if err != nil || state != "completed" {
+			t.Fatalf("protected move: %s %v", state, err)
+		}
+		if _, err := os.Stat(f.Absolute); !errors.Is(err, os.ErrNotExist) {
+			t.Fatal("source remains", err)
+		}
+	} else {
+		if !errors.Is(err, errLocalUploadConflict) || uploadRetryDue(store[key], time.Now()) {
+			t.Fatalf("changed content accepted: %s %v", state, err)
+		}
+		body, err := os.ReadFile(f.Absolute)
+		if err != nil || body[0] != 'X' {
+			t.Fatal("changed source lost", err)
+		}
+	}
+}
+
+// Continuous Windows write protection permits one hash; advisory locks still require cleanup verification.
+func TestUploadMoveHashPhases(t *testing.T) {
+	for _, persistedHash := range []bool{false, true} {
+		t.Run(fmt.Sprint(persistedHash), func(t *testing.T) {
+			s, m, f, _, store := recoveryFixture(t)
+			key := uploadKey(m, f, "overwrite")
+			r := domain.UploadRecord{Key: key, Kind: "115", Root: m.ID, LocalRoot: m.LocalPath, Source: f.Absolute, Relative: f.Relative, Size: f.Size, Modified: f.Modified, Mode: "move", Policy: "overwrite", State: "pending"}
+			if persistedHash {
+				body, err := os.ReadFile(f.Absolute)
+				if err != nil {
+					t.Fatal(err)
+				}
+				r.SHA1 = fmt.Sprintf("%x", sha1.Sum(body))
+			}
+			store[key] = r
+			remote := &receiptUploadRemote{}
+			s.provider = func(context.Context, string) (uploadRemote, error) { return remote, nil }
+			verifications, cleanups := 0, 0
+			ctx := domain.WithUploadProgress(context.Background(), func(done, total int64, phase string) {
+				if done == 0 && phase == "verifying" {
+					verifications++
+				}
+				if done == 0 && phase == "cleanup" {
+					cleanups++
+				}
+			})
+			state, err := s.process(ctx, m, f, "overwrite")
+			if err != nil || state != "completed" {
+				t.Fatalf("move=%s %v", state, err)
+			}
+			wantHash := 1
+			if persistedHash {
+				wantHash = 0
+			}
+			wantCleanup := 1
+			if runtime.GOOS == "windows" && !persistedHash {
+				wantCleanup = 0
+			}
+			if verifications != wantHash || cleanups != wantCleanup {
+				t.Fatalf("hash phases=%d cleanup phases=%d", verifications, cleanups)
+			}
+			if _, err := os.Stat(f.Absolute); !errors.Is(err, os.ErrNotExist) {
+				t.Fatal("source remains", err)
+			}
+		})
 	}
 }
 
