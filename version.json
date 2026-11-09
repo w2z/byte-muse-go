@@ -1,16 +1,20 @@
 {
-  "version": "0.1.231",
-  "commit": "b4104a2d8c6a936aceadcc307eeafb8db31dd3bf",
-  "short_commit": "b4104a2",
-  "built_at": "2026-11-09T09:49:44Z",
+  "version": "0.1.232",
+  "commit": "e0d4d6ccee18e9e5d3634a80f774c9f473e39997",
+  "short_commit": "e0d4d6c",
+  "built_at": "2026-11-09T13:59:35Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.231",
-    "sha-b4104a2",
+    "0.1.232",
+    "sha-e0d4d6c",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.232",
+      "message": "限制115请求突发并隔离本地后处理重试"
+    },
     {
       "version": "0.1.231",
       "message": "复用115上传回执并减少成功后的目录查询"
