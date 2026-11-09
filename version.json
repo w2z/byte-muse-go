@@ -1,16 +1,20 @@
 {
-  "version": "0.1.241",
-  "commit": "ded28d5d0c6b5b9529d2bc33b73ef2953b172ddb",
-  "short_commit": "ded28d5",
-  "built_at": "2026-11-09T16:41:13Z",
+  "version": "0.1.242",
+  "commit": "77cebc7774fe49f6d913e7fea7f39f9b24bdecf9",
+  "short_commit": "77cebc7",
+  "built_at": "2026-11-09T16:51:53Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.241",
-    "sha-ded28d5",
+    "0.1.242",
+    "sha-77cebc7",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.242",
+      "message": "幂等识别同一上传文件的现有链接"
+    },
     {
       "version": "0.1.241",
       "message": "将上传列表大小列固定为两位小数"
