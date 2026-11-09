@@ -182,6 +182,39 @@ func TestUploadDirectoryCacheMutationDiscardsInflightSnapshot(t *testing.T) {
 	<-done
 }
 
+func TestUploadDirectoryCacheLaterUploadDoesNotRestartEarlierVerification(t *testing.T) {
+	cache := &uploadDirectoryCache{}
+	key := uploadDirectoryCacheKey{"account", "0"}
+	entered, release, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	var calls atomic.Int32
+	load := func(context.Context, string) ([]uploadEntry, error) {
+		if calls.Add(1) == 1 {
+			close(entered)
+			<-release
+			return []uploadEntry{{Name: "first-upload"}}, nil
+		}
+		return []uploadEntry{{Name: "first-upload"}, {Name: "second-upload"}}, nil
+	}
+	go func() {
+		defer close(done)
+		entries, err := cache.list(context.Background(), key, time.Now(), load)
+		if err != nil || len(entries) == 0 || entries[0].Name != "first-upload" {
+			t.Errorf("verification failed: %v %v", entries, err)
+		}
+	}()
+	<-entered
+	cache.written(key.scope, key.parent)
+	close(release)
+	<-done
+	if calls.Load() != 1 {
+		t.Fatalf("later upload restarted earlier verification: %d", calls.Load())
+	}
+	entries, err := cache.list(context.Background(), key, time.Time{}, load)
+	if err != nil || len(entries) != 2 || calls.Load() != 2 {
+		t.Fatalf("new reader reused pre-write snapshot: %v calls=%d err=%v", entries, calls.Load(), err)
+	}
+}
+
 type uploadDirectoryCountingRemote struct {
 	uploadRemote
 	lists int

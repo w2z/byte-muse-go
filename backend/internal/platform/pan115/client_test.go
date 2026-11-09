@@ -149,6 +149,88 @@ func TestUploadRateLimitReturnsWithoutInternalSleep(t *testing.T) {
 	}
 }
 
+func TestUploadCooldownEscalatesAcrossQueueAttemptsAndResetsOnSuccess(t *testing.T) {
+	client := New(nil)
+	ctx := WithUploadWorker(context.Background())
+	for index, want := range []time.Duration{time.Minute, 2 * time.Minute, 4 * time.Minute} {
+		client.retryAt = time.Time{}
+		started := time.Now()
+		_, err := callValue(client, ctx, "GET", func() (int, error) { return 0, &APIError{Code: 770004} })
+		var deferred *UploadRetryError
+		if !errors.As(err, &deferred) || deferred.Until.Sub(started) < want || deferred.Until.Sub(started) > want+time.Second {
+			t.Fatalf("round=%d want=%s err=%v", index, want, err)
+		}
+	}
+	client.retryAt = time.Time{}
+	if _, err := callValue(client, ctx, "GET", func() (int, error) { return 1, nil }); err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now()
+	_, err := callValue(client, ctx, "GET", func() (int, error) { return 0, &APIError{Code: 770004} })
+	var deferred *UploadRetryError
+	if !errors.As(err, &deferred) || deferred.Until.Sub(started) > time.Minute+time.Second {
+		t.Fatalf("success did not reset recovery: %v", err)
+	}
+}
+
+func TestUploadConcurrentRateLimitsShareOneRecoveryRound(t *testing.T) {
+	client := New(nil)
+	ctx := WithUploadWorker(context.Background())
+	started, release := make(chan struct{}, 5), make(chan struct{})
+	results := make(chan error, 5)
+	for index := 0; index < 5; index++ {
+		go func() {
+			_, err := callValue(client, ctx, "GET", func() (int, error) {
+				started <- struct{}{}
+				<-release
+				return 0, &APIError{Code: 770004}
+			})
+			results <- err
+		}()
+	}
+	for index := 0; index < 5; index++ {
+		<-started
+	}
+	close(release)
+	var until time.Time
+	for index := 0; index < 5; index++ {
+		var deferred *UploadRetryError
+		if err := <-results; !errors.As(err, &deferred) {
+			t.Fatal(err)
+		}
+		if index == 0 {
+			until = deferred.Until
+		}
+		if !deferred.Until.Equal(until) {
+			t.Fatal("same burst extended cooldown repeatedly")
+		}
+	}
+	if client.uploadCooldownRounds != 1 {
+		t.Fatalf("rounds=%d", client.uploadCooldownRounds)
+	}
+}
+
+func TestUploadInFlightSuccessDoesNotResetCooldownAndHonorsRetryAfter(t *testing.T) {
+	client := New(nil)
+	ctx := WithUploadWorker(context.Background())
+	_, err := callValue(client, ctx, "GET", func() (int, error) {
+		_, limited := callValue(client, ctx, "GET", func() (int, error) { return 0, &APIError{Code: 770004} })
+		if limited == nil {
+			t.Fatal("expected cooldown")
+		}
+		return 1, nil
+	})
+	if err != nil || client.uploadCooldownRounds != 1 {
+		t.Fatalf("in-flight success reset cooldown: %v", err)
+	}
+	started := time.Now()
+	_, err = callValue(client, ctx, "GET", func() (int, error) { return 0, &HTTPError{StatusCode: 429, RetryAfter: 5 * time.Minute} })
+	var deferred *UploadRetryError
+	if !errors.As(err, &deferred) || deferred.Until.Sub(started) < 5*time.Minute || client.uploadCooldownRounds != 1 {
+		t.Fatalf("explicit Retry-After lost: %v", err)
+	}
+}
+
 // TestExternalRetryDoesNotCoolOtherStages leaves retry scheduling to independent task queues.
 func TestExternalRetryDoesNotCoolOtherStages(t *testing.T) {
 	client := New(nil)

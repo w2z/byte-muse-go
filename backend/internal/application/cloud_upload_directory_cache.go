@@ -28,6 +28,7 @@ type uploadDirectoryFlight struct {
 	err         error
 	valid       bool
 	invalidated bool
+	superseded  bool
 	epoch       uint64
 }
 
@@ -91,6 +92,7 @@ func (cache *uploadDirectoryCache) list(ctx context.Context, key uploadDirectory
 			return entries, nil
 		}
 		if flight := cache.flights[key]; flight != nil {
+			eligible := !flight.superseded
 			cache.mu.Unlock()
 			select {
 			case <-ctx.Done():
@@ -99,7 +101,7 @@ func (cache *uploadDirectoryCache) list(ctx context.Context, key uploadDirectory
 				cache.mu.Lock()
 				valid := flight.valid && !flight.invalidated && flight.epoch == cache.epoch
 				cache.mu.Unlock()
-				if valid && flight.started.After(after) && flight.err == nil {
+				if eligible && valid && flight.started.After(after) && flight.err == nil {
 					pan115.TraceUploadCache(ctx, "shared")
 					return append([]uploadEntry(nil), flight.entries...), nil
 				}
@@ -119,7 +121,7 @@ func (cache *uploadDirectoryCache) list(ctx context.Context, key uploadDirectory
 		entries, err := load(ctx, key.parent)
 		cache.mu.Lock()
 		flight.entries, flight.err, flight.valid = entries, err, !flight.invalidated
-		if err == nil && flight.valid {
+		if err == nil && flight.valid && !flight.superseded {
 			cache.putLocked(key, uploadDirectorySnapshot{entries: append([]uploadEntry(nil), entries...), started: flight.started})
 		} else if err != nil && !uploadDirectoryCooldown(err) {
 			cache.removeLocked(key)
@@ -134,6 +136,18 @@ func (cache *uploadDirectoryCache) list(ctx context.Context, key uploadDirectory
 		if valid {
 			return append([]uploadEntry(nil), entries...), nil
 		}
+	}
+}
+
+// written prevents new readers from reusing pre-write contents without restarting earlier verifiers.
+// Earlier readers still enforce their own freshness barrier and verify the exact target identity.
+func (cache *uploadDirectoryCache) written(scope, parent string) {
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	key := uploadDirectoryCacheKey{scope, parent}
+	cache.removeLocked(key)
+	if flight := cache.flights[key]; flight != nil {
+		flight.superseded = true
 	}
 }
 

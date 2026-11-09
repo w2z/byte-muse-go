@@ -27,7 +27,9 @@ func (remote uploadDirectoryRemote) List(ctx context.Context, parent string) ([]
 // Upload invalidates pre-write contents on success or uncertainty, but preserves preparation on rejection.
 func (remote uploadDirectoryRemote) Upload(ctx context.Context, parent, name string, file *os.File, size int64, hash string) error {
 	err := remote.uploadRemote.Upload(ctx, parent, name, file, size, hash)
-	if !uploadDirectoryCooldown(err) {
+	if err == nil {
+		remote.service.directoryCache.written(remote.kind, parent)
+	} else if !uploadDirectoryCooldown(err) {
 		remote.service.directoryCache.invalidateParent(remote.kind, parent)
 	}
 	return err

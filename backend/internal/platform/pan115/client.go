@@ -169,11 +169,12 @@ type Client struct {
 
 	// mu 保护下面三个截止时间：nextCall 与 nextPlay 是各链路的下次可发起时间，
 	// retryAt 是命中限流后的全局冷却截止时间，所有链路共享。
-	mu         sync.Mutex
-	nextCall   time.Time
-	nextPlay   time.Time
-	retryAt    time.Time
-	retryCause error
+	mu                   sync.Mutex
+	nextCall             time.Time
+	nextPlay             time.Time
+	retryAt              time.Time
+	retryCause           error
+	uploadCooldownRounds int
 }
 
 // New 创建协议客户端；client 为空时使用内置超时。
@@ -459,8 +460,16 @@ func matchesRateLimitMessage(message string) bool {
 func callValue[T any](c *Client, ctx context.Context, method string, attempt func() (T, error)) (T, error) {
 	var zero T
 	for index := 1; ; index++ {
+		started := time.Now()
 		value, err := attempt()
 		if err == nil {
+			if worker, _ := ctx.Value(uploadWorkerKey{}).(bool); worker {
+				c.mu.Lock()
+				if !started.Before(c.retryAt) {
+					c.uploadCooldownRounds = 0
+				}
+				c.mu.Unlock()
+			}
 			return value, nil
 		}
 		if external, _ := ctx.Value(externalRetryKey{}).(bool); external {
@@ -471,10 +480,19 @@ func callValue[T any](c *Client, ctx context.Context, method string, attempt fun
 			if errors.As(err, &deferred) {
 				return zero, err
 			}
-			if wait, retryable := c.retryDelay(method, err, 1); retryable && isRateLimitError(err) {
+			if _, retryable := c.retryDelay(method, err, 1); retryable && isRateLimitError(err) {
 				c.mu.Lock()
-				if until := time.Now().Add(wait); until.After(c.retryAt) {
-					c.retryAt, c.retryCause = until, err
+				if !time.Now().Before(c.retryAt) {
+					c.uploadCooldownRounds = min(c.uploadCooldownRounds+1, 6)
+					wait, _ := c.retryDelay(method, err, c.uploadCooldownRounds)
+					c.retryAt, c.retryCause = time.Now().Add(wait), err
+				} else {
+					var httpErr *HTTPError
+					if errors.As(err, &httpErr) && httpErr.RetryAfter > 0 {
+						if until := time.Now().Add(httpErr.RetryAfter); until.After(c.retryAt) {
+							c.retryAt, c.retryCause = until, err
+						}
+					}
 				}
 				deferred = &UploadRetryError{Until: c.retryAt, Cause: err}
 				c.mu.Unlock()
