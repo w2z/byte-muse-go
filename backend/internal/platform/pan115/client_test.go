@@ -1,7 +1,10 @@
 package pan115
 
 import (
+	"bytemuse/backend/internal/logging"
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -11,6 +14,42 @@ import (
 	"testing"
 	"time"
 )
+
+func TestUploadRequestTraceDistinguishesCooldownAndRedactsSecrets(t *testing.T) {
+	var output bytes.Buffer
+	previous := logging.Default
+	logging.Default = logging.New(&output)
+	t.Cleanup(func() { logging.Default = previous })
+	calls := 0
+	client := newTestClient(t, func(writer http.ResponseWriter, request *http.Request) {
+		calls++
+		writeJSON(t, writer, `{"state":false,"code":770004,"message":"secret-response"}`)
+	})
+	client.cooldown = time.Minute
+	ctx := WithUploadTask(WithUploadWorker(context.Background()), "task-id", "pending", 2)
+	for index := 0; index < 2; index++ {
+		_, _ = client.apiCall(ctx, "GET", client.api+"/open/files?token=secret-query", "secret-token", nil, "读取目录")
+	}
+	if calls != 1 {
+		t.Fatalf("cooldown sent %d requests", calls)
+	}
+	if strings.Contains(output.String(), "secret") {
+		t.Fatalf("sensitive trace: %s", output.String())
+	}
+	lines := strings.Split(strings.TrimSpace(output.String()), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("trace count=%d output=%s", len(lines), output.String())
+	}
+	for index, line := range lines {
+		var record map[string]any
+		if err := json.Unmarshal([]byte(line), &record); err != nil {
+			t.Fatal(err)
+		}
+		if record["sent"] != (index == 0) || record["task"] != "task-id" || record["path"] != "/open/files" || record["code"] != float64(770004) || record["retry"] != float64(2) || record["duration_ms"] == nil {
+			t.Fatalf("bad trace: %v", record)
+		}
+	}
+}
 
 // pngSignature 是 PNG 文件头，用于让 http.DetectContentType 识别二维码图片。
 var pngSignature = []byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A}

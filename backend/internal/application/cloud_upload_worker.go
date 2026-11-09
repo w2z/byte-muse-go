@@ -204,6 +204,13 @@ func (s *UploadService) process(ctx context.Context, m UploadMapping, f uploadLo
 		effective := s.effectiveUploadRecord(*record)
 		record = &effective
 	}
+	if m.Kind == "115" {
+		stage, retry := "pending", 0
+		if record != nil {
+			stage, retry = record.State, record.Retries
+		}
+		ctx = pan115.WithUploadTask(ctx, key, stage, retry)
+	}
 	if record != nil && !uploadTerminal(record.State) {
 		freezeUploadQueueTime(record)
 	}
@@ -330,8 +337,13 @@ func (s *UploadService) process(ctx context.Context, m UploadMapping, f uploadLo
 		}
 		preparation = uploadDirectoryRemote{uploadRemote: remote, service: s, kind: scope}
 		defer func() {
-			if resultErr != nil {
+			if resultErr == nil || uploadDirectoryCooldown(resultErr) {
+				return
+			}
+			if isUploadRemoteMissingError(resultErr) {
 				s.directoryCache.invalidate(scope)
+			} else if record != nil && record.Parent != "" {
+				s.directoryCache.invalidateParent(scope, record.Parent)
 			}
 		}()
 	}
@@ -354,7 +366,7 @@ func (s *UploadService) process(ctx context.Context, m UploadMapping, f uploadLo
 			return record.State, listErr
 		}
 	}
-	if record != nil && record.Kind == "115" && record.Parent != "" {
+	if record != nil && record.Kind == "115" && record.Parent != "" && record.Stage != record.Target {
 		if _, listErr := preparation.List(ctx, record.Parent); listErr != nil {
 			if isUploadRemoteMissingError(listErr) {
 				if cached, ok := preparation.(uploadDirectoryRemote); ok {

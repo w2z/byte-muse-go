@@ -1,9 +1,13 @@
 package application
 
 import (
+	"bytemuse/backend/internal/domain"
+	"bytemuse/backend/internal/platform/pan115"
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -199,6 +203,204 @@ func TestUploadSharedPreparationStillVerifiesEachUploadedFile(t *testing.T) {
 	}
 	if remote.uploads != 1 {
 		t.Fatal("upload not performed")
+	}
+}
+
+func TestUploadOverwriteWithoutOldFilesUsesOneVerification(t *testing.T) {
+	service, mapping, file, remote, store := recoveryFixture(t)
+	remote.files = map[string][]byte{}
+	counted := &uploadDirectoryCountingRemote{uploadRemote: remote}
+	service.provider = func(context.Context, string) (uploadRemote, error) { return counted, nil }
+	state, err := service.process(context.Background(), mapping, file, "overwrite")
+	if err != nil || state != "completed" || counted.lists != 2 || remote.uploads != 1 {
+		t.Fatalf("state=%s lists=%d uploads=%d err=%v", state, counted.lists, remote.uploads, err)
+	}
+	if snapshot := store[uploadKey(mapping, file, "overwrite")].Overwrite; snapshot == nil || len(snapshot.Files) != 0 {
+		t.Fatal("empty frozen replacement set must remain durable")
+	}
+}
+
+func TestUploadFiveNewFilesSharePreparation(t *testing.T) {
+	service, mapping, _, remote, _ := recoveryFixture(t)
+	remote.files = map[string][]byte{}
+	counted := &uploadDirectoryCountingRemote{uploadRemote: remote}
+	service.provider = func(context.Context, string) (uploadRemote, error) { return counted, nil }
+	for index := 0; index < 5; index++ {
+		name := fmt.Sprintf("%d.txt", index)
+		absolute := filepath.Join(mapping.LocalPath, name)
+		if err := os.WriteFile(absolute, []byte("new file"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		info, err := os.Stat(absolute)
+		if err != nil {
+			t.Fatal(err)
+		}
+		file := uploadLocalFile{Absolute: absolute, Relative: name, Size: info.Size(), Modified: info.ModTime().UnixNano()}
+		if state, err := service.process(context.Background(), mapping, file, "overwrite"); err != nil || state != "completed" {
+			t.Fatalf("state=%s err=%v", state, err)
+		}
+	}
+	if counted.lists != 6 || remote.uploads != 5 || len(remote.files) != 5 {
+		t.Fatalf("want shared preparation + five verifications: lists=%d uploads=%d files=%d", counted.lists, remote.uploads, len(remote.files))
+	}
+}
+
+func TestUploadDirectRetryResetsDeletedParent(t *testing.T) {
+	service, mapping, file, _, store := recoveryFixture(t)
+	key := uploadKey(mapping, file, "overwrite")
+	store[key] = domain.UploadRecord{Key: key, Kind: "115", Root: mapping.ID, LocalRoot: mapping.LocalPath, Source: file.Absolute, Relative: file.Relative, Size: file.Size, Modified: file.Modified, Policy: "overwrite", State: "pending", Parent: "deleted", Stage: file.Relative, Target: file.Relative, Error: "previous failure"}
+	remote := &uploadRecreateRemote{entries: map[string][]uploadEntry{"0": nil}}
+	service.provider = func(context.Context, string) (uploadRemote, error) { return remote, nil }
+	if _, err := service.process(context.Background(), mapping, file, "overwrite"); err == nil || store[key].Parent != "" {
+		t.Fatalf("missing parent not reset: err=%v record=%+v", err, store[key])
+	}
+	if state, err := service.process(context.Background(), mapping, file, "overwrite"); err != nil || state != "completed" {
+		t.Fatalf("state=%s err=%v", state, err)
+	}
+}
+
+type uploadRetryCountingRemote struct {
+	uploadRemote
+	lists, uploads       int
+	failUpload, failList error
+	failAfterUpload      bool
+}
+
+func (remote *uploadRetryCountingRemote) List(ctx context.Context, parent string) ([]uploadEntry, error) {
+	remote.lists++
+	if remote.failList != nil && (!remote.failAfterUpload || remote.uploads > 0) {
+		return nil, remote.failList
+	}
+	return remote.uploadRemote.List(ctx, parent)
+}
+
+func (remote *uploadRetryCountingRemote) Upload(ctx context.Context, parent, name string, file *os.File, size int64, hash string) error {
+	remote.uploads++
+	if remote.failUpload != nil {
+		return remote.failUpload
+	}
+	return remote.uploadRemote.Upload(ctx, parent, name, file, size, hash)
+}
+
+func TestUploadCooldownPreservesPreparationAndRetryReadsOnce(t *testing.T) {
+	service, mapping, file, remote, _ := recoveryFixture(t)
+	remote.files = map[string][]byte{}
+	counted := &uploadRetryCountingRemote{uploadRemote: remote, failUpload: &pan115.UploadRetryError{Until: time.Now().Add(time.Minute), Cause: &pan115.APIError{Code: 770004}}}
+	service.provider = func(context.Context, string) (uploadRemote, error) { return counted, nil }
+	if _, err := service.process(context.Background(), mapping, file, "overwrite"); err == nil {
+		t.Fatal("expected cooldown")
+	}
+	prepared := uploadDirectoryRemote{uploadRemote: counted, service: service, kind: "115"}
+	if _, err := prepared.List(context.Background(), "0"); err != nil || counted.lists != 1 {
+		t.Fatalf("cooldown discarded valid preparation: lists=%d err=%v", counted.lists, err)
+	}
+	counted.failUpload = nil
+	service.directoryCache.invalidate("115")
+	before := counted.lists
+	state, err := service.process(context.Background(), mapping, file, "overwrite")
+	if err != nil || state != "completed" || counted.lists-before != 2 || remote.uploads != 1 {
+		t.Fatalf("retry should read once before upload and once after: state=%s lists=%d uploads=%d err=%v", state, counted.lists-before, remote.uploads, err)
+	}
+}
+
+func TestUploadVerificationFailureResumesWithoutReupload(t *testing.T) {
+	service, mapping, file, remote, store := recoveryFixture(t)
+	remote.files = map[string][]byte{}
+	counted := &uploadRetryCountingRemote{uploadRemote: remote, failAfterUpload: true, failList: errors.New("read failed")}
+	service.provider = func(context.Context, string) (uploadRemote, error) { return counted, nil }
+	if _, err := service.process(context.Background(), mapping, file, "overwrite"); err == nil {
+		t.Fatal("expected failed verification")
+	}
+	counted.failList = nil
+	restarted := &UploadService{store: store, provider: service.provider}
+	before := counted.lists
+	state, err := restarted.process(context.Background(), mapping, file, "overwrite")
+	if err != nil || state != "completed" || counted.lists-before != 1 || counted.uploads != 1 {
+		t.Fatalf("restart should only reconcile: state=%s lists=%d uploads=%d err=%v", state, counted.lists-before, counted.uploads, err)
+	}
+}
+
+func TestUploadCleanupRetryOnlyReconcilesRecordedOldFiles(t *testing.T) {
+	service, mapping, file, _, store := recoveryFixture(t)
+	remote := &directUploadRemote{entries: []uploadEntry{{ID: "old", Name: file.Relative, Size: 3, SHA1: "old-hash"}}, deleteFailure: true}
+	counted := &uploadDirectoryCountingRemote{uploadRemote: remote}
+	service.provider = func(context.Context, string) (uploadRemote, error) { return counted, nil }
+	if _, err := service.process(context.Background(), mapping, file, "overwrite"); err == nil || store[uploadKey(mapping, file, "overwrite")].State != "cleanup" {
+		t.Fatal("cleanup failure not persisted")
+	}
+	remote.deleteFailure = false
+	restarted := &UploadService{store: store, provider: service.provider}
+	if state, err := restarted.process(context.Background(), mapping, file, "overwrite"); err != nil || state != "completed" || len(remote.names) != 1 || len(remote.entries) != 1 || remote.entries[0].ID != "new-1" {
+		t.Fatalf("cleanup reuploaded or lost identity: state=%s err=%v names=%v entries=%v", state, err, remote.names, remote.entries)
+	}
+}
+
+func TestUploadFailedFreshReadPreservesOnlySafeCachedPreparation(t *testing.T) {
+	for _, cooldown := range []bool{true, false} {
+		t.Run(fmt.Sprint(cooldown), func(t *testing.T) {
+			cache := &uploadDirectoryCache{}
+			key := uploadDirectoryCacheKey{"account", "parent"}
+			calls := 0
+			load := func(context.Context, string) ([]uploadEntry, error) {
+				calls++
+				return []uploadEntry{{Name: "original"}}, nil
+			}
+			_, _ = cache.list(context.Background(), key, time.Time{}, load)
+			failure := error(errors.New("read failed"))
+			if cooldown {
+				failure = &pan115.UploadRetryError{Until: time.Now().Add(time.Minute)}
+			}
+			if _, err := cache.list(context.Background(), key, time.Now(), func(context.Context, string) ([]uploadEntry, error) {
+				return nil, failure
+			}); err == nil {
+				t.Fatal("failed verification accepted cached data")
+			}
+			_, _ = cache.list(context.Background(), key, time.Time{}, load)
+			want := 2
+			if cooldown {
+				want = 1
+			}
+			if calls != want {
+				t.Fatalf("loads=%d want=%d", calls, want)
+			}
+		})
+	}
+}
+
+func TestUploadSuccessfulWriteInvalidatesPreparationBeforeRateLimitedVerification(t *testing.T) {
+	service, mapping, file, remote, _ := recoveryFixture(t)
+	remote.files = map[string][]byte{}
+	counted := &uploadRetryCountingRemote{uploadRemote: remote, failAfterUpload: true, failList: &pan115.UploadRetryError{Until: time.Now().Add(time.Minute)}}
+	service.provider = func(context.Context, string) (uploadRemote, error) { return counted, nil }
+	if _, err := service.process(context.Background(), mapping, file, "overwrite"); err == nil {
+		t.Fatal("expected verification cooldown")
+	}
+	counted.failList = nil
+	prepared := uploadDirectoryRemote{uploadRemote: counted, service: service, kind: "115"}
+	entries, err := prepared.List(context.Background(), "0")
+	if err != nil || len(entries) != 1 || entries[0].Name != file.Relative {
+		t.Fatalf("pre-upload absence survived successful write: %v %v", entries, err)
+	}
+}
+
+func TestUploadUncertainWriteKeepsUnrelatedDirectoryCached(t *testing.T) {
+	service, mapping, file, remote, _ := recoveryFixture(t)
+	remote.files = map[string][]byte{}
+	counted := &uploadRetryCountingRemote{uploadRemote: remote, failUpload: errors.New("response lost")}
+	service.provider = func(context.Context, string) (uploadRemote, error) { return counted, nil }
+	prepared := uploadDirectoryRemote{uploadRemote: counted, service: service, kind: "115"}
+	_, _ = prepared.List(context.Background(), "unrelated")
+	if _, err := service.process(context.Background(), mapping, file, "overwrite"); err == nil {
+		t.Fatal("expected failure")
+	}
+	before := counted.lists
+	_, _ = prepared.List(context.Background(), "unrelated")
+	if counted.lists != before {
+		t.Fatal("unrelated snapshot evicted")
+	}
+	_, _ = prepared.List(context.Background(), "0")
+	if counted.lists != before+1 {
+		t.Fatal("uncertain upload reused stale snapshot")
 	}
 }
 

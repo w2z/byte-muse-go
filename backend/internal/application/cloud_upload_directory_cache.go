@@ -1,6 +1,7 @@
 package application
 
 import (
+	"bytemuse/backend/internal/platform/pan115"
 	"context"
 	"errors"
 	"sync"
@@ -86,6 +87,7 @@ func (cache *uploadDirectoryCache) list(ctx context.Context, key uploadDirectory
 		if snapshot, ok := cache.snapshots[key]; ok && time.Since(snapshot.started) < uploadDirectoryTTL && snapshot.started.After(after) {
 			entries := append([]uploadEntry(nil), snapshot.entries...)
 			cache.mu.Unlock()
+			pan115.TraceUploadCache(ctx, "hit")
 			return entries, nil
 		}
 		if flight := cache.flights[key]; flight != nil {
@@ -98,6 +100,7 @@ func (cache *uploadDirectoryCache) list(ctx context.Context, key uploadDirectory
 				valid := flight.valid && !flight.invalidated && flight.epoch == cache.epoch
 				cache.mu.Unlock()
 				if valid && flight.started.After(after) && flight.err == nil {
+					pan115.TraceUploadCache(ctx, "shared")
 					return append([]uploadEntry(nil), flight.entries...), nil
 				}
 				if flight.err != nil && !errors.Is(flight.err, context.Canceled) && !errors.Is(flight.err, context.DeadlineExceeded) {
@@ -112,12 +115,13 @@ func (cache *uploadDirectoryCache) list(ctx context.Context, key uploadDirectory
 		flight := &uploadDirectoryFlight{done: make(chan struct{}), started: time.Now(), epoch: cache.epoch}
 		cache.flights[key] = flight
 		cache.mu.Unlock()
+		pan115.TraceUploadCache(ctx, "load")
 		entries, err := load(ctx, key.parent)
 		cache.mu.Lock()
 		flight.entries, flight.err, flight.valid = entries, err, !flight.invalidated
 		if err == nil && flight.valid {
 			cache.putLocked(key, uploadDirectorySnapshot{entries: append([]uploadEntry(nil), entries...), started: flight.started})
-		} else if err != nil {
+		} else if err != nil && !uploadDirectoryCooldown(err) {
 			cache.removeLocked(key)
 		}
 		delete(cache.flights, key)
@@ -130,6 +134,23 @@ func (cache *uploadDirectoryCache) list(ctx context.Context, key uploadDirectory
 		if valid {
 			return append([]uploadEntry(nil), entries...), nil
 		}
+	}
+}
+
+// uploadDirectoryCooldown identifies a rejected request, not an uncertain remote write.
+func uploadDirectoryCooldown(err error) bool {
+	var cooldown *pan115.UploadRetryError
+	return errors.As(err, &cooldown)
+}
+
+// invalidateParent discards uncertain contents without evicting unrelated ancestor listings.
+func (cache *uploadDirectoryCache) invalidateParent(scope, parent string) {
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	key := uploadDirectoryCacheKey{scope, parent}
+	cache.removeLocked(key)
+	if flight := cache.flights[key]; flight != nil {
+		flight.invalidated = true
 	}
 }
 

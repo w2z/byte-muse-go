@@ -2,6 +2,7 @@ package application
 
 import (
 	"bytemuse/backend/internal/domain"
+	"bytemuse/backend/internal/platform/pan115"
 	"context"
 	"fmt"
 	"os"
@@ -27,6 +28,7 @@ func (s *UploadService) processDirectUpload(ctx context.Context, remote uploadRe
 		return record.State, err
 	}
 	defer func() { unlock() }()
+	ctx = pan115.WithUploadStage(ctx, "prepare")
 	var entries []uploadEntry
 	fresh := record.State != "pending" || record.OldID != "" || record.StageID != "" || record.Error != "" || record.Overwrite != nil
 	if fresh {
@@ -35,6 +37,9 @@ func (s *UploadService) processDirectUpload(ctx context.Context, remote uploadRe
 		entries, err = remote.List(ctx, record.Parent)
 	}
 	if err != nil {
+		if isUploadRemoteMissingError(err) {
+			return record.State, fmt.Errorf("%w：%w", errUploadRemoteMissing, err)
+		}
 		return record.State, err
 	}
 	var file *os.File
@@ -166,11 +171,11 @@ func (s *UploadService) processDirectUpload(ctx context.Context, remote uploadRe
 		if record.Kind == "cd2" && record.OldID != "" {
 			return record.State, fmt.Errorf("CloudDrive2 无法按独立文件 ID 保留旧文件，原名直传不执行破坏性覆盖；请选择保留两者")
 		}
-		if err = remote.Upload(ctx, record.Parent, record.Target, file, source.Size, record.SHA1); err != nil {
+		if err = remote.Upload(pan115.WithUploadStage(ctx, "upload"), record.Parent, record.Target, file, source.Size, record.SHA1); err != nil {
 			return record.State, err
 		}
 		domain.ReportUploadProgress(ctx, source.Size, source.Size, "uploading")
-		entries, err = uploadFreshList(ctx, remote, record.Parent, time.Now())
+		entries, err = uploadFreshList(pan115.WithUploadStage(ctx, "verify"), remote, record.Parent, time.Now())
 		if err != nil {
 			return record.State, err
 		}
@@ -184,10 +189,11 @@ func (s *UploadService) processDirectUpload(ctx context.Context, remote uploadRe
 	}
 	record.StageID, record.StageSHA1, record.StageSize = installed.ID, installed.SHA1, installed.Size
 	record.State = "cleanup"
+	ctx = pan115.WithUploadStage(ctx, "cleanup")
 	if err = save(); err != nil {
 		return record.State, err
 	}
-	if record.Overwrite != nil || (record.OldID != "" && record.OldID != installed.ID) {
+	if (record.Overwrite != nil && len(record.Overwrite.Files) > 0) || (record.OldID != "" && record.OldID != installed.ID) {
 		entries, err = uploadFreshList(ctx, remote, record.Parent, time.Now())
 		if err != nil {
 			return record.State, err

@@ -24,6 +24,24 @@ func (remote uploadDirectoryRemote) List(ctx context.Context, parent string) ([]
 	return remote.service.directoryCache.list(ctx, uploadDirectoryCacheKey{remote.kind, parent}, time.Time{}, remote.uploadRemote.List)
 }
 
+// Upload invalidates pre-write contents on success or uncertainty, but preserves preparation on rejection.
+func (remote uploadDirectoryRemote) Upload(ctx context.Context, parent, name string, file *os.File, size int64, hash string) error {
+	err := remote.uploadRemote.Upload(ctx, parent, name, file, size, hash)
+	if !uploadDirectoryCooldown(err) {
+		remote.service.directoryCache.invalidateParent(remote.kind, parent)
+	}
+	return err
+}
+
+// Delete invalidates cached identities before a post-delete verification can be rate limited.
+func (remote uploadDirectoryRemote) Delete(ctx context.Context, parent string, entry uploadEntry) error {
+	err := remote.uploadRemote.Delete(ctx, parent, entry)
+	if !uploadDirectoryCooldown(err) {
+		remote.service.directoryCache.invalidateParent(remote.kind, parent)
+	}
+	return err
+}
+
 func (remote uploadDirectoryRemote) Mkdir(ctx context.Context, parent, name string) (string, error) {
 	release, err := remote.service.directoryCache.reserve(ctx, "directory\x00"+remote.kind+"\x00"+parent+"\x00"+name)
 	if err != nil {
@@ -42,7 +60,11 @@ func (remote uploadDirectoryRemote) Mkdir(ctx context.Context, parent, name stri
 	}
 	id, err := remote.uploadRemote.Mkdir(ctx, parent, name)
 	if err != nil {
-		remote.service.directoryCache.invalidate(remote.kind)
+		if isUploadRemoteMissingError(err) {
+			remote.service.directoryCache.invalidate(remote.kind)
+		} else if !uploadDirectoryCooldown(err) {
+			remote.service.directoryCache.invalidateParent(remote.kind, parent)
+		}
 		return "", err
 	}
 	if remote.kind != "cd2" {

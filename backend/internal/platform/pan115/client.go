@@ -6,6 +6,7 @@
 package pan115
 
 import (
+	"bytemuse/backend/internal/logging"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -227,6 +228,66 @@ func (c *Client) admit(ctx context.Context) (func(), error) {
 }
 
 type uploadWorkerKey struct{}
+
+type uploadTaskKey struct{}
+
+type uploadTaskTrace struct {
+	key, stage string
+	retry      int
+}
+
+// WithUploadTask associates protocol diagnostics with a non-secret queue identity; it does not alter admission.
+func WithUploadTask(ctx context.Context, key, stage string, retry int) context.Context {
+	return context.WithValue(ctx, uploadTaskKey{}, uploadTaskTrace{key: key, stage: stage, retry: retry})
+}
+
+// WithUploadStage refines protocol diagnostics without changing the task identity or retry budget.
+func WithUploadStage(ctx context.Context, stage string) context.Context {
+	trace, ok := ctx.Value(uploadTaskKey{}).(uploadTaskTrace)
+	if !ok {
+		return ctx
+	}
+	trace.stage = stage
+	return context.WithValue(ctx, uploadTaskKey{}, trace)
+}
+
+// TraceUploadCache records preparation reuse to process output only, avoiding per-request database writes.
+func TraceUploadCache(ctx context.Context, outcome string) {
+	trace, ok := ctx.Value(uploadTaskKey{}).(uploadTaskTrace)
+	if !ok {
+		return
+	}
+	logging.Default.Slog().InfoContext(ctx, "115 上传目录缓存", "category", string(logging.CategorySystem), "task", trace.key, "stage", trace.stage, "retry", trace.retry, "cache", outcome)
+}
+
+// traceUploadRequest excludes URLs, query values, bodies and provider messages from protocol diagnostics.
+func traceUploadRequest(ctx context.Context, method, endpoint string, started time.Time, sent bool, err error) {
+	trace, ok := ctx.Value(uploadTaskKey{}).(uploadTaskTrace)
+	if !ok {
+		return
+	}
+	parsed, parseErr := url.Parse(endpoint)
+	if parseErr != nil {
+		return
+	}
+	code, status, outcome := 0, 0, "success"
+	var apiErr *APIError
+	var httpErr *HTTPError
+	var cooldown *UploadRetryError
+	if err != nil {
+		outcome = "error"
+	}
+	if errors.As(err, &apiErr) {
+		code = apiErr.Code
+	}
+	if errors.As(err, &httpErr) {
+		status = httpErr.StatusCode
+	}
+	if errors.As(err, &cooldown) {
+		outcome = "cooldown"
+	}
+	logging.Default.Slog().InfoContext(ctx, "115 上传接口", "category", string(logging.CategorySystem), "task", trace.key, "stage", trace.stage, "retry", trace.retry, "method", method, "path", parsed.Path, "started_at", started.UTC().Format(time.RFC3339Nano), "duration_ms", time.Since(started).Milliseconds(), "sent", sent, "code", code, "http_status", status, "outcome", outcome)
+}
 
 // UploadRetryError returns provider backoff to the scheduler without occupying a transfer worker.
 type UploadRetryError struct {
@@ -742,8 +803,12 @@ func (c *Client) apiBody(ctx context.Context, method, endpoint, token string, fo
 }
 
 // apiBodyOnce 是 apiBody 的单次实现；重试由 apiBody 统一驱动。
-func (c *Client) apiBodyOnce(ctx context.Context, method, endpoint, token string, form url.Values, userAgent *string, action string) ([]byte, error) {
+func (c *Client) apiBodyOnce(ctx context.Context, method, endpoint, token string, form url.Values, userAgent *string, action string) (result []byte, resultErr error) {
+	started, sent := time.Now(), false
+	defer func() { traceUploadRequest(ctx, method, endpoint, started, sent, resultErr) }()
 	response, err := c.doWithUserAgent(ctx, method, endpoint, token, form, userAgent)
+	var transportErr *TransportError
+	sent = response != nil || errors.As(err, &transportErr) || errors.Is(err, ErrUnauthorized)
 	if err != nil {
 		return nil, err
 	}
