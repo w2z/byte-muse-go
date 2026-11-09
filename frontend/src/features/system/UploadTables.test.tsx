@@ -200,12 +200,13 @@ it.each(["directories", "files"])("%s 的危险操作必须确认，取消不提
   await userEvent.click(screen.getByRole("button", { name }));
   expect(posts).toHaveLength(count);
   await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "取消" }));
-  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   expect(posts).toHaveLength(count);
   await userEvent.click(screen.getByRole("button", { name }));
   await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "确定" }));
   await waitFor(() => expect(posts).toHaveLength(count + 1));
   expect(posts[count]).toEqual(command);
+  await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
  }
  client.clear();
-});
+}, 15000); // 每个列表依次验证六种操作的取消和确认，等待 Modal 退出动画。
