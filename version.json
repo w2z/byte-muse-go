@@ -1,16 +1,20 @@
 {
-  "version": "0.1.240",
-  "commit": "7f36ee19947ad5bb5c8cf98ed66707b66d266e73",
-  "short_commit": "7f36ee1",
-  "built_at": "2026-11-09T16:28:12Z",
+  "version": "0.1.241",
+  "commit": "ded28d5d0c6b5b9529d2bc33b73ef2953b172ddb",
+  "short_commit": "ded28d5",
+  "built_at": "2026-11-09T16:41:13Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.240",
-    "sha-7f36ee1",
+    "0.1.241",
+    "sha-ded28d5",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.241",
+      "message": "将上传列表大小列固定为两位小数"
+    },
     {
       "version": "0.1.240",
       "message": "保留待清理阶段真实传输进度"
