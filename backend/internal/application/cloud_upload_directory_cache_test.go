@@ -253,6 +253,172 @@ func TestUploadOverwriteWithoutOldFilesUsesOneVerification(t *testing.T) {
 	}
 }
 
+func TestUploadSameContentReusesCurrentAttemptPreparation(t *testing.T) {
+	service, mapping, file, remote, _ := recoveryFixture(t)
+	remote.files[file.Relative] = []byte("new video")
+	counted := &uploadDirectoryCountingRemote{uploadRemote: remote}
+	service.provider = func(context.Context, string) (uploadRemote, error) { time.Sleep(time.Millisecond); return counted, nil }
+	state, err := service.process(context.Background(), mapping, file, "overwrite")
+	if err != nil || state != "completed" || counted.lists != 1 || remote.uploads != 0 {
+		t.Fatalf("same content should reuse current attempt read: state=%s lists=%d uploads=%d err=%v", state, counted.lists, remote.uploads, err)
+	}
+}
+
+func TestUploadOverwriteRetainsOnlyRequiredDeletionReads(t *testing.T) {
+	service, mapping, file, _, _ := recoveryFixture(t)
+	remote := &directUploadRemote{entries: []uploadEntry{{ID: "old", Name: file.Relative, Size: 3, SHA1: "old-hash"}}}
+	counted := &uploadDirectoryCountingRemote{uploadRemote: remote}
+	service.provider = func(context.Context, string) (uploadRemote, error) { time.Sleep(time.Millisecond); return counted, nil }
+	state, err := service.process(context.Background(), mapping, file, "overwrite")
+	if err != nil || state != "completed" || counted.lists != 4 || len(remote.names) != 1 || len(remote.entries) != 1 || remote.entries[0].ID != "new-1" {
+		t.Fatalf("want preparation, upload verification, pre/post delete reads: state=%s lists=%d err=%v entries=%v", state, counted.lists, err, remote.entries)
+	}
+}
+
+func TestUploadVerificationReusesReadAfterWriteBeforeProgressReturns(t *testing.T) {
+	service, mapping, file, remote, _ := recoveryFixture(t)
+	remote.files = map[string][]byte{}
+	counted := &uploadDirectoryCountingRemote{uploadRemote: remote}
+	service.provider = func(context.Context, string) (uploadRemote, error) { return counted, nil }
+	prepared := uploadDirectoryRemote{uploadRemote: counted, service: service, kind: "115"}
+	ctx := domain.WithUploadProgress(context.Background(), func(transferred, total int64, phase string) {
+		if phase == "uploading" && transferred == total && total > 0 {
+			time.Sleep(time.Millisecond)
+			entries, err := uploadFreshList(context.Background(), prepared, "0", time.Now())
+			if err != nil || len(entries) != 1 {
+				t.Fatalf("post-write shared read: %v %v", entries, err)
+			}
+		}
+	})
+	state, err := service.process(ctx, mapping, file, "overwrite")
+	if err != nil || state != "completed" || counted.lists != 2 || remote.uploads != 1 {
+		t.Fatalf("valid post-write snapshot discarded: state=%s lists=%d uploads=%d err=%v", state, counted.lists, remote.uploads, err)
+	}
+}
+
+func TestUploadFiveRecoveriesSharePostAttemptReadAndVerifyEachIdentity(t *testing.T) {
+	for _, corrupt := range []bool{false, true} {
+		t.Run(fmt.Sprint(corrupt), func(t *testing.T) {
+			service, mapping, source, _, _ := recoveryFixture(t)
+			remote := &directUploadRemote{}
+			for index := 0; index < 5; index++ {
+				remote.entries = append(remote.entries, uploadEntry{ID: fmt.Sprint(index), Name: fmt.Sprintf("%d.txt", index), Size: 3, SHA1: "verified-hash"})
+			}
+			if corrupt {
+				remote.entries[4].SHA1 = "wrong"
+			}
+			counted := &uploadDirectoryCountingRemote{uploadRemote: remote}
+			prepared := uploadDirectoryRemote{uploadRemote: counted, service: service, kind: "115"}
+			started := time.Now()
+			time.Sleep(time.Millisecond)
+			for index := 0; index < 5; index++ {
+				record := &domain.UploadRecord{Kind: "115", Parent: "0", Target: fmt.Sprintf("%d.txt", index), StageID: fmt.Sprint(index), SHA1: "verified-hash", Size: 3, State: "cleanup", Policy: "overwrite", Overwrite: &domain.UploadOverwriteSnapshot{}}
+				state, err := service.processDirectUpload(context.Background(), prepared, record, mapping, source, false, started, func() error { return nil })
+				if corrupt && index == 4 {
+					if !errors.Is(err, errUploadAttention) {
+						t.Fatalf("wrong SHA1 accepted: %s %v", state, err)
+					}
+				} else if err != nil || state != "completed" {
+					t.Fatalf("state=%s err=%v", state, err)
+				}
+			}
+			if counted.lists != 1 || len(remote.names) != 0 {
+				t.Fatalf("five recoveries issued %d reads, uploads=%v", counted.lists, remote.names)
+			}
+		})
+	}
+}
+
+func TestUploadFiveCompletedWritesShareOneVerification(t *testing.T) {
+	service := &UploadService{}
+	remote := &uploadParallelPreparationRemote{uploadBlockingRemote: uploadBlockingRemote{started: make(chan string, 5), release: make(chan struct{}, 5)}, listed: make(chan struct{}, 32), prepare: make(chan struct{})}
+	close(remote.prepare)
+	for index := 0; index < 5; index++ {
+		remote.release <- struct{}{}
+	}
+	prepared := uploadDirectoryRemote{uploadRemote: remote, service: service, kind: "115"}
+	if _, err := prepared.List(context.Background(), "0"); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	ready, release := make(chan struct{}, 5), make(chan struct{}, 5)
+	results := make(chan error, 5)
+	for index := 0; index < 5; index++ {
+		_, mapping, source, _, _ := recoveryFixture(t)
+		record := &domain.UploadRecord{Kind: "115", Parent: "0", Target: fmt.Sprintf("%d.txt", index), State: "pending", Policy: "overwrite", Size: source.Size}
+		go func() {
+			progress := domain.WithUploadProgress(ctx, func(done, total int64, phase string) {
+				if phase == "uploading" && done == total && total > 0 {
+					ready <- struct{}{}
+					select {
+					case <-release:
+					case <-ctx.Done():
+					}
+				}
+			})
+			state, err := service.processDirectUpload(progress, prepared, record, mapping, source, false, time.Now(), func() error { return nil })
+			if err == nil && state != "completed" {
+				err = fmt.Errorf("state=%s", state)
+			}
+			results <- err
+		}()
+	}
+	for index := 0; index < 5; index++ {
+		select {
+		case <-ready:
+		case <-ctx.Done():
+			t.Fatal("five uploads did not complete", ctx.Err())
+		}
+	}
+	before := len(remote.listed)
+	time.Sleep(time.Millisecond)
+	for index := 0; index < 5; index++ {
+		release <- struct{}{}
+		select {
+		case err := <-results:
+			if err != nil {
+				t.Fatal(err)
+			}
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		}
+	}
+	if reads := len(remote.listed) - before; reads != 1 {
+		t.Fatalf("five completed uploads issued %d verification reads", reads)
+	}
+}
+
+func TestUploadIdentityChecksRejectStaleSnapshots(t *testing.T) {
+	for _, scenario := range []string{"retry", "long-hash", "move"} {
+		t.Run(scenario, func(t *testing.T) {
+			service, mapping, source, _, _ := recoveryFixture(t)
+			remote := &directUploadRemote{entries: []uploadEntry{{ID: "installed", Name: source.Relative, Size: source.Size, SHA1: "verified-hash"}}}
+			counted := &uploadDirectoryCountingRemote{uploadRemote: remote}
+			prepared := uploadDirectoryRemote{uploadRemote: counted, service: service, kind: "115"}
+			started := time.Now()
+			_, _ = prepared.List(context.Background(), "0")
+			remote.entries = nil
+			record := &domain.UploadRecord{Kind: "115", Parent: "0", Target: source.Relative, StageID: "installed", Size: source.Size, SHA1: "verified-hash", State: "cleanup", Policy: "overwrite", Overwrite: &domain.UploadOverwriteSnapshot{}}
+			switch scenario {
+			case "retry":
+				started = time.Now()
+			case "long-hash":
+				started = time.Now().Add(-time.Minute)
+			case "move":
+				record.Mode = "move"
+			}
+			state, err := service.processDirectUpload(context.Background(), prepared, record, mapping, source, false, started, func() error { return nil })
+			if !errors.Is(err, errUploadAttention) || state == "completed" || counted.lists != 2 {
+				t.Fatalf("stale identity accepted: state=%s lists=%d err=%v", state, counted.lists, err)
+			}
+			if _, err := os.Stat(source.Absolute); err != nil {
+				t.Fatal("local source lost", err)
+			}
+		})
+	}
+}
+
 func TestUploadFiveNewFilesSharePreparation(t *testing.T) {
 	service, mapping, _, remote, _ := recoveryFixture(t)
 	remote.files = map[string][]byte{}

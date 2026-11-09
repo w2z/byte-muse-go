@@ -192,6 +192,7 @@ func uploadMappingRoot(ctx context.Context, remote uploadRemote, mapping UploadM
 
 // process persists its chosen names before any upload and reconciles each commit stage after uncertain failures.
 func (s *UploadService) process(ctx context.Context, m UploadMapping, f uploadLocalFile, policy string) (state string, resultErr error) {
+	attemptStarted := time.Now()
 	if m.Kind == "115" {
 		ctx = pan115.WithUploadWorker(ctx)
 	}
@@ -457,7 +458,7 @@ func (s *UploadService) process(ctx context.Context, m UploadMapping, f uploadLo
 		record.RemotePath = m.Path
 	}
 	if record.Stage == record.Target {
-		state, err = s.processDirectUpload(ctx, preparation, record, m, f, sourceGuarded, save)
+		state, err = s.processDirectUpload(ctx, preparation, record, m, f, sourceGuarded, attemptStarted, save)
 		if err != nil || state != "cleanup" || record.Mode != "move" {
 			return state, err
 		}

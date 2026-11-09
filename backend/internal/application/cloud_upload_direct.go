@@ -13,7 +13,8 @@ import (
 
 // processDirectUpload verifies the final object before deleting any identity in the frozen replacement set.
 // Stage equals Target marks direct receipts; legacy stages are never inferred to be owned or deleted.
-func (s *UploadService) processDirectUpload(ctx context.Context, remote uploadRemote, record *domain.UploadRecord, mapping UploadMapping, source uploadLocalFile, sourceGuarded bool, save func() error) (string, error) {
+// attemptStarted excludes pre-retry snapshots without requiring a new read at every branch.
+func (s *UploadService) processDirectUpload(ctx context.Context, remote uploadRemote, record *domain.UploadRecord, mapping UploadMapping, source uploadLocalFile, sourceGuarded bool, attemptStarted time.Time, save func() error) (string, error) {
 	if record.Intent == "stop" || record.Intent == "delete" || record.State == "discarding" {
 		record.State = "stopped"
 		record.Hidden = record.Intent == "delete"
@@ -31,8 +32,16 @@ func (s *UploadService) processDirectUpload(ctx context.Context, remote uploadRe
 	ctx = pan115.WithUploadStage(ctx, "prepare")
 	var entries []uploadEntry
 	fresh := record.State != "pending" || record.OldID != "" || record.StageID != "" || record.Error != "" || record.Overwrite != nil
+	refresh := func(after time.Time) error {
+		var readErr error
+		entries, readErr = uploadFreshList(ctx, remote, record.Parent, after)
+		if readErr == nil {
+			fresh = true
+		}
+		return readErr
+	}
 	if fresh {
-		entries, err = uploadFreshList(ctx, remote, record.Parent, time.Now())
+		err = refresh(attemptStarted)
 	} else {
 		entries, err = remote.List(ctx, record.Parent)
 	}
@@ -88,22 +97,18 @@ func (s *UploadService) processDirectUpload(ctx context.Context, remote uploadRe
 		return uploadEntry{}, false
 	}
 	installed, found := verified(entries)
-	if found && !fresh {
-		entries, err = uploadFreshList(ctx, remote, record.Parent, time.Now())
-		if err != nil {
+	_, hasTarget := findUploadEntry(entries, record.Target)
+	if (found || (record.Kind == "115" && record.Policy == "overwrite" && record.Overwrite == nil && hasTarget)) && (!fresh || time.Since(attemptStarted) >= uploadDirectoryTTL || record.Mode == "move") {
+		barrier := attemptStarted
+		if time.Since(attemptStarted) >= uploadDirectoryTTL || record.Mode == "move" {
+			barrier = time.Now()
+		}
+		if err = refresh(barrier); err != nil {
 			return record.State, err
 		}
 		installed, found = verified(entries)
 	}
 	if record.Kind == "115" && record.Policy == "overwrite" && record.Overwrite == nil {
-		_, hasTarget := findUploadEntry(entries, record.Target)
-		if !fresh && hasTarget {
-			entries, err = uploadFreshList(ctx, remote, record.Parent, time.Now())
-			if err != nil {
-				return record.State, err
-			}
-			installed, found = verified(entries)
-		}
 		snapshot := &domain.UploadOverwriteSnapshot{Files: []domain.UploadOldFile{}}
 		if record.State != "pending" {
 			if record.OldID != "" {
@@ -174,8 +179,9 @@ func (s *UploadService) processDirectUpload(ctx context.Context, remote uploadRe
 		if err = remote.Upload(pan115.WithUploadStage(ctx, "upload"), record.Parent, record.Target, file, source.Size, record.SHA1); err != nil {
 			return record.State, err
 		}
+		uploadedAt := time.Now()
 		domain.ReportUploadProgress(ctx, source.Size, source.Size, "uploading")
-		entries, err = uploadFreshList(pan115.WithUploadStage(ctx, "verify"), remote, record.Parent, time.Now())
+		entries, err = uploadFreshList(pan115.WithUploadStage(ctx, "verify"), remote, record.Parent, uploadedAt)
 		if err != nil {
 			return record.State, err
 		}
@@ -192,15 +198,6 @@ func (s *UploadService) processDirectUpload(ctx context.Context, remote uploadRe
 	ctx = pan115.WithUploadStage(ctx, "cleanup")
 	if err = save(); err != nil {
 		return record.State, err
-	}
-	if (record.Overwrite != nil && len(record.Overwrite.Files) > 0) || (record.OldID != "" && record.OldID != installed.ID) {
-		entries, err = uploadFreshList(ctx, remote, record.Parent, time.Now())
-		if err != nil {
-			return record.State, err
-		}
-		if _, ok := verified(entries); !ok {
-			return record.State, errUploadAttention
-		}
 	}
 	if err = validateUploadOverwrite(record, entries, installed.ID); err != nil {
 		return record.State, err
@@ -237,7 +234,8 @@ func (s *UploadService) processDirectUpload(ctx context.Context, remote uploadRe
 		if err = remote.Delete(ctx, record.Parent, entry); err != nil {
 			return record.State, err
 		}
-		check, checkErr := uploadFreshList(ctx, remote, record.Parent, time.Now())
+		deletedAt := time.Now()
+		check, checkErr := uploadFreshList(ctx, remote, record.Parent, deletedAt)
 		if checkErr != nil {
 			return record.State, checkErr
 		}
