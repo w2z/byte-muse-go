@@ -10,13 +10,78 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 
 	"bytemuse/backend/internal/ports"
 )
 
+// installUploadedMedia applies the admitted upload policy to local attachments.
+// Matching content is reused after interrupted completion; keep-both never replaces an occupied name.
+func (s *StrmService) installUploadedMedia(ctx context.Context, dir *os.Root, target, relative string, file strmSourceFile, receipt *ports.UploadReceipt) (bool, error) {
+	policy, _ := ctx.Value(localUploadPolicyKey{}).(string)
+	conflict := func() (bool, error) {
+		if marker, ok := ctx.Value(localUploadConflictKey{}).(*atomic.Bool); ok {
+			marker.Store(true)
+		}
+		return false, fmt.Errorf("%w：附件目标 %s", errLocalUploadConflict, relative)
+	}
+	base, ext := relative, filepath.Ext(relative)
+	for index := 0; ; index++ {
+		if err := scanCheckpoint(ctx); err != nil {
+			return false, err
+		}
+		if index > 0 {
+			relative = fmt.Sprintf("%s (%d)%s", strings.TrimSuffix(base, ext), index, ext)
+		}
+		stat, err := dir.Lstat(relative)
+		if errors.Is(err, os.ErrNotExist) {
+			err = s.copyUploadedMedia(ctx, dir, target, relative, file, receipt, false)
+			if errors.Is(err, os.ErrExist) {
+				index--
+				continue
+			}
+			return false, err
+		}
+		if err != nil {
+			return false, err
+		}
+		if !stat.Mode().IsRegular() {
+			return conflict()
+		}
+		if policy == "skip" {
+			return true, nil
+		}
+		if stat.Size() == receipt.Size {
+			existing, err := dir.Open(relative)
+			if err != nil {
+				return false, err
+			}
+			hash := sha1.New()
+			count, readErr := io.Copy(hash, &localCopyReader{ctx: ctx, reader: existing})
+			closeErr := existing.Close()
+			if err = errors.Join(readErr, closeErr); err != nil {
+				return false, err
+			}
+			if count == receipt.Size && strings.EqualFold(fmt.Sprintf("%x", hash.Sum(nil)), receipt.SHA1) {
+				// Recover ownership if installation succeeded but receipt/ownership persistence failed.
+				return true, s.recordManagedFileAt(ctx, file, filepath.Join(target, relative), filepath.Join(target, relative))
+			}
+		}
+		switch policy {
+		case "overwrite":
+			return false, s.copyUploadedMedia(ctx, dir, target, relative, file, receipt, true)
+		case "keep_both":
+			continue
+		default:
+			// Old records without a policy cannot authorize replacing existing data.
+			return conflict()
+		}
+	}
+}
+
 // copyUploadedMedia validates the immutable source version while copying into a rooted temporary
 // output. Hash failure never installs a partial file; destination errors remain retryable locally.
-func (s *StrmService) copyUploadedMedia(ctx context.Context, dir *os.Root, target, relative string, file strmSourceFile, receipt *ports.UploadReceipt) error {
+func (s *StrmService) copyUploadedMedia(ctx context.Context, dir *os.Root, target, relative string, file strmSourceFile, receipt *ports.UploadReceipt, overwrite bool) error {
 	if !filepath.IsLocal(receipt.Relative) || receipt.FileID != file.ID || receipt.SHA1 == "" {
 		return errors.New("本地上传来源无效")
 	}
@@ -82,8 +147,29 @@ func (s *StrmService) copyUploadedMedia(ctx context.Context, dir *os.Root, targe
 	if err = scanCheckpoint(ctx); err != nil {
 		return err
 	}
+	if !overwrite {
+		// Link publishes the complete temporary file without clobbering a concurrently created target.
+		if err = dir.Link(temporary, relative); err != nil {
+			return err
+		}
+	} else {
+		// An existing directory or symlink never becomes an overwrite candidate.
+		current, err := dir.Lstat(relative)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		if err == nil && !current.Mode().IsRegular() {
+			return errLocalUploadConflict
+		}
+	}
 	if err = s.recordManagedFileAt(ctx, file, filepath.Join(target, temporary), filepath.Join(target, relative)); err != nil {
+		if !overwrite {
+			_ = dir.Remove(relative)
+		}
 		return err
+	}
+	if !overwrite {
+		return nil
 	}
 	return dir.Rename(temporary, relative)
 }

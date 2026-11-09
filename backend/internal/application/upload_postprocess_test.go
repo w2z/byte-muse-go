@@ -21,6 +21,89 @@ type localUploadRemote struct{ *directUploadRemote }
 
 func (r localUploadRemote) AccountID(context.Context) (string, error) { return "123", nil }
 
+// Local attachments consume the task policy and remain idempotent before receipt completion.
+func TestLocalUploadAttachmentConflictPolicies(t *testing.T) {
+	for _, policy := range []string{"skip", "overwrite", "keep_both"} {
+		t.Run(policy, func(t *testing.T) {
+			s, api, _, _, values := managedFixture(t)
+			values[pan115LocalUploadEnabledKey], values[strmDownloadEnableSettingKey] = "true", "true"
+			ctx := context.Background()
+			db, err := database.Open(ctx, database.Config{Dialect: database.DialectSQLite, SQLitePath: filepath.Join(t.TempDir(), "policy.db")})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			if err = db.Migrate(ctx); err != nil {
+				t.Fatal(err)
+			}
+			s.SetUploadReceipts(database.NewUploadReceiptRepository(db.SQLDB(), database.DialectSQLite))
+			local := t.TempDir()
+			source := filepath.Join(local, "movie.srt")
+			if err = os.WriteFile(source, []byte("new subtitle"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			stat, _ := os.Stat(source)
+			r := domain.UploadRecord{Key: "policy", Kind: "115", Policy: policy, Mode: "move", Source: source, LocalRoot: local, Relative: "movie.srt", Size: stat.Size(), Modified: stat.ModTime().UnixNano(), SHA1: fmt.Sprintf("%x", sha1.Sum([]byte("new subtitle")))}
+			info := pan115.FileInfo{File: pan115.File{ID: "43", ParentID: "10", Name: "movie.srt", PickCode: "pc43", Size: r.Size, SizeKnown: true, SHA1: r.SHA1}, Path: []pan115.Directory{{ID: "10", Name: "movies"}}}
+			dest := filepath.Join(s.root, "movies")
+			if err = os.MkdirAll(dest, 0755); err != nil {
+				t.Fatal(err)
+			}
+			if err = os.WriteFile(filepath.Join(dest, "movie.srt"), []byte("old subtitle"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			// An occupied numbered file must also be preserved.
+			if err = os.WriteFile(filepath.Join(dest, "movie (1).srt"), []byte("another subtitle"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			for attempt := 0; attempt < 2; attempt++ {
+				if attempt == 1 {
+					// Simulate interruption after output installation but before receipt completion.
+					if _, err = db.SQLDB().ExecContext(ctx, "UPDATE upload_postprocess SET state='pending'"); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if err = s.ProcessLocalUpload(ctx, "123", r, info); err != nil {
+					t.Fatal(err)
+				}
+			}
+			want := "old subtitle"
+			if policy == "overwrite" {
+				want = "new subtitle"
+			}
+			body, err := os.ReadFile(filepath.Join(dest, "movie.srt"))
+			if err != nil || string(body) != want {
+				t.Fatalf("target=%q err=%v", body, err)
+			}
+			body, err = os.ReadFile(filepath.Join(dest, "movie (1).srt"))
+			if err != nil || string(body) != "another subtitle" {
+				t.Fatal("existing numbered file replaced")
+			}
+			entries, err := os.ReadDir(dest)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantCount := 2
+			if policy == "keep_both" {
+				wantCount = 3
+				body, err = os.ReadFile(filepath.Join(dest, "movie (2).srt"))
+				if err != nil || string(body) != "new subtitle" {
+					t.Fatalf("retained copy=%q err=%v", body, err)
+				}
+			}
+			if len(entries) != wantCount {
+				t.Fatalf("retry produced extra outputs: %d", len(entries))
+			}
+			if _, err = os.Stat(source); err != nil {
+				t.Fatal("postprocess removed move source", err)
+			}
+			if api.infoCalls != 0 || api.playFile != "" {
+				t.Fatal("local policy accessed remote")
+			}
+		})
+	}
+}
+
 func TestUploadPostprocessFailureRetainsMoveSource(t *testing.T) {
 	ctx := context.Background()
 	service, mapping, file, _, store := recoveryFixture(t)
@@ -79,7 +162,7 @@ func TestLocalCopyRejectsChangedContent(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer dir.Close()
-	if err = s.copyUploadedMedia(context.Background(), dir, s.root, "movie.srt", strmSourceFile{ID: "43", Name: "movie.srt"}, receipt); err == nil {
+	if err = s.copyUploadedMedia(context.Background(), dir, s.root, "movie.srt", strmSourceFile{ID: "43", Name: "movie.srt"}, receipt, false); err == nil {
 		t.Fatal("changed contents installed")
 	}
 	if _, err = os.Stat(filepath.Join(s.root, "movie.srt")); !errors.Is(err, os.ErrNotExist) {

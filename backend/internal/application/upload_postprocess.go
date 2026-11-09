@@ -34,6 +34,8 @@ type localUploadConflictKey struct{}
 
 type localUploadSourceKey struct{}
 
+type localUploadPolicyKey struct{}
+
 // localUploadRules binds event acknowledgement to the same mapping, formats, root and playback URL.
 func (s *StrmService) localUploadRules(values map[string]string) string {
 	raw, _ := json.Marshal([]string{s.root, values[strmPathsSettingKey], values[strmPlayBaseSettingKey], values[strmDownloadEnableSettingKey], values[strmDownloadExtensionsSettingKey]})
@@ -156,6 +158,7 @@ func (s *StrmService) ProcessLocalUpload(ctx context.Context, account string, re
 	}
 	ctx = context.WithValue(ctx, managedAccountKey{}, account)
 	ctx = context.WithValue(ctx, localUploadSourceKey{}, receipt)
+	ctx = context.WithValue(ctx, localUploadPolicyKey{}, record.Policy)
 	var conflict atomic.Bool
 	ctx = context.WithValue(ctx, localUploadConflictKey{}, &conflict)
 	for _, mapping := range mappings {
