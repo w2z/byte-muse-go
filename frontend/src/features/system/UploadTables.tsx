@@ -1,10 +1,10 @@
-import { Button, Message, Progress, Select, Space, Table, Tabs, Tag, Tooltip } from "@arco-design/web-react";
+import { Button, Message, Modal, Progress, Select, Space, Table, Tabs, Tag, Tooltip } from "@arco-design/web-react";
+import { IconExclamationCircleFill } from "@arco-design/web-react/icon";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { apiRequest } from "../../shared/api/client";
 import { ListPagination } from "../../shared/ui/ListPagination";
 import { UploadMonitorStatus } from "./UploadPathsField";
-import { AppDialog } from "../../shared/ui/AppDialog";
 
 type DirectoryRow = {
   key: string;
@@ -372,11 +372,22 @@ export function UploadTables() {
         </Tabs.TabPane>
       </Tabs>
     </div>
-    <AppDialog
-      title={confirmation?.title ?? "确认操作"}
+    {/* 使用声明式 Modal 的消息提示样式，保留取消入口并兼容 React 19。 */}
+    <Modal
+      simple
+      title={<span><IconExclamationCircleFill />{confirmation?.title ?? "确认操作"}</span>}
+      aria-label={confirmation?.title ?? "确认操作"}
       visible={Boolean(confirmation)}
-      onClose={() => { if (!control.isPending && !rowControl.isPending) setConfirmation(null); }}
-      footer={<><Button onClick={() => setConfirmation(null)} disabled={control.isPending || rowControl.isPending}>取消</Button><Button status="danger" loading={control.isPending || rowControl.isPending} disabled={control.isPending || rowControl.isPending} onClick={executeConfirmation}>确定</Button></>}
-    >{confirmation?.message}</AppDialog>
+      maskClosable={false}
+      unmountOnExit
+      style={{ maxWidth: "calc(100vw - 32px)" }}
+      onCancel={() => { if (!control.isPending && !rowControl.isPending) setConfirmation(null); }}
+      onOk={executeConfirmation}
+      okText="确定"
+      cancelText="取消"
+      confirmLoading={control.isPending || rowControl.isPending}
+      okButtonProps={{ status: "danger", disabled: control.isPending || rowControl.isPending }}
+      cancelButtonProps={{ disabled: control.isPending || rowControl.isPending }}
+    >{confirmation?.message}</Modal>
   </>);
 }
