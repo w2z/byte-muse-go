@@ -79,7 +79,7 @@ func (s *UploadService) processDirectUpload(ctx context.Context, remote uploadRe
 				if !os.SameFile(info, guarded) {
 					return record.State, fmt.Errorf("%w：受保护文件身份改变，保留源文件", errLocalUploadConflict)
 				}
-				protection.verifiedInfo, protection.verifiedSHA1 = info, record.SHA1
+				protection.verifiedInfo = info
 			}
 			if err = save(); err != nil {
 				return record.State, err

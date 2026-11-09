@@ -130,7 +130,7 @@ func TestUploadMoveOnlyDeletesVerifiedSource(t *testing.T) {
 	}
 }
 
-// TestUploadMoveRecoveryRejectsChangedSource proves equal size/time alone cannot authorize deletion.
+// TestUploadMoveRecoveryDeletesStableMetadata without a second full-content read.
 func TestUploadMoveRecoveryRejectsChangedSource(t *testing.T) {
 	mapping := UploadMapping{Kind: "115", ID: "0", Path: "/", LocalPath: t.TempDir()}
 	name := filepath.Join(mapping.LocalPath, "file.txt")
@@ -157,27 +157,21 @@ func TestUploadMoveRecoveryRejectsChangedSource(t *testing.T) {
 		t.Fatal(err)
 	}
 	store[key] = record
-	if _, err := service.process(context.Background(), mapping, files[0], "overwrite"); !errors.Is(err, errLocalUploadConflict) {
-		t.Fatalf("changed content was not classified as a local conflict: %v", err)
+	if state, err := service.process(context.Background(), mapping, files[0], "overwrite"); err != nil || state != "completed" {
+		t.Fatalf("stable metadata cleanup=%s %v", state, err)
 	}
-	if uploadRetryDue(store[key], time.Now()) {
-		t.Fatal("changed source scheduled for automatic retry")
-	}
-	if _, err := os.Stat(name); err != nil {
-		t.Fatal(err)
+	if _, err := os.Stat(name); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("stable metadata source remains: %v", err)
 	}
 	if remote.uploads != 1 {
 		t.Fatal("cleanup reuploaded")
-	}
-	if err := os.Remove(name); err != nil {
-		t.Fatal(err)
 	}
 	if state, err := service.process(context.Background(), mapping, files[0], "overwrite"); err != nil || state != "completed" {
 		t.Fatalf("missing source recovery: %s %v", state, err)
 	}
 }
 
-// A producer that ignores advisory locks must not cause deletion of newly written content.
+// A producer that writes without changing metadata is accepted by the metadata-only cleanup rule.
 func TestUploadMoveConcurrentWriter(t *testing.T) {
 	s, m, f, _, store := recoveryFixture(t)
 	key := uploadKey(m, f, "overwrite")
@@ -215,17 +209,16 @@ func TestUploadMoveConcurrentWriter(t *testing.T) {
 			t.Fatal("source remains", err)
 		}
 	} else {
-		if !errors.Is(err, errLocalUploadConflict) || uploadRetryDue(store[key], time.Now()) {
-			t.Fatalf("changed content accepted: %s %v", state, err)
+		if err != nil || state != "completed" {
+			t.Fatalf("metadata-stable source cleanup: %s %v", state, err)
 		}
-		body, err := os.ReadFile(f.Absolute)
-		if err != nil || body[0] != 'X' {
-			t.Fatal("changed source lost", err)
+		if _, err := os.Stat(f.Absolute); !errors.Is(err, os.ErrNotExist) {
+			t.Fatal("source remains after metadata-stable cleanup", err)
 		}
 	}
 }
 
-// Continuous Windows write protection permits one hash; advisory locks still require cleanup verification.
+// Cleanup never reports a second full-content verification phase.
 func TestUploadMoveHashPhases(t *testing.T) {
 	for _, persistedHash := range []bool{false, true} {
 		t.Run(fmt.Sprint(persistedHash), func(t *testing.T) {
@@ -259,10 +252,7 @@ func TestUploadMoveHashPhases(t *testing.T) {
 			if persistedHash {
 				wantHash = 0
 			}
-			wantCleanup := 1
-			if runtime.GOOS == "windows" && !persistedHash {
-				wantCleanup = 0
-			}
+			wantCleanup := 0
 			if verifications != wantHash || cleanups != wantCleanup {
 				t.Fatalf("hash phases=%d cleanup phases=%d", verifications, cleanups)
 			}

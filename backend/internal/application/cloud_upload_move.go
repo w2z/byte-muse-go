@@ -12,14 +12,13 @@ import (
 	"sync"
 )
 
-// uploadSourceProtection is attempt-local proof only. A mandatory guard must remain
-// open from hashing through deletion; persisted hashes never populate verifiedSHA1.
+// uploadSourceProtection keeps the source handle and deletion operation tied to the
+// same file identity during an in-flight move. Cleanup trusts metadata captured at admission.
 type uploadSourceProtection struct {
 	file         *os.File
 	remove       func() error
 	release      func()
 	verifiedInfo os.FileInfo
-	verifiedSHA1 string
 }
 
 // removeUploadedSource verifies the source before deletion and prunes only its empty parents below the mapping root.
@@ -28,7 +27,7 @@ func removeUploadedSource(ctx context.Context, record *domain.UploadRecord) erro
 	return removeUploadSourceWithProtection(ctx, record, nil)
 }
 
-// removeUploadSourceWithProtection reuses only an uninterrupted mandatory guard and a hash computed under it.
+// removeUploadSourceWithProtection checks identity, type, size and exact modification time before deletion.
 func removeUploadSourceWithProtection(ctx context.Context, record *domain.UploadRecord, protection *uploadSourceProtection) error {
 	if record.Mode != "move" || record.SHA1 == "" || record.StageID == "" {
 		return errors.New("移动任务缺少已验证的上传凭据")
@@ -78,32 +77,17 @@ func removeUploadSourceWithProtection(ctx context.Context, record *domain.Upload
 	if !opened.Mode().IsRegular() || opened.Size() != record.Size || opened.ModTime().UnixNano() != record.Modified {
 		return fmt.Errorf("%w：本地文件大小、修改时间或类型已改变，保留源文件", errLocalUploadConflict)
 	}
-	hash := ""
 	if protection != nil && protection.file != nil && protection.verifiedInfo != nil {
 		if !os.SameFile(opened, protection.verifiedInfo) {
 			return fmt.Errorf("%w：本地文件身份改变，保留源文件", errLocalUploadConflict)
-		}
-		hash = protection.verifiedSHA1
-	}
-	if hash == "" || !strings.EqualFold(hash, record.SHA1) {
-		// Cleanup is local verification, not a new upload or a 115 API call.
-		progress := domain.WithUploadProgress(ctx, func(done, total int64, _ string) {
-			domain.ReportUploadProgress(ctx, done, total, "cleanup")
-		})
-		hash, err = hashUploadSource(progress, file, record.Size)
-		if err != nil {
-			if errors.Is(err, io.ErrUnexpectedEOF) {
-				return fmt.Errorf("%w：本地文件校验期间大小改变，保留源文件", errLocalUploadConflict)
-			}
-			return err
 		}
 	}
 	current, err := root.Lstat(relative)
 	if err != nil {
 		return err
 	}
-	if !os.SameFile(opened, current) || !current.Mode().IsRegular() || current.Size() != record.Size || current.ModTime().UnixNano() != record.Modified || !strings.EqualFold(hash, record.SHA1) {
-		return fmt.Errorf("%w：本地文件内容或身份已改变，保留源文件", errLocalUploadConflict)
+	if !os.SameFile(opened, current) || !current.Mode().IsRegular() || current.Size() != record.Size || current.ModTime().UnixNano() != record.Modified {
+		return fmt.Errorf("%w：本地文件身份、大小或修改时间已改变，保留源文件", errLocalUploadConflict)
 	}
 	if err = ctx.Err(); err != nil {
 		return err
