@@ -1,16 +1,20 @@
 {
-  "version": "0.1.229",
-  "commit": "881564d603bf44cad7c838278cf7e3f67eebde6a",
-  "short_commit": "881564d",
-  "built_at": "2026-11-09T03:38:18Z",
+  "version": "0.1.230",
+  "commit": "d302efe3e9e99552494bf670aeb5a930b661cfca",
+  "short_commit": "d302efe",
+  "built_at": "2026-11-09T08:35:08Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.229",
-    "sha-881564d",
+    "0.1.230",
+    "sha-d302efe",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.230",
+      "message": "持久化本地后处理回执并复用源文件生成STRM"
+    },
     {
       "version": "0.1.229",
       "message": "按写入时间共享目录回查并合并重复校验"
