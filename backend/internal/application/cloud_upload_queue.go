@@ -63,7 +63,8 @@ func (s *UploadService) Run(ctx context.Context) {
 		defer watch.Close()
 	}
 	knownDirs := map[string]bool{}
-	ticker := time.NewTicker(time.Second)
+	// Keep idle discovery and durable-list updates responsive without adding provider requests.
+	ticker := time.NewTicker(250 * time.Millisecond)
 	defer ticker.Stop()
 	type completion struct {
 		key string

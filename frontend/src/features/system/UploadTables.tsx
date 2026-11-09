@@ -161,7 +161,7 @@ export function UploadTables() {
   const [fileStatus, setFileStatus] = useState("all");
   const [confirmation, setConfirmation] = useState<ConfirmCommand | null>(null);
   const [pendingRows, setPendingRows] = useState<Map<string, UploadTarget["action"]>>(() => new Map());
-  const status = useQuery({queryKey:["cloud-upload-status"],queryFn:()=>apiRequest<{actions?:Record<string,boolean>}>("/cloud-upload/status"),refetchInterval:2000});
+  const status = useQuery({queryKey:["cloud-upload-status"],queryFn:()=>apiRequest<{actions?:Record<string,boolean>}>("/cloud-upload/status"),refetchInterval:500});
   const control = useMutation({
     mutationFn:(command:ControlCommand)=>apiRequest("/cloud-upload/control",{method:"POST",body:JSON.stringify(typeof command==="string"?{action:command}:command)}),
     onSuccess:async()=>{await Promise.all([client.invalidateQueries({queryKey:["cloud-upload-status"]}),client.invalidateQueries({queryKey:["upload-directory-progress"]}),client.invalidateQueries({queryKey:["upload-file-progress"]})]);},
@@ -221,7 +221,7 @@ export function UploadTables() {
       apiRequest<DirectoryPage>(
         `/cloud-upload/directories/progress?status=${encodeURIComponent(directoryStatus)}`,
       ),
-    refetchInterval: 2000,
+    refetchInterval: 500,
   });
   const files = useQuery({
     queryKey: ["upload-file-progress", page, pageSize, fileStatus],
@@ -229,7 +229,7 @@ export function UploadTables() {
       apiRequest<FilePage>(
         `/cloud-upload/files?page=${page}&page_size=${pageSize}&status=${encodeURIComponent(fileStatus)}`,
       ),
-    refetchInterval: 2000,
+    refetchInterval: 500,
   });
   const directoryTotal = directories.data?.total ?? 0;
   const fileTotal = files.data?.task_total ?? files.data?.total ?? 0;
