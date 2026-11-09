@@ -16,6 +16,9 @@ func (s *StrmService) syncPan115Events(ctx context.Context, mappings []domain.St
 	s.scanMu.Lock()
 	defer s.scanMu.Unlock()
 	result := domain.StrmScanResult{}
+	if s.localUploads.Load() > 0 {
+		return result, errors.New("本地上传仍在处理，保留事件游标稍后同步")
+	}
 	formats, err := strmDownloadFormats(values)
 	if err != nil {
 		return result, err
@@ -38,6 +41,11 @@ func (s *StrmService) syncPan115Events(ctx context.Context, mappings []domain.St
 		}
 		if event.FileID == "" || !hasInfo {
 			compensate = true
+			continue
+		}
+		if completed, err := s.localUploadEventCompleted(ctx, event); err != nil {
+			return result, err
+		} else if completed {
 			continue
 		}
 		info, err := api.EventFileInfo(ctx, event.FileID)

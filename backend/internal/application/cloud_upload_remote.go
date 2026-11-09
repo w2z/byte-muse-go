@@ -81,6 +81,7 @@ type uploadEntry struct {
 	Size      int64
 	Directory bool
 	SHA1      string
+	Info      *pan115.FileInfo
 }
 
 // uploadRemote keeps conflict and retry rules in the application service, outside provider adapters.
@@ -134,6 +135,11 @@ type uploadPanRemote struct {
 	api uploadPanAPI
 }
 
+// AccountID reads the bound account locally for account-scoped verification and handoff.
+func (r uploadPanRemote) AccountID(ctx context.Context) (string, error) {
+	return r.s.EventAccountID(ctx)
+}
+
 func (r uploadPanRemote) List(ctx context.Context, parent string) ([]uploadEntry, error) {
 	var result []uploadEntry
 	for offset := 0; ; {
@@ -147,7 +153,8 @@ func (r uploadPanRemote) List(ctx context.Context, parent string) ([]uploadEntry
 			return nil, err
 		}
 		for _, f := range page.Files {
-			result = append(result, uploadEntry{f.ID, f.Name, f.Size, f.IsDirectory, f.SHA1})
+			info := pan115.FileInfo{File: f, Path: append([]pan115.Directory(nil), page.Path...)}
+			result = append(result, uploadEntry{ID: f.ID, Name: f.Name, Size: f.Size, Directory: f.IsDirectory, SHA1: f.SHA1, Info: &info})
 		}
 		if !page.HasMore {
 			return result, nil
@@ -186,7 +193,7 @@ func (r uploadCDRemote) List(ctx context.Context, parent string) ([]uploadEntry,
 	}
 	result := make([]uploadEntry, 0, len(entries))
 	for _, e := range entries {
-		result = append(result, uploadEntry{e.FullPath, e.Name, e.Size, e.Directory, e.SHA1})
+		result = append(result, uploadEntry{ID: e.FullPath, Name: e.Name, Size: e.Size, Directory: e.Directory, SHA1: e.SHA1})
 	}
 	return result, nil
 }

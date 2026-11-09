@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"bytemuse/backend/internal/domain"
@@ -159,6 +160,8 @@ type StrmService struct {
 	embyMediaEnqueue func(context.Context)
 	managedFiles     ports.StrmFileRepository
 	managedAccount   func(context.Context) (string, error)
+	uploadReceipts   ports.UploadReceiptRepository
+	localUploads     atomic.Int64
 }
 
 // NewStrmService 组装固定使用 /strm 根目录的 strm 服务。

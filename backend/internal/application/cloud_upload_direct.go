@@ -251,6 +251,20 @@ func (s *UploadService) processDirectUpload(ctx context.Context, remote uploadRe
 			}
 		}
 	}
+	// Keep cleanup durable until the local consumer has succeeded. A failed handoff
+	// retains the move source and resumes here without uploading the file again.
+	if record.Kind == "115" && s.postprocess != nil {
+		if installed.Info == nil {
+			return record.State, fmt.Errorf("上传回查未返回后处理所需的文件身份")
+		}
+		account := strings.TrimPrefix(scope, "115\x00")
+		if account == scope || account == "" {
+			return record.State, fmt.Errorf("无法确认上传回执所属账号")
+		}
+		if err = s.postprocess(ctx, account, *record, *installed.Info); err != nil {
+			return record.State, fmt.Errorf("上传已核验，本地后处理待重试：%w", err)
+		}
+	}
 	if record.Mode != "move" {
 		record.State = "completed"
 	}

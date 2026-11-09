@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha1"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,6 +17,7 @@ import (
 
 	"bytemuse/backend/internal/domain"
 	"bytemuse/backend/internal/platform/pan115"
+	"bytemuse/backend/internal/ports"
 )
 
 const strmDownloadWorkers = 5
@@ -113,10 +115,28 @@ func (s *StrmService) downloadStrmMediaOnce(ctx context.Context, root, target, k
 			return false, errors.New("下载目标不是普通文件")
 		}
 		if mode != domain.StrmGenerateFull {
+			if receipt, ok := ctx.Value(localUploadSourceKey{}).(*ports.UploadReceipt); ok && receipt.FileID == file.ID {
+				existing, err := dir.Open(relative)
+				if err != nil {
+					return false, err
+				}
+				hash := sha1.New()
+				count, readErr := io.Copy(hash, &localCopyReader{ctx: ctx, reader: existing})
+				closeErr := existing.Close()
+				if err = errors.Join(readErr, closeErr); err != nil {
+					return false, err
+				}
+				if count != receipt.Size || !strings.EqualFold(fmt.Sprintf("%x", hash.Sum(nil)), receipt.SHA1) {
+					return false, errors.New("本地附件与上传内容不同，保留文件等待核对")
+				}
+			}
 			return true, nil
 		}
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		return false, fmt.Errorf("无法检查下载目标：%s", scanFileError(err))
+	}
+	if receipt, ok := ctx.Value(localUploadSourceKey{}).(*ports.UploadReceipt); ok && kind == domain.StrmKindPan115 && receipt.FileID == file.ID {
+		return false, s.copyUploadedMedia(ctx, dir, target, relative, file, receipt)
 	}
 	if file.SizeKnown && file.Size == 0 {
 		// 网盘空文件（0 字节）取下载直链会失败（115 返回 403 request expired），

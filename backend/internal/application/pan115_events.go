@@ -95,6 +95,10 @@ func (s *Pan115EventService) Run(ctx context.Context) {
 func (s *Pan115EventService) Poll(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// Local uploads publish verified receipts before the next poll; do not compete for API quota.
+	if s.strm != nil && s.strm.localUploads.Load() > 0 {
+		return nil
+	}
 	values, err := s.settings(ctx)
 	if err != nil {
 		return err

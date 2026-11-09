@@ -44,27 +44,40 @@ type UploadStatus struct {
 
 // UploadService owns bounded workers; only same-child creation and name reservations serialize.
 type UploadService struct {
-	settings        func(context.Context) (map[string]string, error)
-	store           UploadStore
-	provider        func(context.Context, string) (uploadRemote, error)
-	mu              sync.RWMutex
-	preparation     sync.Mutex
-	directoryCache  uploadDirectoryCache
-	directives      map[string]domain.UploadDirective
-	controlSequence uint64
-	active          map[string]bool
-	status          UploadStatus
-	files           map[string]UploadFileProgress
-	mappings        []UploadMapping
-	commands        chan uploadCommand
-	wake            chan struct{}
-	ready           bool
-	mode            string
+	postprocess       func(context.Context, string, domain.UploadRecord, pan115.FileInfo) error
+	beginLocalUpload  func() func()
+	resumeLocalUpload func(context.Context, domain.UploadRecord) (bool, error)
+	settings          func(context.Context) (map[string]string, error)
+	store             UploadStore
+	provider          func(context.Context, string) (uploadRemote, error)
+	mu                sync.RWMutex
+	preparation       sync.Mutex
+	directoryCache    uploadDirectoryCache
+	directives        map[string]domain.UploadDirective
+	controlSequence   uint64
+	active            map[string]bool
+	status            UploadStatus
+	files             map[string]UploadFileProgress
+	mappings          []UploadMapping
+	commands          chan uploadCommand
+	wake              chan struct{}
+	ready             bool
+	mode              string
 	// scanRequested asks the scheduler for one immediate discovery pass.
 	scanRequested bool
 	scanning      bool
 	// manualUpload finishes that pass while continuous monitoring remains off.
 	manualUpload bool
+}
+
+// SetLocalPostprocess wires the durable STRM handoff before Run starts; it never writes upload snapshots.
+func (s *UploadService) SetLocalPostprocess(process func(context.Context, string, domain.UploadRecord, pan115.FileInfo) error) {
+	s.postprocess = process
+}
+
+// SetLocalUploadRecovery registers the receipt recovery and event gate before Run starts.
+func (s *UploadService) SetLocalUploadRecovery(resume func(context.Context, domain.UploadRecord) (bool, error), begin func() func()) {
+	s.resumeLocalUpload, s.beginLocalUpload = resume, begin
 }
 
 // NewUploadService reuses existing provider accounts; it never enables monitoring implicitly.
@@ -194,6 +207,10 @@ func uploadMappingRoot(ctx context.Context, remote uploadRemote, mapping UploadM
 func (s *UploadService) process(ctx context.Context, m UploadMapping, f uploadLocalFile, policy string) (state string, resultErr error) {
 	attemptStarted := time.Now()
 	if m.Kind == "115" {
+		if s.beginLocalUpload != nil {
+			finish := s.beginLocalUpload()
+			defer finish()
+		}
 		ctx = pan115.WithUploadWorker(ctx)
 	}
 	key := uploadKey(m, f, policy)
@@ -291,6 +308,21 @@ func (s *UploadService) process(ctx context.Context, m UploadMapping, f uploadLo
 			record.State = "discarding"
 		}
 	}
+	if record != nil && record.Kind == "115" && record.Mode != "move" && record.State == "cleanup" && record.Intent != "delete" && record.Intent != "stop" && s.resumeLocalUpload != nil {
+		handled, resumeErr := s.resumeLocalUpload(ctx, *record)
+		if resumeErr != nil {
+			return record.State, resumeErr
+		}
+		if handled {
+			if record.Mode == "move" {
+				if err = removeUploadedSource(ctx, record); err != nil {
+					return record.State, err
+				}
+			}
+			record.State = "completed"
+			return record.State, nil
+		}
+	}
 	if record == nil && !uploadUnchanged(f) {
 		return "", fmt.Errorf("文件仍在变化: %s", f.Relative)
 	}
@@ -326,15 +358,17 @@ func (s *UploadService) process(ctx context.Context, m UploadMapping, f uploadLo
 	preparation := remote
 	if m.Kind == "115" {
 		scope := m.Kind
-		if pan, ok := remote.(uploadPanRemote); ok {
-			account, found, loadErr := pan.s.accounts.Load(ctx)
+		if pan, ok := remote.(interface {
+			AccountID(context.Context) (string, error)
+		}); ok {
+			account, loadErr := pan.AccountID(ctx)
 			if loadErr != nil {
 				return "", loadErr
 			}
-			if !found {
+			if account == "" {
 				return "", ErrPan115NotLinked
 			}
-			scope += "\x00" + account.UserID
+			scope += "\x00" + account
 		}
 		preparation = uploadDirectoryRemote{uploadRemote: remote, service: s, kind: scope}
 		defer func() {

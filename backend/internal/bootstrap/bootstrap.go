@@ -355,9 +355,8 @@ func (c *Commands) Serve(ctx context.Context) error {
 	uploadService := application.NewUploadService(settingsValues(settingsService), database.NewUploadRepository(store.SQLDB(), database.Dialect(c.config.DatabaseDriver)), pan115Service, application.NewCloudDriveSettings(settingsValues(settingsService)))
 	settingsService.SetUploadNotifier(uploadService.SettingsChanged)
 	uploadCtx, cancelUpload := context.WithCancel(ctx)
+	defer cancelUpload()
 	uploadDone := make(chan struct{})
-	go func() { defer close(uploadDone); uploadService.Run(uploadCtx) }()
-	defer func() { cancelUpload(); <-uploadDone }()
 	// strm 服务：把 115 与 CloudDrive2 的网盘目录镜像成本地 strm 文件，并解析播放地址。
 	// CloudDrive2 连接参数来自设置，因此传入按设置懒构造的适配器，改配置后无需重启进程。
 	// 本地目录浏览与生成统一使用系统固定的 /strm 根目录。
@@ -368,11 +367,16 @@ func (c *Commands) Serve(ctx context.Context) error {
 	}
 	embyMediaService := application.NewEmbyMediaService(settingsValues(settingsService))
 	strmService.SetManagedFiles(database.NewStrmFileRepository(store.SQLDB(), database.Dialect(c.config.DatabaseDriver)), pan115Service.EventAccountID)
+	strmService.SetUploadReceipts(database.NewUploadReceiptRepository(store.SQLDB(), database.Dialect(c.config.DatabaseDriver)))
+	uploadService.SetLocalPostprocess(strmService.ProcessLocalUpload)
+	uploadService.SetLocalUploadRecovery(strmService.ResumeLocalUpload, strmService.BeginLocalUpload)
 	defer embyMediaService.Close()
 	if err := embyMediaService.Restore(ctx, database.NewScanTaskRepository(store.SQLDB(), database.Dialect(c.config.DatabaseDriver))); err != nil {
 		return fmt.Errorf("restore media refresh: %w", err)
 	}
 	strmService.SetEmbyMediaEnqueue(func(enqueueCtx context.Context) { _, _, _ = embyMediaService.Enqueue(enqueueCtx) })
+	go func() { defer close(uploadDone); uploadService.Run(uploadCtx) }()
+	defer func() { cancelUpload(); <-uploadDone }()
 	embyMediaCtx, cancelEmbyMedia := context.WithCancel(ctx)
 	embyMediaDone := make(chan struct{})
 	go func() { defer close(embyMediaDone); embyMediaService.Run(embyMediaCtx) }()
