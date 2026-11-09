@@ -176,16 +176,30 @@ func (s *UploadService) processDirectUpload(ctx context.Context, remote uploadRe
 		if record.Kind == "cd2" && record.OldID != "" {
 			return record.State, fmt.Errorf("CloudDrive2 无法按独立文件 ID 保留旧文件，原名直传不执行破坏性覆盖；请选择保留两者")
 		}
-		if err = remote.Upload(pan115.WithUploadStage(ctx, "upload"), record.Parent, record.Target, file, source.Size, record.SHA1); err != nil {
+		var receipt uploadEntry
+		uploadCtx := pan115.WithUploadStage(ctx, "upload")
+		if api, ok := remote.(uploadReceiptRemote); ok && record.Kind == "115" {
+			receipt, err = api.UploadWithReceipt(uploadCtx, record.Parent, record.Target, file, source.Size, record.SHA1)
+		} else {
+			err = remote.Upload(uploadCtx, record.Parent, record.Target, file, source.Size, record.SHA1)
+		}
+		if err != nil {
 			return record.State, err
 		}
 		uploadedAt := time.Now()
 		domain.ReportUploadProgress(ctx, source.Size, source.Size, "uploading")
-		entries, err = uploadFreshList(pan115.WithUploadStage(ctx, "verify"), remote, record.Parent, uploadedAt)
-		if err != nil {
-			return record.State, err
+		if validUploadReceipt(receipt, record.Parent, record.Target, source.Size, record.SHA1) {
+			pan115.TraceUploadCache(ctx, "receipt")
+			installed, found = receipt, true
+			entries = mergeUploadEntry(entries, receipt)
+		} else {
+			pan115.TraceUploadCache(ctx, "reconcile")
+			entries, err = uploadFreshList(pan115.WithUploadStage(ctx, "verify"), remote, record.Parent, uploadedAt)
+			if err != nil {
+				return record.State, err
+			}
+			installed, found = verified(entries)
 		}
-		installed, found = verified(entries)
 		if !uploadUnchanged(source) {
 			return record.State, fmt.Errorf("文件上传期间发生变化，保留远端文件等待核对")
 		}

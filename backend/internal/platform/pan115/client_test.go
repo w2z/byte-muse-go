@@ -51,6 +51,22 @@ func TestUploadRequestTraceDistinguishesCooldownAndRedactsSecrets(t *testing.T) 
 	}
 }
 
+func TestUploadListTraceSeparatesPaginationWithoutExposingDirectory(t *testing.T) {
+	var output bytes.Buffer
+	previous := logging.Default
+	logging.Default = logging.New(&output)
+	t.Cleanup(func() { logging.Default = previous })
+	ctx := WithUploadTask(context.Background(), "task", "pending", 0)
+	traceUploadRequest(ctx, "GET", "https://example.com/open/ufile/files?cid=private-directory&offset=1000&limit=1000&token=private-token", time.Now(), true, nil)
+	var row map[string]any
+	if err := json.Unmarshal(output.Bytes(), &row); err != nil {
+		t.Fatal(err)
+	}
+	if row["offset"] != float64(1000) || row["limit"] != float64(1000) || row["directory"] == nil || strings.Contains(output.String(), "private-") {
+		t.Fatalf("unsafe/incomplete trace: %s", output.String())
+	}
+}
+
 // pngSignature 是 PNG 文件头，用于让 http.DetectContentType 识别二维码图片。
 var pngSignature = []byte{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A}
 

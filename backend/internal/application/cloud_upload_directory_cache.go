@@ -41,6 +41,71 @@ type uploadDirectoryCache struct {
 	entries      int
 	epoch        uint64
 	reservations map[string]*uploadNameReservation
+	paths        map[uploadDirectoryCacheKey]uploadDirectoryPath
+}
+
+type uploadDirectoryPath struct {
+	path     []pan115.Directory
+	observed time.Time
+}
+
+// rememberPath retains bounded account-scoped ancestry independently of mutable directory contents.
+func (cache *uploadDirectoryCache) rememberPath(scope, parent string, ancestors []pan115.Directory) {
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	cache.rememberPathLocked(scope, parent, ancestors)
+}
+func (cache *uploadDirectoryCache) rememberPathLocked(scope, parent string, ancestors []pan115.Directory) {
+	if len(ancestors) == 0 || ancestors[len(ancestors)-1].ID != parent {
+		return
+	}
+	if cache.paths == nil {
+		cache.paths = map[uploadDirectoryCacheKey]uploadDirectoryPath{}
+	}
+	if len(cache.paths) >= uploadDirectoryCacheLimit {
+		for key := range cache.paths {
+			delete(cache.paths, key)
+			break
+		}
+	}
+	cache.paths[uploadDirectoryCacheKey{scope, parent}] = uploadDirectoryPath{append([]pan115.Directory(nil), ancestors...), time.Now()}
+}
+
+func (cache *uploadDirectoryCache) directoryPath(scope, parent string) []pan115.Directory {
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	p := cache.paths[uploadDirectoryCacheKey{scope, parent}]
+	if time.Since(p.observed) >= uploadDirectoryTTL {
+		return nil
+	}
+	return append([]pan115.Directory(nil), p.path...)
+}
+
+// mergeUploadEntry preserves distinct same-name identities; only the exact uploaded ID is replaced.
+func mergeUploadEntry(entries []uploadEntry, entry uploadEntry) []uploadEntry {
+	result := append([]uploadEntry(nil), entries...)
+	for i, e := range result {
+		if e.ID == entry.ID {
+			result[i] = entry
+			return result
+		}
+	}
+	return append(result, entry)
+}
+
+// uploaded merges a confirmed object without extending the original full-list freshness.
+// In-flight older lists are invalidated so they cannot erase a newly confirmed upload.
+func (cache *uploadDirectoryCache) uploaded(scope, parent string, entry uploadEntry) {
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	key := uploadDirectoryCacheKey{scope, parent}
+	if flight := cache.flights[key]; flight != nil {
+		flight.invalidated = true
+	}
+	if snapshot, ok := cache.snapshots[key]; ok {
+		snapshot.entries = mergeUploadEntry(snapshot.entries, entry)
+		cache.putLocked(key, snapshot)
+	}
 }
 
 type uploadNameReservation struct {
@@ -162,6 +227,7 @@ func (cache *uploadDirectoryCache) invalidateParent(scope, parent string) {
 	cache.mu.Lock()
 	defer cache.mu.Unlock()
 	key := uploadDirectoryCacheKey{scope, parent}
+	delete(cache.paths, key)
 	cache.removeLocked(key)
 	if flight := cache.flights[key]; flight != nil {
 		flight.invalidated = true
@@ -200,6 +266,11 @@ func (cache *uploadDirectoryCache) invalidate(scope string) {
 	cache.mu.Lock()
 	defer cache.mu.Unlock()
 	cache.epoch++
+	for key := range cache.paths {
+		if key.scope == scope {
+			delete(cache.paths, key)
+		}
+	}
 	for key, flight := range cache.flights {
 		if key.scope == scope {
 			flight.invalidated = true
@@ -216,6 +287,12 @@ func (cache *uploadDirectoryCache) invalidate(scope string) {
 func (cache *uploadDirectoryCache) created(scope, parent, name, id string) {
 	cache.mu.Lock()
 	defer cache.mu.Unlock()
+	ancestors := cache.paths[uploadDirectoryCacheKey{scope, parent}]
+	if parent == "0" {
+		cache.rememberPathLocked(scope, id, []pan115.Directory{{ID: "0"}, {ID: id, Name: name}})
+	} else if len(ancestors.path) > 0 && time.Since(ancestors.observed) < uploadDirectoryTTL {
+		cache.rememberPathLocked(scope, id, append(append([]pan115.Directory(nil), ancestors.path...), pan115.Directory{ID: id, Name: name}))
+	}
 	for key, flight := range cache.flights {
 		if key.scope == scope && (key.parent == parent || key.parent == id) {
 			flight.invalidated = true

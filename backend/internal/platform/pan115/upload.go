@@ -61,6 +61,8 @@ func (c *Client) Delete(ctx context.Context, token, parent, id string) error {
 
 // uploadInit contains provider-issued object-store coordinates, never persisted or logged.
 type uploadInit struct {
+	ID        json.RawMessage `json:"file_id"`
+	PickCode  string          `json:"pick_code"`
 	Status    int             `json:"status"`
 	SignKey   string          `json:"sign_key"`
 	SignCheck string          `json:"sign_check"`
@@ -107,6 +109,18 @@ func uploadHash(ctx context.Context, f *os.File, offset, length int64, report bo
 // Upload uses 115 instant-upload verification followed by bounded OSS multipart transfers when needed.
 // The caller supplies a SHA1 for the guarded source version, or empty to hash locally, and verifies the remote result.
 func (c *Client) Upload(ctx context.Context, token, parent, name string, f *os.File, size int64, sourceSHA1 string) error {
+	return c.upload(ctx, token, parent, name, f, size, sourceSHA1, nil)
+}
+
+// UploadWithReceipt preserves provider-confirmed identity; incomplete receipts fall back to reconciliation.
+// OSS HTTP success alone is insufficient: the callback must confirm the expected content and filename.
+func (c *Client) UploadWithReceipt(ctx context.Context, token, parent, name string, f *os.File, size int64, sourceSHA1 string) (FileInfo, error) {
+	var receipt FileInfo
+	err := c.upload(ctx, token, parent, name, f, size, sourceSHA1, &receipt)
+	return receipt, err
+}
+
+func (c *Client) upload(ctx context.Context, token, parent, name string, f *os.File, size int64, sourceSHA1 string, receipt *FileInfo) error {
 	var hash string
 	var err error
 	if sourceSHA1 != "" {
@@ -137,6 +151,13 @@ func (c *Client) Upload(ctx context.Context, token, parent, name string, f *os.F
 			return e
 		}
 		if init.Status == 2 {
+			if receipt != nil {
+				id := uploadScalar(init.ID)
+				if id == "" {
+					id = uploadPickCodeID(init.PickCode)
+				}
+				*receipt = FileInfo{File: File{ID: id, ParentID: parent, Name: name, PickCode: init.PickCode, SHA1: hash, Size: size, SizeKnown: true}}
+			}
 			return nil
 		}
 		if init.Status != 6 && init.Status != 7 && init.Status != 8 {
@@ -193,9 +214,23 @@ func (c *Client) Upload(ctx context.Context, token, parent, name string, f *os.F
 	if err != nil {
 		return err
 	}
-	options := []oss.Option{oss.WithContext(ctx), oss.Callback(base64.StdEncoding.EncodeToString([]byte(callback.Value))), oss.CallbackVar(base64.StdEncoding.EncodeToString([]byte(callback.Vars)))}
+	var callbackBody []byte
+	options := []oss.Option{oss.WithContext(ctx), oss.Callback(base64.StdEncoding.EncodeToString([]byte(callback.Value))), oss.CallbackVar(base64.StdEncoding.EncodeToString([]byte(callback.Vars))), oss.CallbackResult(&callbackBody)}
+	finish := func() error {
+		result, err := parseUploadCallback(callbackBody, parent, name, size, hash)
+		if err != nil {
+			return err
+		}
+		if receipt != nil {
+			*receipt = result
+		}
+		return nil
+	}
 	if size == 0 {
-		return bucket.PutObject(init.Object, io.NewSectionReader(f, 0, 0), options...)
+		if err = bucket.PutObject(init.Object, io.NewSectionReader(f, 0, 0), options...); err != nil {
+			return err
+		}
+		return finish()
 	}
 	session, err := bucket.InitiateMultipartUpload(init.Object, oss.WithContext(ctx), oss.Sequential())
 	if err != nil {
@@ -221,5 +256,8 @@ func (c *Client) Upload(ctx context.Context, token, parent, name string, f *os.F
 	}
 	_, err = bucket.CompleteMultipartUpload(session, parts, options...)
 	complete = err == nil
-	return err
+	if err != nil {
+		return err
+	}
+	return finish()
 }

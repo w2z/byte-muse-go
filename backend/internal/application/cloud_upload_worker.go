@@ -370,6 +370,11 @@ func (s *UploadService) process(ctx context.Context, m UploadMapping, f uploadLo
 			}
 			scope += "\x00" + account
 		}
+		if pan, ok := remote.(uploadPanRemote); ok {
+			pan.paths = &s.directoryCache
+			pan.scope = scope
+			remote = pan
+		}
 		preparation = uploadDirectoryRemote{uploadRemote: remote, service: s, kind: scope}
 		defer func() {
 			if resultErr == nil || uploadDirectoryCooldown(resultErr) {

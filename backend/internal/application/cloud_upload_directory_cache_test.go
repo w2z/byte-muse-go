@@ -14,6 +14,56 @@ import (
 	"time"
 )
 
+func TestUploadReceiptCacheMergesWithoutRefreshingAge(t *testing.T) {
+	cache := &uploadDirectoryCache{}
+	key := uploadDirectoryCacheKey{"account", "0"}
+	start := time.Now().Add(-time.Second)
+	cache.putLocked(key, uploadDirectorySnapshot{started: start, entries: []uploadEntry{{ID: "old", Name: "same"}}})
+	cache.uploaded("account", "0", uploadEntry{ID: "new", Name: "same"})
+	cache.uploaded("account", "0", uploadEntry{ID: "new", Name: "same"})
+	loaded := false
+	items, err := cache.list(context.Background(), key, time.Time{}, func(context.Context, string) ([]uploadEntry, error) { loaded = true; return nil, nil })
+	if err != nil || loaded || len(items) != 2 || cache.snapshots[key].started != start {
+		t.Fatalf("items=%v loaded=%v err=%v", items, loaded, err)
+	}
+	cache.rememberPath("account", "10", []pan115.Directory{{ID: "0"}, {ID: "10", Name: "movies"}})
+	cache.created("account", "10", "child", "11")
+	ancestors := cache.directoryPath("account", "11")
+	if len(ancestors) != 3 || ancestors[2].ID != "11" || len(cache.directoryPath("other", "11")) != 0 {
+		t.Fatalf("paths=%v", ancestors)
+	}
+	cache.invalidate("account")
+	if len(cache.directoryPath("account", "11")) != 0 {
+		t.Fatal("stale ancestry retained")
+	}
+}
+
+func TestUploadReceiptInvalidatesOlderInFlightList(t *testing.T) {
+	cache := &uploadDirectoryCache{}
+	started, release := make(chan struct{}), make(chan struct{})
+	var calls atomic.Int32
+	load := func(context.Context, string) ([]uploadEntry, error) {
+		if calls.Add(1) == 1 {
+			close(started)
+			<-release
+			return nil, nil
+		}
+		return []uploadEntry{{ID: "new"}}, nil
+	}
+	done := make(chan []uploadEntry, 1)
+	go func() {
+		entries, _ := cache.list(context.Background(), uploadDirectoryCacheKey{"account", "0"}, time.Time{}, load)
+		done <- entries
+	}()
+	<-started
+	cache.uploaded("account", "0", uploadEntry{ID: "new"})
+	close(release)
+	entries := <-done
+	if len(entries) != 1 || entries[0].ID != "new" || calls.Load() != 2 {
+		t.Fatalf("old read erased upload: %v calls=%d", entries, calls.Load())
+	}
+}
+
 func TestUploadDirectoryCacheCoalescesAndSeparatesAccounts(t *testing.T) {
 	cache := &uploadDirectoryCache{}
 	var calls atomic.Int32

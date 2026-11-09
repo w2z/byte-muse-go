@@ -2,6 +2,7 @@ package application
 
 import (
 	"bytemuse/backend/internal/domain"
+	"bytemuse/backend/internal/platform/pan115"
 	"context"
 	"crypto/sha1"
 	"encoding/json"
@@ -11,6 +12,104 @@ import (
 	"os"
 	"testing"
 )
+
+type receiptUploadRemote struct {
+	directUploadRemote
+	lists      int
+	receiptBad bool
+}
+
+func (r *receiptUploadRemote) List(ctx context.Context, parent string) ([]uploadEntry, error) {
+	r.lists++
+	return r.directUploadRemote.List(ctx, parent)
+}
+func (r *receiptUploadRemote) UploadWithReceipt(ctx context.Context, parent, name string, f *os.File, size int64, hash string) (uploadEntry, error) {
+	if err := r.directUploadRemote.Upload(ctx, parent, name, f, size, hash); err != nil {
+		return uploadEntry{}, err
+	}
+	e := r.entries[len(r.entries)-1]
+	e.Info = &pan115.FileInfo{File: pan115.File{ID: e.ID, Name: name, ParentID: parent, PickCode: "pc-new", SHA1: hash, Size: size, SizeKnown: true}}
+	if r.receiptBad {
+		e.SHA1 = "bad"
+	}
+	return e, nil
+}
+
+func TestDirectUploadReceiptAvoidsVerificationList(t *testing.T) {
+	for _, bad := range []bool{false, true} {
+		t.Run(fmt.Sprint(bad), func(t *testing.T) {
+			s, m, f, _, store := recoveryFixture(t)
+			r := &receiptUploadRemote{receiptBad: bad}
+			s.provider = func(context.Context, string) (uploadRemote, error) { return r, nil }
+			state, err := s.process(context.Background(), m, f, "overwrite")
+			if err != nil || state != "completed" {
+				t.Fatalf("state=%s err=%v", state, err)
+			}
+			want := 1
+			if bad {
+				want = 2
+			}
+			if r.lists != want {
+				t.Fatalf("list calls=%d want=%d", r.lists, want)
+			}
+			if store[uploadKey(m, f, "overwrite")].StageID != "new-1" {
+				t.Fatal("receipt identity not persisted")
+			}
+		})
+	}
+}
+
+func TestDirectReceiptMoveStillVerifiesSourceAndRecovery(t *testing.T) {
+	for _, recovering := range []bool{false, true} {
+		t.Run(fmt.Sprint(recovering), func(t *testing.T) {
+			s, m, f, _, store := recoveryFixture(t)
+			r := &receiptUploadRemote{}
+			s.provider = func(context.Context, string) (uploadRemote, error) { return r, nil }
+			key := uploadKey(m, f, "overwrite")
+			store[key] = domain.UploadRecord{Key: key, Kind: "115", Root: m.ID, LocalRoot: m.LocalPath, Source: f.Absolute, Relative: f.Relative, Size: f.Size, Modified: f.Modified, Mode: "move", Policy: "overwrite", State: "pending"}
+			if recovering {
+				// A previous verified upload is not proof it still exists when a move resumes.
+				record := store[key]
+				record.State = "cleanup"
+				record.Parent = "0"
+				record.Target = f.Relative
+				record.Stage = f.Relative
+				record.StageID = "missing"
+				record.SHA1 = "old-hash"
+				store[key] = record
+			}
+			state, err := s.process(context.Background(), m, f, "overwrite")
+			if recovering {
+				if err == nil || r.lists == 0 {
+					t.Fatalf("move recovery skipped remote: %s %v", state, err)
+				}
+				if _, err = os.Stat(f.Absolute); err != nil {
+					t.Fatal("source lost", err)
+				}
+				return
+			}
+			if err != nil || state != "completed" || r.lists != 1 {
+				t.Fatalf("move=%s lists=%d err=%v", state, r.lists, err)
+			}
+			if _, err = os.Stat(f.Absolute); !errors.Is(err, os.ErrNotExist) {
+				t.Fatal("source not moved", err)
+			}
+		})
+	}
+}
+
+func TestDirectReceiptOverwriteRetainsIdentityChecks(t *testing.T) {
+	s, m, f, _, _ := recoveryFixture(t)
+	r := &receiptUploadRemote{directUploadRemote: directUploadRemote{entries: []uploadEntry{{ID: "old", Name: f.Relative, Size: 3, SHA1: "old"}}}}
+	r.afterDirectUpload = func() { r.entries[0].SHA1 = "external-change" }
+	s.provider = func(context.Context, string) (uploadRemote, error) { return r, nil }
+	if _, err := s.process(context.Background(), m, f, "overwrite"); err == nil {
+		t.Fatal("changed old file deleted using upload receipt")
+	}
+	if len(r.entries) != 2 {
+		t.Fatal("old file lost")
+	}
+}
 
 type directUploadRemote struct {
 	uploadMemoryRemote

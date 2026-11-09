@@ -9,6 +9,7 @@ import (
 	"bytemuse/backend/internal/logging"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -287,7 +288,20 @@ func traceUploadRequest(ctx context.Context, method, endpoint string, started ti
 	if errors.As(err, &cooldown) {
 		outcome = "cooldown"
 	}
-	logging.Default.Slog().InfoContext(ctx, "115 上传接口", "category", string(logging.CategorySystem), "task", trace.key, "stage", trace.stage, "retry", trace.retry, "method", method, "path", parsed.Path, "started_at", started.UTC().Format(time.RFC3339Nano), "duration_ms", time.Since(started).Milliseconds(), "sent", sent, "code", code, "http_status", status, "outcome", outcome)
+	fields := []any{"category", string(logging.CategorySystem), "task", trace.key, "stage", trace.stage, "retry", trace.retry, "method", method, "path", parsed.Path, "started_at", started.UTC().Format(time.RFC3339Nano), "duration_ms", time.Since(started).Milliseconds(), "sent", sent, "code", code, "http_status", status, "outcome", outcome}
+	if parsed.Path == "/open/ufile/files" {
+		query := parsed.Query()
+		if directory := query.Get("cid"); directory != "" {
+			sum := sha256.Sum256([]byte(directory))
+			fields = append(fields, "directory", fmt.Sprintf("%x", sum[:8]))
+		}
+		for _, name := range []string{"offset", "limit"} {
+			if value, err := strconv.Atoi(query.Get(name)); err == nil {
+				fields = append(fields, name, value)
+			}
+		}
+	}
+	logging.Default.Slog().InfoContext(ctx, "115 上传接口", fields...)
 }
 
 // UploadRetryError returns provider backoff to the scheduler without occupying a transfer worker.

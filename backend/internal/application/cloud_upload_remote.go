@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path"
+	"strings"
 	"time"
 )
 
@@ -93,6 +94,31 @@ type uploadRemote interface {
 	Delete(context.Context, string, uploadEntry) error
 }
 
+// uploadReceiptRemote returns provider-confirmed identities, checked before replacing verification reads.
+type uploadReceiptRemote interface {
+	UploadWithReceipt(context.Context, string, string, *os.File, int64, string) (uploadEntry, error)
+}
+
+// UploadWithReceipt merges confirmed identities; uncertain writes invalidate preparation snapshots.
+func (remote uploadDirectoryRemote) UploadWithReceipt(ctx context.Context, parent, name string, file *os.File, size int64, hash string) (uploadEntry, error) {
+	api, ok := remote.uploadRemote.(uploadReceiptRemote)
+	if !ok {
+		return uploadEntry{}, remote.Upload(ctx, parent, name, file, size, hash)
+	}
+	entry, err := api.UploadWithReceipt(ctx, parent, name, file, size, hash)
+	if err == nil && validUploadReceipt(entry, parent, name, size, hash) {
+		remote.service.directoryCache.uploaded(remote.kind, parent, entry)
+	} else if !uploadDirectoryCooldown(err) {
+		remote.service.directoryCache.invalidateParent(remote.kind, parent)
+	}
+	return entry, err
+}
+
+// validUploadReceipt requires exact content, provider identity and usable ancestry for local consumers.
+func validUploadReceipt(entry uploadEntry, parent, name string, size int64, hash string) bool {
+	return entry.ID != "" && !entry.Directory && entry.Name == name && entry.Size == size && entry.SHA1 != "" && strings.EqualFold(entry.SHA1, hash) && entry.Info != nil && !entry.Info.IsDirectory && entry.Info.ID == entry.ID && entry.Info.ParentID == parent && entry.Info.PickCode != "" && entry.Info.SizeKnown && entry.Info.Size == size && entry.Info.Name == name && strings.EqualFold(entry.Info.SHA1, hash) && (parent == "0" || (len(entry.Info.Path) > 0 && entry.Info.Path[len(entry.Info.Path)-1].ID == parent))
+}
+
 // uploadPreparationRemote caches only one preparation pass. Shared creation does not imply an empty directory;
 // the worker discards this snapshot before transfer and always verifies the final remote object afresh.
 type uploadPreparationRemote struct {
@@ -131,8 +157,10 @@ type uploadPanAPI interface {
 	Delete(context.Context, string, string, string) error
 }
 type uploadPanRemote struct {
-	s   *Pan115Service
-	api uploadPanAPI
+	s     *Pan115Service
+	api   uploadPanAPI
+	paths *uploadDirectoryCache
+	scope string
 }
 
 // AccountID reads the bound account locally for account-scoped verification and handoff.
@@ -156,6 +184,9 @@ func (r uploadPanRemote) List(ctx context.Context, parent string) ([]uploadEntry
 			info := pan115.FileInfo{File: f, Path: append([]pan115.Directory(nil), page.Path...)}
 			result = append(result, uploadEntry{ID: f.ID, Name: f.Name, Size: f.Size, Directory: f.IsDirectory, SHA1: f.SHA1, Info: &info})
 		}
+		if r.paths != nil {
+			r.paths.rememberPath(r.scope, parent, page.Path)
+		}
 		if !page.HasMore {
 			return result, nil
 		}
@@ -176,6 +207,30 @@ func (r uploadPanRemote) Upload(ctx context.Context, parent, name string, f *os.
 		return err
 	}
 	return r.api.Upload(ctx, token, parent, name, f, size, sourceSHA1)
+}
+
+// UploadWithReceipt reuses upload responses and ancestry observed during preparation.
+func (r uploadPanRemote) UploadWithReceipt(ctx context.Context, parent, name string, f *os.File, size int64, hash string) (uploadEntry, error) {
+	api, ok := r.api.(interface {
+		UploadWithReceipt(context.Context, string, string, string, *os.File, int64, string) (pan115.FileInfo, error)
+	})
+	if !ok {
+		return uploadEntry{}, r.Upload(ctx, parent, name, f, size, hash)
+	}
+	token, err := r.s.accessToken(ctx, false)
+	if err != nil {
+		return uploadEntry{}, err
+	}
+	var ancestors []pan115.Directory
+	if r.paths != nil {
+		ancestors = r.paths.directoryPath(r.scope, parent)
+	}
+	info, err := api.UploadWithReceipt(ctx, token, parent, name, f, size, hash)
+	if err != nil {
+		return uploadEntry{}, err
+	}
+	info.Path = ancestors
+	return uploadEntry{ID: info.ID, Name: info.Name, Size: info.Size, SHA1: info.SHA1, Info: &info}, nil
 }
 func (r uploadPanRemote) Rename(ctx context.Context, parent string, e uploadEntry, name string) error {
 	return r.s.withToken(ctx, func(token string) error { return r.api.Rename(ctx, token, e.ID, name) })
@@ -222,7 +277,7 @@ func uploadProvider(pan *Pan115Service, cloud *CloudDriveSettings) func(context.
 			if !ok {
 				return nil, fmt.Errorf("115 客户端不支持上传")
 			}
-			return uploadPanRemote{pan, api}, nil
+			return uploadPanRemote{s: pan, api: api}, nil
 		}
 		c, err := cloud.connection(ctx)
 		if err != nil {
