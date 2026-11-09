@@ -93,46 +93,66 @@ func TestUploadRetryErrorTimeFormat(t *testing.T) {
 	}
 }
 
-func TestUploadWorkerRequestsBypassFixedAdmission(t *testing.T) {
-	entered := make(chan struct{}, 5)
-	release := make(chan struct{})
-	unblock := sync.OnceFunc(func() { close(release) })
-	client := newTestClient(t, func(writer http.ResponseWriter, request *http.Request) {
-		entered <- struct{}{}
-		select {
-		case <-release:
-		case <-request.Context().Done():
-		}
-		writeJSON(t, writer, `{"state":true,"code":0,"data":{"file_id":"child"}}`)
+// Upload control requests share pacing; OSS transfer concurrency is separate.
+func TestUploadWorkerRequestsShareAdmission(t *testing.T) {
+	var mu sync.Mutex
+	var starts []time.Time
+	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		starts = append(starts, time.Now())
+		mu.Unlock()
+		writeJSON(t, w, `{"state":true,"code":0,"data":{"file_id":"child"}}`)
 	})
-	client.gap = time.Hour
-	client.nextCall = time.Now()
-	client.slots <- struct{}{}
-	defer func() { <-client.slots }()
-	ctx, cancel := context.WithTimeout(WithUploadWorker(context.Background()), 3*time.Second)
-	defer cancel()
-	defer unblock()
-	results := make(chan error, 5)
-	for index := 0; index < 5; index++ {
-		go func() { _, err := client.CreateFolder(ctx, "token", "0", "child"); results <- err }()
+	client.gap = 30 * time.Millisecond
+	results := make(chan error, 6)
+	for i := 0; i < 6; i++ {
+		go func(i int) {
+			ctx := context.Background()
+			if i%2 == 0 {
+				ctx = WithUploadWorker(ctx)
+			}
+			_, err := client.CreateFolder(ctx, "token", "0", "child")
+			results <- err
+		}(i)
 	}
-	for index := 0; index < 5; index++ {
-		select {
-		case <-entered:
-		case <-ctx.Done():
-			t.Fatal("upload requests blocked by fixed slots or pacing")
-		}
-	}
-	unblock()
-	for index := 0; index < 5; index++ {
+	for i := 0; i < 6; i++ {
 		if err := <-results; err != nil {
 			t.Fatal(err)
 		}
 	}
-	normal, stop := context.WithTimeout(context.Background(), 30*time.Millisecond)
-	defer stop()
-	if _, err := client.admit(normal); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("normal admission changed: %v", err)
+	for i := 1; i < len(starts); i++ {
+		if starts[i].Sub(starts[i-1]) < 20*time.Millisecond {
+			t.Fatalf("requests burst: %v", starts[i].Sub(starts[i-1]))
+		}
+	}
+}
+
+func TestUploadRecoveryProbeRejectsQueuedBurst(t *testing.T) {
+	var mu sync.Mutex
+	calls := 0
+	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		calls++
+		mu.Unlock()
+		time.Sleep(20 * time.Millisecond)
+		writeJSON(t, w, `{"state":false,"code":770004,"message":"rate limited"}`)
+	})
+	client.cooldown = time.Minute
+	results := make(chan error, 5)
+	for i := 0; i < 5; i++ {
+		go func() {
+			_, err := client.CreateFolder(WithUploadWorker(context.Background()), "token", "0", "child")
+			results <- err
+		}()
+	}
+	for i := 0; i < 5; i++ {
+		var deferred *UploadRetryError
+		if err := <-results; !errors.As(err, &deferred) {
+			t.Fatal(err)
+		}
+	}
+	if calls != 1 {
+		t.Fatalf("recovery sent %d probes", calls)
 	}
 }
 
@@ -165,7 +185,7 @@ func TestUploadRateLimitReturnsWithoutInternalSleep(t *testing.T) {
 	}
 }
 
-func TestUploadCooldownEscalatesAcrossQueueAttemptsAndResetsOnSuccess(t *testing.T) {
+func TestUploadCooldownEscalatesAcrossQueueAttemptsAndRetainsBriefSuccess(t *testing.T) {
 	client := New(nil)
 	ctx := WithUploadWorker(context.Background())
 	for index, want := range []time.Duration{time.Minute, 2 * time.Minute, 4 * time.Minute} {
@@ -184,45 +204,29 @@ func TestUploadCooldownEscalatesAcrossQueueAttemptsAndResetsOnSuccess(t *testing
 	started := time.Now()
 	_, err := callValue(client, ctx, "GET", func() (int, error) { return 0, &APIError{Code: 770004} })
 	var deferred *UploadRetryError
-	if !errors.As(err, &deferred) || deferred.Until.Sub(started) > time.Minute+time.Second {
-		t.Fatalf("success did not reset recovery: %v", err)
+	if !errors.As(err, &deferred) || deferred.Until.Sub(started) < 8*time.Minute {
+		t.Fatalf("brief success reset recovery: %v", err)
 	}
 }
 
 func TestUploadConcurrentRateLimitsShareOneRecoveryRound(t *testing.T) {
 	client := New(nil)
 	ctx := WithUploadWorker(context.Background())
-	started, release := make(chan struct{}, 5), make(chan struct{})
-	results := make(chan error, 5)
-	for index := 0; index < 5; index++ {
-		go func() {
-			_, err := callValue(client, ctx, "GET", func() (int, error) {
-				started <- struct{}{}
-				<-release
-				return 0, &APIError{Code: 770004}
-			})
-			results <- err
-		}()
-	}
-	for index := 0; index < 5; index++ {
-		<-started
-	}
-	close(release)
 	var until time.Time
-	for index := 0; index < 5; index++ {
+	for i := 0; i < 5; i++ {
+		_, err := callValue(client, ctx, "GET", func() (int, error) { return 0, &APIError{Code: 770004} })
 		var deferred *UploadRetryError
-		if err := <-results; !errors.As(err, &deferred) {
+		if !errors.As(err, &deferred) {
 			t.Fatal(err)
 		}
-		if index == 0 {
+		if i == 0 {
 			until = deferred.Until
-		}
-		if !deferred.Until.Equal(until) {
-			t.Fatal("same burst extended cooldown repeatedly")
+		} else if !deferred.Until.Equal(until) {
+			t.Fatal("same burst extended cooldown")
 		}
 	}
 	if client.uploadCooldownRounds != 1 {
-		t.Fatalf("rounds=%d", client.uploadCooldownRounds)
+		t.Fatal(client.uploadCooldownRounds)
 	}
 }
 
@@ -230,10 +234,8 @@ func TestUploadInFlightSuccessDoesNotResetCooldownAndHonorsRetryAfter(t *testing
 	client := New(nil)
 	ctx := WithUploadWorker(context.Background())
 	_, err := callValue(client, ctx, "GET", func() (int, error) {
-		_, limited := callValue(client, ctx, "GET", func() (int, error) { return 0, &APIError{Code: 770004} })
-		if limited == nil {
-			t.Fatal("expected cooldown")
-		}
+		client.extendCooldown(time.Minute)
+		client.uploadCooldownRounds = 1
 		return 1, nil
 	})
 	if err != nil || client.uploadCooldownRounds != 1 {

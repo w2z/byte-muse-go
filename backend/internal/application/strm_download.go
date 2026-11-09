@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"bytemuse/backend/internal/domain"
@@ -112,6 +113,12 @@ func (s *StrmService) downloadStrmMediaOnce(ctx context.Context, root, target, k
 	info, err := dir.Lstat(relative)
 	if err == nil {
 		if !info.Mode().IsRegular() {
+			if _, local := ctx.Value(localUploadSourceKey{}).(*ports.UploadReceipt); local {
+				if conflict, ok := ctx.Value(localUploadConflictKey{}).(*atomic.Bool); ok {
+					conflict.Store(true)
+				}
+				return false, errLocalUploadConflict
+			}
 			return false, errors.New("下载目标不是普通文件")
 		}
 		if mode != domain.StrmGenerateFull {
@@ -127,7 +134,10 @@ func (s *StrmService) downloadStrmMediaOnce(ctx context.Context, root, target, k
 					return false, err
 				}
 				if count != receipt.Size || !strings.EqualFold(fmt.Sprintf("%x", hash.Sum(nil)), receipt.SHA1) {
-					return false, errors.New("本地附件与上传内容不同，保留文件等待核对")
+					if conflict, ok := ctx.Value(localUploadConflictKey{}).(*atomic.Bool); ok {
+						conflict.Store(true)
+					}
+					return false, errLocalUploadConflict
 				}
 			}
 			return true, nil

@@ -294,3 +294,22 @@ func TestUploadDirectLegacy115LeavesTemporaryObjectsUntouched(t *testing.T) {
 		t.Fatalf("state=%s err=%v entries=%v", state, err, remote.entries)
 	}
 }
+
+// A fresh recovery read must not be repeated just because the mode is move.
+func TestMoveRecoveryUsesOneFreshRead(t *testing.T) {
+	s, m, f, _, store := recoveryFixture(t)
+	body, err := os.ReadFile(f.Absolute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash := fmt.Sprintf("%x", sha1.Sum(body))
+	r := &receiptUploadRemote{}
+	r.entries = []uploadEntry{{ID: "installed", Name: f.Relative, Size: f.Size, SHA1: hash}}
+	s.provider = func(context.Context, string) (uploadRemote, error) { return r, nil }
+	key := uploadKey(m, f, "overwrite")
+	store[key] = domain.UploadRecord{Key: key, Kind: "115", Root: m.ID, LocalRoot: m.LocalPath, Source: f.Absolute, Relative: f.Relative, Size: f.Size, Modified: f.Modified, Mode: "move", Policy: "overwrite", State: "cleanup", Parent: "0", Target: f.Relative, Stage: f.Relative, StageID: "installed", SHA1: hash, Overwrite: &domain.UploadOverwriteSnapshot{}}
+	state, err := s.process(context.Background(), m, f, "overwrite")
+	if err != nil || state != "completed" || r.lists != 1 {
+		t.Fatalf("state=%s reads=%d err=%v", state, r.lists, err)
+	}
+}

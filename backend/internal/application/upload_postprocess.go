@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"bytemuse/backend/internal/domain"
@@ -18,6 +19,18 @@ import (
 
 // Local handoff follows the existing event synchronization switch; it does not enable STRM implicitly.
 const pan115LocalUploadEnabledKey = "PAN115_EVENT_ENABLE"
+
+// uploadLocalPostprocessError separates local failures from uncertain remote writes.
+type uploadLocalPostprocessError struct{ error }
+
+func (e *uploadLocalPostprocessError) Error() string {
+	return "上传已核验，本地后处理待重试：" + e.error.Error()
+}
+func (e *uploadLocalPostprocessError) Unwrap() error { return e.error }
+
+var errLocalUploadConflict = errors.New("本地附件与上传内容不同，保留文件等待核对")
+
+type localUploadConflictKey struct{}
 
 type localUploadSourceKey struct{}
 
@@ -35,7 +48,7 @@ func (s *StrmService) BeginLocalUpload() func() {
 }
 
 // ResumeLocalUpload recovers an existing handoff using local storage only. Its existence proves
-// remote replacement cleanup preceded handoff; move recovery and legacy tasks retain remote verification.
+// remote replacement cleanup preceded handoff; move deletion is verified separately by the worker.
 func (s *StrmService) ResumeLocalUpload(ctx context.Context, record domain.UploadRecord) (bool, error) {
 	if s.uploadReceipts == nil || s.managedAccount == nil {
 		return false, nil
@@ -143,6 +156,8 @@ func (s *StrmService) ProcessLocalUpload(ctx context.Context, account string, re
 	}
 	ctx = context.WithValue(ctx, managedAccountKey{}, account)
 	ctx = context.WithValue(ctx, localUploadSourceKey{}, receipt)
+	var conflict atomic.Bool
+	ctx = context.WithValue(ctx, localUploadConflictKey{}, &conflict)
 	for _, mapping := range mappings {
 		if mapping.Kind != domain.StrmKindPan115 {
 			continue
@@ -171,6 +186,9 @@ func (s *StrmService) ProcessLocalUpload(ctx context.Context, account string, re
 			}
 		}
 		result := s.scanMapping(ctx, s.root, mapping, base, domain.StrmGenerateIdempotent, walk, func() {}, formats)
+		if conflict.Load() {
+			return errLocalUploadConflict
+		}
 		if result.Message != "" || result.Failed > 0 || result.DownloadFailed > 0 {
 			return fmt.Errorf("本地上传后处理失败：%s", result.Message)
 		}

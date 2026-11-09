@@ -284,7 +284,10 @@ func (s *UploadService) process(ctx context.Context, m UploadMapping, f uploadLo
 			if record.ErrorKind == "blocked" {
 				record.NextRetry = time.Now().Add(15 * time.Minute).UTC().Format(time.RFC3339Nano)
 			}
-			if record.Error != "" && record.ErrorKind != "blocked" && record.ErrorKind != "locked" && record.Retries < uploadMaxAutoRetries {
+			if errors.Is(resultErr, errLocalUploadConflict) {
+				record.ErrorKind = "local_conflict"
+			}
+			if record.Error != "" && record.ErrorKind != "local_conflict" && record.ErrorKind != "blocked" && record.ErrorKind != "locked" && record.Retries < uploadMaxAutoRetries {
 				record.Error = uploadRetryMessage(record.Retries, record.Error)
 			}
 		} else if record.CompletedAt == "" && (record.State == "completed" || record.State == "skipped") {
@@ -308,13 +311,33 @@ func (s *UploadService) process(ctx context.Context, m UploadMapping, f uploadLo
 			record.State = "discarding"
 		}
 	}
-	if record != nil && record.Kind == "115" && record.Mode != "move" && record.State == "cleanup" && record.Intent != "delete" && record.Intent != "stop" && s.resumeLocalUpload != nil {
+	if record != nil && record.Kind == "115" && record.State == "cleanup" && record.Intent != "delete" && record.Intent != "stop" && s.resumeLocalUpload != nil {
 		handled, resumeErr := s.resumeLocalUpload(ctx, *record)
 		if resumeErr != nil {
-			return record.State, resumeErr
+			return record.State, &uploadLocalPostprocessError{resumeErr}
 		}
 		if handled {
 			if record.Mode == "move" {
+				// Handoff already proves remote replacement cleanup finished. Only verify
+				// the exact installed object before deleting the retained move source.
+				remote, remoteErr := s.provider(ctx, m.Kind)
+				if remoteErr != nil {
+					return record.State, remoteErr
+				}
+				entries, listErr := remote.List(pan115.WithUploadStage(ctx, "move_verify"), record.Parent)
+				if listErr != nil {
+					return record.State, listErr
+				}
+				found := false
+				for _, entry := range entries {
+					if entry.ID == record.StageID && entry.Name == record.Target && !entry.Directory && entry.Size == record.Size && entry.SHA1 != "" && strings.EqualFold(entry.SHA1, record.SHA1) {
+						found = true
+						break
+					}
+				}
+				if !found {
+					return record.State, errUploadAttention
+				}
 				if err = removeUploadedSource(ctx, record); err != nil {
 					return record.State, err
 				}
@@ -377,7 +400,8 @@ func (s *UploadService) process(ctx context.Context, m UploadMapping, f uploadLo
 		}
 		preparation = uploadDirectoryRemote{uploadRemote: remote, service: s, kind: scope}
 		defer func() {
-			if resultErr == nil || uploadDirectoryCooldown(resultErr) {
+			var localErr *uploadLocalPostprocessError
+			if resultErr == nil || uploadDirectoryCooldown(resultErr) || errors.As(resultErr, &localErr) {
 				return
 			}
 			if isUploadRemoteMissingError(resultErr) {

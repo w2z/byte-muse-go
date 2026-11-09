@@ -40,17 +40,6 @@ func (s *UploadService) processDirectUpload(ctx context.Context, remote uploadRe
 		}
 		return readErr
 	}
-	if fresh {
-		err = refresh(attemptStarted)
-	} else {
-		entries, err = remote.List(ctx, record.Parent)
-	}
-	if err != nil {
-		if isUploadRemoteMissingError(err) {
-			return record.State, fmt.Errorf("%w：%w", errUploadRemoteMissing, err)
-		}
-		return record.State, err
-	}
 	var file *os.File
 	if record.State == "pending" {
 		if !sourceGuarded {
@@ -88,6 +77,22 @@ func (s *UploadService) processDirectUpload(ctx context.Context, remote uploadRe
 		}
 		domain.ReportUploadProgress(ctx, 0, source.Size, "uploading")
 	}
+	// Hash first, then obtain one sufficiently fresh snapshot for conflict/move checks.
+	if fresh {
+		barrier := attemptStarted
+		if record.Mode == "move" {
+			barrier = time.Now()
+		}
+		err = refresh(barrier)
+	} else {
+		entries, err = remote.List(ctx, record.Parent)
+	}
+	if err != nil {
+		if isUploadRemoteMissingError(err) {
+			return record.State, fmt.Errorf("%w：%w", errUploadRemoteMissing, err)
+		}
+		return record.State, err
+	}
 	verified := func(objects []uploadEntry) (uploadEntry, bool) {
 		for _, entry := range objects {
 			if entry.Name == record.Target && !entry.Directory && entry.Size == record.Size && entry.SHA1 != "" && strings.EqualFold(entry.SHA1, record.SHA1) && (record.StageID == "" || entry.ID == record.StageID) {
@@ -98,12 +103,10 @@ func (s *UploadService) processDirectUpload(ctx context.Context, remote uploadRe
 	}
 	installed, found := verified(entries)
 	_, hasTarget := findUploadEntry(entries, record.Target)
-	if (found || (record.Kind == "115" && record.Policy == "overwrite" && record.Overwrite == nil && hasTarget)) && (!fresh || time.Since(attemptStarted) >= uploadDirectoryTTL || record.Mode == "move") {
-		barrier := attemptStarted
-		if time.Since(attemptStarted) >= uploadDirectoryTTL || record.Mode == "move" {
-			barrier = time.Now()
-		}
-		if err = refresh(barrier); err != nil {
+	// A fresh read above already satisfies the identity barrier; do not use the total
+	// hashing time to force a second read immediately after it completes.
+	if (!fresh || (record.Mode != "move" && time.Since(attemptStarted) >= uploadDirectoryTTL)) && (found || (record.Kind == "115" && record.Policy == "overwrite" && record.Overwrite == nil && hasTarget)) {
+		if err = refresh(time.Now()); err != nil {
 			return record.State, err
 		}
 		installed, found = verified(entries)
@@ -276,7 +279,7 @@ func (s *UploadService) processDirectUpload(ctx context.Context, remote uploadRe
 			return record.State, fmt.Errorf("无法确认上传回执所属账号")
 		}
 		if err = s.postprocess(ctx, account, *record, *installed.Info); err != nil {
-			return record.State, fmt.Errorf("上传已核验，本地后处理待重试：%w", err)
+			return record.State, &uploadLocalPostprocessError{err}
 		}
 	}
 	if record.Mode != "move" {

@@ -31,7 +31,7 @@ const (
 )
 
 // 默认请求节流参数：相邻请求间隔 400ms 且严格串行，单个响应体上限 4MiB。
-// 上传 worker 由用户设置限制并发，跳过固定节流，但仍遵守服务端限流后的冷却。
+// 上传控制请求共享节流；OSS 数据传输仍由上传任务并发数控制。
 //
 // 115 对开放接口的突发并发极其敏感：参考实现（MoviePilot、MeBox）实测 3 QPS 可长期稳定，
 // 提到 8 QPS 会被阿里云 WAF 拦截并返回 405 阻断页，随后整体吞吐反而更低。
@@ -151,8 +151,9 @@ func Unauthorized(err error) bool {
 
 // Client 是直连 115 开放平台的协议客户端。
 type Client struct {
-	http  *http.Client
-	slots chan struct{}
+	http        *http.Client
+	slots       chan struct{}
+	uploadTurns chan struct{} // Hold a worker request through decoding and cooldown publication.
 
 	// 节流参数：gap 是普通请求的最小间隔，playGap 是直链换取的最小间隔，
 	// cooldown 是命中限流后的冷却时长，backoff 是网络错误与 5xx 的退避基数。
@@ -176,6 +177,7 @@ type Client struct {
 	retryAt              time.Time
 	retryCause           error
 	uploadCooldownRounds int
+	uploadRecoverySince  time.Time
 }
 
 // New 创建协议客户端；client 为空时使用内置超时。
@@ -188,16 +190,17 @@ func New(client *http.Client) *Client {
 		clone.Timeout = requestTimeout
 	}
 	return &Client{
-		http:     &clone,
-		slots:    make(chan struct{}, maxInFlight),
-		gap:      requestGap,
-		playGap:  playRequestGap,
-		cooldown: rateLimitBackoff,
-		backoff:  serverRetryBaseWait,
-		passport: passportBase,
-		qrcode:   qrcodeBase,
-		api:      apiBase,
-		life:     "https://webapi.115.com",
+		http:        &clone,
+		slots:       make(chan struct{}, maxInFlight),
+		uploadTurns: make(chan struct{}, 1),
+		gap:         requestGap,
+		playGap:     playRequestGap,
+		cooldown:    rateLimitBackoff,
+		backoff:     serverRetryBaseWait,
+		passport:    passportBase,
+		qrcode:      qrcodeBase,
+		api:         apiBase,
+		life:        "https://webapi.115.com",
 	}
 }
 
@@ -215,17 +218,6 @@ func (c *Client) Close() {
 // admit 取得一次普通请求配额：先占用并发槽，再等待全局冷却与最小间隔。
 // 返回的释放函数必须调用，否则并发槽不会归还。
 func (c *Client) admit(ctx context.Context) (func(), error) {
-	if worker, _ := ctx.Value(uploadWorkerKey{}).(bool); worker {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		c.mu.Lock()
-		defer c.mu.Unlock()
-		if time.Now().Before(c.retryAt) {
-			return nil, &UploadRetryError{Until: c.retryAt, Cause: c.retryCause}
-		}
-		return func() {}, nil
-	}
 	return c.admitWith(ctx, c.gap, &c.nextCall)
 }
 
@@ -320,8 +312,8 @@ func (err *UploadRetryError) Error() string {
 
 func (err *UploadRetryError) Unwrap() error { return err.Cause }
 
-// WithUploadWorker delegates request concurrency and pacing to a bounded upload worker.
-// Only task-owned sequential requests may use it; provider cooldown and retry behavior remain shared.
+// WithUploadWorker returns cooldown to the durable queue without bypassing API pacing.
+// Control requests are serialized through response decoding; OSS transfers remain concurrent.
 func WithUploadWorker(ctx context.Context) context.Context {
 	return context.WithValue(ctx, uploadWorkerKey{}, true)
 }
@@ -336,6 +328,24 @@ func (c *Client) admitWith(ctx context.Context, gap time.Duration, next *time.Ti
 	}
 	release := func() { <-c.slots }
 	for {
+		if err := ctx.Err(); err != nil {
+			release()
+			return nil, err
+		}
+		if worker, _ := ctx.Value(uploadWorkerKey{}).(bool); worker {
+			c.mu.Lock()
+			if time.Now().Before(c.retryAt) {
+				err := &UploadRetryError{Until: c.retryAt, Cause: c.retryCause}
+				c.mu.Unlock()
+				release()
+				return nil, err
+			}
+			// During recovery, successful probes resume at a conservative pace.
+			if c.uploadCooldownRounds > 0 && gap < time.Second {
+				gap = time.Second
+			}
+			c.mu.Unlock()
+		}
 		wait, cooling := c.reserve(gap, next)
 		if wait > 0 {
 			timer := time.NewTimer(wait)
@@ -348,6 +358,16 @@ func (c *Client) admitWith(ctx context.Context, gap time.Duration, next *time.Ti
 			}
 		}
 		if !cooling {
+			if worker, _ := ctx.Value(uploadWorkerKey{}).(bool); worker {
+				c.mu.Lock()
+				if time.Now().Before(c.retryAt) {
+					err := &UploadRetryError{Until: c.retryAt, Cause: c.retryCause}
+					c.mu.Unlock()
+					release()
+					return nil, err
+				}
+				c.mu.Unlock()
+			}
 			return release, nil
 		}
 	}
@@ -473,14 +493,29 @@ func matchesRateLimitMessage(message string) bool {
 // 上下文取消由 attempt 内部的配额等待负责，取消后立即返回 context 错误而不是继续重试。
 func callValue[T any](c *Client, ctx context.Context, method string, attempt func() (T, error)) (T, error) {
 	var zero T
+	// Keep waiting workers behind the probe until its decoded result updates cooldown.
+	if worker, _ := ctx.Value(uploadWorkerKey{}).(bool); worker {
+		select {
+		case c.uploadTurns <- struct{}{}:
+		case <-ctx.Done():
+			return zero, ctx.Err()
+		}
+		defer func() { <-c.uploadTurns }()
+	}
 	for index := 1; ; index++ {
 		started := time.Now()
 		value, err := attempt()
 		if err == nil {
 			if worker, _ := ctx.Value(uploadWorkerKey{}).(bool); worker {
 				c.mu.Lock()
-				if !started.Before(c.retryAt) {
-					c.uploadCooldownRounds = 0
+				if !started.Before(c.retryAt) && c.uploadCooldownRounds > 0 {
+					if c.uploadRecoverySince.IsZero() {
+						c.uploadRecoverySince = started
+					}
+					if time.Since(c.uploadRecoverySince) >= time.Minute {
+						c.uploadCooldownRounds = 0
+						c.uploadRecoverySince = time.Time{}
+					}
 				}
 				c.mu.Unlock()
 			}
@@ -496,6 +531,7 @@ func callValue[T any](c *Client, ctx context.Context, method string, attempt fun
 			}
 			if _, retryable := c.retryDelay(method, err, 1); retryable && isRateLimitError(err) {
 				c.mu.Lock()
+				c.uploadRecoverySince = time.Time{}
 				if !time.Now().Before(c.retryAt) {
 					c.uploadCooldownRounds = min(c.uploadCooldownRounds+1, 6)
 					wait, _ := c.retryDelay(method, err, c.uploadCooldownRounds)

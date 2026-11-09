@@ -39,9 +39,9 @@ func uploadBatchActive(records []domain.UploadRecord) bool {
 	return false
 }
 
-// uploadRetriesExhausted reports a non-blocked failure that has used all automatic attempts.
+// uploadRetriesExhausted stops exhausted failures and deterministic local conflicts until manual retry.
 func uploadRetriesExhausted(record domain.UploadRecord) bool {
-	return record.Error != "" && record.ErrorKind != "blocked" && record.ErrorKind != "locked" && record.ErrorKind != "cooldown" && record.Retries >= uploadMaxAutoRetries
+	return record.Error != "" && (record.ErrorKind == "local_conflict" || (record.ErrorKind != "blocked" && record.ErrorKind != "locked" && record.ErrorKind != "cooldown" && record.Retries >= uploadMaxAutoRetries))
 }
 
 // Control serializes queue commands with discovery and waits for durable acknowledgement.
@@ -692,7 +692,7 @@ func uploadPresentationState(r domain.UploadRecord, liveState string, current bo
 		return "blocked"
 	}
 	if r.Error != "" {
-		if r.Retries < uploadMaxAutoRetries {
+		if !uploadRetriesExhausted(r) {
 			return "retrying"
 		}
 		return "failed"

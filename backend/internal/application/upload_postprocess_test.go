@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -174,7 +175,7 @@ func TestUploadPostprocessPendingCopyResumesWithoutRemote(t *testing.T) {
 	if err = os.WriteFile(filepath.Join(s.root, "movies", "movie.srt"), []byte("external"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if handled, err := s.ResumeLocalUpload(ctx, record); !handled || err == nil {
+	if handled, err := s.ResumeLocalUpload(ctx, record); !handled || !errors.Is(err, errLocalUploadConflict) {
 		t.Fatal("different existing attachment accepted")
 	}
 	if err = os.Remove(filepath.Join(s.root, "movies", "movie.srt")); err != nil {
@@ -253,5 +254,100 @@ func TestUploadPostprocessCopiesBeforeMoveAndDeduplicatesEvents(t *testing.T) {
 	}
 	if api.infoCalls != 1 {
 		t.Fatalf("move info calls=%d", api.infoCalls)
+	}
+}
+
+// A durable local handoff failure must not open a remote client, including for move.
+func TestMovePostprocessFailureRetriesLocally(t *testing.T) {
+	s, m, f, _, store := recoveryFixture(t)
+	key := uploadKey(m, f, "overwrite")
+	store[key] = domain.UploadRecord{Key: key, Kind: "115", State: "cleanup", Mode: "move", Parent: "0", Stage: f.Relative, Target: f.Relative, StageID: "uploaded", Source: f.Absolute, LocalRoot: m.LocalPath, Relative: f.Relative, Size: f.Size, Modified: f.Modified}
+	calls := 0
+	s.provider = func(context.Context, string) (uploadRemote, error) {
+		calls++
+		return nil, errors.New("remote must not run")
+	}
+	s.SetLocalUploadRecovery(func(context.Context, domain.UploadRecord) (bool, error) {
+		return true, errors.New("local disk unavailable")
+	}, nil)
+	_, err := s.process(context.Background(), m, f, "overwrite")
+	if err == nil || calls != 0 {
+		t.Fatalf("local retry accessed remote: calls=%d err=%v", calls, err)
+	}
+	if _, err = os.Stat(f.Absolute); err != nil {
+		t.Fatal("source lost", err)
+	}
+}
+
+func TestLocalConflictRejectsNonRegularTarget(t *testing.T) {
+	s, _, _, _, values := managedFixture(t)
+	local := t.TempDir()
+	source := filepath.Join(local, "poster.jpg")
+	body := []byte("source")
+	if err := os.WriteFile(source, body, 0600); err != nil {
+		t.Fatal(err)
+	}
+	stat, _ := os.Stat(source)
+	receipt := &ports.UploadReceipt{FileID: "42", ParentID: "10", Info: `{"id":"42"}`, LocalRoot: local, Relative: "poster.jpg", Size: int64(len(body)), SHA1: fmt.Sprintf("%x", sha1.Sum(body)), Modified: stat.ModTime().UnixNano()}
+	target := filepath.Join(s.root, "movies", "poster.jpg")
+	if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(target, 0755); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.WithValue(context.Background(), localUploadSourceKey{}, receipt)
+	var conflict atomic.Bool
+	ctx = context.WithValue(ctx, localUploadConflictKey{}, &conflict)
+	_, err := s.downloadStrmMediaOnce(ctx, s.root, filepath.Join(s.root, "movies"), "115", strmSourceFile{ID: "42", Name: "poster.jpg", SizeKnown: true, Size: int64(len(body))}, domain.StrmGenerateIncremental)
+	if !errors.Is(err, errLocalUploadConflict) || !conflict.Load() {
+		t.Fatalf("non-regular target not classified: %v", err)
+	}
+	_ = values
+}
+
+func TestLocalConflictStopsAutomaticRetryAndAllowsManualRetry(t *testing.T) {
+	s, m, f, _, store := recoveryFixture(t)
+	key := uploadKey(m, f, "overwrite")
+	store[key] = domain.UploadRecord{Key: key, Kind: "115", State: "cleanup", Mode: "move", Parent: "0", StageID: "installed", Source: f.Absolute}
+	s.SetLocalUploadRecovery(func(context.Context, domain.UploadRecord) (bool, error) { return true, errLocalUploadConflict }, nil)
+	_, err := s.process(context.Background(), m, f, "overwrite")
+	r := store[key]
+	if !errors.Is(err, errLocalUploadConflict) || uploadRetryDue(r, time.Now()) || uploadPresentationState(r, "", false, "running", true, true) != "failed" {
+		t.Fatalf("conflict auto-retried: %+v %v", r, err)
+	}
+	retry, changed := transformUploadControl(r, "retry", "paused", false)
+	if !changed || retry.Error != "" || !uploadRetryDue(retry, time.Now()) {
+		t.Fatalf("manual retry unavailable: %+v", retry)
+	}
+}
+
+func TestMoveLocalRecoveryVerifiesRemoteBeforeDeletingSource(t *testing.T) {
+	for _, present := range []bool{false, true} {
+		t.Run(fmt.Sprint(present), func(t *testing.T) {
+			s, m, f, _, store := recoveryFixture(t)
+			body, _ := os.ReadFile(f.Absolute)
+			hash := fmt.Sprintf("%x", sha1.Sum(body))
+			key := uploadKey(m, f, "overwrite")
+			store[key] = domain.UploadRecord{Key: key, Kind: "115", State: "cleanup", Mode: "move", Parent: "0", Target: f.Relative, Stage: f.Relative, StageID: "installed", Source: f.Absolute, LocalRoot: m.LocalPath, Relative: f.Relative, Size: f.Size, Modified: f.Modified, SHA1: hash}
+			remote := &receiptUploadRemote{}
+			if present {
+				remote.entries = []uploadEntry{{ID: "installed", Name: f.Relative, Size: f.Size, SHA1: hash}}
+			}
+			s.provider = func(context.Context, string) (uploadRemote, error) { return remote, nil }
+			s.SetLocalUploadRecovery(func(context.Context, domain.UploadRecord) (bool, error) { return true, nil }, nil)
+			state, err := s.process(context.Background(), m, f, "overwrite")
+			_, statErr := os.Stat(f.Absolute)
+			if remote.lists != 1 || len(remote.names) != 0 {
+				t.Fatalf("reads=%d uploads=%d", remote.lists, len(remote.names))
+			}
+			if present {
+				if err != nil || state != "completed" || !errors.Is(statErr, os.ErrNotExist) {
+					t.Fatalf("move=%s %v source=%v", state, err, statErr)
+				}
+			} else if err == nil || statErr != nil {
+				t.Fatalf("unverified source deleted: %v %v", err, statErr)
+			}
+		})
 	}
 }
