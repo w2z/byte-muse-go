@@ -1,16 +1,20 @@
 {
-  "version": "0.1.232",
-  "commit": "e0d4d6ccee18e9e5d3634a80f774c9f473e39997",
-  "short_commit": "e0d4d6c",
-  "built_at": "2026-11-09T13:59:35Z",
+  "version": "0.1.233",
+  "commit": "8e4f5f1effc932b3faab9060d31cccc459881d80",
+  "short_commit": "8e4f5f1",
+  "built_at": "2026-11-09T15:02:13Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.232",
-    "sha-e0d4d6c",
+    "0.1.233",
+    "sha-8e4f5f1",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.233",
+      "message": "隔离网盘上传行操作并增加危险操作确认"
+    },
     {
       "version": "0.1.232",
       "message": "限制115请求突发并隔离本地后处理重试"
