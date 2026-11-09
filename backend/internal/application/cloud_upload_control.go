@@ -634,13 +634,6 @@ func (s *UploadService) mergeUploadView(records []domain.UploadRecord, full bool
 		}
 		current := s.active[r.Key] || st.Current == r.Key
 		f.State = uploadPresentationState(r, f.State, current, s.mode, st.Enabled, s.manualUpload)
-		// cleanup is local source verification/deletion after remote upload; it is
-		// already complete from the transfer column's perspective.
-		if r.State == "cleanup" {
-			f.Progress = 100
-			f.UploadedBytes = r.Size
-			f.Speed = 0
-		}
 		if !current {
 			f.Speed = 0
 		}

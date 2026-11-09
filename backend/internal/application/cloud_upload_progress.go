@@ -384,16 +384,6 @@ func normalizedUploadProgress(item UploadFileProgress) UploadFileProgress {
 func (s *UploadService) reportBytes(key string, done, total int64, phase string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if phase == "cleanup" {
-		if item, ok := s.files[key]; ok {
-			item.Speed = 0
-			item.Progress = 100
-			item.UploadedBytes = item.Size
-			item.updated = time.Now()
-			s.files[key] = item
-		}
-		return
-	}
 	item, ok := s.files[key]
 	if !ok {
 		return
