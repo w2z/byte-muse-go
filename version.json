@@ -1,16 +1,20 @@
 {
-  "version": "0.1.239",
-  "commit": "e005af46a5ce2529384d8e422486657abf563d00",
-  "short_commit": "e005af4",
-  "built_at": "2026-11-09T16:24:18Z",
+  "version": "0.1.240",
+  "commit": "7f36ee19947ad5bb5c8cf98ed66707b66d266e73",
+  "short_commit": "7f36ee1",
+  "built_at": "2026-11-09T16:28:12Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.239",
-    "sha-e005af4",
+    "0.1.240",
+    "sha-7f36ee1",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.240",
+      "message": "保留待清理阶段真实传输进度"
+    },
     {
       "version": "0.1.239",
       "message": "使用Modal消息提示布局显示上传二次确认"
