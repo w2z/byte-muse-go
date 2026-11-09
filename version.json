@@ -1,16 +1,20 @@
 {
-  "version": "0.1.230",
-  "commit": "d302efe3e9e99552494bf670aeb5a930b661cfca",
-  "short_commit": "d302efe",
-  "built_at": "2026-11-09T08:35:08Z",
+  "version": "0.1.231",
+  "commit": "b4104a2d8c6a936aceadcc307eeafb8db31dd3bf",
+  "short_commit": "b4104a2",
+  "built_at": "2026-11-09T09:49:44Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.230",
-    "sha-d302efe",
+    "0.1.231",
+    "sha-b4104a2",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.231",
+      "message": "复用115上传回执并减少成功后的目录查询"
+    },
     {
       "version": "0.1.230",
       "message": "持久化本地后处理回执并复用源文件生成STRM"
