@@ -1,16 +1,20 @@
 {
-  "version": "0.1.233",
-  "commit": "8e4f5f1effc932b3faab9060d31cccc459881d80",
-  "short_commit": "8e4f5f1",
-  "built_at": "2026-11-09T15:02:13Z",
+  "version": "0.1.234",
+  "commit": "34f4570d1acd847a210d3f5c70e7986353156a9c",
+  "short_commit": "34f4570",
+  "built_at": "2026-11-09T15:38:10Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.233",
-    "sha-8e4f5f1",
+    "0.1.234",
+    "sha-34f4570",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.234",
+      "message": "复用受保护源文件校验并停止冲突重试"
+    },
     {
       "version": "0.1.233",
       "message": "隔离网盘上传行操作并增加危险操作确认"
