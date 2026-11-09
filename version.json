@@ -1,16 +1,20 @@
 {
-  "version": "0.1.227",
-  "commit": "4ad88c3e3d3d01ef8904d2631a706434e96dddab",
-  "short_commit": "4ad88c3",
-  "built_at": "2026-11-09T02:45:06Z",
+  "version": "0.1.228",
+  "commit": "6d633652d7c47a3d922bfe2269e941591fa2bafc",
+  "short_commit": "6d63365",
+  "built_at": "2026-11-09T03:13:01Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.227",
-    "sha-4ad88c3",
+    "0.1.228",
+    "sha-6d63365",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.228",
+      "message": "避免并发回查反复失效并递增限流冷却"
+    },
     {
       "version": "0.1.227",
       "message": "减少重复回查并保留限流缓存及请求诊断"
