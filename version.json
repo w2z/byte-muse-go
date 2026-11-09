@@ -1,16 +1,20 @@
 {
-  "version": "0.1.234",
-  "commit": "34f4570d1acd847a210d3f5c70e7986353156a9c",
-  "short_commit": "34f4570",
-  "built_at": "2026-11-09T15:38:10Z",
+  "version": "0.1.235",
+  "commit": "10f648f8f963fa84ad2f0a9e9df0fb4033568358",
+  "short_commit": "10f648f",
+  "built_at": "2026-11-09T15:54:47Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.234",
-    "sha-34f4570",
+    "0.1.235",
+    "sha-10f648f",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.235",
+      "message": "按上传策略处理本地附件冲突"
+    },
     {
       "version": "0.1.234",
       "message": "复用受保护源文件校验并停止冲突重试"
