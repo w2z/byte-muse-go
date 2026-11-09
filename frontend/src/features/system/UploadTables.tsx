@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { apiRequest } from "../../shared/api/client";
 import { ListPagination } from "../../shared/ui/ListPagination";
 import { UploadMonitorStatus } from "./UploadPathsField";
+import { AppDialog } from "../../shared/ui/AppDialog";
 
 type DirectoryRow = {
   key: string;
@@ -137,6 +138,8 @@ function fileState(row: FileRow) {
 
 type UploadTarget = { action: "pause" | "stop" | "start" | "retry" | "delete"; scope: "directory" | "file"; key: string };
 type HeaderCommand = { action: "clear_completed" | "clear_failed"; scope: "directories" | "files" };
+type ControlCommand = string | HeaderCommand;
+type ConfirmCommand = { command: ControlCommand | UploadTarget; title: string; message: string; row?: boolean };
 
 const statusOptions = [
   { label: "全部", value: "all" },
@@ -156,9 +159,11 @@ export function UploadTables() {
   const [pageSize, setPageSize] = useState(15);
   const [directoryStatus, setDirectoryStatus] = useState("all");
   const [fileStatus, setFileStatus] = useState("all");
+  const [confirmation, setConfirmation] = useState<ConfirmCommand | null>(null);
+  const [pendingRows, setPendingRows] = useState<Map<string, UploadTarget["action"]>>(() => new Map());
   const status = useQuery({queryKey:["cloud-upload-status"],queryFn:()=>apiRequest<{actions?:Record<string,boolean>}>("/cloud-upload/status"),refetchInterval:2000});
   const control = useMutation({
-    mutationFn:(command:string | HeaderCommand)=>apiRequest("/cloud-upload/control",{method:"POST",body:JSON.stringify(typeof command==="string"?{action:command}:command)}),
+    mutationFn:(command:ControlCommand)=>apiRequest("/cloud-upload/control",{method:"POST",body:JSON.stringify(typeof command==="string"?{action:command}:command)}),
     onSuccess:async()=>{await Promise.all([client.invalidateQueries({queryKey:["cloud-upload-status"]}),client.invalidateQueries({queryKey:["upload-directory-progress"]}),client.invalidateQueries({queryKey:["upload-file-progress"]})]);},
     onError:(error:Error)=>{Message.error(error.message);void client.invalidateQueries({queryKey:["cloud-upload-status"]});},
   });
@@ -167,9 +172,35 @@ export function UploadTables() {
     onSuccess: async () => { await Promise.all([client.invalidateQueries({ queryKey: ["cloud-upload-status"] }), client.invalidateQueries({ queryKey: ["upload-directory-progress"] }), client.invalidateQueries({ queryKey: ["upload-file-progress"] })]); },
     onError: (error: Error) => { Message.error(error.message); void client.invalidateQueries({ queryKey: ["upload-directory-progress"] }); void client.invalidateQueries({ queryKey: ["upload-file-progress"] }); },
   });
+  const rowPending = (scope: UploadTarget["scope"], key: string) => pendingRows.has(`${scope}:${key}`);
+  const rowActionPending = (scope: UploadTarget["scope"], key: string, action: UploadTarget["action"]) => pendingRows.get(`${scope}:${key}`) === action;
+  const submitRow = (target: UploadTarget) => {
+    const pendingKey = `${target.scope}:${target.key}`;
+    setPendingRows((current) => new Map(current).set(pendingKey, target.action));
+    void rowControl.mutateAsync(target).finally(() => {
+      setPendingRows((current) => {
+        const next = new Map(current);
+        next.delete(pendingKey);
+        return next;
+      });
+    });
+  };
+  const requestConfirmation = (command: ControlCommand | UploadTarget, title: string, message: string, row = false) => {
+    setConfirmation({ command, title, message, row });
+  };
+  const executeConfirmation = () => {
+    if (!confirmation) return;
+    if (confirmation.row) submitRow(confirmation.command as UploadTarget);
+    else control.mutate(confirmation.command as ControlCommand);
+    setConfirmation(null);
+  };
   const rowActions = (scope: UploadTarget["scope"], name: string, row: { key: string; actions?: Record<string, boolean> }) => <Space wrap>{([
     ["pause", "暂停"], ["stop", "停止"], ["start", "开始"], ["retry", "重新上传"], ["delete", "删除"],
-  ] as const).filter(([action]) => row.actions?.[action]).map(([action, text]) => <Button key={action} htmlType="button" status={action === "delete" ? "danger" : undefined} aria-label={`${text}${scope === "directory" ? "目录" : "文件"} ${name}`} disabled={rowControl.isPending} loading={rowControl.isPending && rowControl.variables?.key === row.key && rowControl.variables.action === action} onClick={() => rowControl.mutate({ action, scope, key: row.key })}>{text}</Button>)}</Space>;
+  ] as const).filter(([action]) => row.actions?.[action]).map(([action, text]) => <Button key={action} htmlType="button" status={action === "delete" ? "danger" : undefined} aria-label={`${text}${scope === "directory" ? "目录" : "文件"} ${name}`} disabled={rowPending(scope, row.key)} loading={rowActionPending(scope, row.key, action)} onClick={() => {
+    const target = { action, scope, key: row.key } as UploadTarget;
+    if (action === "stop" || action === "delete") requestConfirmation(target, `${text}${scope === "directory" ? "目录" : "文件"}`, `确定${text}${scope === "directory" ? "目录" : "文件"}「${name}」吗？此操作可能影响正在执行的上传任务。` , true);
+    else submitRow(target);
+  }}>{text}</Button>)}</Space>;
   const listScope = tab === "files" ? "files" : "directories";
   const headerEnabled = (command: string | HeaderCommand) => {
     if (typeof command === "string") return Boolean(status.data?.actions?.[command]);
@@ -178,11 +209,11 @@ export function UploadTables() {
   };
   const actions = <div className="settings-upload-actions" aria-label="上传任务操作">{([
     ["pause","暂停","pause"],["stop","停止","stop"],["resume","继续","resume"],["retry_all","全部重试","retry_all"],
-  ] as const).map(([action,label])=><Button key={action} htmlType="button" disabled={status.isError || !headerEnabled(action) || control.isPending} loading={control.isPending && control.variables===action} onClick={()=>control.mutate(action)}>{label}</Button>)}
+  ] as const).map(([action,label])=><Button key={action} htmlType="button" disabled={status.isError || !headerEnabled(action) || control.isPending} loading={control.isPending && control.variables===action} onClick={()=>action === "stop" ? requestConfirmation(action, label, "确定停止当前上传任务吗？正在执行的任务将停止并保留记录。") : control.mutate(action)}>{label}</Button>)}
     {([
       ["clear_completed","清空已完成"],["clear_failed","清空错误"],
-    ] as const).map(([action,label])=><Button key={`${action}-${listScope}`} htmlType="button" disabled={status.isError || !headerEnabled({action,scope:listScope}) || control.isPending} loading={control.isPending && typeof control.variables==="object" && control.variables?.action===action && control.variables.scope===listScope} onClick={()=>control.mutate({action,scope:listScope})}>{label}</Button>)}
-    <Button htmlType="button" status="danger" disabled={status.isError || !headerEnabled("delete_all") || control.isPending} loading={control.isPending && control.variables==="delete_all"} onClick={()=>control.mutate("delete_all")}>删除所有任务</Button>
+    ] as const).map(([action,label])=><Button key={`${action}-${listScope}`} htmlType="button" disabled={status.isError || !headerEnabled({action,scope:listScope}) || control.isPending} loading={control.isPending && typeof control.variables==="object" && control.variables?.action===action && control.variables.scope===listScope} onClick={()=>requestConfirmation({action,scope:listScope}, label, `确定${label}吗？清理后将从当前列表移除符合条件的任务记录。`)}>{label}</Button>)}
+    <Button htmlType="button" status="danger" disabled={status.isError || !headerEnabled("delete_all") || control.isPending} loading={control.isPending && control.variables==="delete_all"} onClick={()=>requestConfirmation("delete_all", "删除所有任务", "确定删除所有上传任务吗？此操作会停止并隐藏所有任务，且不可恢复。")}>删除所有任务</Button>
   </div>;
   const directories = useQuery({
     queryKey: ["upload-directory-progress", directoryStatus],
@@ -213,7 +244,7 @@ export function UploadTables() {
     if (files.data && page > 1 && (page - 1) * pageSize >= files.data.total)
       setPage(Math.max(1, Math.ceil(files.data.total / pageSize)));
   }, [files.data, page, pageSize]);
-  return (
+  return (<>
     <div className="settings-upload-tables">
       <Tabs
         activeTab={tab}
@@ -341,5 +372,11 @@ export function UploadTables() {
         </Tabs.TabPane>
       </Tabs>
     </div>
-  );
+    <AppDialog
+      title={confirmation?.title ?? "确认操作"}
+      visible={Boolean(confirmation)}
+      onClose={() => { if (!control.isPending && !rowControl.isPending) setConfirmation(null); }}
+      footer={<><Button onClick={() => setConfirmation(null)} disabled={control.isPending || rowControl.isPending}>取消</Button><Button status="danger" loading={control.isPending || rowControl.isPending} disabled={control.isPending || rowControl.isPending} onClick={executeConfirmation}>确定</Button></>}
+    >{confirmation?.message}</AppDialog>
+  </>);
 }

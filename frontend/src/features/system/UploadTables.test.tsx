@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import {QueryClient,QueryClientProvider} from "@tanstack/react-query";
 import "@testing-library/jest-dom/vitest";
-import {cleanup,render,screen,waitFor} from "@testing-library/react";
+import {act,cleanup,render,screen,waitFor,within} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {afterEach,expect,it,vi} from "vitest";
 import {UploadTables} from "./UploadTables";
@@ -83,6 +83,7 @@ it("目录和文件行按钮按范围提交，目录操作由服务作用于其�
  expect(screen.queryByRole("button", { name: "开始文件 /videos/a.mkv" })).not.toBeInTheDocument();
  expect(screen.queryByRole("button", { name: "重新上传文件 /videos/a.mkv" })).not.toBeInTheDocument();
  await userEvent.click(await screen.findByRole("button", { name: "删除文件 /videos/a.mkv" }));
+ await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "确定" }));
  await waitFor(() => expect(posts).toContainEqual({ action: "delete", scope: "file", key: "file-1" }));
  client.clear();
 });
@@ -103,6 +104,7 @@ it("按当前列表清空，并在三次失败后显示重新上传", async () =
  expect(screen.getByRole("tab", { name: "目录列表 (1/1)" })).toBeInTheDocument();
  expect(document.querySelector(".settings-upload-progress-success .arco-progress-is-success")).toBeTruthy();
  await userEvent.click(screen.getByRole("button", { name: "清空已完成" }));
+ await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "确定" }));
  await waitFor(() => expect(posts).toContainEqual({ action: "clear_completed", scope: "directories" }));
  await userEvent.click(screen.getByRole("button", { name: "重新上传目录 /videos" }));
  await waitFor(() => expect(posts).toContainEqual({ action: "retry", scope: "directory", key: "dir-1" }));
@@ -127,10 +129,83 @@ it("按当前列表清空，并在三次失败后显示重新上传", async () =
  await userEvent.click(screen.getByRole("button", { name: "重新上传文件 /videos/a.mkv" }));
  await waitFor(() => expect(posts).toContainEqual({ action: "retry", scope: "file", key: "file-1" }));
  await userEvent.click(screen.getByRole("button", { name: "清空错误" }));
+ await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "确定" }));
  await waitFor(() => expect(posts).toContainEqual({ action: "clear_failed", scope: "files" }));
  await userEvent.click(screen.getByRole("button", { name: "全部重试" }));
  await waitFor(() => expect(posts).toContainEqual({ action: "retry_all" }));
  await userEvent.click(screen.getByRole("button", { name: "删除所有任务" }));
+ await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "确定" }));
  await waitFor(() => expect(posts).toContainEqual({ action: "delete_all" }));
+ client.clear();
+});
+
+it.each(["directory", "file"])("%s 行并发请求各自保持禁用和加载，失败只释放当前行", async (scope) => {
+ const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+ const pending: { resolve: (value: unknown) => void; reject: (error: Error) => void }[] = [];
+ const posts: unknown[] = [];
+ vi.mocked(apiRequest).mockImplementation(async (path, options) => {
+  if (path === "/cloud-upload/control") {
+   posts.push(JSON.parse(String(options?.body)));
+   return new Promise((resolve, reject) => pending.push({ resolve, reject }));
+  }
+  if (path.startsWith("/cloud-upload/directories")) return { items: ["a", "b"].map(key => ({ key, local_path: `/${key}`, remote_path: "/cloud", kind: "115", size: 1, progress: 0, speed: 0, uploaded: 0, total: 1, skipped: 0, failed: 0, actions: { pause: true, stop: true } })), total: 2 };
+  if (path.startsWith("/cloud-upload/files")) return { items: ["a", "b"].map(key => ({ key, path: `/${key}`, size: 1, progress: 0, speed: 0, state: "waiting", error: "", actions: { pause: true, stop: true } })), total: 2 };
+  return { actions: {} };
+ });
+ render(<QueryClientProvider client={client}><UploadTables /></QueryClientProvider>);
+ await screen.findByRole("button", { name: "暂停目录 /a" });
+ if (scope === "file") await userEvent.click(screen.getByRole("tab", { name: "文件列表 (0/2)" }));
+ const kind = scope === "directory" ? "目录" : "文件";
+ const first = screen.getByRole("button", { name: `暂停${kind} /a` });
+ const second = screen.getByRole("button", { name: `暂停${kind} /b` });
+ await userEvent.click(first);
+ expect(first).toBeDisabled();
+ expect(screen.getByRole("button", { name: `停止${kind} /a` })).toBeDisabled();
+ expect(second).toBeEnabled();
+ await userEvent.click(second);
+ expect(first).toHaveClass("arco-btn-loading");
+ expect(second).toHaveClass("arco-btn-loading");
+ await userEvent.click(first);
+ expect(posts).toEqual([{ action: "pause", scope, key: "a" }, { action: "pause", scope, key: "b" }]);
+ await act(async () => { pending[0].resolve({}); pending[1].resolve({}); });
+ await waitFor(() => expect(first).toBeEnabled());
+ client.clear();
+});
+
+it.each(["directories", "files"])("%s 的危险操作必须确认，取消不提交且确认保留正确范围", async (scope) => {
+ const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+ const posts: unknown[] = [];
+ vi.mocked(apiRequest).mockImplementation(async (path, options) => {
+  if (path === "/cloud-upload/control") { posts.push(JSON.parse(String(options?.body))); return {}; }
+  if (path.startsWith("/cloud-upload/directories")) return { items: [{ key: "dir", local_path: "/videos", remote_path: "/cloud", kind: "115", size: 1, progress: 0, speed: 0, uploaded: 0, total: 1, skipped: 0, failed: 0, actions: { stop: true, delete: true } }], total: 1 };
+  if (path.startsWith("/cloud-upload/files")) return { items: [{ key: "file", path: "/videos/a", size: 1, progress: 0, speed: 0, state: "waiting", error: "", actions: { stop: true, delete: true } }], total: 1 };
+  return { actions: { stop: true, delete_all: true, clear_completed_directories: true, clear_failed_directories: true, clear_completed_files: true, clear_failed_files: true } };
+ });
+ render(<QueryClientProvider client={client}><UploadTables /></QueryClientProvider>);
+ await screen.findByRole("button", { name: "停止目录 /videos" });
+ if (scope === "files") await userEvent.click(screen.getByRole("tab", { name: "文件列表 (0/1)" }));
+ const rowName = scope === "files" ? "文件 /videos/a" : "目录 /videos";
+ const target = scope === "files" ? { scope: "file", key: "file" } : { scope: "directory", key: "dir" };
+ const cases = [
+  { name: "清空已完成", command: { action: "clear_completed", scope } },
+  { name: "清空错误", command: { action: "clear_failed", scope } },
+  { name: "停止", command: { action: "stop" } },
+  { name: "删除所有任务", command: { action: "delete_all" } },
+  { name: `停止${rowName}`, command: { action: "stop", ...target } },
+  { name: `删除${rowName}`, command: { action: "delete", ...target } },
+ ];
+ for (const { name, command } of cases) {
+  const count = posts.length;
+  await waitFor(() => expect(screen.getByRole("button", { name })).toBeEnabled());
+  await userEvent.click(screen.getByRole("button", { name }));
+  expect(posts).toHaveLength(count);
+  await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "取消" }));
+  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  expect(posts).toHaveLength(count);
+  await userEvent.click(screen.getByRole("button", { name }));
+  await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "确定" }));
+  await waitFor(() => expect(posts).toHaveLength(count + 1));
+  expect(posts[count]).toEqual(command);
+ }
  client.clear();
 });
