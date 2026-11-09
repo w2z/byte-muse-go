@@ -1,16 +1,20 @@
 {
-  "version": "0.1.238",
-  "commit": "7e2ee21a57053f46765b65135edc10f288cdddbf",
-  "short_commit": "7e2ee21",
-  "built_at": "2026-11-09T16:23:56Z",
+  "version": "0.1.239",
+  "commit": "e005af46a5ce2529384d8e422486657abf563d00",
+  "short_commit": "e005af4",
+  "built_at": "2026-11-09T16:24:18Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.238",
-    "sha-7e2ee21",
+    "0.1.239",
+    "sha-e005af4",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.239",
+      "message": "使用Modal消息提示布局显示上传二次确认"
+    },
     {
       "version": "0.1.238",
       "message": "清理阶段仅按文件元数据删除"
