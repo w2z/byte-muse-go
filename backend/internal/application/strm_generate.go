@@ -19,6 +19,28 @@ import (
 
 type strmGenerateOutcome struct{ created, changed, skipped bool }
 
+// strmOutputMatchesSource accepts an existing output when it already points to
+// the same remote object, making event retries idempotent without hiding real collisions.
+func strmOutputMatchesSource(path, base, kind string, file strmSourceFile) bool {
+	identifier := file.ID
+	if kind == domain.StrmKindPan115 {
+		identifier = strings.TrimSpace(file.PickCode)
+	}
+	if identifier == "" {
+		return false
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	previous, err := url.Parse(strings.TrimSpace(string(data)))
+	if err != nil {
+		return false
+	}
+	current, err := url.Parse(strings.TrimSpace(strmPlayURL(base, kind, identifier)))
+	return err == nil && previous.EscapedPath() == current.EscapedPath() && previous.RawQuery == current.RawQuery
+}
+
 // strmVideoName 替换视频后缀；超过 NAS 单文件名的 255 字节限制时，保留 UTF-8 前缀及名称摘要以免截断重名。
 func strmVideoName(name string) string {
 	stem := strings.TrimSuffix(name, filepath.Ext(name))
@@ -391,7 +413,7 @@ func (s *StrmService) scanMappings(ctx context.Context, root string, mappings []
 					preservedOutputs[destination] = absolute
 				}
 			}
-			if exists && previous != source && preservedOutputs[destination] != absolute {
+			if exists && previous != source && preservedOutputs[destination] != absolute && !strmOutputMatchesSource(absolute, base, mapping.Kind, file) {
 				if operation == "download" {
 					return fmt.Errorf("网盘附件文件名冲突：%s", name)
 				}

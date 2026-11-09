@@ -31,6 +31,18 @@ func TestStrmLongVideoName(t *testing.T) {
 	}
 }
 
+func TestStrmOutputMatchesSameRemoteSource(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "CAWD-365.strm")
+	if err := os.WriteFile(path, []byte("https://media.example/files/play/115/pick\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	file := strmSourceFile{ID: "remote-id", PickCode: "pick", Name: "CAWD-365.mp4"}
+	if !strmOutputMatchesSource(path, "https://media.example", domain.StrmKindPan115, file) {
+		t.Fatal("same remote source was treated as a collision")
+	}
+}
+
 // strmPan115Stub 按目录 ID 返回预设的 115 目录内容，使 strm 生成与播放解析可离线验证。
 type strmPan115Stub struct {
 	pages    map[string]domain.Pan115FilePage
