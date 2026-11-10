@@ -1,16 +1,20 @@
 {
-  "version": "0.1.243",
-  "commit": "66c07dd458bd556912fa32d5c998bf75faa4db75",
-  "short_commit": "66c07dd",
-  "built_at": "2026-11-10T01:37:18Z",
+  "version": "0.1.244",
+  "commit": "9351d73c169ae8eb8c57f299e3806df6eedfcda2",
+  "short_commit": "9351d73",
+  "built_at": "2026-11-10T13:25:19Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.243",
-    "sha-66c07dd",
+    "0.1.244",
+    "sha-9351d73",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.244",
+      "message": "过期STS凭据自动刷新重试"
+    },
     {
       "version": "0.1.243",
       "message": "按上传同名策略处理已有播放文件"
