@@ -1,16 +1,20 @@
 {
-  "version": "0.1.246",
-  "commit": "b51c87151bca93d2b473bae1626e00783b84f204",
-  "short_commit": "b51c871",
-  "built_at": "2026-11-10T15:44:12Z",
+  "version": "0.1.247",
+  "commit": "adb418bc9a69bff45c3552bd6dec624aeabbd92b",
+  "short_commit": "adb418b",
+  "built_at": "2026-11-10T16:33:58Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.246",
-    "sha-b51c871",
+    "0.1.247",
+    "sha-adb418b",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.247",
+      "message": "增加115分片断点续传与任务清理"
+    },
     {
       "version": "0.1.246",
       "message": "将上传到网盘状态文案改为上传中"
