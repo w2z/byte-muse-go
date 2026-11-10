@@ -54,7 +54,7 @@ const states: Record<string, string> = {
   stopped: "已停止",
   waiting: "等待中",
   transferring: "传送至 CD2",
-  uploading: "上传到网盘",
+  uploading: "上传中",
   verifying: "校验中",
   completed: "成功",
   skipped: "成功",
