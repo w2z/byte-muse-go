@@ -21,6 +21,125 @@ type localUploadRemote struct{ *directUploadRemote }
 
 func (r localUploadRemote) AccountID(context.Context) (string, error) { return "123", nil }
 
+func TestStrmConflictPolicyRequiresMatchingUploadReceipt(t *testing.T) {
+	for _, receipt := range []*ports.UploadReceipt{nil, {FileID: "other"}} {
+		s, _, _, _, _ := managedFixture(t)
+		ctx := context.WithValue(context.Background(), localUploadPolicyKey{}, "overwrite")
+		if receipt != nil {
+			ctx = context.WithValue(ctx, localUploadSourceKey{}, receipt)
+		}
+		path := filepath.Join(s.root, "movie.strm")
+		const previous = "https://media.example.com/files/play/115/old\n"
+		if err := os.WriteFile(path, []byte(previous), 0600); err != nil {
+			t.Fatal(err)
+		}
+		_, err := s.generateStrmFile(ctx, s.root, s.root, "115", "https://media.example.com", domain.StrmGenerateIdempotent, strmSourceFile{ID: "42", PickCode: "pc42", Name: "movie.mkv"})
+		if err == nil {
+			t.Fatal("unrelated event overwrote existing STRM")
+		}
+		data, err := os.ReadFile(path)
+		if err != nil || string(data) != previous {
+			t.Fatalf("existing STRM=%q err=%v", data, err)
+		}
+	}
+}
+
+// Exercise the actual receipt-to-STRM pipeline, including retries after the file was written.
+func TestLocalUploadStrmConflictPolicies(t *testing.T) {
+	const old = "https://media.example.com/files/play/115/old\n"
+	const current = "https://media.example.com/files/play/115/pc42\n"
+	for _, tc := range []struct {
+		name, policy, existing, want string
+		count                        int
+		wantErr                      bool
+	}{
+		{"overwrite", "overwrite", old, current, 2, false},
+		{"skip", "skip", old, old, 2, false},
+		{"skip_same_source_old_host", "skip", "https://old.example.com/files/play/115/pc42\n", "https://old.example.com/files/play/115/pc42\n", 2, false},
+		{"keep_both", "keep_both", old, old, 3, false},
+		{"same_source", "keep_both", current, current, 2, false},
+		{"missing_policy", "", old, old, 2, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			s, api, managed, _, values := managedFixture(t)
+			values[pan115LocalUploadEnabledKey] = "true"
+			db, err := database.Open(ctx, database.Config{Dialect: database.DialectSQLite, SQLitePath: filepath.Join(t.TempDir(), "strm-policy.db")})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			if err = db.Migrate(ctx); err != nil {
+				t.Fatal(err)
+			}
+			receipts := database.NewUploadReceiptRepository(db.SQLDB(), database.DialectSQLite)
+			s.SetUploadReceipts(receipts)
+			info := api.infos["42"]
+			info.SHA1, info.Size, info.SizeKnown = "verified", 100, true
+			record := domain.UploadRecord{Key: "video", StageID: "42", Policy: tc.policy, SHA1: "verified", Size: 100, LocalRoot: t.TempDir(), Relative: "movie.mkv"}
+			dest := filepath.Join(s.root, "movies")
+			if err = os.MkdirAll(dest, 0755); err != nil {
+				t.Fatal(err)
+			}
+			for name, body := range map[string]string{"movie.strm": tc.existing, "movie (1).strm": "another file\n"} {
+				if err = os.WriteFile(filepath.Join(dest, name), []byte(body), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for attempt := 0; attempt < 2; attempt++ {
+				if attempt == 1 {
+					if _, err = db.SQLDB().ExecContext(ctx, "UPDATE upload_postprocess SET state='pending'"); err != nil {
+						t.Fatal(err)
+					}
+				}
+				err = s.ProcessLocalUpload(ctx, "123", record, info)
+				if (err != nil) != tc.wantErr {
+					t.Fatalf("attempt %d: %v", attempt, err)
+				}
+				receipt, err := receipts.Get(ctx, journalKey("123", record.Key, info.ID))
+				if err != nil || receipt == nil {
+					t.Fatalf("receipt=%+v err=%v", receipt, err)
+				}
+				if (receipt.State == "completed") == tc.wantErr {
+					t.Fatalf("state=%s", receipt.State)
+				}
+			}
+			for name, want := range map[string]string{"movie.strm": tc.want, "movie (1).strm": "another file\n"} {
+				body, err := os.ReadFile(filepath.Join(dest, name))
+				if err != nil || string(body) != want {
+					t.Fatalf("%s=%q err=%v", name, body, err)
+				}
+			}
+			if tc.count == 3 {
+				body, err := os.ReadFile(filepath.Join(dest, "movie (2).strm"))
+				if err != nil || string(body) != current {
+					t.Fatalf("numbered output=%q err=%v", body, err)
+				}
+			}
+			entries, err := os.ReadDir(dest)
+			if err != nil || len(entries) != tc.count {
+				t.Fatalf("outputs=%d err=%v", len(entries), err)
+			}
+			if tc.name == "overwrite" || tc.name == "keep_both" {
+				if len(managed.items) != 1 {
+					t.Fatalf("ownership records=%d", len(managed.items))
+				}
+				for _, item := range managed.items {
+					if item.FileID != "42" {
+						t.Fatalf("wrong owner: %+v", item)
+					}
+				}
+			}
+			if tc.policy == "skip" && len(managed.items) != 0 {
+				t.Fatal("skip acquired ownership of an existing file")
+			}
+			if api.infoCalls != 0 || api.playFile != "" {
+				t.Fatal("local STRM accessed remote")
+			}
+		})
+	}
+}
+
 // Local attachments consume the task policy and remain idempotent before receipt completion.
 func TestLocalUploadAttachmentConflictPolicies(t *testing.T) {
 	for _, policy := range []string{"skip", "overwrite", "keep_both"} {

@@ -15,6 +15,7 @@ import (
 
 	"bytemuse/backend/internal/domain"
 	"bytemuse/backend/internal/platform/pan115"
+	"bytemuse/backend/internal/ports"
 )
 
 type strmGenerateOutcome struct{ created, changed, skipped bool }
@@ -33,11 +34,16 @@ func strmOutputMatchesSource(path, base, kind string, file strmSourceFile) bool 
 	if err != nil {
 		return false
 	}
-	previous, err := url.Parse(strings.TrimSpace(string(data)))
+	return strmContentMatchesSource(string(data), strmPlayURL(base, kind, identifier))
+}
+
+// strmContentMatchesSource compares remote identity while allowing a playback host change.
+func strmContentMatchesSource(existing, content string) bool {
+	previous, err := url.Parse(strings.TrimSpace(existing))
 	if err != nil {
 		return false
 	}
-	current, err := url.Parse(strings.TrimSpace(strmPlayURL(base, kind, identifier)))
+	current, err := url.Parse(strings.TrimSpace(content))
 	return err == nil && previous.EscapedPath() == current.EscapedPath() && previous.RawQuery == current.RawQuery
 }
 
@@ -104,17 +110,50 @@ func (s *StrmService) generateStrmFile(ctx context.Context, root, target, kind, 
 		}
 	}
 	content := strmPlayURL(base, kind, identifier) + "\n"
-	// 单文件事件跨批执行，不能仅靠扫描内的冲突表。已有目标必须仍指向同一网盘文件；
-	// 允许同一文件更换访问域名，但拒绝覆盖其他源文件或无法确认归属的播放地址。
-	existing, readErr := os.ReadFile(absolute)
-	if readErr == nil {
-		previous, previousErr := url.Parse(strings.TrimSpace(string(existing)))
-		current, currentErr := url.Parse(strings.TrimSpace(content))
-		if previousErr != nil || currentErr != nil || previous.EscapedPath() != current.EscapedPath() || previous.RawQuery != current.RawQuery {
+	// 本地上传只采用当前文件回执绑定的任务策略；普通事件仍拒绝不同来源的同名输出。
+	// keep_both 重试逐个核对已有编号的播放身份，避免中断后不断生成新副本。
+	policy := ""
+	if receipt, ok := ctx.Value(localUploadSourceKey{}).(*ports.UploadReceipt); ok && receipt != nil && receipt.FileID == file.ID && kind == domain.StrmKindPan115 {
+		policy, _ = ctx.Value(localUploadPolicyKey{}).(string)
+	}
+	original := absolute
+	for index := 0; ; index++ {
+		if err := scanCheckpoint(ctx); err != nil {
+			return outcome, err
+		}
+		if index > 0 {
+			name := fmt.Sprintf("%s (%d).strm", strings.TrimSuffix(filepath.Base(original), ".strm"), index)
+			absolute = filepath.Join(filepath.Dir(original), strmVideoName(name))
+		}
+		stat, statErr := os.Lstat(absolute)
+		if errors.Is(statErr, os.ErrNotExist) {
+			break
+		}
+		if statErr != nil {
+			return outcome, fmt.Errorf("读取本地 strm 文件失败：%w", statErr)
+		}
+		if !stat.Mode().IsRegular() {
+			return outcome, fmt.Errorf("STRM 目标不是普通文件：%s", filepath.Base(absolute))
+		}
+		if policy == "skip" {
+			outcome.skipped = true
+			return outcome, strmCheckpointFailure(completeTaskUnit(ctx, "strm-file", target, file.Directory, file.ID))
+		}
+		existing, readErr := os.ReadFile(absolute)
+		if readErr != nil {
+			return outcome, fmt.Errorf("读取本地 strm 文件失败：%w", readErr)
+		}
+		if strmContentMatchesSource(string(existing), content) {
+			break
+		}
+		switch policy {
+		case "overwrite":
+		case "keep_both":
+			continue
+		default:
 			return outcome, fmt.Errorf("去除视频后缀后文件名冲突：%s", filepath.Base(absolute))
 		}
-	} else if !errors.Is(readErr, os.ErrNotExist) {
-		return outcome, fmt.Errorf("读取本地 strm 文件失败：%w", readErr)
+		break
 	}
 	outcome.created, outcome.changed, err = s.writeManagedStrm(ctx, file, absolute, content)
 	if err != nil {
