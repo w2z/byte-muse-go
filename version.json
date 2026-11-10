@@ -1,16 +1,20 @@
 {
-  "version": "0.1.244",
-  "commit": "9351d73c169ae8eb8c57f299e3806df6eedfcda2",
-  "short_commit": "9351d73",
-  "built_at": "2026-11-10T13:25:19Z",
+  "version": "0.1.245",
+  "commit": "d0f388f7d1865c7c8de9870d13262a61c1e46545",
+  "short_commit": "d0f388f",
+  "built_at": "2026-11-10T14:12:38Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.244",
-    "sha-9351d73",
+    "0.1.245",
+    "sha-d0f388f",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.245",
+      "message": "恢复传输时清除旧错误展示并保留重试计数"
+    },
     {
       "version": "0.1.244",
       "message": "过期STS凭据自动刷新重试"
