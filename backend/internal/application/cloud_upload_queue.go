@@ -356,6 +356,7 @@ func (s *UploadService) Run(ctx context.Context) {
 								replacement.Parent, replacement.Stage, replacement.StageID, replacement.SHA1 = "", "", "", ""
 								replacement.OldID, replacement.OldSHA1, replacement.StageSHA1 = "", "", ""
 								replacement.Overwrite = nil
+								replacement.Multipart = nil
 								replacement.Error, replacement.ErrorKind, replacement.NextRetry = "", "", ""
 								replacement.Retries = 0
 								replacement.UpdatedAt = now.UTC().Format(time.RFC3339Nano)
@@ -371,12 +372,19 @@ func (s *UploadService) Run(ctx context.Context) {
 									}
 								}
 							}
-							if r.Parent == "" {
+							if r.Parent == "" && r.Multipart == nil {
 								r.State, r.Hidden = "discarded", true
 								if saveErr := s.store.Save(ctx, r); saveErr != nil {
 									s.update(func(st *UploadStatus) { st.Error = saveErr.Error() })
 								}
 								continue
+							}
+							if r.Multipart != nil {
+								r.State = "discarding"
+								if saveErr := s.store.Save(ctx, r); saveErr != nil {
+									s.update(func(st *UploadStatus) { st.Error = saveErr.Error() })
+									continue
+								}
 							}
 						}
 					} else if uploadIndividuallyPaused(r, s.mode) && r.State == "uploaded" {

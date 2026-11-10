@@ -2,6 +2,47 @@ package domain
 
 import "context"
 
+// UploadMultipart is one resumable OSS session bound to an immutable source and account.
+// Nil means no saved session (including legacy tasks). Access keys and STS tokens are never stored.
+// Uploaded parts are queried from OSS on recovery rather than accumulated in this snapshot.
+type UploadMultipart struct {
+	Account     string `json:"account"`      // 115 账号，必须与当前登录账号一致。
+	Parent      string `json:"parent"`       // 目标目录 ID。
+	Name        string `json:"name"`         // 初始化时确定的文件名。
+	SHA1        string `json:"sha1"`         // 源文件完整摘要。
+	Size        int64  `json:"size"`         // 源文件字节数。
+	Modified    int64  `json:"modified"`     // 源文件修改时间，Unix 纳秒。
+	Bucket      string `json:"bucket"`       // OSS 桶名。
+	Object      string `json:"object"`       // 本次上传的 OSS 对象键。
+	UploadID    string `json:"upload_id"`    // 未完成分片会话标识。
+	PartSize    int64  `json:"part_size"`    // 固定分片字节数，恢复时不得改变。
+	Callback    string `json:"callback"`     // 115 签发的完成回调参数，不输出到接口或日志。
+	CallbackVar string `json:"callback_var"` // 回调变量，仅供提交原会话使用。
+	CreatedAt   int64  `json:"created_at"`   // 会话创建时间，Unix 秒。
+}
+
+// UploadMultipartJournal connects the protocol adapter to the owning task's durable snapshot.
+// Save must commit before sending file bytes; clearing is owned by the application after a receipt or abort.
+type UploadMultipartJournal struct {
+	Session  *UploadMultipart
+	Account  string
+	Modified int64
+	Save     func(context.Context, *UploadMultipart) error
+}
+
+type uploadMultipartKey struct{}
+
+// WithUploadMultipart binds one task's checkpoint without changing the public upload API.
+func WithUploadMultipart(ctx context.Context, journal *UploadMultipartJournal) context.Context {
+	return context.WithValue(ctx, uploadMultipartKey{}, journal)
+}
+
+// UploadMultipartFromContext returns nil for callers that do not persist upload tasks.
+func UploadMultipartFromContext(ctx context.Context) *UploadMultipartJournal {
+	journal, _ := ctx.Value(uploadMultipartKey{}).(*UploadMultipartJournal)
+	return journal
+}
+
 type uploadProgressKey struct{}
 
 // UploadDirective is a durable pause/start command. Sequence is scheduler-ordered, not wall-clock time.
@@ -43,6 +84,8 @@ func ReportUploadProgress(ctx context.Context, transferred, total int64, phase s
 // Stage equals Target for direct uploads; StageID identifies the verified final object.
 // Distinct Stage and Backup names belong only to legacy replacement recovery.
 type UploadRecord struct {
+	// Multipart defaults to nil for legacy/completed tasks; only unfinished OSS sessions retain it.
+	Multipart *UploadMultipart `json:"multipart,omitempty"`
 	// ControlSequence defaults to zero for legacy tasks; ordinary progress updates never advance it.
 	ControlSequence uint64 `json:"control_sequence,omitempty"`
 	// Directive is present only on control rows, not file receipts; nil preserves legacy semantics.

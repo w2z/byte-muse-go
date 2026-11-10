@@ -41,6 +41,9 @@ func uploadBatchActive(records []domain.UploadRecord) bool {
 
 // uploadRetriesExhausted stops exhausted failures and deterministic local conflicts until manual retry.
 func uploadRetriesExhausted(record domain.UploadRecord) bool {
+	if record.Multipart != nil && (record.Parent == "" || record.Intent == "delete" || record.Intent == "stop" || record.State == "discarding") {
+		return false
+	}
 	return record.Error != "" && (record.ErrorKind == "local_conflict" || (record.ErrorKind != "blocked" && record.ErrorKind != "locked" && record.ErrorKind != "cooldown" && record.Retries >= uploadMaxAutoRetries))
 }
 
@@ -222,6 +225,13 @@ func (s *UploadService) applyUploadControl(ctx context.Context, action string) e
 			if action == "delete_all" {
 				r.Hidden = true
 			}
+			if r.Multipart != nil {
+				r.State, r.Intent = "discarding", "stop"
+				if action == "delete_all" {
+					r.Intent = "delete"
+				}
+				r.Error, r.ErrorKind, r.NextRetry = "", "", ""
+			}
 		case "retry_all":
 			if r.Hidden || uploadTerminal(r.State) || r.ErrorKind == "locked" {
 				continue
@@ -356,6 +366,10 @@ func (s *UploadService) applyListClear(ctx context.Context, action, scope string
 			continue
 		}
 		record.Hidden = true
+		if record.Multipart != nil {
+			record.State, record.Intent = "discarding", "delete"
+			record.Error, record.ErrorKind, record.NextRetry = "", "", ""
+		}
 		if err = s.store.Save(ctx, record); err != nil {
 			return err
 		}
@@ -425,6 +439,12 @@ func uploadScopeMatch(record domain.UploadRecord, scope, key string) bool {
 // Start overrides a queue pause, and also runs the selection while monitoring is off.
 // scheduled reports whether a normal pending file would run without an individual run intent.
 func transformUploadControl(record domain.UploadRecord, action, mode string, scheduled bool) (domain.UploadRecord, bool) {
+	if record.Multipart != nil && (action == "stop" || action == "delete") {
+		record.State, record.Intent = "discarding", action
+		record.Hidden = record.Hidden || action == "delete"
+		record.Error, record.ErrorKind, record.NextRetry = "", "", ""
+		return record, true
+	}
 	if !uploadTerminal(record.State) || (record.State == "stopped" && (action == "start" || action == "retry")) {
 		freezeUploadQueueTime(&record)
 	}
@@ -735,7 +755,7 @@ func uploadRetryDue(r domain.UploadRecord, now time.Time) bool {
 	if uploadRetriesExhausted(r) {
 		return false
 	}
-	if r.ErrorKind != "blocked" && r.ErrorKind != "cooldown" {
+	if r.ErrorKind != "blocked" && r.ErrorKind != "cooldown" && r.ErrorKind != "multipart_cleanup" {
 		return true
 	}
 	next, err := time.Parse(time.RFC3339Nano, r.NextRetry)

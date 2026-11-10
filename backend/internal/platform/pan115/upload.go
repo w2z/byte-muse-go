@@ -4,7 +4,6 @@ import (
 	"bytemuse/backend/internal/domain"
 	"context"
 	"crypto/sha1"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -18,7 +17,7 @@ import (
 	"strings"
 )
 
-// isUploadCredentialExpired limits whole-upload restart to the explicit OSS STS expiry response.
+// isUploadCredentialExpired limits per-operation credential refresh to explicit OSS STS expiry.
 // Other 403 responses may indicate a bad object, policy, or endpoint and must remain fatal.
 func isUploadCredentialExpired(err error) bool {
 	var serviceErr oss.ServiceError
@@ -71,7 +70,7 @@ func (c *Client) Delete(ctx context.Context, token, parent, id string) error {
 	return err
 }
 
-// uploadInit contains provider-issued object-store coordinates, never persisted or logged.
+// uploadInit contains provider-issued coordinates; resumable journals retain only session data, never STS keys.
 type uploadInit struct {
 	ID        json.RawMessage `json:"file_id"`
 	PickCode  string          `json:"pick_code"`
@@ -132,23 +131,8 @@ func (c *Client) UploadWithReceipt(ctx context.Context, token, parent, name stri
 	return receipt, err
 }
 
+// upload validates source identity before choosing an existing session or 115 instant-upload negotiation.
 func (c *Client) upload(ctx context.Context, token, parent, name string, f *os.File, size int64, sourceSHA1 string, receipt *FileInfo) error {
-	for attempt := 0; attempt < 2; attempt++ {
-		if err := c.uploadOnce(ctx, token, parent, name, f, size, sourceSHA1, receipt); err != nil {
-			if attempt == 0 && isUploadCredentialExpired(err) {
-				if receipt != nil {
-					*receipt = FileInfo{}
-				}
-				continue
-			}
-			return err
-		}
-		return nil
-	}
-	return errors.New("OSS 上传凭据刷新重试失败")
-}
-
-func (c *Client) uploadOnce(ctx context.Context, token, parent, name string, f *os.File, size int64, sourceSHA1 string, receipt *FileInfo) error {
 	var hash string
 	var err error
 	if sourceSHA1 != "" {
@@ -162,6 +146,17 @@ func (c *Client) uploadOnce(ctx context.Context, token, parent, name string, f *
 		if err != nil {
 			return err
 		}
+	}
+	journal := domain.UploadMultipartFromContext(ctx)
+	if journal != nil && journal.Session != nil {
+		session := *journal.Session
+		if err = validateMultipartBinding(session, journal, parent, name, hash, size); err != nil {
+			return err
+		}
+		return c.uploadMultipart(ctx, token, f, session, true, journal, receipt)
+	}
+	if journal != nil && (journal.Save == nil || journal.Account == "") {
+		return fmt.Errorf("上传会话缺少持久化回调或账号")
 	}
 	pre, err := uploadHash(ctx, f, 0, min(size, 128*1024), false)
 	if err != nil {
@@ -217,75 +212,9 @@ func (c *Client) uploadOnce(ctx context.Context, token, parent, name string, f *
 	if err = json.Unmarshal(init.Callback, &callback); err != nil || callback.Value == "" {
 		return fmt.Errorf("115 上传回调无效")
 	}
-	raw, err := c.apiCall(ctx, http.MethodGet, c.api+"/open/upload/get_token", token, nil, "上传凭据")
-	if err != nil {
-		return err
+	session := domain.UploadMultipart{Parent: parent, Name: name, SHA1: hash, Size: size, Bucket: init.Bucket, Object: init.Object, Callback: callback.Value, CallbackVar: callback.Vars, PartSize: max(int64(16*1024*1024), size/10000+1)}
+	if journal != nil {
+		session.Account, session.Modified = journal.Account, journal.Modified
 	}
-	var credentials struct {
-		Endpoint string `json:"endpoint"`
-		ID       string `json:"AccessKeyId"`
-		Secret   string `json:"AccessKeySecret"`
-		Token    string `json:"SecurityToken"`
-	}
-	if err = json.Unmarshal(raw, &credentials); err != nil {
-		return err
-	}
-	endpoint, err := url.Parse(credentials.Endpoint)
-	if err != nil || endpoint.Scheme != "https" || !strings.HasSuffix(endpoint.Hostname(), ".aliyuncs.com") {
-		return fmt.Errorf("115 返回不可信的上传端点")
-	}
-	client, err := oss.New(credentials.Endpoint, credentials.ID, credentials.Secret, oss.SecurityToken(credentials.Token))
-	if err != nil {
-		return err
-	}
-	bucket, err := client.Bucket(init.Bucket)
-	if err != nil {
-		return err
-	}
-	var callbackBody []byte
-	options := []oss.Option{oss.WithContext(ctx), oss.Callback(base64.StdEncoding.EncodeToString([]byte(callback.Value))), oss.CallbackVar(base64.StdEncoding.EncodeToString([]byte(callback.Vars))), oss.CallbackResult(&callbackBody)}
-	finish := func() error {
-		result, err := parseUploadCallback(callbackBody, parent, name, size, hash)
-		if err != nil {
-			return err
-		}
-		if receipt != nil {
-			*receipt = result
-		}
-		return nil
-	}
-	if size == 0 {
-		if err = bucket.PutObject(init.Object, io.NewSectionReader(f, 0, 0), options...); err != nil {
-			return err
-		}
-		return finish()
-	}
-	session, err := bucket.InitiateMultipartUpload(init.Object, oss.WithContext(ctx), oss.Sequential())
-	if err != nil {
-		return err
-	}
-	complete := false
-	defer func() {
-		if !complete {
-			cleanup, cancel := context.WithTimeout(context.Background(), requestTimeout)
-			defer cancel()
-			_ = bucket.AbortMultipartUpload(session, oss.WithContext(cleanup))
-		}
-	}()
-	partSize := max(int64(16*1024*1024), (size+9999)/10000)
-	parts := []oss.UploadPart{}
-	for offset := int64(0); offset < size; offset += partSize {
-		count := min(partSize, size-offset)
-		part, e := bucket.UploadPart(session, io.NewSectionReader(f, offset, count), count, len(parts)+1, oss.WithContext(ctx), oss.Progress(uploadProgress{ctx, offset, size}))
-		if e != nil {
-			return e
-		}
-		parts = append(parts, part)
-	}
-	_, err = bucket.CompleteMultipartUpload(session, parts, options...)
-	complete = err == nil
-	if err != nil {
-		return err
-	}
-	return finish()
+	return c.uploadMultipart(ctx, token, f, session, false, journal, receipt)
 }

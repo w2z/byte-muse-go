@@ -1,6 +1,7 @@
 package application
 
 import (
+	"bytemuse/backend/internal/domain"
 	"bytemuse/backend/internal/platform/clouddrive"
 	"bytemuse/backend/internal/platform/pan115"
 	"context"
@@ -97,6 +98,17 @@ type uploadRemote interface {
 // uploadReceiptRemote returns provider-confirmed identities, checked before replacing verification reads.
 type uploadReceiptRemote interface {
 	UploadWithReceipt(context.Context, string, string, *os.File, int64, string) (uploadEntry, error)
+}
+
+// AbortUpload forwards cancellation without deleting an installed provider object.
+func (remote uploadDirectoryRemote) AbortUpload(ctx context.Context, session domain.UploadMultipart) error {
+	api, ok := remote.uploadRemote.(interface {
+		AbortUpload(context.Context, domain.UploadMultipart) error
+	})
+	if !ok {
+		return fmt.Errorf("网盘客户端不支持上传断点清理")
+	}
+	return api.AbortUpload(ctx, session)
 }
 
 // UploadWithReceipt merges confirmed identities; uncertain writes invalidate preparation snapshots.
@@ -225,12 +237,40 @@ func (r uploadPanRemote) UploadWithReceipt(ctx context.Context, parent, name str
 	if r.paths != nil {
 		ancestors = r.paths.directoryPath(r.scope, parent)
 	}
+	if journal := domain.UploadMultipartFromContext(ctx); journal != nil {
+		account, err := r.AccountID(ctx)
+		if err != nil {
+			return uploadEntry{}, err
+		}
+		if account == "" {
+			return uploadEntry{}, ErrPan115NotLinked
+		}
+		journal.Account = account
+	}
 	info, err := api.UploadWithReceipt(ctx, token, parent, name, f, size, hash)
 	if err != nil {
 		return uploadEntry{}, err
 	}
 	info.Path = ancestors
 	return uploadEntry{ID: info.ID, Name: info.Name, Size: info.Size, SHA1: info.SHA1, Info: &info}, nil
+}
+
+// AbortUpload releases only an unfinished OSS session belonging to the current account.
+func (r uploadPanRemote) AbortUpload(ctx context.Context, session domain.UploadMultipart) error {
+	account, err := r.AccountID(ctx)
+	if err != nil {
+		return err
+	}
+	if account == "" || account != session.Account {
+		return fmt.Errorf("上传断点属于其他账号，保留待清理记录")
+	}
+	api, ok := r.api.(interface {
+		AbortUpload(context.Context, string, domain.UploadMultipart) error
+	})
+	if !ok {
+		return fmt.Errorf("115 客户端不支持分片清理")
+	}
+	return r.s.withToken(ctx, func(token string) error { return api.AbortUpload(ctx, token, session) })
 }
 func (r uploadPanRemote) Rename(ctx context.Context, parent string, e uploadEntry, name string) error {
 	return r.s.withToken(ctx, func(token string) error { return r.api.Rename(ctx, token, e.ID, name) })

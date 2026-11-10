@@ -4,6 +4,7 @@ import (
 	"bytemuse/backend/internal/domain"
 	"bytemuse/backend/internal/platform/pan115"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -112,6 +113,7 @@ func (s *UploadService) processDirectUpload(ctx context.Context, remote uploadRe
 		return uploadEntry{}, false
 	}
 	installed, found := verified(entries)
+	transferred := false
 	_, hasTarget := findUploadEntry(entries, record.Target)
 	// A fresh read above already satisfies the identity barrier; do not use the total
 	// hashing time to force a second read immediately after it completes.
@@ -155,6 +157,14 @@ func (s *UploadService) processDirectUpload(ctx context.Context, remote uploadRe
 		}
 		if record.Policy == "keep_both" {
 			if _, occupied := findUploadEntry(entries, record.Target); occupied {
+				if record.Multipart != nil {
+					if err = s.abortMultipartRecord(ctx, remote, record); err != nil {
+						return record.State, err
+					}
+					if err = save(); err != nil {
+						return record.State, err
+					}
+				}
 				s.preparation.Lock()
 				err = s.selectUploadName(ctx, record, entries)
 				if err == nil {
@@ -179,6 +189,11 @@ func (s *UploadService) processDirectUpload(ctx context.Context, remote uploadRe
 		}
 		for _, entry := range entries {
 			if entry.Name == record.Target && !entry.Directory && record.Policy == "skip" {
+				if record.Multipart != nil {
+					if err = s.abortMultipartRecord(ctx, remote, record); err != nil {
+						return record.State, err
+					}
+				}
 				record.State = "skipped"
 				return record.State, save()
 			}
@@ -191,14 +206,59 @@ func (s *UploadService) processDirectUpload(ctx context.Context, remote uploadRe
 		}
 		var receipt uploadEntry
 		uploadCtx := pan115.WithUploadStage(ctx, "upload")
+		if record.Kind == "115" {
+			uploadCtx = domain.WithUploadMultipart(uploadCtx, &domain.UploadMultipartJournal{
+				Session: record.Multipart, Modified: record.Modified,
+				Save: func(saveCtx context.Context, session *domain.UploadMultipart) error {
+					// Never mutate the cache's shared pointer before the durable write succeeds.
+					next := *record
+					if session == nil {
+						next.Multipart = nil
+					} else {
+						copy := *session
+						next.Multipart = &copy
+					}
+					next.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+					if err := s.store.Save(saveCtx, next); err != nil {
+						return err
+					}
+					*record = next
+					return nil
+				},
+			})
+		}
 		if api, ok := remote.(uploadReceiptRemote); ok && record.Kind == "115" {
 			receipt, err = api.UploadWithReceipt(uploadCtx, record.Parent, record.Target, file, source.Size, record.SHA1)
 		} else {
 			err = remote.Upload(uploadCtx, record.Parent, record.Target, file, source.Size, record.SHA1)
 		}
+		if journal := domain.UploadMultipartFromContext(uploadCtx); journal != nil && journal.Session != nil && record.Multipart == nil {
+			// If the immediate checkpoint write failed, the worker's final uncancelled save still retains cleanup identity.
+			copy := *journal.Session
+			record.Multipart = &copy
+		}
+		if errors.Is(err, pan115.ErrUploadSessionMissing) {
+			// Completion also removes an OSS session: reconcile before allowing a fresh upload.
+			objects, listErr := uploadFreshList(ctx, remote, record.Parent, time.Now())
+			if listErr != nil {
+				return record.State, listErr
+			}
+			if recovered, ok := verified(objects); ok {
+				receipt, err = recovered, nil
+			} else {
+				if abortErr := s.abortMultipartRecord(ctx, remote, record); abortErr != nil {
+					return record.State, abortErr
+				}
+				if saveErr := save(); saveErr != nil {
+					return record.State, saveErr
+				}
+				return record.State, fmt.Errorf("OSS 断点已失效且目录未找到完成文件，下次重新上传")
+			}
+		}
 		if err != nil {
 			return record.State, err
 		}
+		transferred = true
 		uploadedAt := time.Now()
 		domain.ReportUploadProgress(ctx, source.Size, source.Size, "uploading")
 		if validUploadReceipt(receipt, record.Parent, record.Target, source.Size, record.SHA1) {
@@ -225,6 +285,22 @@ func (s *UploadService) processDirectUpload(ctx context.Context, remote uploadRe
 	ctx = pan115.WithUploadStage(ctx, "cleanup")
 	if err = save(); err != nil {
 		return record.State, err
+	}
+	// The verified final identity must be durable before discarding the resume checkpoint.
+	if record.Multipart != nil {
+		if !transferred {
+			// A prior completed call may have lost its response, or a matching file may predate this session.
+			// Abort is idempotent for an already completed session and cleans any still unfinished parts.
+			if err = s.abortMultipartRecord(ctx, remote, record); err != nil {
+				return record.State, err
+			}
+		}
+		previous := record.Multipart
+		record.Multipart = nil
+		if err = save(); err != nil {
+			record.Multipart = previous
+			return record.State, err
+		}
 	}
 	if err = validateUploadOverwrite(record, entries, installed.ID); err != nil {
 		return record.State, err

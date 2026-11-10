@@ -255,12 +255,16 @@ func (s *UploadService) process(ctx context.Context, m UploadMapping, f uploadLo
 				record.Overwrite = nil
 				if record.Intent == "delete" || record.Intent == "stop" {
 					record.State = "stopped"
+					if record.Multipart != nil {
+						record.State = "discarding"
+						record.Error = resultErr.Error()
+					}
 					record.Hidden = record.Intent == "delete"
 				} else {
 					record.State = "pending"
 					record.Error = resultErr.Error()
 				}
-				if record.Intent == "delete" || record.Intent == "stop" {
+				if record.Multipart == nil && (record.Intent == "delete" || record.Intent == "stop") {
 					resultErr = nil
 				}
 			} else {
@@ -287,6 +291,11 @@ func (s *UploadService) process(ctx context.Context, m UploadMapping, f uploadLo
 			if errors.Is(resultErr, errLocalUploadConflict) {
 				record.ErrorKind = "local_conflict"
 			}
+			if record.Multipart != nil && (record.Parent == "" || record.Intent == "stop" || record.Intent == "delete" || record.State == "discarding") {
+				// Keep the cleanup obligation scheduled even after the normal upload retry budget.
+				record.ErrorKind = "multipart_cleanup"
+				record.NextRetry = time.Now().Add(time.Minute).UTC().Format(time.RFC3339Nano)
+			}
 			if record.Error != "" && record.ErrorKind != "local_conflict" && record.ErrorKind != "blocked" && record.ErrorKind != "locked" && record.Retries < uploadMaxAutoRetries {
 				record.Error = uploadRetryMessage(record.Retries, record.Error)
 			}
@@ -298,8 +307,44 @@ func (s *UploadService) process(ctx context.Context, m UploadMapping, f uploadLo
 		state = record.State
 		resultErr = errors.Join(resultErr, s.store.Save(persist, *record))
 	}()
+	if record != nil && record.Multipart != nil && (record.Intent == "stop" || record.Intent == "delete" || record.State == "discarding" || !uploadUnchanged(f)) {
+		// Cancellation cleanup does not require the local file to survive.
+		record.State = "discarding"
+		if err = s.store.Save(ctx, *record); err != nil {
+			return record.State, err
+		}
+		remote, loadErr := s.provider(ctx, m.Kind)
+		if loadErr != nil {
+			return record.State, loadErr
+		}
+		if err = s.abortMultipartRecord(ctx, remote, record); err != nil {
+			return record.State, err
+		}
+		record.State = "stopped"
+		if record.Intent != "stop" && record.Intent != "delete" {
+			record.State, record.Hidden = "discarded", true
+		}
+		record.Hidden = record.Hidden || record.Intent == "delete"
+		return record.State, nil
+	}
 	if record != nil && uploadTerminal(record.State) {
 		return record.State, nil
+	}
+	if record != nil && record.Multipart != nil && record.Parent == "" {
+		// A missing parent invalidates the binding, but its journal remains authoritative
+		// until the old session is aborted and that removal is durably saved.
+		remote, loadErr := s.provider(ctx, m.Kind)
+		if loadErr != nil {
+			return record.State, loadErr
+		}
+		previous := record.Multipart
+		if err = s.abortMultipartRecord(ctx, remote, record); err != nil {
+			return record.State, err
+		}
+		if err = s.store.Save(ctx, *record); err != nil {
+			record.Multipart = previous
+			return record.State, err
+		}
 	}
 	if record != nil && record.Intent == "delete" {
 		if record.Parent == "" {
@@ -317,6 +362,18 @@ func (s *UploadService) process(ctx context.Context, m UploadMapping, f uploadLo
 			return record.State, &uploadLocalPostprocessError{resumeErr}
 		}
 		if handled {
+			if record.Multipart != nil {
+				remote, err := s.provider(ctx, record.Kind)
+				if err != nil {
+					return record.State, err
+				}
+				if err = s.abortMultipartRecord(ctx, remote, record); err != nil {
+					return record.State, err
+				}
+				if err = s.store.Save(ctx, *record); err != nil {
+					return record.State, err
+				}
+			}
 			if record.Mode == "move" {
 				// Handoff already proves remote replacement cleanup finished. Only verify
 				// the exact installed object before deleting the retained move source.

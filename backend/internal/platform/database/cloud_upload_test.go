@@ -4,8 +4,49 @@ import (
 	"bytemuse/backend/internal/domain"
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+// Multipart stays within the existing task snapshot; legacy rows need no backfill or schema change.
+func TestUploadMultipartSnapshotRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, Config{Dialect: DialectSQLite, SQLitePath: filepath.Join(t.TempDir(), "multipart.db")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err = store.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	repo := NewUploadRepository(store.SQLDB(), DialectSQLite)
+	r := domain.UploadRecord{Key: "resume", State: "pending", Multipart: &domain.UploadMultipart{Account: "account", UploadID: "session", Bucket: "bucket", Object: "object", PartSize: 16777216, Size: 33554432, Modified: 1234, Callback: "callback", CallbackVar: "vars"}}
+	if err = repo.Save(ctx, r); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := repo.Get(ctx, r.Key)
+	if err != nil || loaded.Multipart == nil || *loaded.Multipart != *r.Multipart {
+		t.Fatalf("checkpoint=%+v %v", loaded, err)
+	}
+	loaded.StageID, loaded.State, loaded.Multipart = "verified", "cleanup", nil
+	if err = repo.Save(ctx, *loaded); err != nil {
+		t.Fatal(err)
+	}
+	var raw string
+	if err = store.SQLDB().QueryRow("SELECT snapshot FROM cloud_upload_records WHERE record_key='resume'").Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(raw, "multipart") || !strings.Contains(raw, "verified") {
+		t.Fatal("checkpoint retained or receipt lost")
+	}
+	if _, err = store.SQLDB().Exec("INSERT INTO cloud_upload_records VALUES ('legacy','pending','{\"key\":\"legacy\",\"state\":\"pending\"}')"); err != nil {
+		t.Fatal(err)
+	}
+	legacy, err := repo.Get(ctx, "legacy")
+	if err != nil || legacy.Multipart != nil {
+		t.Fatal("legacy task needs migration", err)
+	}
+}
 
 func TestUploadHideCompletedPreservesReceiptsAndPending(t *testing.T) {
 	ctx := context.Background()
