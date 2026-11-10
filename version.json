@@ -1,16 +1,20 @@
 {
-  "version": "0.1.242",
-  "commit": "77cebc7774fe49f6d913e7fea7f39f9b24bdecf9",
-  "short_commit": "77cebc7",
-  "built_at": "2026-11-09T16:51:53Z",
+  "version": "0.1.243",
+  "commit": "66c07dd458bd556912fa32d5c998bf75faa4db75",
+  "short_commit": "66c07dd",
+  "built_at": "2026-11-10T01:37:18Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.242",
-    "sha-77cebc7",
+    "0.1.243",
+    "sha-66c07dd",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.243",
+      "message": "按上传同名策略处理已有播放文件"
+    },
     {
       "version": "0.1.242",
       "message": "幂等识别同一上传文件的现有链接"
