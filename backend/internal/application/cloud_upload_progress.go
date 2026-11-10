@@ -403,6 +403,13 @@ func (s *UploadService) reportBytes(key string, done, total int64, phase string)
 	}
 	item.updated = now
 	item.State = phase
+	if uploadLivePhase(phase) {
+		item.Error, item.NextRetry = "", ""
+		if item.failed {
+			item.failed = false
+			s.status.Failed--
+		}
+	}
 	item.UploadedBytes = done
 	if total > 0 {
 		item.Progress = min(99.9, float64(done)*100/float64(total))

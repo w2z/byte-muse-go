@@ -634,6 +634,10 @@ func (s *UploadService) mergeUploadView(records []domain.UploadRecord, full bool
 		}
 		current := s.active[r.Key] || st.Current == r.Key
 		f.State = uploadPresentationState(r, f.State, current, s.mode, st.Enabled, s.manualUpload)
+		if current && uploadLivePhase(f.State) {
+			// Keep the durable failure for recovery, but do not present it as the running attempt's error.
+			f.Error, f.NextRetry, f.failed = "", "", false
+		}
 		if !current {
 			f.Speed = 0
 		}
@@ -675,15 +679,22 @@ func (s *UploadService) mergeUploadView(records []domain.UploadRecord, full bool
 	}
 }
 
-// uploadPresentationState is the single durable-to-UI state mapping. An
-// error always outranks the last commit phase, so a failed replacement cannot
-// remain displayed as "正在替换" while it waits for retry.
+// uploadLivePhase identifies actual byte-progress phases, not durable commit or waiting states.
+func uploadLivePhase(state string) bool {
+	return state == "verifying" || state == "uploading" || state == "transferring"
+}
+
+// uploadPresentationState uses live transfer progress during an active attempt;
+// outside that attempt, persisted failures outrank stale progress and commit phases.
 func uploadPresentationState(r domain.UploadRecord, liveState string, current bool, mode string, enabled, manual bool) string {
 	if uploadTerminal(r.State) {
 		return r.State
 	}
 	if (r.State == "pending" || r.State == "uploaded") && uploadIndividuallyPaused(r, mode) {
 		return "paused"
+	}
+	if current && uploadLivePhase(liveState) && r.State == "pending" {
+		return liveState
 	}
 	if r.ErrorKind == "locked" || r.ErrorKind == "cooldown" {
 		return "waiting"
@@ -696,9 +707,6 @@ func uploadPresentationState(r domain.UploadRecord, liveState string, current bo
 			return "retrying"
 		}
 		return "failed"
-	}
-	if current && (liveState == "verifying" || liveState == "uploading" || liveState == "transferring") && r.State == "pending" {
-		return liveState
 	}
 	if r.State == "pending" {
 		if current {

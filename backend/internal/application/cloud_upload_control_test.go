@@ -472,6 +472,42 @@ func TestUploadRetryPresentationAndManualRestart(t *testing.T) {
 	}
 }
 
+// A running retry must expose live progress without presenting the previous attempt as a new failure.
+func TestUploadRunningRetryClearsStalePresentation(t *testing.T) {
+	for _, kind := range []string{"transient", "cooldown", "blocked"} {
+		for _, phase := range []string{"verifying", "uploading", "transferring"} {
+			t.Run(kind+"/"+phase, func(t *testing.T) {
+				r := domain.UploadRecord{Key: "retry", State: "pending", Size: 100, Retries: 1, ErrorKind: kind, NextRetry: time.Now().Add(-time.Minute).UTC().Format(time.RFC3339Nano), Error: "正在重试 (1/3)；SecurityTokenExpired: old-request"}
+				s := &UploadService{mode: "running", active: map[string]bool{"retry": true}, files: map[string]UploadFileProgress{}, status: UploadStatus{Enabled: true}}
+				s.mergeUploadView([]domain.UploadRecord{r}, true)
+				s.reportBytes(r.Key, 40, 100, phase)
+				assertLive := func() {
+					t.Helper()
+					item := s.Files(1, 10, "").Items[0]
+					if item.State != phase || item.Error != "" || item.NextRetry != "" || item.Retries != 1 || item.Progress != 40 || item.UploadedBytes != 40 {
+						t.Fatalf("stale retry masked live progress: %+v", item)
+					}
+				}
+				assertLive()
+				// Refreshing the durable queue must not restore the old error over live progress.
+				s.mergeUploadView([]domain.UploadRecord{r}, true)
+				assertLive()
+				if s.status.Failed != 0 {
+					t.Fatalf("active retry counted as failed: %d", s.status.Failed)
+				}
+				delete(s.active, r.Key)
+				r.Error, r.Retries = "new failure", 2
+				r.ErrorKind = "transient"
+				s.mergeUploadView([]domain.UploadRecord{r}, true)
+				item := s.Files(1, 10, "").Items[0]
+				if item.State != "retrying" || item.Error != "new failure" || item.Retries != 2 || s.status.Failed != 1 {
+					t.Fatalf("new failure suppressed: %+v", item)
+				}
+			})
+		}
+	}
+}
+
 func TestUploadListClearFollowsSelectedTab(t *testing.T) {
 	ctx := context.Background()
 	store := uploadMemoryStore{
