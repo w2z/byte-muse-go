@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/aliyun/aliyun-oss-go-sdk/oss"
 	"io"
@@ -16,6 +17,17 @@ import (
 	"strconv"
 	"strings"
 )
+
+// isUploadCredentialExpired limits whole-upload restart to the explicit OSS STS expiry response.
+// Other 403 responses may indicate a bad object, policy, or endpoint and must remain fatal.
+func isUploadCredentialExpired(err error) bool {
+	var serviceErr oss.ServiceError
+	if errors.As(err, &serviceErr) {
+		return serviceErr.Code == "SecurityTokenExpired"
+	}
+	var serviceErrPtr *oss.ServiceError
+	return errors.As(err, &serviceErrPtr) && serviceErrPtr != nil && serviceErrPtr.Code == "SecurityTokenExpired"
+}
 
 // uploadProgress translates each OSS part's byte counter into an absolute file counter.
 type uploadProgress struct {
@@ -121,6 +133,22 @@ func (c *Client) UploadWithReceipt(ctx context.Context, token, parent, name stri
 }
 
 func (c *Client) upload(ctx context.Context, token, parent, name string, f *os.File, size int64, sourceSHA1 string, receipt *FileInfo) error {
+	for attempt := 0; attempt < 2; attempt++ {
+		if err := c.uploadOnce(ctx, token, parent, name, f, size, sourceSHA1, receipt); err != nil {
+			if attempt == 0 && isUploadCredentialExpired(err) {
+				if receipt != nil {
+					*receipt = FileInfo{}
+				}
+				continue
+			}
+			return err
+		}
+		return nil
+	}
+	return errors.New("OSS 上传凭据刷新重试失败")
+}
+
+func (c *Client) uploadOnce(ctx context.Context, token, parent, name string, f *os.File, size int64, sourceSHA1 string, receipt *FileInfo) error {
 	var hash string
 	var err error
 	if sourceSHA1 != "" {

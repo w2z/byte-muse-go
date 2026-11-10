@@ -4,12 +4,30 @@ import (
 	"bytemuse/backend/internal/domain"
 	"bytes"
 	"context"
+	"fmt"
+	"github.com/aliyun/aliyun-oss-go-sdk/oss"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestUploadCredentialExpiryIsRetryable(t *testing.T) {
+	err := oss.ServiceError{StatusCode: 403, Code: "SecurityTokenExpired", Message: "The security token you provided has expired."}
+	if !isUploadCredentialExpired(err) {
+		t.Fatal("SecurityTokenExpired was not classified for credential refresh")
+	}
+	if !isUploadCredentialExpired(&err) {
+		t.Fatal("pointer SecurityTokenExpired was not classified for credential refresh")
+	}
+	if !isUploadCredentialExpired(fmt.Errorf("wrapped: %w", err)) {
+		t.Fatal("wrapped SecurityTokenExpired was not classified for credential refresh")
+	}
+	if isUploadCredentialExpired(oss.ServiceError{StatusCode: 403, Code: "AccessDenied"}) {
+		t.Fatal("generic OSS access denial must not refresh credentials")
+	}
+}
 
 func TestUploadReceiptInstantSkipsLookup(t *testing.T) {
 	f, err := os.Create(filepath.Join(t.TempDir(), "source"))
