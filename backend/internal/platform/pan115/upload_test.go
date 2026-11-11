@@ -120,6 +120,9 @@ func TestUploadInstant(t *testing.T) {
 		if r.FormValue("topupload") != "1" {
 			t.Errorf("missing open upload task marker: %v", r.Form)
 		}
+		if r.FormValue("preid") != "" {
+			t.Errorf("open upload must not send legacy preid: %v", r.Form)
+		}
 		_ = r.ParseForm()
 		if r.FormValue("target") != "U_1_12" || r.FormValue("fileid") != "A9993E364706816ABA3E25717850C26C9CD0D89D" {
 			t.Errorf("wrong upload init: %v", r.Form)
@@ -146,7 +149,7 @@ func TestUploadReusesSHA1(t *testing.T) {
 	})
 	client := newTestClient(t, func(writer http.ResponseWriter, request *http.Request) {
 		_ = request.ParseForm()
-		if request.FormValue("fileid") != "A9993E364706816ABA3E25717850C26C9CD0D89D" || request.FormValue("preid") != "A9993E364706816ABA3E25717850C26C9CD0D89D" {
+		if request.FormValue("fileid") != "A9993E364706816ABA3E25717850C26C9CD0D89D" || request.FormValue("topupload") != "1" {
 			t.Errorf("invalid hashes: %v", request.Form)
 		}
 		writeJSON(t, writer, `{"state":true,"code":0,"data":{"status":2}}`)

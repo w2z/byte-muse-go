@@ -158,14 +158,10 @@ func (c *Client) upload(ctx context.Context, token, parent, name string, f *os.F
 	if journal != nil && (journal.Save == nil || journal.Account == "") {
 		return fmt.Errorf("上传会话缺少持久化回调或账号")
 	}
-	pre, err := uploadHash(ctx, f, 0, min(size, 128*1024), false)
-	if err != nil {
-		return err
-	}
 	// p115client marks open API uploads as the first item of an upload task.
 	// 115 uses this flag when issuing the OSS policy; omitting it yields valid
 	// looking credentials that are rejected by the bucket policy at PUT time.
-	form := url.Values{"file_name": {name}, "file_size": {strconv.FormatInt(size, 10)}, "target": {"U_1_" + parent}, "fileid": {hash}, "preid": {pre}, "topupload": {"1"}}
+	form := url.Values{"file_name": {name}, "file_size": {strconv.FormatInt(size, 10)}, "target": {"U_1_" + parent}, "fileid": {hash}, "topupload": {"1"}}
 	domain.ReportUploadProgress(ctx, 0, size, "uploading")
 	var init uploadInit
 	for attempt := 0; attempt < 2; attempt++ {
