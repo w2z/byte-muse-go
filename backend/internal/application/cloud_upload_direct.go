@@ -252,7 +252,7 @@ func (s *UploadService) processDirectUpload(ctx context.Context, remote uploadRe
 				if saveErr := save(); saveErr != nil {
 					return record.State, saveErr
 				}
-				return record.State, fmt.Errorf("OSS 断点已失效且目录未找到完成文件，下次重新上传")
+				return record.State, fmt.Errorf("%w：OSS 断点已失效且目录未找到完成文件，旧会话已清理，准备重新上传", errUploadSessionReset)
 			}
 		}
 		if err != nil {

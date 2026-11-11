@@ -14,6 +14,7 @@ import (
 var errUploadAttention = errors.New("需处理：远端文件身份无法确认")
 var errUploadFileLocked = errors.New("该文件正在被占用")
 var errUploadRemoteMissing = errors.New("远端文件不存在或已删除")
+var errUploadSessionReset = errors.New("OSS 断点已安全清理，可重新建立上传会话")
 
 // isUploadRemoteMissingError only classifies 115's 20018 as a deleted object
 // when its message actually describes a missing object. The same code is also

@@ -144,6 +144,17 @@ func TestMultipartPauseAndClearPolicies(t *testing.T) {
 	}
 }
 
+func TestExpiredMultipartSessionCanStartAgainAfterSafeReset(t *testing.T) {
+	r := domain.UploadRecord{Key: "task", Kind: "115", State: "pending", Intent: "run", Retries: 3, ErrorKind: "transient", Error: "正在重试 (3/3)；OSS 断点已失效且目录未找到完成文件，下次重新上传"}
+	if uploadRetriesExhausted(r) {
+		t.Fatal("safe session reset remained exhausted")
+	}
+	next, ok := transformUploadControl(r, "start", "running", true)
+	if !ok || next.Error != "" || next.ErrorKind != "" || next.Retries != 3 {
+		t.Fatalf("start did not clear legacy reset error: %+v ok=%v", next, ok)
+	}
+}
+
 func TestMultipartQueueCleansMissingSourceWithoutParent(t *testing.T) {
 	s, m, f, _, store := recoveryFixture(t)
 	r := &multipartRemoteStub{}

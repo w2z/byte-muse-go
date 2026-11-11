@@ -247,7 +247,11 @@ func (s *UploadService) process(ctx context.Context, m UploadMapping, f uploadLo
 			record.Error, record.ErrorKind = deferred.Error(), "cooldown"
 			record.NextRetry = deferred.Until.UTC().Format(time.RFC3339Nano)
 		} else if resultErr != nil && !errors.Is(resultErr, context.Canceled) {
-			if errors.Is(resultErr, errUploadRemoteMissing) {
+			if errors.Is(resultErr, errUploadSessionReset) {
+				record.State = "pending"
+				record.Error, record.ErrorKind, record.NextRetry = resultErr.Error(), "session_reset", ""
+				record.Retries = 0
+			} else if errors.Is(resultErr, errUploadRemoteMissing) {
 				record.Parent = ""
 				record.Stage = ""
 				record.StageID, record.StageSHA1, record.StageSize = "", "", 0
@@ -270,7 +274,9 @@ func (s *UploadService) process(ctx context.Context, m UploadMapping, f uploadLo
 			} else {
 				record.Error = resultErr.Error()
 			}
-			if errors.Is(resultErr, errUploadFileLocked) {
+			if errors.Is(resultErr, errUploadSessionReset) {
+				// The session reset is deliberately outside the ordinary failure budget.
+			} else if errors.Is(resultErr, errUploadFileLocked) {
 				record.ErrorKind = "locked"
 				record.NextRetry = time.Now().Add(time.Second).UTC().Format(time.RFC3339Nano)
 			} else if resultErr != nil {

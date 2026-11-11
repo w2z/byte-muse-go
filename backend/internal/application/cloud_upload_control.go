@@ -41,6 +41,11 @@ func uploadBatchActive(records []domain.UploadRecord) bool {
 
 // uploadRetriesExhausted stops exhausted failures and deterministic local conflicts until manual retry.
 func uploadRetriesExhausted(record domain.UploadRecord) bool {
+	if strings.Contains(record.Error, "OSS 断点已失效且目录未找到完成文件") && record.Multipart == nil {
+		// 旧版本把 a safely discarded OSS session into the ordinary retry budget.
+		// It is safe to create a new session after the directory reconciliation.
+		return false
+	}
 	if record.Multipart != nil && (record.Parent == "" || record.Intent == "delete" || record.Intent == "stop" || record.State == "discarding") {
 		return false
 	}
@@ -486,7 +491,7 @@ func transformUploadControl(record domain.UploadRecord, action, mode string, sch
 			record.Intent = ""
 		}
 		record.NextRetry = ""
-		if record.ErrorKind == "transient" || record.ErrorKind == "blocked" {
+		if record.ErrorKind == "transient" || record.ErrorKind == "blocked" || strings.Contains(record.Error, "OSS 断点已失效且目录未找到完成文件") {
 			record.Error, record.ErrorKind = "", ""
 		}
 		return record, true
