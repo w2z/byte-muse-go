@@ -1,16 +1,20 @@
 {
-  "version": "0.1.252",
-  "commit": "42a371d14e206c493b98e471f210960cfe1e9a52",
-  "short_commit": "42a371d",
-  "built_at": "2026-11-11T03:21:22Z",
+  "version": "0.1.253",
+  "commit": "2e3f51f417ff12e3d7a27612b2f1ec3b288c7da9",
+  "short_commit": "2e3f51f",
+  "built_at": "2026-11-11T03:40:15Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.252",
-    "sha-42a371d",
+    "0.1.253",
+    "sha-2e3f51f",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.253",
+      "message": "对齐单请求OSS内容类型签名"
+    },
     {
       "version": "0.1.252",
       "message": "小文件改用单请求上传并保留重试进度"
