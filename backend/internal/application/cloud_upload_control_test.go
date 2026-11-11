@@ -408,6 +408,7 @@ func TestUploadRetryAllResetsEveryError(t *testing.T) {
 	store := uploadMemoryStore{
 		"failed":  {Key: "failed", State: "pending", Error: "传输失败", ErrorKind: "transient", Retries: 3},
 		"blocked": {Key: "blocked", State: "pending", Error: "账号失效", ErrorKind: "blocked", Retries: 1, NextRetry: time.Now().Add(time.Hour).UTC().Format(time.RFC3339Nano)},
+		"paused":  {Key: "paused", State: "pending", Intent: "pause"},
 	}
 	service := &UploadService{store: store, ready: true, mode: "running", status: UploadStatus{Enabled: true}, files: map[string]UploadFileProgress{
 		"failed":  {Key: "failed", State: "failed", Error: "传输失败"},
@@ -426,6 +427,20 @@ func TestUploadRetryAllResetsEveryError(t *testing.T) {
 		if record.Retries != 0 || record.Error != "" || record.ErrorKind != "" || record.NextRetry != "" || record.Intent != "run" {
 			t.Fatalf("retry_all did not reset %s: %+v", key, record)
 		}
+	}
+}
+
+func TestUploadRetryAllReleasesPausedPendingTasks(t *testing.T) {
+	store := uploadMemoryStore{"paused": {Key: "paused", State: "pending", Intent: "pause"}}
+	service := &UploadService{store: store, ready: true, mode: "paused", status: UploadStatus{Enabled: true}, files: map[string]UploadFileProgress{"paused": {Key: "paused", State: "paused"}}}
+	if err := service.applyUploadControl(context.Background(), "retry_all"); err != nil {
+		t.Fatal(err)
+	}
+	if got := store["paused"]; got.Intent != "run" || got.State != "pending" {
+		t.Fatalf("paused task was not released: %+v", got)
+	}
+	if got := service.Files(1, 10, "").Items[0].State; got != "waiting" {
+		t.Fatalf("released task shown as %s", got)
 	}
 }
 

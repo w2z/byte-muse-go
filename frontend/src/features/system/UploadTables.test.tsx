@@ -29,7 +29,7 @@ it("状态摘要使用标签栏右侧区域且不显示当前文件", async () =
  const summary = await screen.findByText(/已处理 0\/1/);
  expect(summary.closest(".arco-tabs-header-nav")).toBeTruthy();
  expect(screen.queryByText(/当前文件：/)).not.toBeInTheDocument();
- expect(screen.getByText("最近错误：最近一次错误")).toBeInTheDocument();
+ expect(screen.queryByText("最近错误：最近一次错误")).not.toBeInTheDocument();
  client.clear();
 });
 it("无任务时隐藏数量，筛选为空但仍有任务时保留全局数量",async()=>{

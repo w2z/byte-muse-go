@@ -52,7 +52,6 @@ export function UploadMonitorStatus() {
         · 已处理 {status.processed}/{status.total}（{percent}%），上传{" "}
         {status.uploaded}，跳过 {status.skipped}，异常任务 {status.failed}
       </div>
-      {status.error ? <div>最近错误：{status.error}</div> : null}
     </div>
   );
 }

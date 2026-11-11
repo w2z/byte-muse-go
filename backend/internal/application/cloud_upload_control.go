@@ -247,10 +247,14 @@ func (s *UploadService) applyUploadControl(ctx context.Context, action string) e
 			if current {
 				continue
 			}
-			if r.Error == "" && r.ErrorKind == "" && r.State != "failed" && r.State != "blocked" && r.State != "attention" {
+			if r.Error == "" && r.ErrorKind == "" && r.State != "failed" && r.State != "blocked" && r.State != "attention" && r.Intent != "pause" {
 				continue
 			}
 			r.Intent = "run"
+			if r.State == "pending" || r.State == "uploaded" {
+				// A bulk retry also releases tasks that were paused before they entered the worker.
+				r.State = "pending"
+			}
 			r.Retries = 0
 			r.Error, r.ErrorKind, r.NextRetry = "", "", ""
 		}
