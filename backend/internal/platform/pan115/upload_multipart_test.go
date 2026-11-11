@@ -299,6 +299,9 @@ func TestSinglePutLifecycle(t *testing.T) {
 				if r.Method != "PUT" || r.URL.RawQuery != "" {
 					t.Fatalf("single PUT reached multipart: %s %s", r.Method, r.URL.RawQuery)
 				}
+				if r.Header.Get("Content-Type") != "" {
+					t.Errorf("p115client-compatible upload must leave Content-Type empty, got %q", r.Header.Get("Content-Type"))
+				}
 				puts++
 				if r.Header.Get("X-Oss-Callback") != base64.StdEncoding.EncodeToString([]byte("callback")) || r.Header.Get("X-Oss-Callback-Var") != base64.StdEncoding.EncodeToString([]byte("vars")) {
 					t.Error("missing provider callback headers")

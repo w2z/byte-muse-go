@@ -241,7 +241,10 @@ func (c *Client) uploadMultipart(ctx context.Context, token string, f *os.File, 
 	// p115client uses a single PUT when multipart is not explicitly requested.
 	// New small files need no multipart initialization; existing journals still resume below.
 	if !resume && s.Size <= uploadPartSize {
-		putOptions := append(options, oss.Progress(uploadProgress{ctx, 0, s.Size}))
+		// p115client signs a raw PUT with an empty Content-Type.  Passing an
+		// explicit empty option prevents the Go SDK from inferring one from the
+		// object suffix, which otherwise changes the bucket-policy signature.
+		putOptions := append(options, oss.ContentType(""), oss.Progress(uploadProgress{ctx, 0, s.Size}))
 		err = c.uploadOSS(ctx, token, s.Bucket, &bucket, func(b *oss.Bucket) error {
 			return b.PutObject(s.Object, io.NewSectionReader(f, 0, s.Size), putOptions...)
 		})
