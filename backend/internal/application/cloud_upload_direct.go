@@ -237,6 +237,16 @@ func (s *UploadService) processDirectUpload(ctx context.Context, remote uploadRe
 			copy := *journal.Session
 			record.Multipart = &copy
 		}
+		if err != nil && strings.Contains(err.Error(), "OSS 上传回调") && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+			// OSS may have committed the object before the callback response was lost or
+			// rejected. Reconcile the exact target before retrying, otherwise every retry
+			// uploads the same bytes again even though progress already reached 100%.
+			if objects, listErr := uploadFreshList(pan115.WithUploadStage(ctx, "verify"), remote, record.Parent, time.Now()); listErr == nil {
+				if recovered, ok := verified(objects); ok {
+					receipt, err = recovered, nil
+				}
+			}
+		}
 		if errors.Is(err, pan115.ErrUploadSessionMissing) {
 			// Completion also removes an OSS session: reconcile before allowing a fresh upload.
 			objects, listErr := uploadFreshList(ctx, remote, record.Parent, time.Now())

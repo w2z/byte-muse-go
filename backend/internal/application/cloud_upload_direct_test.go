@@ -15,8 +15,9 @@ import (
 
 type receiptUploadRemote struct {
 	directUploadRemote
-	lists      int
-	receiptBad bool
+	lists        int
+	receiptBad   bool
+	callbackLost bool
 }
 
 func (r *receiptUploadRemote) List(ctx context.Context, parent string) ([]uploadEntry, error) {
@@ -26,6 +27,9 @@ func (r *receiptUploadRemote) List(ctx context.Context, parent string) ([]upload
 func (r *receiptUploadRemote) UploadWithReceipt(ctx context.Context, parent, name string, f *os.File, size int64, hash string) (uploadEntry, error) {
 	if err := r.directUploadRemote.Upload(ctx, parent, name, f, size, hash); err != nil {
 		return uploadEntry{}, err
+	}
+	if r.callbackLost {
+		return uploadEntry{}, errors.New("OSS 上传回调未确认业务成功，需核验远端结果")
 	}
 	e := r.entries[len(r.entries)-1]
 	e.Info = &pan115.FileInfo{File: pan115.File{ID: e.ID, Name: name, ParentID: parent, PickCode: "pc-new", SHA1: hash, Size: size, SizeKnown: true}}
@@ -108,6 +112,16 @@ func TestDirectReceiptOverwriteRetainsIdentityChecks(t *testing.T) {
 	}
 	if len(r.entries) != 2 {
 		t.Fatal("old file lost")
+	}
+}
+
+func TestDirectReceiptReconcilesLostCallbackWithoutReupload(t *testing.T) {
+	s, m, f, _, store := recoveryFixture(t)
+	r := &receiptUploadRemote{directUploadRemote: directUploadRemote{}, callbackLost: true}
+	s.provider = func(context.Context, string) (uploadRemote, error) { return r, nil }
+	state, err := s.process(context.Background(), m, f, "overwrite")
+	if err != nil || state != "completed" || len(r.names) != 1 || store[uploadKey(m, f, "overwrite")].StageID == "" {
+		t.Fatalf("lost callback was retried: state=%s err=%v uploads=%v record=%+v", state, err, r.names, store[uploadKey(m, f, "overwrite")])
 	}
 }
 
