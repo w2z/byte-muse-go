@@ -1,16 +1,20 @@
 {
-  "version": "0.1.247",
-  "commit": "adb418bc9a69bff45c3552bd6dec624aeabbd92b",
-  "short_commit": "adb418b",
-  "built_at": "2026-11-10T16:33:58Z",
+  "version": "0.1.248",
+  "commit": "3b46f0a5e5c2de7e863f93ca131855376eab6b1b",
+  "short_commit": "3b46f0a",
+  "built_at": "2026-11-11T01:28:01Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.247",
-    "sha-adb418b",
+    "0.1.248",
+    "sha-3b46f0a",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.248",
+      "message": "允许失效断点清理后重新上传"
+    },
     {
       "version": "0.1.247",
       "message": "增加115分片断点续传与任务清理"
