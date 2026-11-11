@@ -274,6 +274,90 @@ func TestUploadMonitorDiscoveryAndStop(t *testing.T) {
 	}
 }
 
+// TestUploadMonitorDiscoversWhilePaused separates durable discovery from transfer permission,
+// including enabling monitoring on a paused queue, new filesystem events and restart recovery.
+func TestUploadMonitorDiscoversWhilePaused(t *testing.T) {
+	root := t.TempDir()
+	write := func(name string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(root, name), []byte("test"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("existing.txt")
+	raw, _ := json.Marshal([]UploadMapping{{Kind: "115", ID: "0", Path: "/", LocalPath: root}})
+	store := uploadMemoryStore{uploadControlKey: {
+		Key: uploadControlKey, State: "control", Intent: "paused", ControlSequence: 1,
+		Directive: &domain.UploadDirective{Action: "pause", Sequence: 1},
+	}}
+	var enabled atomic.Bool
+	started := make(chan struct{}, 8)
+	start := func() (*UploadService, func()) {
+		service := &UploadService{store: store, settings: func(context.Context) (map[string]string, error) {
+			return map[string]string{"CLOUD_UPLOAD_ENABLE": fmt.Sprint(enabled.Load()), "CLOUD_UPLOAD_PATHS": string(raw)}, nil
+		}, provider: func(ctx context.Context, _ string) (uploadRemote, error) {
+			started <- struct{}{}
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}}
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan struct{})
+		go func() { defer close(done); service.Run(ctx) }()
+		return service, func() { cancel(); <-done }
+	}
+	wait := func(check func() bool) {
+		t.Helper()
+		deadline := time.Now().Add(5 * time.Second)
+		for !check() {
+			if time.Now().After(deadline) {
+				t.Fatal("paused monitor did not publish discovered files")
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	service, stop := start()
+	defer func() { stop() }()
+	wait(func() bool { return service.Status().Actions["resume"] })
+	if service.Files(1, 20, "").Total != 0 {
+		t.Fatal("disabled monitoring discovered files")
+	}
+	enabled.Store(true)
+	service.SettingsChanged()
+	wait(func() bool { return service.Files(1, 20, "").Total == 1 })
+	write("new.txt")
+	wait(func() bool { return service.Files(1, 20, "").Total == 2 })
+	stop()
+	write("offline.txt")
+	service, stop = start()
+	wait(func() bool { return service.Files(1, 20, "").Total == 3 })
+	for _, file := range service.Files(1, 20, "").Items {
+		if file.State != "paused" || file.QueuedAt == "" {
+			t.Fatalf("new task must be visible and paused: %+v", file)
+		}
+	}
+	if service.DirectoryPage("").Total != 1 || !service.Status().Actions["resume"] {
+		t.Fatal("discovery lost directory progress or resumed the queue")
+	}
+	// Allow several scheduler ticks: admission must not invoke any provider while paused.
+	select {
+	case <-started:
+		t.Fatal("paused discovery started a transfer")
+	case <-time.After(1200 * time.Millisecond):
+	}
+	control, err := store.Get(context.Background(), uploadControlKey)
+	if err != nil || control == nil || control.Intent != "paused" {
+		t.Fatalf("discovery changed persisted pause: %+v %v", control, err)
+	}
+	if err = service.Control(context.Background(), "resume"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("resume did not execute discovered tasks")
+	}
+}
+
 // TestManualUploadScanWithoutMonitoring starts one saved-directory pass without enabling continuous monitoring.
 func TestManualUploadScanWithoutMonitoring(t *testing.T) {
 	root := t.TempDir()

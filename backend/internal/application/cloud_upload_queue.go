@@ -217,7 +217,9 @@ func (s *UploadService) Run(ctx context.Context) {
 			}
 		}
 		s.mu.Unlock()
-		if discovery == nil && (scanNow || (enabled && s.mode == "running" && (dirty || !now.Before(nextScan)))) {
+		// Monitoring owns discovery separately from transfer permission: a globally paused
+		// queue still records new files so they are visible and ready when resumed.
+		if discovery == nil && (scanNow || (enabled && (s.mode == "running" || s.mode == "paused") && (dirty || !now.Before(nextScan)))) {
 			dirty = false
 			nextScan = now.Add(30 * time.Second)
 			scanManual = scanNow
