@@ -117,7 +117,7 @@ func uploadHash(ctx context.Context, f *os.File, offset, length int64, report bo
 	return strings.ToUpper(fmt.Sprintf("%x", h.Sum(nil))), nil
 }
 
-// Upload uses 115 instant-upload verification followed by bounded OSS multipart transfers when needed.
+// Upload uses 115 instant-upload verification, single PUT for small files and resumable multipart for large files.
 // The caller supplies a SHA1 for the guarded source version, or empty to hash locally, and verifies the remote result.
 func (c *Client) Upload(ctx context.Context, token, parent, name string, f *os.File, size int64, sourceSHA1 string) error {
 	return c.upload(ctx, token, parent, name, f, size, sourceSHA1, nil)
@@ -212,7 +212,7 @@ func (c *Client) upload(ctx context.Context, token, parent, name string, f *os.F
 	if err = json.Unmarshal(init.Callback, &callback); err != nil || callback.Value == "" {
 		return fmt.Errorf("115 上传回调无效")
 	}
-	session := domain.UploadMultipart{Parent: parent, Name: name, SHA1: hash, Size: size, Bucket: init.Bucket, Object: init.Object, Callback: callback.Value, CallbackVar: callback.Vars, PartSize: max(int64(16*1024*1024), size/10000+1)}
+	session := domain.UploadMultipart{Parent: parent, Name: name, SHA1: hash, Size: size, Bucket: init.Bucket, Object: init.Object, Callback: callback.Value, CallbackVar: callback.Vars, PartSize: max(uploadPartSize, size/10000+1)}
 	if journal != nil {
 		session.Account, session.Modified = journal.Account, journal.Modified
 	}

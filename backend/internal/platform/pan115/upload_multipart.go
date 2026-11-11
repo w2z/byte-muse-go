@@ -25,6 +25,10 @@ var ErrUploadSessionMissing = errors.New("OSS 上传会话不存在，必须先�
 
 const uploadIdleTimeout = 2 * time.Minute
 
+// uploadPartSize is the minimum multipart size and the single-PUT size limit.
+// Existing multipart sessions always retain their original transfer mode.
+const uploadPartSize int64 = 16 * 1024 * 1024
+
 // uploadIdleConn bounds each network read/write, allowing long transfers while bytes keep moving.
 type uploadIdleConn struct {
 	net.Conn
@@ -208,8 +212,8 @@ func (c *Client) listMultipartParts(ctx context.Context, token string, s domain.
 	}
 }
 
-// uploadMultipart persists new sessions before file bytes; durable callers retain failures until explicit stop.
-// Only verified callback data produces a receipt; the application owns clearing the checkpoint afterwards.
+// uploadMultipart uses a single PUT for new small files and persists multipart sessions before sending large files.
+// Existing sessions always resume. Only verified callback data produces a receipt; the caller owns journal cleanup.
 func (c *Client) uploadMultipart(ctx context.Context, token string, f *os.File, s domain.UploadMultipart, resume bool, journal *domain.UploadMultipartJournal, receipt *FileInfo) error {
 	bucket, err := c.uploadBucket(ctx, token, s.Bucket)
 	if err != nil {
@@ -224,10 +228,25 @@ func (c *Client) uploadMultipart(ctx context.Context, token string, f *os.File, 
 		}
 		return err
 	}
-	if s.Size == 0 {
-		err = c.uploadOSS(ctx, token, s.Bucket, &bucket, func(b *oss.Bucket) error { return b.PutObject(s.Object, io.NewSectionReader(f, 0, 0), options...) })
+	// Preserve absolute progress across credential retries for both transfer modes.
+	outerCtx := ctx
+	var highWater int64
+	ctx = domain.WithUploadProgress(ctx, func(done, total int64, phase string) {
+		if done < highWater {
+			return
+		}
+		highWater = done
+		domain.ReportUploadProgress(outerCtx, done, total, phase)
+	})
+	// p115client uses a single PUT when multipart is not explicitly requested.
+	// New small files need no multipart initialization; existing journals still resume below.
+	if !resume && s.Size <= uploadPartSize {
+		putOptions := append(options, oss.Progress(uploadProgress{ctx, 0, s.Size}))
+		err = c.uploadOSS(ctx, token, s.Bucket, &bucket, func(b *oss.Bucket) error {
+			return b.PutObject(s.Object, io.NewSectionReader(f, 0, s.Size), putOptions...)
+		})
 		if err != nil {
-			return err
+			return fmt.Errorf("OSS 单请求上传失败：%w", err)
 		}
 		return finish()
 	}
@@ -236,7 +255,7 @@ func (c *Client) uploadMultipart(ctx context.Context, token string, f *os.File, 
 		err = c.uploadOSS(ctx, token, s.Bucket, &bucket, func(b *oss.Bucket) error {
 			var e error
 			// p115client sends sequential=1 when creating the multipart session.
-			// 115's bucket policy expects the same provider-specific flag.
+			// Preserve that request shape without assuming it grants multipart permission.
 			initiated, e = b.InitiateMultipartUpload(s.Object, oss.WithContext(ctx), oss.AddParam("sequential", "1"))
 			return e
 		})
@@ -279,16 +298,6 @@ func (c *Client) uploadMultipart(ctx context.Context, token string, f *os.File, 
 			return fmt.Errorf("OSS 查询已上传分片失败：%w", err)
 		}
 	}
-	// Reports remain absolute even with non-contiguous existing parts and an expired-token retry.
-	outerCtx := ctx
-	highWater := transferred
-	ctx = domain.WithUploadProgress(ctx, func(done, total int64, phase string) {
-		if done < highWater {
-			return
-		}
-		highWater = done
-		domain.ReportUploadProgress(outerCtx, done, total, phase)
-	})
 	domain.ReportUploadProgress(ctx, transferred, s.Size, "uploading")
 	count := int((s.Size-1)/s.PartSize + 1)
 	ordered := make([]oss.UploadPart, 0, count)

@@ -3,6 +3,7 @@ package pan115
 import (
 	"bytemuse/backend/internal/domain"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -129,6 +130,22 @@ func multipartSource(t *testing.T, size int64) *os.File {
 	return f
 }
 
+func multipartSourceWithBytes(t *testing.T, data []byte) *os.File {
+	t.Helper()
+	f, err := os.Create(filepath.Join(t.TempDir(), "source"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { f.Close() })
+	if _, err = f.Write(data); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = f.Seek(0, io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+	return f
+}
+
 func multipartSession() *domain.UploadMultipart {
 	return &domain.UploadMultipart{Account: "account", Parent: "12", Name: "file", SHA1: multipartTestHash, Size: 6, Modified: 7, Bucket: "test-bucket", Object: "test-object", UploadID: "upload-one", PartSize: 3, Callback: "callback", CallbackVar: "vars"}
 }
@@ -201,6 +218,7 @@ func TestUploadResumesMultipart(t *testing.T) {
 // TestUploadMultipartMatches115PolicyRequestShape keeps the provider-specific
 // multipart init and completion headers aligned with p115client.
 func TestUploadMultipartMatches115PolicyRequestShape(t *testing.T) {
+	const size = int64(16*1024*1024 + 1)
 	var initQuery, completeType string
 	c, _, _ := multipartClient(t, true, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == "POST" && r.URL.Query().Has("uploads") {
@@ -215,12 +233,12 @@ func TestUploadMultipartMatches115PolicyRequestShape(t *testing.T) {
 		}
 		if r.Method == "POST" {
 			completeType = r.Header.Get("Content-Type")
-			io.WriteString(w, multipartCallback(6))
+			io.WriteString(w, multipartCallback(size))
 			return
 		}
 		t.Errorf("unexpected OSS method %s", r.Method)
 	})
-	if err := c.Upload(context.Background(), "token", "12", "file", multipartSource(t, 6), 6, multipartTestHash); err != nil {
+	if err := c.Upload(context.Background(), "token", "12", "file", multipartSource(t, size), size, multipartTestHash); err != nil {
 		t.Fatal(err)
 	}
 	if initQuery != "sequential=1&uploads" && initQuery != "uploads&sequential=1" {
@@ -228,6 +246,111 @@ func TestUploadMultipartMatches115PolicyRequestShape(t *testing.T) {
 	}
 	if completeType != "text/xml" {
 		t.Fatalf("provider completion content type=%q", completeType)
+	}
+}
+
+// TestUploadSmallFileUsesSingleObjectPut verifies nonempty bytes go directly to PUT.
+func TestUploadSmallFileUsesSingleObjectPut(t *testing.T) {
+	initCalls, puts := 0, 0
+	c, _, _ := multipartClient(t, true, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "POST" && r.URL.Query().Has("uploads") {
+			initCalls++
+			t.Errorf("small upload initialized multipart: %s", r.URL.RawQuery)
+			return
+		}
+		if r.Method != "PUT" {
+			t.Errorf("small upload used unexpected OSS method %s", r.Method)
+			return
+		}
+		puts++
+		body, _ := io.ReadAll(r.Body)
+		if string(body) != "abcdef" {
+			t.Errorf("small upload body=%q", body)
+		}
+		io.WriteString(w, multipartCallback(6))
+	})
+	receipt, err := c.UploadWithReceipt(context.Background(), "token", "12", "file", multipartSourceWithBytes(t, []byte("abcdef")), 6, multipartTestHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if receipt.ID != "99" || initCalls != 0 || puts != 1 {
+		t.Fatalf("receipt=%+v multipart=%d puts=%d", receipt, initCalls, puts)
+	}
+}
+
+// TestSinglePutLifecycle covers the size boundary, callback authority, progress,
+// credential retry rewind and the absence of multipart journals for single PUTs.
+func TestSinglePutLifecycle(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		size    int64
+		failure string
+	}{
+		{"empty", 0, ""},
+		{"nfo", 4096, ""},
+		{"size_boundary", 16 * 1024 * 1024, ""},
+		{"expired_once", 128 * 1024, "SecurityTokenExpired"},
+		{"denied", 4096, "AccessDenied"},
+		{"invalid_callback", 4096, "callback"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			puts, saves := 0, 0
+			c, inits, tokens := multipartClient(t, true, func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != "PUT" || r.URL.RawQuery != "" {
+					t.Fatalf("single PUT reached multipart: %s %s", r.Method, r.URL.RawQuery)
+				}
+				puts++
+				if r.Header.Get("X-Oss-Callback") != base64.StdEncoding.EncodeToString([]byte("callback")) || r.Header.Get("X-Oss-Callback-Var") != base64.StdEncoding.EncodeToString([]byte("vars")) {
+					t.Error("missing provider callback headers")
+				}
+				n, err := io.Copy(io.Discard, r.Body)
+				if err != nil || n != tc.size {
+					t.Fatalf("PUT body/retry did not rewind: bytes=%d err=%v", n, err)
+				}
+				if puts == 1 && (tc.failure == "SecurityTokenExpired" || tc.failure == "AccessDenied") {
+					w.WriteHeader(403)
+					fmt.Fprintf(w, "<Error><Code>%s</Code></Error>", tc.failure)
+					return
+				}
+				if tc.failure == "callback" {
+					io.WriteString(w, `{"state":false}`)
+					return
+				}
+				io.WriteString(w, multipartCallback(tc.size))
+			})
+			journal := &domain.UploadMultipartJournal{Account: "account", Modified: 7, Save: func(context.Context, *domain.UploadMultipart) error { saves++; return nil }}
+			var progress int64
+			ctx := domain.WithUploadProgress(domain.WithUploadMultipart(context.Background(), journal), func(done, total int64, phase string) {
+				if phase == "uploading" {
+					if done < progress {
+						t.Errorf("credential retry rewound progress: %d -> %d", progress, done)
+					}
+					progress = done
+				}
+			})
+			receipt, err := c.UploadWithReceipt(ctx, "token", "12", "file", multipartSource(t, tc.size), tc.size, multipartTestHash)
+			switch tc.failure {
+			case "AccessDenied":
+				if !uploadServiceCode(err, "AccessDenied") || isUploadCredentialExpired(err) || !strings.Contains(err.Error(), "OSS 单请求上传失败") || receipt.ID != "" {
+					t.Fatalf("incorrect denial handling: receipt=%+v err=%v", receipt, err)
+				}
+			case "callback":
+				if err == nil || !strings.Contains(err.Error(), "OSS 上传回调") || receipt.ID != "" {
+					t.Fatalf("accepted invalid callback: receipt=%+v err=%v", receipt, err)
+				}
+			default:
+				if err != nil || receipt.ID != "99" || progress != tc.size {
+					t.Fatalf("receipt=%+v err=%v progress=%d", receipt, err, progress)
+				}
+			}
+			wantCalls := 1
+			if tc.failure == "SecurityTokenExpired" {
+				wantCalls = 2
+			}
+			if puts != wantCalls || *tokens != wantCalls || *inits != 1 || saves != 0 || journal.Session != nil {
+				t.Fatalf("puts=%d tokens=%d init=%d saves=%d journal=%+v", puts, *tokens, *inits, saves, journal.Session)
+			}
+		})
 	}
 }
 
@@ -333,6 +456,7 @@ func TestUploadMultipartInterruptedPersistsBeforeBytes(t *testing.T) {
 
 // TestUploadMultipartSaveFailureSendsNoBytes prevents unjournaled parts after a database failure.
 func TestUploadMultipartSaveFailureSendsNoBytes(t *testing.T) {
+	const size = int64(16*1024*1024 + 1)
 	want := errors.New("storage unavailable")
 	aborts, saves := 0, 0
 	c, _, _ := multipartClient(t, true, func(w http.ResponseWriter, r *http.Request) {
@@ -348,7 +472,7 @@ func TestUploadMultipartSaveFailureSendsNoBytes(t *testing.T) {
 	})
 	journal := &domain.UploadMultipartJournal{Account: "account", Modified: 7, Save: func(context.Context, *domain.UploadMultipart) error { saves++; return want }}
 	ctx := domain.WithUploadMultipart(context.Background(), journal)
-	if err := c.Upload(ctx, "token", "12", "file", multipartSource(t, 6), 6, multipartTestHash); !errors.Is(err, want) {
+	if err := c.Upload(ctx, "token", "12", "file", multipartSource(t, size), size, multipartTestHash); !errors.Is(err, want) {
 		t.Fatalf("err=%v", err)
 	}
 	if saves != 2 || aborts != 1 || journal.Session == nil {
@@ -358,6 +482,7 @@ func TestUploadMultipartSaveFailureSendsNoBytes(t *testing.T) {
 
 // TestUploadMultipartSaveCancellationRecoversJournal preserves the newly issued ID when pause races initiation.
 func TestUploadMultipartSaveCancellationRecoversJournal(t *testing.T) {
+	const size = int64(16*1024*1024 + 1)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	saves := 0
@@ -378,7 +503,7 @@ func TestUploadMultipartSaveCancellationRecoversJournal(t *testing.T) {
 		}
 		return nil
 	}}
-	if err := c.Upload(domain.WithUploadMultipart(ctx, journal), "token", "12", "file", multipartSource(t, 6), 6, multipartTestHash); !errors.Is(err, context.Canceled) {
+	if err := c.Upload(domain.WithUploadMultipart(ctx, journal), "token", "12", "file", multipartSource(t, size), size, multipartTestHash); !errors.Is(err, context.Canceled) {
 		t.Fatalf("err=%v", err)
 	}
 	if saves != 2 || journal.Session == nil {
@@ -427,6 +552,10 @@ func TestUploadAbortRejectsUntrustedEndpoint(t *testing.T) {
 func TestUploadMultipartExpiryRetriesOnlyFailedOperation(t *testing.T) {
 	for _, operation := range []string{"initiate", "list", "part", "complete", "abort"} {
 		t.Run(operation, func(t *testing.T) {
+			size := int64(6)
+			if operation == "initiate" {
+				size = 16*1024*1024 + 1
+			}
 			attempts := map[string]int{}
 			c, initializations, tokens := multipartClient(t, operation == "initiate", func(w http.ResponseWriter, r *http.Request) {
 				q := r.URL.Query()
@@ -439,7 +568,14 @@ func TestUploadMultipartExpiryRetriesOnlyFailedOperation(t *testing.T) {
 				attempts[current]++
 				if current == "part" {
 					body, err := io.ReadAll(r.Body)
-					if err != nil || len(body) != 6 {
+					expected := int64(6)
+					if operation == "initiate" {
+						expected = 16 * 1024 * 1024
+						if q.Get("partNumber") == "2" {
+							expected = 1
+						}
+					}
+					if err != nil || int64(len(body)) != expected {
 						t.Errorf("retry did not rewind part: len=%d err=%v", len(body), err)
 					}
 				}
@@ -459,7 +595,7 @@ func TestUploadMultipartExpiryRetriesOnlyFailedOperation(t *testing.T) {
 				case "part":
 					w.Header().Set("ETag", "part-etag")
 				case "complete":
-					io.WriteString(w, multipartCallback(6))
+					io.WriteString(w, multipartCallback(size))
 				case "abort":
 					w.WriteHeader(204)
 				}
@@ -474,7 +610,7 @@ func TestUploadMultipartExpiryRetriesOnlyFailedOperation(t *testing.T) {
 			if operation == "abort" {
 				err = c.AbortUpload(context.Background(), "token", *s)
 			} else {
-				err = c.Upload(domain.WithUploadMultipart(context.Background(), journal), "token", "12", "file", multipartSource(t, 6), 6, multipartTestHash)
+				err = c.Upload(domain.WithUploadMultipart(context.Background(), journal), "token", "12", "file", multipartSource(t, size), size, multipartTestHash)
 			}
 			if err != nil {
 				t.Fatal(err)
