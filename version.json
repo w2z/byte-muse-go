@@ -1,16 +1,20 @@
 {
-  "version": "0.1.250",
-  "commit": "68ec10fd02e70efb7dd50c2d105ec61c854253f0",
-  "short_commit": "68ec10f",
-  "built_at": "2026-11-11T02:00:06Z",
+  "version": "0.1.251",
+  "commit": "a53763eb47a97edd13ba837eee891d80462c0b58",
+  "short_commit": "a53763e",
+  "built_at": "2026-11-11T02:28:52Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.250",
-    "sha-68ec10f",
+    "0.1.251",
+    "sha-a53763e",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.251",
+      "message": "对齐115分片请求并标记OSS操作错误"
+    },
     {
       "version": "0.1.250",
       "message": "回调失败时回查已完成文件"
