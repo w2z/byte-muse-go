@@ -1,16 +1,20 @@
 {
-  "version": "0.1.249",
-  "commit": "0b25d4afe7300bf0788af7bf885f52d8a781e6f9",
-  "short_commit": "0b25d4a",
-  "built_at": "2026-11-11T01:45:07Z",
+  "version": "0.1.250",
+  "commit": "68ec10fd02e70efb7dd50c2d105ec61c854253f0",
+  "short_commit": "68ec10f",
+  "built_at": "2026-11-11T02:00:06Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.249",
-    "sha-0b25d4a",
+    "0.1.250",
+    "sha-68ec10f",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.250",
+      "message": "回调失败时回查已完成文件"
+    },
     {
       "version": "0.1.249",
       "message": "清理重试错误并恢复等待状态"
