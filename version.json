@@ -1,16 +1,20 @@
 {
-  "version": "0.1.254",
-  "commit": "6b65a2af9dbdd770db1968ff9b4a705dc69fef4d",
-  "short_commit": "6b65a2a",
-  "built_at": "2026-11-11T06:10:23Z",
+  "version": "0.1.255",
+  "commit": "a340a6182aceeed19182a351fd2385bc714c376c",
+  "short_commit": "a340a61",
+  "built_at": "2026-11-11T06:44:30Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.254",
-    "sha-6b65a2a",
+    "0.1.255",
+    "sha-a340a61",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.255",
+      "message": "对齐开放接口初始化参数"
+    },
     {
       "version": "0.1.254",
       "message": "补齐115开放上传任务标记"
