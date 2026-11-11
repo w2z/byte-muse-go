@@ -162,7 +162,10 @@ func (c *Client) upload(ctx context.Context, token, parent, name string, f *os.F
 	if err != nil {
 		return err
 	}
-	form := url.Values{"file_name": {name}, "file_size": {strconv.FormatInt(size, 10)}, "target": {"U_1_" + parent}, "fileid": {hash}, "preid": {pre}}
+	// p115client marks open API uploads as the first item of an upload task.
+	// 115 uses this flag when issuing the OSS policy; omitting it yields valid
+	// looking credentials that are rejected by the bucket policy at PUT time.
+	form := url.Values{"file_name": {name}, "file_size": {strconv.FormatInt(size, 10)}, "target": {"U_1_" + parent}, "fileid": {hash}, "preid": {pre}, "topupload": {"1"}}
 	domain.ReportUploadProgress(ctx, 0, size, "uploading")
 	var init uploadInit
 	for attempt := 0; attempt < 2; attempt++ {

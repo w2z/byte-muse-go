@@ -117,6 +117,10 @@ func TestUploadInstant(t *testing.T) {
 	_, _ = f.WriteString("abc")
 	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		_ = r.ParseForm()
+		if r.FormValue("topupload") != "1" {
+			t.Errorf("missing open upload task marker: %v", r.Form)
+		}
+		_ = r.ParseForm()
 		if r.FormValue("target") != "U_1_12" || r.FormValue("fileid") != "A9993E364706816ABA3E25717850C26C9CD0D89D" {
 			t.Errorf("wrong upload init: %v", r.Form)
 		}
