@@ -163,6 +163,9 @@ func TestUploadResumesMultipart(t *testing.T) {
 			w.Header().Set("ETag", "etag-2")
 		case "POST":
 			body, _ := io.ReadAll(r.Body)
+			if r.Header.Get("Content-Type") != "text/xml" {
+				t.Errorf("completion content type=%q", r.Header.Get("Content-Type"))
+			}
 			if !strings.Contains(string(body), "etag-1") || !strings.Contains(string(body), "etag-2") {
 				t.Errorf("missing remote etags: %s", body)
 			}
@@ -192,6 +195,39 @@ func TestUploadResumesMultipart(t *testing.T) {
 	}
 	if journal.Session == nil {
 		t.Fatal("protocol cleared journal before caller saved receipt")
+	}
+}
+
+// TestUploadMultipartMatches115PolicyRequestShape keeps the provider-specific
+// multipart init and completion headers aligned with p115client.
+func TestUploadMultipartMatches115PolicyRequestShape(t *testing.T) {
+	var initQuery, completeType string
+	c, _, _ := multipartClient(t, true, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "POST" && r.URL.Query().Has("uploads") {
+			initQuery = r.URL.RawQuery
+			io.WriteString(w, `<InitiateMultipartUploadResult><Bucket>test-bucket</Bucket><Key>test-object</Key><UploadId>upload-one</UploadId></InitiateMultipartUploadResult>`)
+			return
+		}
+		if r.Method == "PUT" {
+			w.Header().Set("ETag", "etag-1")
+			io.Copy(io.Discard, r.Body)
+			return
+		}
+		if r.Method == "POST" {
+			completeType = r.Header.Get("Content-Type")
+			io.WriteString(w, multipartCallback(6))
+			return
+		}
+		t.Errorf("unexpected OSS method %s", r.Method)
+	})
+	if err := c.Upload(context.Background(), "token", "12", "file", multipartSource(t, 6), 6, multipartTestHash); err != nil {
+		t.Fatal(err)
+	}
+	if initQuery != "sequential=1&uploads" && initQuery != "uploads&sequential=1" {
+		t.Fatalf("provider init query=%q", initQuery)
+	}
+	if completeType != "text/xml" {
+		t.Fatalf("provider completion content type=%q", completeType)
 	}
 }
 

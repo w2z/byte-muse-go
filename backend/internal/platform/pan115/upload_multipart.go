@@ -235,11 +235,13 @@ func (c *Client) uploadMultipart(ctx context.Context, token string, f *os.File, 
 		var initiated oss.InitiateMultipartUploadResult
 		err = c.uploadOSS(ctx, token, s.Bucket, &bucket, func(b *oss.Bucket) error {
 			var e error
-			initiated, e = b.InitiateMultipartUpload(s.Object, oss.WithContext(ctx))
+			// p115client sends sequential=1 when creating the multipart session.
+			// 115's bucket policy expects the same provider-specific flag.
+			initiated, e = b.InitiateMultipartUpload(s.Object, oss.WithContext(ctx), oss.AddParam("sequential", "1"))
 			return e
 		})
 		if err != nil {
-			return err
+			return fmt.Errorf("OSS 初始化分片失败：%w", err)
 		}
 		if initiated.UploadID == "" || initiated.Bucket != s.Bucket || initiated.Key != s.Object {
 			return fmt.Errorf("OSS 上传会话初始化响应无效")
@@ -274,7 +276,7 @@ func (c *Client) uploadMultipart(ctx context.Context, token string, f *os.File, 
 	if resume {
 		parts, transferred, err = c.listMultipartParts(ctx, token, s, &bucket)
 		if err != nil {
-			return err
+			return fmt.Errorf("OSS 查询已上传分片失败：%w", err)
 		}
 	}
 	// Reports remain absolute even with non-contiguous existing parts and an expired-token retry.
@@ -304,7 +306,7 @@ func (c *Client) uploadMultipart(ctx context.Context, token string, f *os.File, 
 				return ErrUploadSessionMissing
 			}
 			if err != nil {
-				return err
+				return fmt.Errorf("OSS 上传第 %d 个分片失败：%w", number, err)
 			}
 			if strings.TrimSpace(part.ETag) == "" {
 				return fmt.Errorf("OSS 上传分片未返回 ETag")
@@ -316,14 +318,17 @@ func (c *Client) uploadMultipart(ctx context.Context, token string, f *os.File, 
 	}
 	err = c.uploadOSS(ctx, token, s.Bucket, &bucket, func(b *oss.Bucket) error {
 		var e error
-		_, e = b.CompleteMultipartUpload(multipartCoordinates(s), ordered, options...)
+		// p115client explicitly declares the XML payload type on completion.
+		completeOptions := append([]oss.Option{}, options...)
+		completeOptions = append(completeOptions, oss.ContentType("text/xml"))
+		_, e = b.CompleteMultipartUpload(multipartCoordinates(s), ordered, completeOptions...)
 		return e
 	})
 	if uploadServiceCode(err, "NoSuchUpload") {
 		return ErrUploadSessionMissing
 	}
 	if err != nil {
-		return err
+		return fmt.Errorf("OSS 完成分片失败：%w", err)
 	}
 	complete = true
 	return finish()
@@ -345,5 +350,8 @@ func (c *Client) AbortUpload(ctx context.Context, token string, s domain.UploadM
 	if uploadServiceCode(err, "NoSuchUpload") {
 		return nil
 	}
-	return err
+	if err != nil {
+		return fmt.Errorf("OSS 取消分片失败：%w", err)
+	}
+	return nil
 }
