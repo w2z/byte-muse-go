@@ -62,7 +62,7 @@ type UploadOldFile struct {
 	Size int64  `json:"size"`
 }
 
-// UploadOverwriteSnapshot freezes the replacement set before direct upload.
+// UploadOverwriteSnapshot freezes the replacement set for one direct-upload attempt.
 // A nil snapshot on UploadRecord denotes a legacy record; an empty Files list means no old files.
 type UploadOverwriteSnapshot struct {
 	Files []UploadOldFile `json:"files"`
@@ -98,7 +98,8 @@ type UploadRecord struct {
 	OldID      string `json:"old_id"`
 	OldSHA1    string `json:"old_sha1"`
 	OldSize    int64  `json:"old_size"`
-	// Overwrite is an optional JSON receipt, never backfilled during startup. Once set, retries cannot extend it.
+	// Overwrite is an optional JSON receipt, never backfilled during startup.
+	// Each overwrite attempt refreshes it from current same-name identities before remote mutations.
 	Overwrite *UploadOverwriteSnapshot `json:"overwrite_snapshot,omitempty"`
 	Retries   int                      `json:"retries"`
 	NextRetry string                   `json:"next_retry"`

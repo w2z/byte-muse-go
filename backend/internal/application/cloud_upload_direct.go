@@ -12,7 +12,8 @@ import (
 	"time"
 )
 
-// processDirectUpload verifies the final object before deleting any identity in the frozen replacement set.
+// processDirectUpload replans overwrite from a fresh listing at each attempt, then freezes
+// that replacement set until the attempt ends and verifies the final object before deletion.
 // Stage equals Target marks direct receipts; legacy stages are never inferred to be owned or deleted.
 // attemptStarted excludes pre-retry snapshots without requiring a new read at every branch.
 func (s *UploadService) processDirectUpload(ctx context.Context, remote uploadRemote, record *domain.UploadRecord, mapping UploadMapping, source uploadLocalFile, protection *uploadSourceProtection, attemptStarted time.Time, save func() error) (string, error) {
@@ -123,28 +124,24 @@ func (s *UploadService) processDirectUpload(ctx context.Context, remote uploadRe
 		}
 		installed, found = verified(entries)
 	}
-	if record.Kind == "115" && record.Policy == "overwrite" && record.Overwrite == nil {
+	if record.Kind == "115" && record.Policy == "overwrite" {
+		// Overwrite authorizes replacement of current same-name files, not a permanent
+		// historical set. Retry/restart must replan too, including cleanup receipts.
+		// Renamed files leave the scope; the verified final object is never a deletion candidate.
 		snapshot := &domain.UploadOverwriteSnapshot{Files: []domain.UploadOldFile{}}
-		if record.State != "pending" {
-			if record.OldID != "" {
-				snapshot.Files = append(snapshot.Files, domain.UploadOldFile{ID: record.OldID, SHA1: record.OldSHA1, Size: record.OldSize})
+		for _, entry := range entries {
+			if entry.Name != record.Target || (found && entry.ID == installed.ID) {
+				continue
 			}
-		} else {
-			for _, entry := range entries {
-				if entry.Name != record.Target || (found && entry.ID == installed.ID) {
-					continue
-				}
-				if entry.Directory || entry.ID == "" || entry.SHA1 == "" {
-					return record.State, fmt.Errorf("%w：同名旧文件缺少身份信息或存在同名目录", errUploadAttention)
-				}
-				if entry.ID == record.OldID && (entry.Size != record.OldSize || !strings.EqualFold(entry.SHA1, record.OldSHA1)) {
-					return record.State, fmt.Errorf("%w：已记录的旧文件发生变化", errUploadAttention)
-				}
-				snapshot.Files = append(snapshot.Files, domain.UploadOldFile{ID: entry.ID, SHA1: entry.SHA1, Size: entry.Size})
+			if entry.Directory || entry.ID == "" || entry.SHA1 == "" {
+				return record.State, fmt.Errorf("%w：同名旧文件缺少身份信息或存在同名目录", errUploadAttention)
 			}
+			snapshot.Files = append(snapshot.Files, domain.UploadOldFile{ID: entry.ID, SHA1: entry.SHA1, Size: entry.Size})
 		}
+		previous := record.Overwrite
 		record.Overwrite = snapshot
 		if err = save(); err != nil {
+			record.Overwrite = previous
 			return record.State, err
 		}
 	}
@@ -397,7 +394,8 @@ func uploadRecordedOldFile(record *domain.UploadRecord, id string) (domain.Uploa
 	return domain.UploadOldFile{ID: record.OldID, SHA1: record.OldSHA1, Size: record.OldSize}, id != "" && id == record.OldID
 }
 
-// validateUploadOverwrite rejects newly arrived or changed objects without expanding the deletion set.
+// validateUploadOverwrite rejects changes within one attempt; the next attempt replans
+// from fresh entries under the persisted overwrite policy before any remote mutation.
 func validateUploadOverwrite(record *domain.UploadRecord, entries []uploadEntry, installedID string) error {
 	if record.Overwrite == nil {
 		return nil

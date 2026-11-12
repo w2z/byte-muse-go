@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"testing"
+	"time"
 )
 
 type receiptUploadRemote struct {
@@ -197,6 +198,109 @@ func TestUploadDirectPreservesLateDuplicate(t *testing.T) {
 	_, err := service.process(context.Background(), mapping, file, "overwrite")
 	if !errors.Is(err, errUploadAttention) || len(remote.entries) != 3 {
 		t.Fatalf("late duplicate must not be adopted or deleted: %v %v", err, remote.entries)
+	}
+}
+
+func TestUploadDirectRetryReplansOverwriteWithoutReupload(t *testing.T) {
+	for _, scenario := range []string{"late-duplicate", "changed-old", "renamed-old", "lost-response", "legacy-cleanup"} {
+		t.Run(scenario, func(t *testing.T) {
+			service, mapping, file, _, store := recoveryFixture(t)
+			remote := &directUploadRemote{entries: []uploadEntry{{ID: "old-a", Name: "film.mkv", Size: 8, SHA1: "hash-a"}}}
+			remote.afterDirectUpload = func() {
+				switch scenario {
+				case "changed-old":
+					remote.entries[0].SHA1 = "updated-hash"
+				case "renamed-old":
+					remote.entries[0].Name = "other.mkv"
+				default:
+					remote.entries = append(remote.entries, uploadEntry{ID: "late", Name: "film.mkv", Size: 7, SHA1: "late-hash"})
+				}
+			}
+			remote.lostResponse = scenario == "lost-response"
+			service.provider = func(context.Context, string) (uploadRemote, error) { return remote, nil }
+			if _, err := service.process(context.Background(), mapping, file, "overwrite"); err == nil {
+				t.Fatal("concurrent changes must stop the current attempt")
+			}
+			key := uploadKey(mapping, file, "overwrite")
+			record := store[key]
+			if scenario == "legacy-cleanup" {
+				record.Overwrite = nil
+			}
+			// Exercise the public retry policy and JSON persistence used across restarts.
+			record.Retries = uploadMaxAutoRetries
+			record, allowed := transformUploadControl(record, "retry", "running", true)
+			if !allowed {
+				t.Fatal("retry unavailable")
+			}
+			raw, _ := json.Marshal(record)
+			var restored domain.UploadRecord
+			if err := json.Unmarshal(raw, &restored); err != nil {
+				t.Fatal(err)
+			}
+			store[key] = restored
+			restarted := &UploadService{store: store, provider: service.provider}
+			state, err := restarted.process(context.Background(), mapping, file, "overwrite")
+			if err != nil || state != "completed" || len(remote.names) != 1 {
+				t.Fatalf("retry failed or reuploaded: state=%s err=%v uploads=%v", state, err, remote.names)
+			}
+			for _, entry := range remote.entries {
+				if entry.ID != "new-1" && !(scenario == "renamed-old" && entry.ID == "old-a" && entry.Name == "other.mkv") {
+					t.Fatalf("overwrite left a conflicting object: %+v", remote.entries)
+				}
+			}
+			want := 1
+			if scenario == "renamed-old" {
+				want = 2
+			}
+			if len(remote.entries) != want {
+				t.Fatalf("verified final or renamed unrelated file lost: %+v", remote.entries)
+			}
+		})
+	}
+}
+
+func TestUploadDirectReplanFailurePreservesRemoteAndSnapshot(t *testing.T) {
+	for _, scenario := range []string{"save-failed", "directory", "missing-hash", "missing-final"} {
+		t.Run(scenario, func(t *testing.T) {
+			service, mapping, file, _, store := recoveryFixture(t)
+			remote := &directUploadRemote{entries: []uploadEntry{{ID: "old", Name: "film.mkv", Size: 8, SHA1: "old-hash"}}, deleteFailure: true}
+			service.provider = func(context.Context, string) (uploadRemote, error) { return remote, nil }
+			if _, err := service.process(context.Background(), mapping, file, "overwrite"); err == nil {
+				t.Fatal("expected interrupted cleanup")
+			}
+			record := store[uploadKey(mapping, file, "overwrite")]
+			previous := record.Overwrite
+			late := uploadEntry{ID: "late", Name: "film.mkv", Size: 7, SHA1: "late-hash"}
+			if scenario == "directory" {
+				late.Directory = true
+			}
+			if scenario == "missing-hash" {
+				late.SHA1 = ""
+			}
+			if scenario == "missing-final" {
+				remote.entries = remote.entries[:1]
+			}
+			remote.entries = append(remote.entries, late)
+			before, _ := json.Marshal(remote.entries)
+			remote.deleteFailure = false
+			persistenceErr := errors.New("snapshot persistence failed")
+			_, err := service.processDirectUpload(context.Background(), remote, &record, mapping, file, nil, time.Now(), func() error {
+				if scenario == "save-failed" {
+					return persistenceErr
+				}
+				return nil
+			})
+			if err == nil {
+				t.Fatal("unsafe cleanup accepted")
+			}
+			if scenario == "save-failed" && (!errors.Is(err, persistenceErr) || record.Overwrite != previous) {
+				t.Fatalf("failed save did not preserve previous receipt: %v", err)
+			}
+			after, _ := json.Marshal(remote.entries)
+			if string(before) != string(after) || len(remote.names) != 1 {
+				t.Fatalf("failed replan mutated remote: before=%s after=%s uploads=%v", before, after, remote.names)
+			}
+		})
 	}
 }
 
