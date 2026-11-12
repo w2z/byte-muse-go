@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"crypto/sha1"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -16,6 +17,228 @@ import (
 	"bytemuse/backend/internal/platform/pan115"
 	"bytemuse/backend/internal/ports"
 )
+
+func TestLocalUploadOnlyRequiresPlaybackForMatchedVideo(t *testing.T) {
+	for _, scenario := range []string{"no-mapping", "unmatched", "attachment", "video"} {
+		t.Run(scenario, func(t *testing.T) {
+			ctx := context.Background()
+			s, api, _, _, values := managedFixture(t)
+			values[pan115LocalUploadEnabledKey] = "true"
+			values[strmPlayBaseSettingKey] = ""
+			db, err := database.Open(ctx, database.Config{Dialect: database.DialectSQLite, SQLitePath: filepath.Join(t.TempDir(), "handoff.db")})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			if err = db.Migrate(ctx); err != nil {
+				t.Fatal(err)
+			}
+			repo := database.NewUploadReceiptRepository(db.SQLDB(), database.DialectSQLite)
+			s.SetUploadReceipts(repo)
+			local := t.TempDir()
+			body := []byte("subtitle")
+			name := "movie.mkv"
+			if scenario == "attachment" {
+				name = "movie.srt"
+				values[strmDownloadEnableSettingKey] = "true"
+			}
+			if err = os.WriteFile(filepath.Join(local, name), body, 0600); err != nil {
+				t.Fatal(err)
+			}
+			stat, _ := os.Stat(filepath.Join(local, name))
+			r := domain.UploadRecord{Key: "config", StageID: "42", SHA1: fmt.Sprintf("%x", sha1.Sum(body)), Size: int64(len(body)), Modified: stat.ModTime().UnixNano(), LocalRoot: local, Relative: name, Policy: "overwrite"}
+			info := api.infos["42"]
+			info.Name, info.SHA1, info.Size, info.SizeKnown = name, r.SHA1, r.Size, true
+			if scenario == "no-mapping" {
+				values[strmPathsSettingKey] = "[]"
+			}
+			if scenario == "unmatched" {
+				info.ParentID = "elsewhere"
+				info.Path = []pan115.Directory{{ID: "elsewhere", Name: "other"}}
+			}
+			err = s.ProcessLocalUpload(ctx, "123", r, info)
+			if scenario == "video" {
+				if err == nil {
+					t.Fatal("video accepted without playback address")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			stored, err := repo.Get(ctx, journalKey("123", r.Key, info.ID))
+			if err != nil || stored == nil || stored.State != "completed" {
+				t.Fatalf("receipt=%+v err=%v", stored, err)
+			}
+			if scenario == "attachment" {
+				got, err := os.ReadFile(filepath.Join(s.root, "movies", name))
+				if err != nil || string(got) != string(body) {
+					t.Fatalf("copy=%q %v", got, err)
+				}
+			}
+			if api.infoCalls != 0 || api.playFile != "" {
+				t.Fatal("local handoff accessed remote")
+			}
+		})
+	}
+}
+
+func TestPendingLocalUploadDoesNotBlockOtherEvents(t *testing.T) {
+	ctx := context.Background()
+	s, api, _, mapping, values := managedFixture(t)
+	db, err := database.Open(ctx, database.Config{Dialect: database.DialectSQLite, SQLitePath: filepath.Join(t.TempDir(), "events.db")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err = db.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	repo := database.NewUploadReceiptRepository(db.SQLDB(), database.DialectSQLite)
+	s.SetUploadReceipts(repo)
+	info := api.infos["42"]
+	raw, _ := json.Marshal(info)
+	now := time.Now().Unix()
+	if err = repo.Insert(ctx, ports.UploadReceipt{Key: "pending", Account: "123", FileID: "42", ParentID: "10", Info: string(raw), VerifiedAt: now, Rules: s.localUploadRules(values)}); err != nil {
+		t.Fatal(err)
+	}
+	other := info
+	other.ID, other.PickCode, other.Name = "43", "pc43", "other.mkv"
+	api.infos["43"] = other
+	ctx = context.WithValue(ctx, managedAccountKey{}, "123")
+	_, err = s.syncPan115Events(ctx, []domain.StrmMapping{mapping}, values[strmPlayBaseSettingKey], values, []pan115.LifeEvent{{Type: 2, FileID: "42", ParentID: "10", UpdatedAt: now}, {Type: 2, FileID: "43", ParentID: "10", UpdatedAt: now}}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = os.Stat(filepath.Join(s.root, "movies", "other.strm")); err != nil {
+		t.Fatal("unrelated event blocked", err)
+	}
+	if _, err = os.Stat(filepath.Join(s.root, "movies", "movie.strm")); err != nil {
+		t.Fatal("orphaned handoff not taken over", err)
+	}
+}
+
+func TestPendingHandoffRetainsOwnerAndSurvivesCancellationAfterCursor(t *testing.T) {
+	ctx := context.Background()
+	s, api, _, mapping, values := managedFixture(t)
+	db, err := database.Open(ctx, database.Config{Dialect: database.DialectSQLite, SQLitePath: filepath.Join(t.TempDir(), "owner.db")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err = db.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	repo := database.NewUploadReceiptRepository(db.SQLDB(), database.DialectSQLite)
+	s.SetUploadReceipts(repo)
+	r := domain.UploadRecord{Key: "task", Kind: "115", State: "cleanup", StageID: "42", Error: "local failure", Retries: 3}
+	store := uploadMemoryStore{r.Key: r}
+	uploads := &UploadService{store: store}
+	s.SetLocalUploadOwner(uploads.OwnsLocalUpload)
+	info := api.infos["42"]
+	raw, _ := json.Marshal(info)
+	now := time.Now().Unix()
+	key := journalKey("123", r.Key, "42")
+	if err = repo.Insert(ctx, ports.UploadReceipt{Key: key, Account: "123", FileID: "42", ParentID: "10", Info: string(raw), VerifiedAt: now, Rules: s.localUploadRules(values)}); err != nil {
+		t.Fatal(err)
+	}
+	ctx = context.WithValue(ctx, managedAccountKey{}, "123")
+	if done, err := s.localUploadEventCompleted(ctx, pan115.LifeEvent{Type: 2, FileID: "42", ParentID: "10", UpdatedAt: now}); err != nil || !done {
+		t.Fatalf("owned work blocked event: %v %v", done, err)
+	}
+	pending, err := s.orphanLocalUploadEvents(ctx, "123")
+	if err != nil || len(pending) != 0 {
+		t.Fatalf("active retry was taken over: %+v %v", pending, err)
+	}
+	// The event cursor may now advance. Cancellation must not lose the independent handoff.
+	r.State, r.Intent, r.Hidden = "stopped", "delete", true
+	store[r.Key] = r
+	s.SetUploadReceipts(database.NewUploadReceiptRepository(db.SQLDB(), database.DialectSQLite))
+	pending, err = s.orphanLocalUploadEvents(ctx, "123")
+	if err != nil || len(pending) != 1 {
+		t.Fatalf("cancelled work lost after restart: %+v %v", pending, err)
+	}
+	if _, err = s.syncPan115Events(ctx, []domain.StrmMapping{mapping}, values[strmPlayBaseSettingKey], values, pending, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = os.Stat(filepath.Join(s.root, "movies", "movie.strm")); err != nil {
+		t.Fatal(err)
+	}
+	pending, err = s.orphanLocalUploadEvents(ctx, "123")
+	if err != nil || len(pending) != 0 {
+		t.Fatalf("completed event replayed: %+v %v", pending, err)
+	}
+}
+
+func TestFailedOrphanDoesNotPreventFollowingEvent(t *testing.T) {
+	s, api, _, mapping, values := managedFixture(t)
+	if err := os.MkdirAll(filepath.Join(s.root, "movies", "movie.strm"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	info := api.infos["42"]
+	info.ID, info.Name, info.PickCode = "43", "other.mkv", "pc43"
+	api.infos["43"] = info
+	_, err := s.syncPan115Events(context.Background(), []domain.StrmMapping{mapping}, values[strmPlayBaseSettingKey], values, []pan115.LifeEvent{{Type: 2, FileID: "42"}, {Type: 2, FileID: "43"}}, false)
+	if err == nil {
+		t.Fatal("failed event should keep cursor retryable")
+	}
+	if _, err = os.Stat(filepath.Join(s.root, "movies", "other.strm")); err != nil {
+		t.Fatal("following event blocked", err)
+	}
+}
+
+func TestEventPollRecoversOrphanWithoutNewCloudEvents(t *testing.T) {
+	ctx := context.Background()
+	s, api, _, _, values := managedFixture(t)
+	values[pan115LocalUploadEnabledKey] = "true"
+	values["PAN115_COOKIE"] = "UID=123_test; CID=test; SEID=test"
+	db, err := database.Open(ctx, database.Config{Dialect: database.DialectSQLite, SQLitePath: filepath.Join(t.TempDir(), "poll.db")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err = db.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	repo := database.NewUploadReceiptRepository(db.SQLDB(), database.DialectSQLite)
+	s.SetUploadReceipts(repo)
+	info := api.infos["42"]
+	raw, _ := json.Marshal(info)
+	if err = repo.Insert(ctx, ports.UploadReceipt{Key: "orphan", Account: "123", FileID: "42", ParentID: "10", Info: string(raw), VerifiedAt: 1, Rules: s.localUploadRules(values)}); err != nil {
+		t.Fatal(err)
+	}
+	cursor, _ := json.Marshal(pan115EventCursor{UserID: "123", ID: 100, Since: 1})
+	settings := &eventSettingsStub{items: []ports.StoredSetting{{Key: pan115EventCursorKey, Value: string(cursor)}}}
+	worker := NewPan115EventService(&lifeSourceStub{pages: map[int]pan115.LifePage{}}, s, settings, strmTestSettings(values), func(context.Context) (string, error) { return "123", nil })
+	if err = worker.Poll(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = os.Stat(filepath.Join(s.root, "movies", "movie.strm")); err != nil {
+		t.Fatal("orphan lost behind cursor", err)
+	}
+	if err = worker.Poll(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if api.infoCalls != 1 {
+		t.Fatalf("orphan replayed: %d", api.infoCalls)
+	}
+	// Multiple historic receipts for the same cloud identity must all converge.
+	for _, key := range []string{"orphan-a", "orphan-b"} {
+		if err = repo.Insert(ctx, ports.UploadReceipt{Key: key, Account: "123", FileID: "42", ParentID: "10", Info: string(raw), VerifiedAt: 1, Rules: s.localUploadRules(values)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err = worker.Poll(ctx); err != nil {
+		t.Fatal(err)
+	}
+	pending, err := repo.Pending(ctx, "123")
+	if err != nil || len(pending) != 0 {
+		t.Fatalf("historic pending receipts stranded: %+v %v", pending, err)
+	}
+	if api.infoCalls != 2 {
+		t.Fatalf("same-file receipts caused duplicate requests: %d", api.infoCalls)
+	}
+}
 
 type localUploadRemote struct{ *directUploadRemote }
 

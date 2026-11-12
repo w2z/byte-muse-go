@@ -36,6 +36,8 @@ type localUploadSourceKey struct{}
 
 type localUploadPolicyKey struct{}
 
+type localUploadPendingKey struct{}
+
 // localUploadRules binds event acknowledgement to the same mapping, formats, root and playback URL.
 func (s *StrmService) localUploadRules(values map[string]string) string {
 	raw, _ := json.Marshal([]string{s.root, values[strmPathsSettingKey], values[strmPlayBaseSettingKey], values[strmDownloadEnableSettingKey], values[strmDownloadExtensionsSettingKey]})
@@ -73,6 +75,91 @@ func (s *StrmService) ResumeLocalUpload(ctx context.Context, record domain.Uploa
 // SetUploadReceipts injects the independent durable handoff before any worker starts.
 func (s *StrmService) SetUploadReceipts(repository ports.UploadReceiptRepository) {
 	s.uploadReceipts = repository
+}
+
+// SetLocalUploadOwner wires the durable queue ownership check before workers start.
+// Pending receipts can acknowledge events only while an upload task retains their recovery work.
+func (s *StrmService) SetLocalUploadOwner(owner func(context.Context, ports.UploadReceipt) (bool, error)) {
+	s.uploadOwner = owner
+}
+
+// OwnsLocalUpload checks pending queue records, including exhausted tasks awaiting manual retry.
+// Stopped, deleted, hidden or superseded receipts fall back to normal event synchronization.
+func (s *UploadService) OwnsLocalUpload(ctx context.Context, receipt ports.UploadReceipt) (bool, error) {
+	records, err := s.store.PendingCommits(ctx)
+	if err != nil {
+		return false, err
+	}
+	for _, record := range records {
+		if record.Kind == "115" && record.State == "cleanup" && !record.Hidden && record.Intent != "delete" && record.Intent != "stop" && record.StageID == receipt.FileID && journalKey(receipt.Account, record.Key, record.StageID) == receipt.Key {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// orphanLocalUploadEvents rediscovers cancelled/orphaned handoffs independently of the
+// event cursor. It transfers work to normal event processing without trusting stale paths.
+func (s *StrmService) orphanLocalUploadEvents(ctx context.Context, account string) ([]pan115.LifeEvent, error) {
+	if s.uploadReceipts == nil {
+		return nil, nil
+	}
+	receipts, err := s.uploadReceipts.Pending(ctx, account)
+	if err != nil {
+		return nil, err
+	}
+	var events []pan115.LifeEvent
+	for _, receipt := range receipts {
+		if s.uploadOwner != nil {
+			owned, err := s.uploadOwner(ctx, receipt)
+			if err != nil {
+				return nil, err
+			}
+			if owned {
+				continue
+			}
+		}
+		events = append(events, pan115.LifeEvent{Type: 2, FileID: receipt.FileID, ParentID: receipt.ParentID})
+	}
+	return events, nil
+}
+
+// completeOrphanLocalUpload acknowledges only successfully synchronized handoffs which
+// no upload task owns. Active local retries retain their immutable pending receipt.
+func (s *StrmService) completeOrphanLocalUpload(ctx context.Context, fileID string) error {
+	if s.uploadReceipts == nil {
+		return nil
+	}
+	account, _ := ctx.Value(managedAccountKey{}).(string)
+	if account == "" {
+		return nil
+	}
+	receipts, cached := ctx.Value(localUploadPendingKey{}).([]ports.UploadReceipt)
+	if !cached {
+		var err error
+		receipts, err = s.uploadReceipts.Pending(ctx, account)
+		if err != nil {
+			return err
+		}
+	}
+	for _, receipt := range receipts {
+		if receipt.FileID != fileID {
+			continue
+		}
+		if s.uploadOwner != nil {
+			owned, err := s.uploadOwner(ctx, receipt)
+			if err != nil {
+				return err
+			}
+			if owned {
+				continue
+			}
+		}
+		if err := s.uploadReceipts.Complete(ctx, receipt.Key); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // ProcessLocalUpload persists verified identity before touching local outputs. The upload worker
@@ -149,9 +236,6 @@ func (s *StrmService) ProcessLocalUpload(ctx context.Context, account string, re
 		return err
 	}
 	base := strings.TrimRight(strings.TrimSpace(values[strmPlayBaseSettingKey]), "/")
-	if base == "" {
-		return errors.New("本地上传后处理需要配置 STRM 播放地址")
-	}
 	formats, err := strmDownloadFormats(values)
 	if err != nil {
 		return err
@@ -168,6 +252,10 @@ func (s *StrmService) ProcessLocalUpload(ctx context.Context, account string, re
 		walk, matched := s.eventMappingWalk(mapping, info, formats)
 		if !matched {
 			continue
+		}
+		// Attachment copies do not use a playback URL; only an actual video output does.
+		if base == "" && !isStrmMedia(info.Name, formats) {
+			return errors.New("本地上传后处理需要配置 STRM 播放地址")
 		}
 		if record.Mode == "move" {
 			target, _, err := resolveStrmPath(s.root, mapping.LocalPath)
@@ -202,7 +290,8 @@ func (s *StrmService) ProcessLocalUpload(ctx context.Context, account string, re
 }
 
 // localUploadEventCompleted suppresses only the matching upload event in a bounded receipt window.
-// Moves, renames, deletes, unknown accounts and pending work always retain normal event processing.
+// Pending work is acknowledged only when its durable upload task still owns recovery.
+// Orphaned/cancelled handoffs fall back to normal events; no pending receipt is marked completed here.
 func (s *StrmService) localUploadEventCompleted(ctx context.Context, event pan115.LifeEvent) (bool, error) {
 	if s.uploadReceipts == nil || (event.Type != 1 && event.Type != 2) || event.UpdatedAt == 0 {
 		return false, nil
@@ -226,7 +315,10 @@ func (s *StrmService) localUploadEventCompleted(ctx context.Context, event pan11
 		return false, nil
 	}
 	if receipt.State != "completed" {
-		return false, errors.New("本地上传后处理尚未完成，保留事件游标等待重试")
+		if s.uploadOwner == nil {
+			return false, nil
+		}
+		return s.uploadOwner(ctx, *receipt)
 	}
 	return true, nil
 }

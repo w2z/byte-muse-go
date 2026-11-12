@@ -106,12 +106,8 @@ func (s *UploadService) processDirectUpload(ctx context.Context, remote uploadRe
 		return record.State, err
 	}
 	verified := func(objects []uploadEntry) (uploadEntry, bool) {
-		for _, entry := range objects {
-			if entry.Name == record.Target && !entry.Directory && entry.Size == record.Size && entry.SHA1 != "" && strings.EqualFold(entry.SHA1, record.SHA1) && (record.StageID == "" || entry.ID == record.StageID) {
-				return entry, true
-			}
-		}
-		return uploadEntry{}, false
+		entry, found, _ := uploadFinalEntry(record, objects, false)
+		return entry, found
 	}
 	installed, found := verified(entries)
 	transferred := false
@@ -123,6 +119,17 @@ func (s *UploadService) processDirectUpload(ctx context.Context, remote uploadRe
 			return record.State, err
 		}
 		installed, found = verified(entries)
+	}
+	// Rebind a lost cleanup receipt only from this attempt's fresh listing. A surviving
+	// changed receipt or multiple matching replacements is ambiguous and must stay protected.
+	// Later deletion checks remain pinned to the durably saved identity for this attempt.
+	rebound := false
+	if !found && record.State == "cleanup" && record.StageID != "" {
+		installed, found, err = uploadFinalEntry(record, entries, true)
+		if err != nil {
+			return record.State, err
+		}
+		rebound = found
 	}
 	if record.Kind == "115" && record.Policy == "overwrite" {
 		// Overwrite authorizes replacement of current same-name files, not a permanent
@@ -287,10 +294,15 @@ func (s *UploadService) processDirectUpload(ctx context.Context, remote uploadRe
 	if !found {
 		return record.State, fmt.Errorf("%w：原名上传后大小或 SHA1 回查未通过", errUploadAttention)
 	}
+	previousIdentity := *record
 	record.StageID, record.StageSHA1, record.StageSize = installed.ID, installed.SHA1, installed.Size
 	record.State = "cleanup"
 	ctx = pan115.WithUploadStage(ctx, "cleanup")
 	if err = save(); err != nil {
+		if rebound {
+			// A failed rebind must not leak into the worker's deferred checkpoint save.
+			*record = previousIdentity
+		}
 		return record.State, err
 	}
 	// The verified final identity must be durable before discarding the resume checkpoint.
@@ -379,6 +391,40 @@ func (s *UploadService) processDirectUpload(ctx context.Context, remote uploadRe
 		record.State = "completed"
 	}
 	return record.State, save()
+}
+
+// uploadFinalEntry verifies the installed receipt; recovery may select a unique replacement
+// only when the recorded ID is absent. Callers must supply a fresh listing and persist a
+// changed identity before cleanup, and must not reuse the old identity's local handoff.
+func uploadFinalEntry(record *domain.UploadRecord, entries []uploadEntry, recoverIdentity bool) (uploadEntry, bool, error) {
+	matches := func(entry uploadEntry) bool {
+		return entry.ID != "" && entry.Name == record.Target && !entry.Directory && entry.Size == record.Size && entry.SHA1 != "" && strings.EqualFold(entry.SHA1, record.SHA1)
+	}
+	for _, entry := range entries {
+		if record.StageID != "" && entry.ID != record.StageID {
+			continue
+		}
+		if matches(entry) {
+			return entry, true, nil
+		}
+		if recoverIdentity && record.StageID != "" {
+			return uploadEntry{}, false, fmt.Errorf("%w：已记录的成品文件已改变，保留文件", errUploadAttention)
+		}
+	}
+	if !recoverIdentity || record.StageID == "" {
+		return uploadEntry{}, false, nil
+	}
+	var installed uploadEntry
+	found := false
+	for _, entry := range entries {
+		if matches(entry) {
+			if found && installed.ID != entry.ID {
+				return uploadEntry{}, false, fmt.Errorf("%w：存在多个匹配成品，无法重新绑定身份", errUploadAttention)
+			}
+			installed, found = entry, true
+		}
+	}
+	return installed, found, nil
 }
 
 // uploadRecordedOldFile reads the frozen multi-file receipt, retaining single-file legacy recovery.

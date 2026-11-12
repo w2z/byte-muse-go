@@ -381,32 +381,35 @@ func (s *UploadService) process(ctx context.Context, m UploadMapping, f uploadLo
 				}
 			}
 			if record.Mode == "move" {
-				// Handoff already proves remote replacement cleanup finished. Only verify
-				// the exact installed object before deleting the retained move source.
+				// A completed handoff belongs to its exact final ID. A replacement must
+				// pass through direct recovery and a new durable handoff before source removal.
 				remote, remoteErr := s.provider(ctx, m.Kind)
 				if remoteErr != nil {
 					return record.State, remoteErr
 				}
-				entries, listErr := remote.List(pan115.WithUploadStage(ctx, "move_verify"), record.Parent)
+				entries, listErr := uploadFreshList(pan115.WithUploadStage(ctx, "move_verify"), remote, record.Parent, time.Now())
 				if listErr != nil {
 					return record.State, listErr
 				}
-				found := false
-				for _, entry := range entries {
-					if entry.ID == record.StageID && entry.Name == record.Target && !entry.Directory && entry.Size == record.Size && entry.SHA1 != "" && strings.EqualFold(entry.SHA1, record.SHA1) {
-						found = true
-						break
-					}
+				installed, found, verifyErr := uploadFinalEntry(record, entries, true)
+				if verifyErr != nil {
+					return record.State, verifyErr
 				}
 				if !found {
 					return record.State, errUploadAttention
 				}
-				if err = removeUploadedSource(ctx, record); err != nil {
-					return record.State, err
+				if installed.ID != record.StageID {
+					handled = false
+				} else {
+					if err = removeUploadedSource(ctx, record); err != nil {
+						return record.State, err
+					}
 				}
 			}
-			record.State = "completed"
-			return record.State, nil
+			if handled {
+				record.State = "completed"
+				return record.State, nil
+			}
 		}
 	}
 	if record == nil && !uploadUnchanged(f) {

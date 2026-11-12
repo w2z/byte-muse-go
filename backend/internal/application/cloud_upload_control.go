@@ -28,6 +28,21 @@ func uploadTerminal(state string) bool {
 	return state == "completed" || state == "skipped" || state == "stopped" || state == "discarded"
 }
 
+// uploadDirectCancellationTerminal identifies direct receipts that have no remote
+// cleanup obligation. Stage==Target is the direct-upload marker; a multipart
+// journal or legacy backup/stage is retained for the cleanup worker instead.
+func uploadDirectCancellationTerminal(record domain.UploadRecord) bool {
+	return (record.Intent == "stop" || record.Intent == "delete") && record.Stage != "" && record.Stage == record.Target && record.Multipart == nil && record.Backup == ""
+}
+
+// terminateUploadCancellation persists a cancellation as a terminal receipt while
+// preserving the delete view choice and the cloud final object.
+func terminateUploadCancellation(record *domain.UploadRecord) {
+	record.State = "stopped"
+	record.Hidden = record.Hidden || record.Intent == "delete"
+	record.Error, record.ErrorKind, record.NextRetry = "", "", ""
+}
+
 // uploadBatchActive reports unfinished work that should continue after a manual scan.
 // Failures that have used the automatic attempts stay visible but do not keep the manual batch running.
 func uploadBatchActive(records []domain.UploadRecord) bool {
@@ -221,11 +236,14 @@ func (s *UploadService) applyUploadControl(ctx context.Context, action string) e
 				if action == "delete_all" {
 					r.Intent = "delete"
 				}
-				if r.Parent == "" && r.State == "pending" {
+				if uploadDirectCancellationTerminal(r) {
+					terminateUploadCancellation(&r)
+				} else if r.Parent == "" && r.State == "pending" {
 					r.State = "stopped"
 				} else if r.State == "pending" || r.State == "uploaded" || r.State == "failed" || r.State == "retrying" {
 					r.State = "discarding"
 				}
+				r.Error, r.ErrorKind, r.NextRetry = "", "", ""
 			}
 			if action == "delete_all" {
 				r.Hidden = true
@@ -457,7 +475,7 @@ func transformUploadControl(record domain.UploadRecord, action, mode string, sch
 	if !uploadTerminal(record.State) || (record.State == "stopped" && (action == "start" || action == "retry")) {
 		freezeUploadQueueTime(&record)
 	}
-	if (action == "pause" || action == "stop") && uploadRetriesExhausted(record) {
+	if action == "pause" && uploadRetriesExhausted(record) {
 		return record, false
 	}
 	switch action {
@@ -472,11 +490,17 @@ func transformUploadControl(record domain.UploadRecord, action, mode string, sch
 			return record, false
 		}
 		record.Intent = "stop"
-		if record.Parent == "" && record.State == "pending" {
+		if uploadRetriesExhausted(record) && !uploadDirectCancellationTerminal(record) {
+			return record, false
+		}
+		if uploadDirectCancellationTerminal(record) {
+			terminateUploadCancellation(&record)
+		} else if record.Parent == "" && record.State == "pending" {
 			record.State = "stopped"
 		} else if record.State == "pending" || record.State == "uploaded" {
 			record.State = "discarding"
 		}
+		record.Error, record.ErrorKind, record.NextRetry = "", "", ""
 		if uploadTerminal(record.State) {
 			record.Error, record.ErrorKind, record.NextRetry = "", "", ""
 		}
@@ -518,11 +542,14 @@ func transformUploadControl(record domain.UploadRecord, action, mode string, sch
 		record.Hidden = true
 		if !uploadTerminal(record.State) {
 			record.Intent = "delete"
-			if record.Parent == "" && record.State == "pending" {
+			if uploadDirectCancellationTerminal(record) {
+				terminateUploadCancellation(&record)
+			} else if record.Parent == "" && record.State == "pending" {
 				record.State = "stopped"
 			} else if record.State == "pending" || record.State == "uploaded" {
 				record.State = "discarding"
 			}
+			record.Error, record.ErrorKind, record.NextRetry = "", "", ""
 		}
 		if uploadTerminal(record.State) {
 			record.Hidden = true

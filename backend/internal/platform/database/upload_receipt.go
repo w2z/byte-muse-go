@@ -96,6 +96,24 @@ func (r *UploadReceiptRepository) Find(ctx context.Context, account, file string
 	return r.read(ctx, "account_id=? AND file_id=? ORDER BY verified_at DESC,receipt_key DESC LIMIT 1", account, file)
 }
 
+// Pending keeps unfinished handoffs discoverable after the event cursor has advanced.
+func (r *UploadReceiptRepository) Pending(ctx context.Context, account string) ([]ports.UploadReceipt, error) {
+	rows, err := r.db.QueryContext(ctx, r.query("SELECT "+uploadReceiptColumns+" FROM upload_postprocess WHERE account_id=? AND state='pending' ORDER BY verified_at,receipt_key"), account)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []ports.UploadReceipt
+	for rows.Next() {
+		var v ports.UploadReceipt
+		if err = rows.Scan(&v.Key, &v.Account, &v.FileID, &v.ParentID, &v.Info, &v.LocalRoot, &v.Relative, &v.SHA1, &v.Size, &v.Modified, &v.VerifiedAt, &v.Rules, &v.State); err != nil {
+			return nil, err
+		}
+		result = append(result, v)
+	}
+	return result, rows.Err()
+}
+
 // Complete changes only processing state, leaving the immutable source and remote identity intact.
 func (r *UploadReceiptRepository) Complete(ctx context.Context, key string) error {
 	_, err := r.db.ExecContext(ctx, r.query("UPDATE upload_postprocess SET state='completed' WHERE receipt_key=?"), key)

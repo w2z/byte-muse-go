@@ -18,5 +18,6 @@ type UploadReceiptRepository interface {
 	Insert(context.Context, UploadReceipt) error
 	Get(context.Context, string) (*UploadReceipt, error)
 	Find(context.Context, string, string) (*UploadReceipt, error)
+	Pending(context.Context, string) ([]UploadReceipt, error)
 	Complete(context.Context, string) error
 }

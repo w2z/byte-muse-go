@@ -206,6 +206,12 @@ func (s *Pan115EventService) Poll(ctx context.Context) error {
 		dirty = true
 		logging.Default.Error(logging.CategoryPan115Event, "115 事件超出历史窗口，执行映射补偿扫描")
 	}
+	orphans, err := s.strm.orphanLocalUploadEvents(ctx, userID)
+	if err != nil {
+		return err
+	}
+	changes = append(changes, orphans...)
+	dirty = dirty || len(orphans) > 0
 	if dirty {
 		ctx = context.WithValue(ctx, managedAccountKey{}, userID)
 		result, err := s.strm.syncPan115Events(ctx, active, base, values, changes, !reached)

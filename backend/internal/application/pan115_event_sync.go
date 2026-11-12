@@ -8,6 +8,7 @@ import (
 
 	"bytemuse/backend/internal/domain"
 	"bytemuse/backend/internal/platform/pan115"
+	"bytemuse/backend/internal/ports"
 )
 
 // syncPan115Events 合并同一对象的事件并查询当前状态；单文件不扫描整个映射。
@@ -19,13 +20,24 @@ func (s *StrmService) syncPan115Events(ctx context.Context, mappings []domain.St
 	if s.localUploads.Load() > 0 {
 		return result, errors.New("本地上传仍在处理，保留事件游标稍后同步")
 	}
+	// Load pending recovery once per batch, never scan the receipt table per event.
+	if account, _ := ctx.Value(managedAccountKey{}).(string); account != "" && s.uploadReceipts != nil {
+		pending, err := s.uploadReceipts.Pending(ctx, account)
+		if err != nil {
+			return result, err
+		}
+		if pending == nil {
+			pending = []ports.UploadReceipt{}
+		}
+		ctx = context.WithValue(ctx, localUploadPendingKey{}, pending)
+	}
 	formats, err := strmDownloadFormats(values)
 	if err != nil {
 		return result, err
 	}
 	api, hasInfo := s.pan115.(pan115EventFiles)
 	seen := map[string]bool{}
-	var deletionErr error
+	var eventErrors error
 	for _, event := range events {
 		if event.FileID != "" && seen[event.FileID] {
 			continue
@@ -35,7 +47,7 @@ func (s *StrmService) syncPan115Events(ctx context.Context, mappings []domain.St
 			deleted, err := s.deletePan115Event(ctx, event, mappings, formats)
 			result.Deleted += deleted
 			if err != nil {
-				deletionErr = err
+				eventErrors = errors.Join(eventErrors, err)
 			}
 			continue
 		}
@@ -50,8 +62,20 @@ func (s *StrmService) syncPan115Events(ctx context.Context, mappings []domain.St
 		}
 		info, err := api.EventFileInfo(ctx, event.FileID)
 		if err != nil {
-			return result, err
+			if errors.Is(err, pan115.ErrFileNotFound) {
+				// A confirmed deleted orphan has no remaining output to generate.
+				if finishErr := s.completeOrphanLocalUpload(ctx, event.FileID); finishErr != nil {
+					eventErrors = errors.Join(eventErrors, finishErr)
+				}
+				continue
+			}
+			if ctx.Err() != nil || pan115.IsRateLimitError(err) {
+				return result, errors.Join(eventErrors, err)
+			}
+			eventErrors = errors.Join(eventErrors, err)
+			continue
 		}
+		failed := false
 		for _, mapping := range mappings {
 			walk, matched := s.eventMappingWalk(mapping, info, formats)
 			if !matched {
@@ -59,15 +83,20 @@ func (s *StrmService) syncPan115Events(ctx context.Context, mappings []domain.St
 			}
 			entry := s.scanMapping(ctx, s.root, mapping, base, domain.StrmGenerateIdempotent, walk, func() {}, formats)
 			if entry.Message != "" || entry.Failed > 0 || entry.DownloadFailed > 0 {
-				return result, fmt.Errorf("115 事件生成失败：%s", entry.Message)
+				eventErrors = errors.Join(eventErrors, fmt.Errorf("115 事件生成失败：%s", entry.Message))
+				failed = true
+				continue
 			}
 			result.Files += entry.Files
 			result.Created += entry.Created
 			result.Downloaded += entry.Downloaded
 		}
+		if !failed && (event.Type == 1 || event.Type == 2) {
+			eventErrors = errors.Join(eventErrors, s.completeOrphanLocalUpload(ctx, event.FileID))
+		}
 	}
-	if deletionErr != nil {
-		return result, deletionErr
+	if eventErrors != nil {
+		return result, eventErrors
 	}
 	if compensate {
 		generated, err := s.scanPan115EventMappingsLocked(ctx, mappings, base, values)

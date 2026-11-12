@@ -44,6 +44,14 @@ func TestUploadReceiptMigrationPreservesSnapshotsAndCompletion(t *testing.T) {
 			if err = r.Insert(ctx, v); err != nil {
 				t.Fatal(err)
 			}
+			pending, pendingErr := r.Pending(ctx, "a")
+			if pendingErr != nil || len(pending) != 1 || pending[0].Key != "task" {
+				t.Fatalf("pending handoff not discoverable: %+v %v", pending, pendingErr)
+			}
+			other, pendingErr := r.Pending(ctx, "other")
+			if pendingErr != nil || len(other) != 0 {
+				t.Fatalf("pending handoff leaked account: %+v %v", other, pendingErr)
+			}
 			if err = r.Complete(ctx, v.Key); err != nil {
 				t.Fatal(err)
 			}
@@ -59,6 +67,10 @@ func TestUploadReceiptMigrationPreservesSnapshotsAndCompletion(t *testing.T) {
 				t.Fatal(err)
 			}
 			r = NewUploadReceiptRepository(db.SQLDB(), DialectSQLite)
+			pending, pendingErr = r.Pending(ctx, "a")
+			if pendingErr != nil || len(pending) != 0 {
+				t.Fatalf("completed handoff replayed after restart: %+v %v", pending, pendingErr)
+			}
 			got, err := r.Find(ctx, "a", "42")
 			if err != nil || got == nil || got.State != "completed" || got.Info != `{"PickCode":"pc42"}` {
 				t.Fatalf("receipt=%+v err=%v", got, err)

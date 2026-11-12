@@ -247,6 +247,25 @@ func (s *UploadService) Run(ctx context.Context) {
 			if listErr != nil {
 				s.update(func(st *UploadStatus) { st.Error = listErr.Error() })
 			} else {
+				// Older hidden delete receipts could remain in cleanup after the
+				// direct upload had already reached its final target. Reconcile that
+				// cancellation receipt before building recovery blockers, but never
+				// rewrite an active worker or hide a failed durable write.
+				for index := range records {
+					r := records[index]
+					if !uploadDirectCancellationTerminal(r) || r.State == "stopped" {
+						continue
+					}
+					if _, active := workers[r.Key]; active {
+						continue
+					}
+					terminateUploadCancellation(&r)
+					if saveErr := s.store.Save(ctx, r); saveErr != nil {
+						s.update(func(st *UploadStatus) { st.Error = saveErr.Error() })
+						continue
+					}
+					records[index] = r
+				}
 				recovering := map[string]bool{}
 				for _, r := range records {
 					if r.State != "pending" && !uploadTerminal(r.State) {

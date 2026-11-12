@@ -368,6 +368,7 @@ func (c *Commands) Serve(ctx context.Context) error {
 	embyMediaService := application.NewEmbyMediaService(settingsValues(settingsService))
 	strmService.SetManagedFiles(database.NewStrmFileRepository(store.SQLDB(), database.Dialect(c.config.DatabaseDriver)), pan115Service.EventAccountID)
 	strmService.SetUploadReceipts(database.NewUploadReceiptRepository(store.SQLDB(), database.Dialect(c.config.DatabaseDriver)))
+	strmService.SetLocalUploadOwner(uploadService.OwnsLocalUpload)
 	uploadService.SetLocalPostprocess(strmService.ProcessLocalUpload)
 	uploadService.SetLocalUploadRecovery(strmService.ResumeLocalUpload, strmService.BeginLocalUpload)
 	defer embyMediaService.Close()

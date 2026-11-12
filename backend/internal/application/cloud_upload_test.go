@@ -274,6 +274,53 @@ func TestUploadMonitorDiscoveryAndStop(t *testing.T) {
 	}
 }
 
+type uploadCancellationStore struct {
+	uploadMemoryStore
+	terminated chan domain.UploadRecord
+}
+
+func (s *uploadCancellationStore) Save(ctx context.Context, r domain.UploadRecord) error {
+	if err := s.uploadMemoryStore.Save(ctx, r); err != nil {
+		return err
+	}
+	if r.Key == "legacy-direct" && r.State == "stopped" {
+		s.terminated <- r
+	}
+	return nil
+}
+
+func TestUploadRunRecoversHiddenDirectCancellationWithoutProvider(t *testing.T) {
+	store := uploadMemoryStore{"legacy-direct": {
+		Key: "legacy-direct", Kind: "115", State: "cleanup", Intent: "delete", Hidden: true,
+		Parent: "parent", Target: "movie.mkv", Stage: "movie.mkv", StageID: "final-id",
+		Source: filepath.Join(t.TempDir(), "movie.mkv"), Error: "旧清理失败", ErrorKind: "transient", Retries: uploadMaxAutoRetries,
+	}}
+	var providerCalls atomic.Int32
+	durable := &uploadCancellationStore{uploadMemoryStore: store, terminated: make(chan domain.UploadRecord, 1)}
+	service := &UploadService{
+		store: durable,
+		settings: func(context.Context) (map[string]string, error) {
+			return map[string]string{"CLOUD_UPLOAD_ENABLE": "false", "CLOUD_UPLOAD_PATHS": "[]"}, nil
+		},
+		provider: func(context.Context, string) (uploadRemote, error) {
+			providerCalls.Add(1)
+			return nil, errors.New("provider must not be called")
+		},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { defer close(done); service.Run(ctx) }()
+	defer func() { cancel(); <-done }()
+	select {
+	case record := <-durable.terminated:
+		if providerCalls.Load() != 0 || record.Error != "" || record.ErrorKind != "" || !record.Hidden {
+			t.Fatalf("recovery invoked provider or retained error: %+v calls=%d", record, providerCalls.Load())
+		}
+	case <-time.After(4 * time.Second):
+		t.Fatal("hidden direct cancellation was not recovered")
+	}
+}
+
 // TestUploadMonitorDiscoversWhilePaused separates durable discovery from transfer permission,
 // including enabling monitoring on a paused queue, new filesystem events and restart recovery.
 func TestUploadMonitorDiscoversWhilePaused(t *testing.T) {

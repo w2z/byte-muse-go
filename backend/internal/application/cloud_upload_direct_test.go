@@ -304,6 +304,173 @@ func TestUploadDirectReplanFailurePreservesRemoteAndSnapshot(t *testing.T) {
 	}
 }
 
+func TestUploadDirectCleanupRecoversFinalIdentityAfterRestart(t *testing.T) {
+	for _, scenario := range []string{"unique-replacement", "rebound-cleanup-restart", "prefer-recorded", "multiple-replacements", "changed-recorded", "renamed-recorded", "wrong-size", "wrong-hash", "missing-hash", "wrong-name", "missing-id", "directory"} {
+		t.Run(scenario, func(t *testing.T) {
+			service, mapping, file, _, store := recoveryFixture(t)
+			remote := &directUploadRemote{entries: []uploadEntry{{ID: "old", Name: file.Relative, Size: 8, SHA1: "old-hash"}}, deleteFailure: true}
+			service.provider = func(context.Context, string) (uploadRemote, error) { return remote, nil }
+			if _, err := service.process(context.Background(), mapping, file, "overwrite"); err == nil {
+				t.Fatal("expected interrupted cleanup")
+			}
+			key := uploadKey(mapping, file, "overwrite")
+			candidate := remote.entries[1]
+			candidate.ID = "replacement"
+			remote.entries = remote.entries[:1]
+			switch scenario {
+			case "prefer-recorded", "changed-recorded", "renamed-recorded":
+				recorded := candidate
+				recorded.ID = "new-1"
+				if scenario == "changed-recorded" {
+					recorded.SHA1 = "changed"
+				}
+				if scenario == "renamed-recorded" {
+					recorded.Name = "other.mkv"
+				}
+				remote.entries = append(remote.entries, recorded)
+			case "multiple-replacements":
+				other := candidate
+				other.ID = "another-replacement"
+				remote.entries = append(remote.entries, other)
+			case "wrong-size":
+				candidate.Size++
+			case "wrong-hash":
+				candidate.SHA1 = "different"
+			case "missing-hash":
+				candidate.SHA1 = ""
+			case "wrong-name":
+				candidate.Name = "other.mkv"
+			case "missing-id":
+				candidate.ID = ""
+			case "directory":
+				candidate.Directory = true
+			}
+			// Put the alternative first to prove a surviving receipt wins independently of listing order.
+			remote.entries = append([]uploadEntry{candidate}, remote.entries...)
+			before, _ := json.Marshal(remote.entries)
+			raw, _ := json.Marshal(store[key])
+			var restored domain.UploadRecord
+			if err := json.Unmarshal(raw, &restored); err != nil {
+				t.Fatal(err)
+			}
+			store[key] = restored
+			remote.deleteFailure = scenario == "rebound-cleanup-restart"
+			restarted := &UploadService{store: store, provider: service.provider}
+			state, err := restarted.process(context.Background(), mapping, file, "overwrite")
+			if scenario == "rebound-cleanup-restart" {
+				if err == nil || state != "cleanup" || store[key].StageID != "replacement" || len(remote.entries) != 2 {
+					t.Fatalf("interrupted rebind lost durable identity or files: state=%s err=%v record=%+v entries=%+v", state, err, store[key], remote.entries)
+				}
+				raw, _ = json.Marshal(store[key])
+				if err = json.Unmarshal(raw, &restored); err != nil {
+					t.Fatal(err)
+				}
+				store[key] = restored
+				remote.deleteFailure = false
+				restarted = &UploadService{store: store, provider: service.provider}
+				state, err = restarted.process(context.Background(), mapping, file, "overwrite")
+			}
+			if scenario == "unique-replacement" || scenario == "rebound-cleanup-restart" || scenario == "prefer-recorded" {
+				wantID := "replacement"
+				if scenario == "prefer-recorded" {
+					wantID = "new-1"
+				}
+				if err != nil || state != "completed" || store[key].StageID != wantID || len(remote.entries) != 1 || remote.entries[0].ID != wantID {
+					t.Fatalf("final identity not recovered durably: state=%s err=%v record=%+v entries=%+v", state, err, store[key], remote.entries)
+				}
+			} else {
+				after, _ := json.Marshal(remote.entries)
+				if !errors.Is(err, errUploadAttention) || string(before) != string(after) || store[key].StageID != "new-1" {
+					t.Fatalf("ambiguous or changed final was adopted: err=%v before=%s after=%s record=%+v", err, before, after, store[key])
+				}
+			}
+			if len(remote.names) != 1 {
+				t.Fatalf("cleanup uploaded again: %v", remote.names)
+			}
+		})
+	}
+}
+
+func TestUploadDirectCleanupRebindSaveFailurePreservesFiles(t *testing.T) {
+	service, mapping, file, _, store := recoveryFixture(t)
+	remote := &directUploadRemote{entries: []uploadEntry{{ID: "old", Name: file.Relative, Size: 8, SHA1: "old-hash"}}, deleteFailure: true}
+	service.provider = func(context.Context, string) (uploadRemote, error) { return remote, nil }
+	if _, err := service.process(context.Background(), mapping, file, "overwrite"); err == nil {
+		t.Fatal("expected interrupted cleanup")
+	}
+	key := uploadKey(mapping, file, "overwrite")
+	record := store[key]
+	remote.entries[1].ID = "replacement"
+	remote.deleteFailure = false
+	before, _ := json.Marshal(remote.entries)
+	persistenceErr := errors.New("final identity persistence failed")
+	_, err := service.processDirectUpload(context.Background(), remote, &record, mapping, file, nil, time.Now(), func() error {
+		if record.StageID == "replacement" {
+			return persistenceErr
+		}
+		store[key] = record
+		return nil
+	})
+	after, _ := json.Marshal(remote.entries)
+	if !errors.Is(err, persistenceErr) || string(before) != string(after) || store[key].StageID != "new-1" || record.StageID != "new-1" || len(remote.names) != 1 {
+		t.Fatalf("failed durable rebind changed identity or remote: err=%v record=%+v before=%s after=%s", err, record, before, after)
+	}
+}
+
+type identityRecoveryRemote struct{ directUploadRemote }
+
+func (*identityRecoveryRemote) AccountID(context.Context) (string, error) { return "123", nil }
+
+func TestUploadDirectMoveHandoffRecoversChangedFinalIdentity(t *testing.T) {
+	service, mapping, file, _, store := recoveryFixture(t)
+	remote := &identityRecoveryRemote{directUploadRemote{entries: []uploadEntry{{ID: "old", Name: file.Relative, Size: 8, SHA1: "old-hash"}}, deleteFailure: true}}
+	service.provider = func(context.Context, string) (uploadRemote, error) { return remote, nil }
+	if _, err := service.process(context.Background(), mapping, file, "overwrite"); err == nil {
+		t.Fatal("expected interrupted cleanup")
+	}
+	key := uploadKey(mapping, file, "overwrite")
+	record := store[key]
+	record.Mode = "move"
+	store[key] = record
+	remote.entries = remote.entries[1:]
+	remote.entries[0].ID = "replacement"
+	remote.entries[0].Info = &pan115.FileInfo{File: pan115.File{ID: "replacement", ParentID: "0", Name: file.Relative, SHA1: record.SHA1, Size: file.Size, SizeKnown: true}}
+	remote.deleteFailure = false
+	handoffErr := errors.New("new identity handoff interrupted")
+	handoffs := 0
+	service.resumeLocalUpload = func(_ context.Context, record domain.UploadRecord) (bool, error) {
+		return record.StageID == "new-1", nil
+	}
+	service.postprocess = func(_ context.Context, _ string, record domain.UploadRecord, info pan115.FileInfo) error {
+		handoffs++
+		if record.StageID != "replacement" || info.ID != "replacement" || store[key].StageID != "replacement" {
+			t.Fatalf("handoff did not use durable new identity: record=%+v info=%+v saved=%+v", record, info, store[key])
+		}
+		if _, err := os.Stat(file.Absolute); err != nil {
+			t.Fatal("source removed before new handoff", err)
+		}
+		if handoffs == 1 {
+			return handoffErr
+		}
+		return nil
+	}
+	state, err := service.process(context.Background(), mapping, file, "overwrite")
+	if !errors.Is(err, handoffErr) || state != "cleanup" || handoffs != 1 {
+		t.Fatalf("completed old handoff bypassed new identity: state=%s err=%v handoffs=%d", state, err, handoffs)
+	}
+	if _, err := os.Stat(file.Absolute); err != nil {
+		t.Fatal("source removed after failed new handoff", err)
+	}
+	restarted := &UploadService{store: store, provider: service.provider, resumeLocalUpload: service.resumeLocalUpload, postprocess: service.postprocess}
+	state, err = restarted.process(context.Background(), mapping, file, "overwrite")
+	if err != nil || state != "completed" || handoffs != 2 || len(remote.names) != 1 {
+		t.Fatalf("new identity handoff not resumed: state=%s err=%v handoffs=%d uploads=%v", state, err, handoffs, remote.names)
+	}
+	if _, err := os.Stat(file.Absolute); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("source not removed after new handoff", err)
+	}
+}
+
 func TestUploadDirectMultipleOldFilesRejectChangedOrUnknownIdentity(t *testing.T) {
 	for _, scenario := range []string{"missing-hash", "changed-after-upload", "partial-delete-restart"} {
 		t.Run(scenario, func(t *testing.T) {

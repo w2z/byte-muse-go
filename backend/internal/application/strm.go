@@ -161,6 +161,7 @@ type StrmService struct {
 	managedFiles     ports.StrmFileRepository
 	managedAccount   func(context.Context) (string, error)
 	uploadReceipts   ports.UploadReceiptRepository
+	uploadOwner      func(context.Context, ports.UploadReceipt) (bool, error)
 	localUploads     atomic.Int64
 }
 

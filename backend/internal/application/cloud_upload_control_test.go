@@ -303,6 +303,43 @@ func TestUploadDeleteDoesNotRestartPendingTransfer(t *testing.T) {
 	}
 }
 
+func TestUploadCancelTerminatesDirectReceiptWithoutCleanupResponsibility(t *testing.T) {
+	for _, action := range []string{"stop", "delete"} {
+		t.Run(action, func(t *testing.T) {
+			record := domain.UploadRecord{
+				Key: "direct", State: "cleanup", Intent: "run", Parent: "parent",
+				Target: "movie.mkv", Stage: "movie.mkv", StageID: "final-id",
+				Error: "旧清理失败", ErrorKind: "transient", Retries: uploadMaxAutoRetries,
+			}
+			next, ok := transformUploadControl(record, action, "running", true)
+			if !ok || next.State != "stopped" || next.Intent != action || next.Hidden != (action == "delete") {
+				t.Fatalf("direct cancellation was not terminal: %+v", next)
+			}
+			if next.Error != "" || next.ErrorKind != "" || next.NextRetry != "" {
+				t.Fatalf("stale cleanup error survived cancellation: %+v", next)
+			}
+			if !uploadTerminal(next.State) || next.State != "stopped" {
+				t.Fatalf("terminal cancellation did not stop: %+v", next)
+			}
+		})
+	}
+}
+
+func TestUploadCancelRetainsLegacyCleanupResponsibility(t *testing.T) {
+	record := domain.UploadRecord{
+		Key: "legacy", State: "cleanup", Intent: "run", Parent: "parent",
+		Target: "movie.mkv", Stage: ".bytemuse-upload-movie", StageID: "stage-id", Backup: "old-movie.mkv",
+		Error: "旧清理失败", ErrorKind: "transient", Retries: uploadMaxAutoRetries,
+	}
+	next, ok := transformUploadControl(record, "delete", "running", true)
+	if !ok || next.State != "cleanup" || next.Intent != "delete" || !next.Hidden {
+		t.Fatalf("legacy cleanup was incorrectly terminated: %+v", next)
+	}
+	if next.Error != "" || next.ErrorKind != "" || next.NextRetry != "" || next.Retries != uploadMaxAutoRetries {
+		t.Fatalf("legacy cleanup cancellation changed retry budget: %+v", next)
+	}
+}
+
 func TestScopedUploadControlChangesOnlySelectedFiles(t *testing.T) {
 	ctx := context.Background()
 	store := uploadMemoryStore{
