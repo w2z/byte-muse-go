@@ -1,16 +1,20 @@
 {
-  "version": "0.1.257",
-  "commit": "1c543e9f65b6d3a16f3426968c659ebc9bad8dd4",
-  "short_commit": "1c543e9",
-  "built_at": "2026-11-12T02:07:35Z",
+  "version": "0.1.258",
+  "commit": "713ac7c4be7e10a1b68e01f9f3577fb8300d512e",
+  "short_commit": "713ac7c",
+  "built_at": "2026-11-12T03:11:47Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.257",
-    "sha-1c543e9",
+    "0.1.258",
+    "sha-713ac7c",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.258",
+      "message": "修复任务取消与成品恢复并解除后处理事件阻塞"
+    },
     {
       "version": "0.1.257",
       "message": "重试上传时按覆盖策略刷新同名文件快照"
