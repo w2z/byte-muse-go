@@ -4,6 +4,8 @@ import (
 	"bytemuse/backend/internal/ports"
 	"context"
 	"errors"
+	"io"
+	"net/http"
 	"os"
 	"strings"
 	"testing"
@@ -116,6 +118,35 @@ func TestJavDBListUsesExplicitCodeAndDate(t *testing.T) {
 	// 搜索结果没有类别字段，交回统一分类规则；常规番号按行业常态归为有码。
 	if e != nil || b.Items[0].VideoType != "censored" {
 		t.Fatalf("search classification: %+v %v", b, e)
+	}
+}
+
+// TestJavDBRankLoginDetection 从 HTTP 响应走到榜单解析，区分公共页面上的表单和真正的登录墙。
+func TestJavDBRankLoginDetection(t *testing.T) {
+	const form = `<form action="/users/sign_in"><input type="password"></form>`
+	const cards = `<div class="movie-list"><div class="item"><a class="box" title="测试" href="/v/abc12"><span class="video-title"><strong>TEST-001</strong></span></a></div></div>`
+	for _, tc := range []struct {
+		name   string
+		status int
+		body   string
+		want   error
+	}{
+		{"公开榜附带密码框", 200, cards + `<form><input type="password"></form>`, nil},
+		{"公开榜附带登录弹窗", 200, cards + form, nil},
+		{"只有密码表单", 200, `<form><input type="password"></form>`, ErrCookieRequired},
+		{"空列表不能掩盖登录墙", 200, `<div class="movie-list"></div>` + form, ErrCookieRequired},
+		{"未授权优先于正文", 401, cards + form, ErrCookieRequired},
+		{"挑战优先于公开卡片", 200, cards + form + `<div id="challenge-form"></div>`, ErrChallenge},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client := NewClient(&http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: tc.status, Body: io.NopCloser(strings.NewReader(tc.body)), Request: req}, nil
+			})})
+			batch, err := NewRegistry(client).Collect(context.Background(), ports.CollectionRequest{Source: "javdb", Kind: "rank", Period: "daily", Page: 1})
+			if !errors.Is(err, tc.want) || (tc.want == nil && (len(batch.Items) != 1 || batch.Items[0].Code != "TEST-001")) {
+				t.Fatalf("items=%d err=%v want=%v", len(batch.Items), err, tc.want)
+			}
+		})
 	}
 }
 

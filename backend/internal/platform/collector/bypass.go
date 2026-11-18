@@ -83,7 +83,8 @@ func classifyPage(status int, headers http.Header, finalURL string, body []byte)
 		}
 	}
 	doc, err := goquery.NewDocumentFromReader(bytes.NewReader(body))
-	if err == nil && doc.Find("form input[type='password']").Length() > 0 {
+	javDBList := u != nil && u.Host == "javdb.com" && (u.Path == "/rankings/movies" || u.Path == "/search")
+	if err == nil && !javDBList && doc.Find("form input[type='password']").Length() > 0 {
 		return ErrCookieRequired
 	}
 	if err == nil && doc.Find("#challenge-form, #challenge-running, #cf-challenge-running").Length() > 0 {

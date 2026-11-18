@@ -17,7 +17,7 @@ import (
 var sourceIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 var datePattern = regexp.MustCompile(`\d{4}-\d{2}-\d{2}`)
 
-// collectJavDB 仅解析已确认的搜索和榜单卡片，不把登录页视为空结果。
+// collectJavDB 校验搜索和榜单卡片；公开列表可附带登录表单，只有无卡片时才将表单视为登录墙。
 func collectJavDB(ctx context.Context, f Fetcher, req ports.CollectionRequest) (ports.CollectionBatch, error) {
 	if req.Kind == "detail" {
 		return collectJavDBDetail(ctx, f, req)
@@ -40,7 +40,8 @@ func collectJavDB(ctx context.Context, f Fetcher, req ports.CollectionRequest) (
 	if err != nil {
 		return ports.CollectionBatch{}, ErrParse
 	}
-	if doc.Find("form[action='/users/sign_in']").Length() > 0 || strings.Contains(doc.Find("title").Text(), "登入") {
+	cards := doc.Find(".movie-list .item")
+	if strings.Contains(doc.Find("title").Text(), "登入") || (cards.Length() == 0 && doc.Find("form[action='/users/sign_in'], form input[type='password']").Length() > 0) {
 		return ports.CollectionBatch{}, ErrCookieRequired
 	}
 	if doc.Find(".movie-list").Length() != 1 {
@@ -48,7 +49,7 @@ func collectJavDB(ctx context.Context, f Fetcher, req ports.CollectionRequest) (
 	}
 	batch := ports.CollectionBatch{}
 	valid := true
-	doc.Find(".movie-list .item").Each(func(_ int, s *goquery.Selection) {
+	cards.Each(func(_ int, s *goquery.Selection) {
 		a := s.Find("a.box").First()
 		href, _ := a.Attr("href")
 		id := strings.TrimPrefix(href, "/v/")
