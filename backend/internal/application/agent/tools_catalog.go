@@ -3,7 +3,6 @@ package agent
 import (
 	"context"
 	"fmt"
-	"sort"
 	"strings"
 
 	"bytemuse/backend/internal/application"
@@ -14,12 +13,6 @@ import (
 const (
 	// mediaSearchLimit 是 Agent 单次影片搜索返回的最大条数。
 	mediaSearchLimit = 20
-	// tagQueryLimit 是标签目录查询的单页上限，不超过 ports.MaxTagPageSize。
-	tagQueryLimit = 200
-	// tagResultLimit 是标签查询回填模型的条数上限。
-	tagResultLimit = 30
-	// torrentResultLimit 是资源搜索回填模型的条数上限。
-	torrentResultLimit = 10
 )
 
 // mediaBrief 把影片压缩成渠道对话需要的精简字段。
@@ -46,7 +39,40 @@ func mediaListResult(page application.Page[domain.Media]) map[string]any {
 	for _, item := range page.Items {
 		items = append(items, mediaBrief(item))
 	}
-	return map[string]any{"total": page.Total, "returned": len(items), "items": items}
+	return pageResult(toolPage{page.Page, page.PageSize}, page.Total, items)
+}
+
+// pageResult 保留过滤后的完整总数，越界页仍返回空数组及原页码。
+func pageResult(p toolPage, total int, items []map[string]any) map[string]any {
+	return map[string]any{"page": p.number, "page_size": p.size, "has_more": p.number*p.size < total, "total": total, "returned": len(items), "items": items}
+}
+
+// pageWindow 仅用于上游一次性返回完整候选集的列表。
+func pageWindow[T any](items []T, p toolPage) []T {
+	start := min((p.number-1)*p.size, len(items))
+	return items[start:min(start+p.size, len(items))]
+}
+
+// searchTool 保留渠道的外站搜索，MCP 同名工具只读本地目录，避免空页触发外站请求。
+type searchTool struct {
+	builtinTool
+	local Tool
+}
+
+func localSearchTool(deps Deps) Tool {
+	return builtinTool{
+		name:        "search_media",
+		description: "按名称或番号分页搜索本地影片，可组合影片类型、媒体库和订阅状态；不回退外站。",
+		parameters: listSchema(listPages, map[string]any{
+			"keyword":      stringProperty("名称或番号关键词；省略或空字符串表示不过滤"),
+			"video_type":   videoTypeProperty(),
+			"library":      libraryProperty(),
+			"subscription": stringProperty("有效订阅状态；空字符串不限", "", "active", "none"),
+		}),
+		run: func(ctx context.Context, args map[string]any) (any, error) {
+			return catalogMedia(ctx, deps, args, stringArg(args, "keyword"))
+		},
+	}
 }
 
 // lookupToolMedia 按番号精确定位本地影片；查询服务缺失或未命中时返回面向用户的说明文本。
@@ -73,7 +99,7 @@ func searchCode(ctx context.Context, deps Deps, raw string) (any, error) {
 	item, failure := resolveMedia(ctx, deps, code)
 	if failure != "" {
 		if deps.Torrents != nil {
-			result, err := searchTorrents(ctx, deps, code)
+			result, err := searchTorrents(ctx, deps, code, torrentPages.read(nil))
 			if err != nil {
 				return map[string]any{"media_status": failure, "resource_status": "资源站搜索失败，请稍后重试"}, nil
 			}
@@ -82,7 +108,7 @@ func searchCode(ctx context.Context, deps Deps, raw string) (any, error) {
 		return failure, nil
 	}
 	if deps.Torrents != nil {
-		result, err := searchTorrents(ctx, deps, code)
+		result, err := searchTorrents(ctx, deps, code, torrentPages.read(nil))
 		if err != nil {
 			result = "资源站搜索失败，请稍后重试"
 		}
@@ -92,35 +118,35 @@ func searchCode(ctx context.Context, deps Deps, raw string) (any, error) {
 }
 
 // searchActor 按名称查询演员及其订阅截止日期。
-func searchActor(ctx context.Context, deps Deps, raw string) (any, error) {
+func searchActor(ctx context.Context, deps Deps, raw, subscription string, p toolPage) (any, error) {
 	if deps.Actors == nil {
 		return "演员服务不可用", nil
 	}
 	name := strings.TrimSpace(raw)
-	page, err := deps.Actors.List(ctx, 1, mediaSearchLimit, "", name)
+	page, err := deps.Actors.List(ctx, p.number, p.size, subscription, name)
 	if err != nil {
 		return nil, fmt.Errorf("查询演员失败: %w", err)
-	}
-	if len(page.Items) == 0 {
-		if name == "" {
-			return "演员目录为空", nil
-		}
-		return "未找到演员: " + name, nil
 	}
 	items := make([]map[string]any, 0, len(page.Items))
 	for _, item := range page.Items {
 		items = append(items, map[string]any{"name": item.Name, "photo": item.Photo, "limit_date": item.LimitDate})
 	}
-	return map[string]any{"total": page.Total, "returned": len(items), "items": items}, nil
+	return pageResult(p, page.Total, items), nil
 }
 
 // queryMedia 复用网页影片列表的分页与过滤；不联网补资料或创建订阅/下载，保留服务已有的按需翻译。
 func queryMedia(ctx context.Context, deps Deps, args map[string]any) (any, error) {
+	return catalogMedia(ctx, deps, args, stringArg(args, "search"))
+}
+
+// catalogMedia 将不同入口的关键词映射到网页目录的同一组过滤条件。
+func catalogMedia(ctx context.Context, deps Deps, args map[string]any, keyword string) (any, error) {
 	if deps.Catalog == nil {
 		return "影片列表服务不可用", nil
 	}
-	page, err := deps.Catalog.List(ctx, intArg(args, "page", 1, 1, 1000000), intArg(args, "page_size", mediaSearchLimit, 1, mediaSearchLimit), ports.MediaListQuery{
-		Search:             stringArg(args, "search"),
+	p := listPages.read(args)
+	page, err := deps.Catalog.List(ctx, p.number, p.size, ports.MediaListQuery{
+		Search:             keyword,
 		SubscriptionStatus: stringArg(args, "subscription"),
 		DownloadStatus:     stringArg(args, "download"),
 		LibraryStatus:      stringArg(args, "library"),
@@ -131,8 +157,6 @@ func queryMedia(ctx context.Context, deps Deps, args map[string]any) (any, error
 		return nil, fmt.Errorf("查询影片列表失败: %w", err)
 	}
 	result := mediaListResult(page)
-	result["page"], result["page_size"] = page.Page, page.PageSize
-	result["has_more"] = page.Page*page.PageSize < page.Total
 	items := result["items"].([]map[string]any)
 	for i, item := range page.Items {
 		items[i]["id"], items[i]["video_type"], items[i]["download_status"] = item.ID, item.VideoType, item.DownloadStatus
@@ -160,7 +184,7 @@ func searchMedia(ctx context.Context, deps Deps, raw string) (any, error) {
 			external, incomplete = deps.Codes.SearchExternal(ctx, keyword)
 		}
 		if deps.Torrents != nil {
-			result, err := searchTorrents(ctx, deps, keyword)
+			result, err := searchTorrents(ctx, deps, keyword, torrentPages.read(nil))
 			if err != nil {
 				result = "资源站搜索失败，请稍后重试"
 			}
@@ -177,11 +201,12 @@ func searchMedia(ctx context.Context, deps Deps, raw string) (any, error) {
 }
 
 // searchCategoryMedia 复用标签或影片类型的权威查询；不写入订阅或下载。
-func searchCategoryMedia(ctx context.Context, deps Deps, tag, videoType string) (any, error) {
-	tag, videoType = strings.TrimSpace(tag), strings.TrimSpace(videoType)
-	if tag != "" && videoType != "" {
-		return "请只指定标签或影片类型中的一种", nil
+func searchCategoryMedia(ctx context.Context, deps Deps, args map[string]any) (any, error) {
+	tag, videoType, keyword := stringArg(args, "tag"), stringArg(args, "video_type"), stringArg(args, "keyword")
+	if (tag != "" && videoType != "") || (keyword != "" && (tag != "" || videoType != "")) || (tag == "" && videoType == "" && keyword == "") {
+		return nil, fmt.Errorf("tag（标签）、video_type（影片类型）、keyword（名称或番号）必须且只能指定一种")
 	}
+	p := listPages.read(args)
 	var page application.Page[domain.Media]
 	var err error
 	switch {
@@ -189,39 +214,34 @@ func searchCategoryMedia(ctx context.Context, deps Deps, tag, videoType string) 
 		if deps.Tags == nil {
 			return "标签服务不可用", nil
 		}
-		page, err = deps.Tags.SearchMedia(ctx, tag, 1, mediaSearchLimit)
-	case videoType != "":
+		page, err = deps.Tags.SearchMedia(ctx, tag, p.number, p.size)
+	default:
 		if deps.Catalog == nil {
 			return "影片查询服务不可用", nil
 		}
-		page, err = deps.Catalog.List(ctx, 1, mediaSearchLimit, ports.MediaListQuery{VideoType: videoType})
-	default:
-		return "请提供标签或影片类型", nil
+		page, err = deps.Catalog.List(ctx, p.number, p.size, ports.MediaListQuery{VideoType: videoType, Search: keyword})
 	}
 	if err != nil {
 		return nil, fmt.Errorf("查询分类影片失败: %w", err)
 	}
-	if len(page.Items) == 0 {
-		return "该分类暂无影片", nil
-	}
 	result := mediaListResult(page)
 	result["tag"] = tag
 	result["video_type"] = videoType
+	if keyword != "" {
+		result["keyword"] = keyword
+	}
 	return result, nil
 }
 
 // getRank 查询榜单；周期取值由 normalizeRankType 收敛。
-func getRank(ctx context.Context, deps Deps, raw string) (any, error) {
+func getRank(ctx context.Context, deps Deps, raw string, p toolPage) (any, error) {
 	rankType := normalizeRankType(raw)
 	if deps.Queries == nil {
 		return "影片查询服务不可用", nil
 	}
-	page, err := deps.Queries.Rank(ctx, rankType, 1, mediaSearchLimit, ports.MediaListQuery{})
+	page, err := deps.Queries.Rank(ctx, rankType, p.number, p.size, ports.MediaListQuery{})
 	if err != nil {
 		return nil, fmt.Errorf("查询榜单失败: %w", err)
-	}
-	if len(page.Items) == 0 {
-		return "榜单暂无数据（" + rankType + "）", nil
 	}
 	result := mediaListResult(page)
 	result["type"] = rankType
@@ -240,31 +260,25 @@ func normalizeRankType(raw string) string {
 }
 
 // getReleaseToday 查询今天发行的影片。
-func getReleaseToday(ctx context.Context, deps Deps) (any, error) {
+func getReleaseToday(ctx context.Context, deps Deps, p toolPage) (any, error) {
 	if deps.Queries == nil {
 		return "影片查询服务不可用", nil
 	}
-	page, err := deps.Queries.ReleaseToday(ctx, 1, mediaSearchLimit, ports.MediaListQuery{})
+	page, err := deps.Queries.ReleaseToday(ctx, p.number, p.size, ports.MediaListQuery{})
 	if err != nil {
 		return nil, fmt.Errorf("查询今日上新失败: %w", err)
-	}
-	if len(page.Items) == 0 {
-		return "今天没有发行记录", nil
 	}
 	return mediaListResult(page), nil
 }
 
 // getRecommendations 返回未订阅的推荐影片。
-func getRecommendations(ctx context.Context, deps Deps, limit int) (any, error) {
+func getRecommendations(ctx context.Context, deps Deps, p toolPage) (any, error) {
 	if deps.Queries == nil {
 		return "影片查询服务不可用", nil
 	}
-	page, err := deps.Queries.Recommend(ctx, 1, limit, ports.MediaListQuery{SubscriptionStatus: "none"})
+	page, err := deps.Queries.Recommend(ctx, p.number, p.size, ports.MediaListQuery{SubscriptionStatus: "none"})
 	if err != nil {
 		return nil, fmt.Errorf("查询推荐失败: %w", err)
-	}
-	if len(page.Items) == 0 {
-		return "暂无可推荐的影片", nil
 	}
 	return mediaListResult(page), nil
 }
@@ -298,7 +312,7 @@ func queryLibrary(ctx context.Context, deps Deps, raw string) (any, error) {
 }
 
 // searchTorrents 在已配置的资源站搜索种子候选，复用订阅下载链路的搜索器。
-func searchTorrents(ctx context.Context, deps Deps, raw string) (any, error) {
+func searchTorrents(ctx context.Context, deps Deps, raw string, p toolPage) (any, error) {
 	query := strings.TrimSpace(raw)
 	if query == "" {
 		return "请提供要搜索的番号或关键词", nil
@@ -310,14 +324,9 @@ func searchTorrents(ctx context.Context, deps Deps, raw string) (any, error) {
 	if err != nil {
 		return nil, fmt.Errorf("搜索资源失败: %w", err)
 	}
-	if len(resources) == 0 {
-		return "资源站本次未返回资源，部分站点可能不可用: " + query, nil
-	}
-	items := make([]map[string]any, 0, min(len(resources), torrentResultLimit))
-	for _, item := range resources {
-		if len(items) == torrentResultLimit {
-			break
-		}
+	window := pageWindow(resources, p)
+	items := make([]map[string]any, 0, len(window))
+	for _, item := range window {
 		items = append(items, map[string]any{
 			"site":    item.Site,
 			"title":   item.Title,
@@ -330,33 +339,23 @@ func searchTorrents(ctx context.Context, deps Deps, raw string) (any, error) {
 			"kind":    item.Kind,
 		})
 	}
-	return map[string]any{"query": query, "total": len(resources), "returned": len(items), "items": items}, nil
+	result := pageResult(p, len(resources), items)
+	result["query"] = query
+	return result, nil
 }
 
-// queryTags 查询标签目录并按影片数量降序返回前 30 个，供订阅前确认真实标签名。
-func queryTags(ctx context.Context, deps Deps, raw string) (any, error) {
+// queryTags 共用仓储的全局排序、分类与订阅过滤，避免仅在当前页内排序。
+func queryTags(ctx context.Context, deps Deps, raw, subscription, category string, p toolPage) (any, error) {
 	if deps.Tags == nil {
 		return "标签服务不可用", nil
 	}
 	keyword := strings.TrimSpace(raw)
-	page, err := deps.Tags.List(ctx, 1, tagQueryLimit, keyword)
+	page, err := deps.Tags.List(ctx, p.number, p.size, keyword, subscription, category)
 	if err != nil {
 		return nil, fmt.Errorf("查询标签失败: %w", err)
 	}
-	if len(page.Items) == 0 {
-		if keyword == "" {
-			return "标签目录为空", nil
-		}
-		return "未找到标签: " + keyword, nil
-	}
-	ranked := make([]ports.Tag, len(page.Items))
-	copy(ranked, page.Items)
-	sort.SliceStable(ranked, func(i, j int) bool { return ranked[i].MediaCount > ranked[j].MediaCount })
-	if len(ranked) > tagResultLimit {
-		ranked = ranked[:tagResultLimit]
-	}
-	items := make([]map[string]any, 0, len(ranked))
-	for _, item := range ranked {
+	items := make([]map[string]any, 0, len(page.Items))
+	for _, item := range page.Items {
 		items = append(items, map[string]any{
 			"name":        item.Name,
 			"media_count": item.MediaCount,
@@ -364,5 +363,5 @@ func queryTags(ctx context.Context, deps Deps, raw string) (any, error) {
 			"limit_date":  item.LimitDate,
 		})
 	}
-	return map[string]any{"total": page.Total, "returned": len(items), "items": items}, nil
+	return pageResult(p, page.Total, items), nil
 }

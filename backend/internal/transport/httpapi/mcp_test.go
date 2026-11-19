@@ -39,6 +39,7 @@ func TestMCPHTTP(t *testing.T) {
 	registry := agent.NewRegistry(agent.BuiltinTools(agent.Deps{
 		Version:               "test-mcp",
 		Catalog:               application.NewCatalogService(store.Media()),
+		Tags:                  application.NewTagService(database.NewTagRepository(store.SQLDB(), database.DialectSQLite)),
 		Queries:               application.NewCatalogQueryService(database.NewCatalogQueryRepository(store.SQLDB(), database.DialectSQLite)),
 		Subscriptions:         application.NewSubscriptionService(store.Subscriptions()),
 		SubscriptionDownloads: application.NewSubscriptionDownloadService(database.NewSubscriptionDownloadRepository(store.SQLDB(), database.DialectSQLite), nil, nil, nil),
@@ -110,7 +111,7 @@ func TestMCPHTTP(t *testing.T) {
 	if w := request(`{"jsonrpc":"2.0","id":22,"method":"tools/call","params":{"name":"query_media","arguments":{}}}`, token, ""); !strings.Contains(w.Body.String(), `"error"`) {
 		t.Fatalf("新增影片列表被自动授权: %s", w.Body)
 	}
-	if _, err := settings.Update(ctx, map[string]string{"MCP_ALLOWED_TOOLS": `["get_version","query_media","search_category_media","add_subscribe","query_subscribes","cancel_subscribe","send_message","unknown_tool"]`}); err != nil {
+	if _, err := settings.Update(ctx, map[string]string{"MCP_ALLOWED_TOOLS": `["get_version","query_media","search_media","search_category_media","query_tag_subscribes","add_subscribe","query_subscribes","cancel_subscribe","send_message","unknown_tool"]`}); err != nil {
 		t.Fatal(err)
 	}
 	for _, bad := range []string{"", "wrong"} {
@@ -156,7 +157,10 @@ func TestMCPHTTP(t *testing.T) {
 		{`{"vr":"only"}`, `"total":0`, false},
 		{`{"search":"missing"}`, `"total":0`, false},
 		{`{"page":0}`, "", true},
-		{`{"page_size":21}`, "", true},
+		{`{"page_size":100}`, `"page_size":100`, false},
+		{`{"page_size":101}`, "", true},
+		{`{"offset":20}`, "", true},
+		{`{"page":null}`, "", true},
 		{`{"page_size":1.5}`, "", true},
 		{`{"subscription":"bad"}`, "", true},
 		{`{"download":"bad"}`, "", true},
@@ -197,6 +201,56 @@ func TestMCPHTTP(t *testing.T) {
 		result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "search_category_media", Arguments: args})
 		if err != nil || result.IsError {
 			t.Fatalf("按标签查询不接受空影片类型: result=%v err=%v", result, err)
+		}
+	}
+	if _, err := store.SQLDB().ExecContext(ctx, "INSERT INTO media (id,code,title,subscription_status,library_status,created_at,updated_at) VALUES (?,?,?,?,?,?,?)", "mcp-second", "TEST-002", "MCP test film two", "none", "absent", now, now); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"search_media", "search_category_media"} {
+		seen := map[string]bool{}
+		for number := 1; number <= 3; number++ {
+			args := map[string]any{"keyword": "MCP test", "page": number, "page_size": 1}
+			if name == "search_media" {
+				args["library"] = "absent"
+				args["subscription"] = "none"
+			}
+			result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: name, Arguments: args})
+			if err != nil || result.IsError {
+				t.Fatalf("%s page %d: %v %v", name, number, result, err)
+			}
+			var page struct {
+				Page, Total, Returned int
+				Size                  int  `json:"page_size"`
+				More                  bool `json:"has_more"`
+				Items                 []struct{ Code string }
+			}
+			text := result.Content[0].(*mcp.TextContent).Text
+			if json.Unmarshal([]byte(text), &page) != nil || page.Page != number || page.Size != 1 || page.Total != 2 || page.Returned != len(page.Items) || page.Items == nil || page.More != (number == 1) {
+				t.Fatalf("%s: %s", name, text)
+			}
+			if number <= 2 {
+				if len(page.Items) != 1 || seen[page.Items[0].Code] {
+					t.Fatalf("重复或缺少影片: %s", text)
+				}
+				seen[page.Items[0].Code] = true
+			} else if page.Returned != 0 {
+				t.Fatalf("末页后仍返回影片: %s", text)
+			}
+		}
+	}
+	for _, tc := range []struct {
+		name    string
+		args    map[string]any
+		invalid bool
+	}{
+		{"search_category_media", map[string]any{"keyword": "TEST", "tag": "test"}, true},
+		{"query_subscribes", map[string]any{"limit": 100}, true},
+		{"query_tag_subscribes", map[string]any{"category": "角色", "search": "TEST", "page_size": 200}, false},
+		{"query_tag_subscribes", map[string]any{"page_size": 201}, true},
+	} {
+		result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: tc.name, Arguments: tc.args})
+		if err != nil || result.IsError != tc.invalid {
+			t.Fatalf("%s %v: %v %v", tc.name, tc.args, result, err)
 		}
 	}
 	for _, tc := range []struct {

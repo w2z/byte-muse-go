@@ -93,7 +93,7 @@ func cardForCode(ctx context.Context, deps Deps, raw string) ports.Reply {
 		reply = mediaCard(ctx, deps, media)
 	}
 	if deps.Torrents != nil {
-		result, err := searchTorrents(ctx, deps, code)
+		result, err := searchTorrents(ctx, deps, code, torrentPages.read(nil))
 		lines := []string{}
 		if err != nil {
 			lines = append(lines, "资源站搜索失败，请稍后重试")

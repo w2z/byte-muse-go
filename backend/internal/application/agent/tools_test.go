@@ -139,6 +139,9 @@ func (r *fakeDownloadRepository) List(_ context.Context, query ports.DownloadLis
 	r.last = query
 	matched := make([]domain.DownloadTask, 0, len(r.tasks))
 	for _, task := range r.tasks {
+		if query.MediaSearch != "" && (task.Code == nil || !strings.Contains(*task.Code, domain.NormalizeCode(query.MediaSearch))) {
+			continue
+		}
 		if query.MediaID != "" && task.MediaID != query.MediaID {
 			continue
 		}
@@ -150,7 +153,7 @@ func (r *fakeDownloadRepository) List(_ context.Context, query ports.DownloadLis
 	return domain.DownloadPage{Items: pageSlice(matched, query.Limit, query.Offset), Total: len(matched)}, nil
 }
 
-// TestQueryDownloadTasksMapsStatusAndKeyword 验证状态映射与内存关键词过滤。
+// TestQueryDownloadTasksMapsStatusAndKeyword 验证状态与关键词在计数之前传入仓储。
 func TestQueryDownloadTasksMapsStatusAndKeyword(t *testing.T) {
 	code := "SSIS-001"
 	repo := &fakeDownloadRepository{tasks: []domain.DownloadTask{
@@ -177,7 +180,7 @@ func TestQueryDownloadTasksMapsStatusAndKeyword(t *testing.T) {
 	}
 
 	out = registry.Call(ctx, "query_download_tasks", map[string]any{"query": "ssis 001"})
-	if !strings.Contains(out, `"returned":1`) || !strings.Contains(out, `"note"`) {
+	if !strings.Contains(out, `"returned":1`) || !strings.Contains(out, `"total":1`) || repo.last.MediaSearch != "ssis 001" {
 		t.Fatalf("关键词过滤结果=%s", out)
 	}
 }

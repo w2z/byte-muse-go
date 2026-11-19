@@ -109,6 +109,8 @@ type SubscriptionRepository interface {
 
 // DownloadListQuery is the normalized download task pagination and status filter.
 type DownloadListQuery struct {
+	// MediaSearch 在计数前按影片番号、原标题或译名匹配，仅供内部工具使用。
+	MediaSearch string
 	// ColumnFilters uses text/enum values or inclusive numeric and half-open time bounds; validated by the application.
 	ColumnFilters     map[string][]string
 	SortBy, SortOrder string

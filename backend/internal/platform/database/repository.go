@@ -459,6 +459,10 @@ func (r *sqlDownloadRepository) List(ctx context.Context, query ports.DownloadLi
 	if query.MediaID != "" {
 		add("media_id", query.MediaID, " = ")
 	}
+	if term := strings.TrimSpace(query.MediaSearch); term != "" {
+		args = append(args, "%"+domain.NormalizeCode(term)+"%", "%"+strings.ToUpper(term)+"%", "%"+strings.ToUpper(term)+"%")
+		conditions = append(conditions, fmt.Sprintf("EXISTS (SELECT 1 FROM media m WHERE m.id=download_tasks.media_id AND (UPPER(m.code) LIKE %s OR UPPER(m.title) LIKE %s OR UPPER(m.translated_title) LIKE %s))", placeholder(r.dialect, len(args)-2), placeholder(r.dialect, len(args)-1), placeholder(r.dialect, len(args))))
+	}
 	if query.TransferStatus != "" {
 		if query.TransferStatus == "failed" {
 			conditions = append(conditions, "(status='failed' OR transfer_status='failed')")

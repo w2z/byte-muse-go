@@ -105,6 +105,9 @@ func (r *Registry) List() []Tool {
 func (r *Registry) MCPTools() []Tool {
 	items := []Tool{}
 	for _, tool := range r.List() {
+		if search, ok := tool.(searchTool); ok {
+			tool = search.local
+		}
 		if tool.Name() != "send_message" {
 			items = append(items, tool)
 		}

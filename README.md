@@ -447,7 +447,11 @@ docker compose -f deploy/compose.mysql.yaml up -d
 
 MCP 复用渠道 Agent 的工具目录，支持影片、演员、标签、榜单、媒体库、下载任务和日志查询，以及影片/演员/标签订阅、取消订阅和触发任务。依赖当前消息渠道的 `send_message` 不对外开放。影片订阅沿用现有规则，会登记一次资源搜索与下载受理；受理不表示下载完成，重复请求由现有业务服务去重。工具参数以 `tools/list` 返回的 JSON Schema 为准。
 
-影片列表使用 `query_media`（权限页显示“查询影片列表”）：不需要关键词，支持 `page`（默认 1，最多 1000000）、`page_size`（默认 20，范围 1–20）、`search`、`subscription`、`download`、`library`、`video_type` 和 `vr`，与网页影片列表共用查询服务及排序、筛选规则；不主动采集资料、订阅或下载，按需标题翻译沿用网页规则。返回 `page`、`page_size`、`total`、`returned`、`has_more` 和精简 `items`，每项包含影片 ID、番号、标题、影片类型、封面、发行日期和订阅/下载/媒体库状态；缺失字段保留 null。新增工具默认未授权，须勾选保存后刷新客户端目录。
+**遍历片库**：用 `query_media`，从 `{"page":1,"page_size":100}` 开始，保持筛选条件和每页条数不变，每次将 `page` 加一，直到 `has_more` 为 `false`。无需关键词或逐标签遍历；可组合 `search`、`subscription`、`download`、`library`、`video_type` 和 `vr`，排序、筛选和按需翻译与网页一致。须先授权工具并刷新客户端目录。
+
+**关键词搜索**：MCP 的 `search_media` 支持 `keyword`（名称或番号）、`video_type`、`library`、`subscription` 组合筛选；空页不回退外站。`search_category_media` 则要求精确标签 `tag`、`video_type`、`keyword` 三选一。`query_subscribes`、`query_actor_subscribes`、`query_tag_subscribes` 只列有效订阅；演员可传 `keywords`，标签可传 `search` 和 `category`。
+
+所有列表都使用整数 `page`（1–1000000，默认 1）和 `page_size`（通常默认 20、上限 100）。两个标签目录工具上限 200；日志默认 80、上限 200；推荐和资源候选默认 10。推荐的旧 `limit` 和日志的旧 `lines` 仅在没有 `page_size` 时生效；其他未声明参数（如 `offset`）会被拒绝。返回 `items`、`page`、`page_size`、筛选后总数 `total`、本页条数 `returned`、是否有下一页 `has_more`。超过末页时 `items` 为 `[]`，不丢失原总数。资源站的总数仅指本次上游返回的候选；分页不是冻结快照，数据变化时结果可能变化。
 
 「工具权限」按实际工具逐项勾选，默认全部不选，已有实例未配置权限时同样不授予任何工具。勾选并保存后，只有白名单中的工具才会出现在 MCP 工具列表里；客户端即使缓存了工具名，调用未勾选或已撤销的工具仍会被拒绝。权限对后续请求立即生效，已受理任务继续执行；新增权限可能需要客户端刷新工具列表。网页和消息渠道 Agent 的功能不受 MCP 权限限制。每项说明会标明工具的业务行为，部分工具会联网采集、保存资料或登记下载，授权前按说明选择。
 

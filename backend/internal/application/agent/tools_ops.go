@@ -13,10 +13,6 @@ import (
 )
 
 const (
-	// downloadTaskPageSize 是下载任务查询的单页条数，状态过滤由仓储完成。
-	downloadTaskPageSize = 50
-	// downloadTaskResultLimit 是下载任务回填模型的条数上限。
-	downloadTaskResultLimit = 20
 	// healthErrorLimit 是健康自检附带错误日志的条数。
 	healthErrorLimit = 5
 )
@@ -47,44 +43,25 @@ func downloadTaskBrief(task domain.DownloadTask) map[string]any {
 	}
 }
 
-// queryDownloadTasks 查询下载任务；仓储不支持关键词过滤，关键词在内存中按番号与影片标题匹配。
-func queryDownloadTasks(ctx context.Context, deps Deps, rawKeyword, rawStatus string) (any, error) {
+// queryDownloadTasks 在仓储计数与分页前按关联影片过滤。
+func queryDownloadTasks(ctx context.Context, deps Deps, rawKeyword, rawStatus string, paging toolPage) (any, error) {
 	if deps.Downloads == nil {
 		return "下载服务不可用", nil
 	}
 	keyword := strings.TrimSpace(rawKeyword)
 	statusKey, status := downloadStatusFilter(rawStatus)
-	page, err := deps.Downloads.ListFiltered(ctx, 1, downloadTaskPageSize, ports.DownloadListQuery{Status: status})
+	page, err := deps.Downloads.ListFiltered(ctx, paging.number, paging.size, ports.DownloadListQuery{Status: status, MediaSearch: keyword})
 	if err != nil {
 		return nil, fmt.Errorf("查询下载任务失败: %w", err)
 	}
-	matched := map[string]bool{}
-	if keyword != "" && deps.Queries != nil {
-		if found, searchErr := deps.Queries.Search(ctx, keyword, 1, mediaSearchLimit); searchErr == nil {
-			for _, media := range found.Items {
-				matched[domain.NormalizeCode(media.Code)] = true
-			}
-		}
-	}
-	items := make([]map[string]any, 0, min(len(page.Items), downloadTaskResultLimit))
+	items := make([]map[string]any, 0, len(page.Items))
 	for _, task := range page.Items {
-		if len(items) == downloadTaskResultLimit {
-			break
-		}
-		if keyword != "" && !downloadTaskMatches(task, keyword, matched) {
-			continue
-		}
 		items = append(items, downloadTaskBrief(task))
 	}
-	result := map[string]any{
-		"status":   statusKey,
-		"total":    page.Total,
-		"returned": len(items),
-		"items":    items,
-	}
+	result := pageResult(paging, page.Total, items)
+	result["status"] = statusKey
 	if keyword != "" {
 		result["keyword"] = keyword
-		result["note"] = "仓储不支持关键词过滤，已在本机按番号与影片标题过滤"
 	}
 	if len(items) == 0 {
 		result["message"] = "没有符合条件的下载任务"
@@ -92,34 +69,16 @@ func queryDownloadTasks(ctx context.Context, deps Deps, rawKeyword, rawStatus st
 	return result, nil
 }
 
-// downloadTaskMatches 判断任务是否命中关键词：先比对番号，再用影片搜索解析出的番号集合比对标题。
-func downloadTaskMatches(task domain.DownloadTask, keyword string, matched map[string]bool) bool {
-	if task.Code == nil {
-		return false
-	}
-	code := domain.NormalizeCode(*task.Code)
-	if code == "" {
-		return false
-	}
-	if needle := domain.NormalizeCode(keyword); needle != "" && strings.Contains(code, needle) {
-		return true
-	}
-	return matched[code]
-}
-
 // queryLogs 查询后台日志；级别非法时按“不按级别过滤”处理。
-func queryLogs(ctx context.Context, deps Deps, rawKeyword, rawLevel string, lines int) (any, error) {
+func queryLogs(ctx context.Context, deps Deps, rawKeyword, rawLevel string, paging toolPage) (any, error) {
 	keyword := strings.TrimSpace(rawKeyword)
 	level := logging.Level(strings.ToLower(strings.TrimSpace(rawLevel)))
 	if !level.Valid() {
 		level = ""
 	}
-	records, total, err := deps.Logs.Search(ctx, logging.Query{Level: level, Keyword: keyword, Page: 1, PageSize: lines})
+	records, total, err := deps.Logs.Search(ctx, logging.Query{Level: level, Keyword: keyword, Page: paging.number, PageSize: paging.size})
 	if err != nil {
 		return nil, fmt.Errorf("查询日志失败: %w", err)
-	}
-	if len(records) == 0 {
-		return "没有匹配的日志", nil
 	}
 	items := make([]map[string]any, 0, len(records))
 	for _, record := range records {
@@ -130,7 +89,7 @@ func queryLogs(ctx context.Context, deps Deps, rawKeyword, rawLevel string, line
 			"message":  record.Message,
 		})
 	}
-	result := map[string]any{"total": total, "returned": len(items), "items": items}
+	result := pageResult(paging, total, items)
 	if level != "" {
 		result["level"] = string(level)
 	}
@@ -141,16 +100,14 @@ func queryLogs(ctx context.Context, deps Deps, rawKeyword, rawLevel string, line
 }
 
 // querySchedulers 列出定时任务及其 cron 表达式与最近执行状态。
-func querySchedulers(_ context.Context, deps Deps) (any, error) {
+func querySchedulers(_ context.Context, deps Deps, paging toolPage) (any, error) {
 	if deps.Scheduler == nil {
 		return "调度器不可用", nil
 	}
 	tasks := deps.Scheduler.Tasks()
-	if len(tasks) == 0 {
-		return "当前没有配置定时任务", nil
-	}
-	items := make([]map[string]any, 0, len(tasks))
-	for _, task := range tasks {
+	window := pageWindow(tasks, paging)
+	items := make([]map[string]any, 0, len(window))
+	for _, task := range window {
 		items = append(items, map[string]any{
 			"name":     task.Name,
 			"cron":     task.Spec,
@@ -158,7 +115,7 @@ func querySchedulers(_ context.Context, deps Deps) (any, error) {
 			"running":  task.Running,
 		})
 	}
-	return map[string]any{"returned": len(items), "items": items}, nil
+	return pageResult(paging, len(tasks), items), nil
 }
 
 // runCronJob 立即触发一个已配置的定时任务；触发是异步的，只报告是否受理。

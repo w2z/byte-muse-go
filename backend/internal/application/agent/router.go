@@ -241,7 +241,8 @@ func (r *Router) newMediaResult(ctx context.Context, msg ports.InboundMessage, c
 		return ports.Reply{}
 	}
 	token := hex.EncodeToString(random[:])
-	set := mediaResultSet{owner: mediaResultOwner(msg), codes: append([]string(nil), codes...), total: total, external: collected.external, created: time.Now(), queryName: collected.queryName, queryArgs: collected.queryArgs, page: 1}
+	start := listPages.read(collected.queryArgs)
+	set := mediaResultSet{owner: mediaResultOwner(msg), codes: append([]string(nil), codes...), total: total, external: collected.external, created: time.Now(), queryName: collected.queryName, queryArgs: collected.queryArgs, page: start.number}
 	r.mu.Lock()
 	for key, value := range r.results {
 		if time.Since(value.created) > sessionTTL {
@@ -298,7 +299,7 @@ func (r *Router) decorateMediaResult(reply ports.Reply, set mediaResultSet, toke
 			reply.Card.Buttons[i].Data = fmt.Sprintf("bm:list:%s:%d:%s", token, index, name)
 		}
 	}
-	if len(set.codes) > 1 || (set.queryName != "" && len(set.codes) < set.total) {
+	if len(set.codes) > 1 || set.hasMore() {
 		reply.Card.Text += fmt.Sprintf("\n%d / %d", index+1, len(set.codes))
 		if set.total > len(set.codes) {
 			reply.Card.Text = strings.TrimSuffix(reply.Card.Text, fmt.Sprintf("%d / %d", index+1, len(set.codes))) + fmt.Sprintf("%d / %d", index+1, set.total)
@@ -306,7 +307,7 @@ func (r *Router) decorateMediaResult(reply ports.Reply, set mediaResultSet, toke
 		if index > 0 {
 			reply.Card.Buttons = append(reply.Card.Buttons, ports.ActionButton{Label: "◀ 上一张", Data: fmt.Sprintf("bm:list:%s:%d:show", token, index-1), NewRow: true})
 		}
-		if index+1 < len(set.codes) || (set.queryName != "" && len(set.codes) < set.total) {
+		if index+1 < len(set.codes) || set.hasMore() {
 			reply.Card.Buttons = append(reply.Card.Buttons, ports.ActionButton{Label: "下一张 ▶", Data: fmt.Sprintf("bm:list:%s:%d:show", token, index+1), NewRow: index == 0})
 		}
 	}
@@ -326,7 +327,7 @@ func (r *Router) handleMediaResultAction(ctx context.Context, msg ports.InboundM
 		return ports.Reply{Text: "结果已失效，请重新查询"}
 	}
 	if parts[4] == "show" {
-		if index == len(set.codes) && set.queryName != "" && len(set.codes) < set.total {
+		if index == len(set.codes) && set.hasMore() {
 			set, err = r.loadMoreMediaResults(ctx, parts[2], set)
 			if err != nil {
 				return ports.Reply{Text: "加载更多影片失败，请稍后重试"}
@@ -353,24 +354,30 @@ func (r *Router) handleMediaResultAction(ctx context.Context, msg ports.InboundM
 	return reply
 }
 
+// hasMore 按实际页码判断，而非假设卡片总是从第一页开始。
+func (set mediaResultSet) hasMore() bool {
+	return set.queryName != "" && set.page*listPages.read(set.queryArgs).size < set.total
+}
+
 // loadMoreMediaResults 按原查询逐页加载，错误时保留已有结果并允许重试。
 func (r *Router) loadMoreMediaResults(ctx context.Context, token string, set mediaResultSet) (mediaResultSet, error) {
 	pageNumber := set.page + 1
+	size := listPages.read(set.queryArgs).size
 	var page application.Page[domain.Media]
 	var err error
 	switch set.queryName {
 	case "search_media":
-		page, err = r.deps.Queries.Search(ctx, stringArg(set.queryArgs, "keyword"), pageNumber, mediaSearchLimit)
+		page, err = r.deps.Queries.Search(ctx, stringArg(set.queryArgs, "keyword"), pageNumber, size)
 	case "search_category_media":
 		if tag := stringArg(set.queryArgs, "tag"); tag != "" {
-			page, err = r.deps.Tags.SearchMedia(ctx, tag, pageNumber, mediaSearchLimit)
+			page, err = r.deps.Tags.SearchMedia(ctx, tag, pageNumber, size)
 		} else {
-			page, err = r.deps.Catalog.List(ctx, pageNumber, mediaSearchLimit, ports.MediaListQuery{VideoType: stringArg(set.queryArgs, "video_type")})
+			page, err = r.deps.Catalog.List(ctx, pageNumber, size, ports.MediaListQuery{VideoType: stringArg(set.queryArgs, "video_type"), Search: stringArg(set.queryArgs, "keyword")})
 		}
 	case "get_rank":
-		page, err = r.deps.Queries.Rank(ctx, normalizeRankType(stringArg(set.queryArgs, "type")), pageNumber, mediaSearchLimit, ports.MediaListQuery{})
+		page, err = r.deps.Queries.Rank(ctx, normalizeRankType(stringArg(set.queryArgs, "type")), pageNumber, size, ports.MediaListQuery{})
 	case "get_release_today":
-		page, err = r.deps.Queries.ReleaseToday(ctx, pageNumber, mediaSearchLimit, ports.MediaListQuery{})
+		page, err = r.deps.Queries.ReleaseToday(ctx, pageNumber, size, ports.MediaListQuery{})
 	default:
 		return set, errors.New("不支持分页")
 	}

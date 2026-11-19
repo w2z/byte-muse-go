@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"sort"
 	"strings"
 	"testing"
 
@@ -99,7 +100,7 @@ func (r *categoryMediaRepository) SearchMedia(_ context.Context, name string, li
 func TestSearchCategoryMediaUsesTagService(t *testing.T) {
 	repo := &categoryMediaRepository{fakeTagRepository: &fakeTagRepository{}, media: []domain.Media{libraryMedia("1", "TEST-001", "影片")}}
 	deps := Deps{Tags: application.NewTagService(repo)}
-	result, err := searchCategoryMedia(context.Background(), deps, "制服", "")
+	result, err := searchCategoryMedia(context.Background(), deps, map[string]any{"tag": "制服"})
 	data, ok := result.(map[string]any)
 	if err != nil || !ok || repo.name != "制服" || data["total"] != 1 {
 		t.Fatalf("result=%v name=%q err=%v", result, repo.name, err)
@@ -121,6 +122,9 @@ func (r *fakeTagRepository) ListTags(_ context.Context, query ports.TagListQuery
 		if query.Search != "" && !strings.Contains(item.Name, query.Search) {
 			continue
 		}
+		if query.Category != "" && item.Category != query.Category {
+			continue
+		}
 		switch query.Subscription {
 		case "active":
 			if item.LimitDate == nil {
@@ -133,6 +137,7 @@ func (r *fakeTagRepository) ListTags(_ context.Context, query ports.TagListQuery
 		}
 		matched = append(matched, item)
 	}
+	sort.SliceStable(matched, func(i, j int) bool { return matched[i].MediaCount > matched[j].MediaCount })
 	return pageSlice(matched, query.Limit, query.Offset), len(matched), nil
 }
 

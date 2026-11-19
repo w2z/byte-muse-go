@@ -12,8 +12,6 @@ import (
 )
 
 const (
-	// subscriptionResultLimit 是订阅类列表回填模型的最大条数。
-	subscriptionResultLimit = 50
 	// dateLayout 是追新起始日期的统一格式，与演员、标签订阅的存储口径一致。
 	dateLayout = "2006-01-02"
 )
@@ -89,16 +87,13 @@ func subscriptionCodeTitle(item domain.Subscription) (string, string) {
 }
 
 // querySubscribes 列出当前有效影片订阅。
-func querySubscribes(ctx context.Context, deps Deps) (any, error) {
+func querySubscribes(ctx context.Context, deps Deps, paging toolPage) (any, error) {
 	if deps.Subscriptions == nil {
 		return "订阅服务不可用", nil
 	}
-	page, err := deps.Subscriptions.List(ctx, 1, subscriptionResultLimit, domain.SubscriptionStatusActive)
+	page, err := deps.Subscriptions.List(ctx, paging.number, paging.size, domain.SubscriptionStatusActive)
 	if err != nil {
 		return nil, fmt.Errorf("查询订阅失败: %w", err)
-	}
-	if len(page.Items) == 0 {
-		return "当前没有有效订阅", nil
 	}
 	items := make([]map[string]any, 0, len(page.Items))
 	for _, item := range page.Items {
@@ -110,7 +105,7 @@ func querySubscribes(ctx context.Context, deps Deps) (any, error) {
 			"created_at": item.CreatedAt,
 		})
 	}
-	return map[string]any{"total": page.Total, "returned": len(items), "items": items}, nil
+	return pageResult(paging, page.Total, items), nil
 }
 
 // addActorSubscribe 保存演员追新起始日期；空日期按当天计算。
@@ -164,25 +159,6 @@ func cancelActorSubscribe(ctx context.Context, deps Deps, rawName string) (any, 
 	}
 }
 
-// queryActorSubscribes 列出已订阅演员；仓储的订阅状态取值是 active（limit_date 非空）。
-func queryActorSubscribes(ctx context.Context, deps Deps) (any, error) {
-	if deps.Actors == nil {
-		return "演员服务不可用", nil
-	}
-	page, err := deps.Actors.List(ctx, 1, subscriptionResultLimit, "active", "")
-	if err != nil {
-		return nil, fmt.Errorf("查询演员订阅失败: %w", err)
-	}
-	if len(page.Items) == 0 {
-		return "当前没有订阅中的演员", nil
-	}
-	items := make([]map[string]any, 0, len(page.Items))
-	for _, item := range page.Items {
-		items = append(items, map[string]any{"name": item.Name, "photo": item.Photo, "limit_date": item.LimitDate})
-	}
-	return map[string]any{"total": page.Total, "returned": len(items), "items": items}, nil
-}
-
 // addTagSubscribe 保存标签订阅规则并触发一次追新；追新失败时规则已保存，如实说明。
 func addTagSubscribe(ctx context.Context, deps Deps, rawName, rawDate string) (any, error) {
 	name := strings.TrimSpace(rawName)
@@ -234,30 +210,6 @@ func cancelTagSubscribe(ctx context.Context, deps Deps, rawName string) (any, er
 	default:
 		return nil, fmt.Errorf("取消标签订阅失败: %w", err)
 	}
-}
-
-// queryTagSubscribes 列出已订阅标签；仓储的订阅状态取值是 active（limit_date 非空）。
-func queryTagSubscribes(ctx context.Context, deps Deps) (any, error) {
-	if deps.Tags == nil {
-		return "标签服务不可用", nil
-	}
-	page, err := deps.Tags.List(ctx, 1, subscriptionResultLimit, "", "active")
-	if err != nil {
-		return nil, fmt.Errorf("查询标签订阅失败: %w", err)
-	}
-	if len(page.Items) == 0 {
-		return "当前没有订阅中的标签", nil
-	}
-	items := make([]map[string]any, 0, len(page.Items))
-	for _, item := range page.Items {
-		items = append(items, map[string]any{
-			"name":        item.Name,
-			"media_count": item.MediaCount,
-			"category":    item.Category,
-			"limit_date":  item.LimitDate,
-		})
-	}
-	return map[string]any{"total": page.Total, "returned": len(items), "items": items}, nil
 }
 
 // downloadSubscribe 触发一次订阅资源搜索受理，只报告受理条数，不承诺找到资源或完成下载。

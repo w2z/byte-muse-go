@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 )
@@ -23,15 +24,15 @@ func BuiltinTools(deps Deps) []Tool {
 		},
 		builtinTool{
 			name:        "search_actor",
-			description: "按名称查询演员及其订阅截止日期；名称为空时列出前 20 位演员。",
-			parameters: objectSchema(map[string]any{
+			description: "按名称分页查询演员及其订阅截止日期；名称为空时浏览全部演员。",
+			parameters: listSchema(listPages, map[string]any{
 				"name": stringProperty("演员名称或名称片段，可为空"),
 			}),
 			run: func(ctx context.Context, args map[string]any) (any, error) {
-				return searchActor(ctx, deps, stringArg(args, "name"))
+				return searchActor(ctx, deps, stringArg(args, "name"), "", listPages.read(args))
 			},
 		},
-		builtinTool{
+		searchTool{builtinTool: builtinTool{
 			name:        "search_media",
 			description: "按关键词优先搜索本地影片；未命中时搜索已配置的 PT、BT 资源。",
 			parameters: objectSchema(map[string]any{
@@ -40,18 +41,16 @@ func BuiltinTools(deps Deps) []Tool {
 			run: func(ctx context.Context, args map[string]any) (any, error) {
 				return searchMedia(ctx, deps, stringArg(args, "keyword"))
 			},
-		},
+		}, local: localSearchTool(deps)},
 		builtinTool{
 			name:        "query_media",
-			description: "查询影片列表：无需关键词即可分页浏览，支持关键词、订阅状态、下载状态、媒体库状态、影片类型和 VR 筛选；默认每页 20 条，最多 20 条。复用网页影片列表，不主动采集、订阅或下载；沿用按需标题翻译。",
-			parameters: objectSchema(map[string]any{
-				"page":         map[string]any{"type": "integer", "description": "页码，从 1 开始，默认 1，最多 1000000", "minimum": 1, "maximum": 1000000, "default": 1},
-				"page_size":    map[string]any{"type": "integer", "description": "每页条数，默认 20，范围 1-20", "minimum": 1, "maximum": mediaSearchLimit, "default": mediaSearchLimit},
+			description: "分页浏览本地影片；支持关键词与状态组合筛选，沿用网页按需翻译，不主动采集、订阅或下载。",
+			parameters: listSchema(listPages, map[string]any{
 				"search":       stringProperty("番号、原标题或译名关键词；省略或空字符串表示不过滤"),
 				"subscription": stringProperty("订阅状态；空字符串不限，none 无有效订阅、active 有效订阅、canceled 已取消", "", "none", "active", "canceled"),
 				"download":     stringProperty("下载状态；空字符串不限，unknown 表示无下载任务或最近任务状态未知，其余按最近下载任务筛选", "", "queued", "searching", "submitted", "downloading", "completed", "failed", "unknown"),
-				"library":      stringProperty("媒体库状态；空字符串不限，unknown 未知、absent 未入库、present 已入库", "", "unknown", "absent", "present"),
-				"video_type":   stringProperty("影片类型；空字符串不限，unknown 未分类，其余为有码、无码、无码破解或流出", "", "censored", "uncensored", "uncensored_cracked", "leaked", "unknown"),
+				"library":      libraryProperty(),
+				"video_type":   videoTypeProperty(),
 				"vr":           stringProperty("VR 筛选；空字符串不限，hide 隐藏 VR，only 仅 VR，与网页一样按番号识别", "", "hide", "only"),
 			}),
 			run: func(ctx context.Context, args map[string]any) (any, error) {
@@ -60,41 +59,42 @@ func BuiltinTools(deps Deps) []Tool {
 		},
 		builtinTool{
 			name:        "search_category_media",
-			description: "查询指定标签或影片类型下的影片；标签使用精确名称，影片类型使用有码、无码、无码破解、流出或未分类。",
-			parameters: objectSchema(map[string]any{
+			description: "分页查询影片：标签精确名称、影片类型、名称或番号关键词三选一。",
+			parameters: listSchema(listPages, map[string]any{
+				"keyword":    stringProperty("名称或番号关键词；与 tag、video_type 互斥"),
 				"tag":        stringProperty("影片标签的准确名称；按影片类型查询时留空"),
-				"video_type": stringProperty("影片类型：censored、uncensored、uncensored_cracked、leaked、unknown；按标签查询时省略或留空字符串", "", "censored", "uncensored", "uncensored_cracked", "leaked", "unknown"),
+				"video_type": videoTypeProperty(),
 			}),
 			run: func(ctx context.Context, args map[string]any) (any, error) {
-				return searchCategoryMedia(ctx, deps, stringArg(args, "tag"), stringArg(args, "video_type"))
+				return searchCategoryMedia(ctx, deps, args)
 			},
 		},
 		builtinTool{
 			name:        "get_rank",
-			description: "查询榜单影片，返回最多 20 条；type 支持 daily、weekly、monthly。",
-			parameters: objectSchema(map[string]any{
+			description: "分页查询榜单影片；type 支持 daily、weekly、monthly。",
+			parameters: listSchema(listPages, map[string]any{
 				"type": stringProperty("榜单周期：daily 日榜、weekly 周榜、monthly 月榜；缺省或非法值按 monthly 处理", "daily", "weekly", "monthly"),
 			}),
 			run: func(ctx context.Context, args map[string]any) (any, error) {
-				return getRank(ctx, deps, stringArg(args, "type"))
+				return getRank(ctx, deps, stringArg(args, "type"), listPages.read(args))
 			},
 		},
 		builtinTool{
 			name:        "get_release_today",
-			description: "查询今天发行的影片，返回最多 20 条。",
-			parameters:  objectSchema(map[string]any{}),
-			run: func(ctx context.Context, _ map[string]any) (any, error) {
-				return getReleaseToday(ctx, deps)
+			description: "分页查询今天发行的影片。",
+			parameters:  listSchema(listPages, nil),
+			run: func(ctx context.Context, args map[string]any) (any, error) {
+				return getReleaseToday(ctx, deps, listPages.read(args))
 			},
 		},
 		builtinTool{
 			name:        "get_recommendations",
-			description: "根据已有订阅与媒体库画像推荐未订阅影片，默认 10 条，最多 20 条。",
-			parameters: objectSchema(map[string]any{
+			description: "分页推荐未订阅影片；page_size 优先于旧参数 limit。",
+			parameters: listSchema(recommendPages, map[string]any{
 				"limit": integerProperty("返回条数，默认 10，取值范围 1-20"),
 			}),
 			run: func(ctx context.Context, args map[string]any) (any, error) {
-				return getRecommendations(ctx, deps, intArg(args, "limit", 10, 1, 20))
+				return getRecommendations(ctx, deps, recommendPages.read(args))
 			},
 		},
 		builtinTool{
@@ -117,12 +117,12 @@ func BuiltinTools(deps Deps) []Tool {
 		},
 		builtinTool{
 			name:        "search_torrents",
-			description: "在已配置的资源站搜索种子候选，返回最多 10 条，含站点、大小、做种数与免费标记。",
-			parameters: objectSchema(map[string]any{
+			description: "分页浏览本次资源站搜索返回的候选，含站点、大小、做种数与免费标记。",
+			parameters: listSchema(torrentPages, map[string]any{
 				"query": stringProperty("番号或搜索关键词"),
 			}, "query"),
 			run: func(ctx context.Context, args map[string]any) (any, error) {
-				return searchTorrents(ctx, deps, stringArg(args, "query"))
+				return searchTorrents(ctx, deps, stringArg(args, "query"), torrentPages.read(args))
 			},
 		},
 		builtinTool{
@@ -147,10 +147,10 @@ func BuiltinTools(deps Deps) []Tool {
 		},
 		builtinTool{
 			name:        "query_subscribes",
-			description: "列出当前有效影片订阅，最多 50 条。",
-			parameters:  objectSchema(map[string]any{}),
-			run: func(ctx context.Context, _ map[string]any) (any, error) {
-				return querySubscribes(ctx, deps)
+			description: "分页列出当前有效影片订阅。",
+			parameters:  listSchema(listPages, nil),
+			run: func(ctx context.Context, args map[string]any) (any, error) {
+				return querySubscribes(ctx, deps, listPages.read(args))
 			},
 		},
 		builtinTool{
@@ -176,10 +176,10 @@ func BuiltinTools(deps Deps) []Tool {
 		},
 		builtinTool{
 			name:        "query_actor_subscribes",
-			description: "列出当前已订阅的演员，最多 50 条。",
-			parameters:  objectSchema(map[string]any{}),
-			run: func(ctx context.Context, _ map[string]any) (any, error) {
-				return queryActorSubscribes(ctx, deps)
+			description: "按名称分页列出已订阅的演员。",
+			parameters:  listSchema(listPages, map[string]any{"keywords": stringProperty("演员名称关键词，省略时不限")}),
+			run: func(ctx context.Context, args map[string]any) (any, error) {
+				return searchActor(ctx, deps, stringArg(args, "keywords"), "active", listPages.read(args))
 			},
 		},
 		builtinTool{
@@ -205,20 +205,21 @@ func BuiltinTools(deps Deps) []Tool {
 		},
 		builtinTool{
 			name:        "query_tag_subscribes",
-			description: "列出当前已订阅的标签，最多 50 条。",
-			parameters:  objectSchema(map[string]any{}),
-			run: func(ctx context.Context, _ map[string]any) (any, error) {
-				return queryTagSubscribes(ctx, deps)
+			description: "分页列出已订阅的标签，可按标签名和分类筛选。",
+			parameters:  listSchema(tagPages, map[string]any{"search": stringProperty("标签名称关键词，省略时不限"), "category": tagCategoryProperty()}),
+			run: func(ctx context.Context, args map[string]any) (any, error) {
+				return queryTags(ctx, deps, stringArg(args, "search"), "active", stringArg(args, "category"), tagPages.read(args))
 			},
 		},
 		builtinTool{
 			name:        "query_tags",
-			description: "按关键词查询标签目录，按影片数量降序返回前 30 个标签，用于订阅前确认真实标签名。",
-			parameters: objectSchema(map[string]any{
-				"keyword": stringProperty("标签名称关键词，可为空表示不过滤"),
+			description: "按关键词分页查询标签目录，按影片数量降序排列。",
+			parameters: listSchema(tagPages, map[string]any{
+				"category": tagCategoryProperty(),
+				"keyword":  stringProperty("标签名称关键词，可为空表示不过滤"),
 			}),
 			run: func(ctx context.Context, args map[string]any) (any, error) {
-				return queryTags(ctx, deps, stringArg(args, "keyword"))
+				return queryTags(ctx, deps, stringArg(args, "keyword"), "", stringArg(args, "category"), tagPages.read(args))
 			},
 		},
 		builtinTool{
@@ -231,33 +232,33 @@ func BuiltinTools(deps Deps) []Tool {
 		},
 		builtinTool{
 			name:        "query_download_tasks",
-			description: "查询下载任务，最多返回 20 条；status 支持 all、downloading、completed，其他值按 all 处理。",
-			parameters: objectSchema(map[string]any{
+			description: "按状态、番号或影片标题分页查询下载任务。",
+			parameters: listSchema(listPages, map[string]any{
 				"query":  stringProperty("按番号或影片标题过滤的关键词，可为空"),
 				"status": stringProperty("任务状态：all 全部、downloading 下载中、completed 已完成", "all", "downloading", "completed"),
 			}),
 			run: func(ctx context.Context, args map[string]any) (any, error) {
-				return queryDownloadTasks(ctx, deps, stringArg(args, "query"), stringArg(args, "status"))
+				return queryDownloadTasks(ctx, deps, stringArg(args, "query"), stringArg(args, "status"), listPages.read(args))
 			},
 		},
 		builtinTool{
 			name:        "query_logs",
-			description: "查询后台日志，用于排查下载失败、采集异常；lines 默认 80，最多 200。",
-			parameters: objectSchema(map[string]any{
+			description: "分页查询后台日志；page_size 优先于旧参数 lines。",
+			parameters: listSchema(logPages, map[string]any{
 				"keyword": stringProperty("日志关键词，可为空"),
 				"level":   stringProperty("日志级别", "debug", "info", "warning", "error"),
 				"lines":   integerProperty("返回条数，默认 80，取值范围 1-200"),
 			}),
 			run: func(ctx context.Context, args map[string]any) (any, error) {
-				return queryLogs(ctx, deps, stringArg(args, "keyword"), stringArg(args, "level"), intArg(args, "lines", 80, 1, 200))
+				return queryLogs(ctx, deps, stringArg(args, "keyword"), stringArg(args, "level"), logPages.read(args))
 			},
 		},
 		builtinTool{
 			name:        "query_schedulers",
-			description: "列出全部定时任务及其 cron 表达式、最近执行时间和运行状态。",
-			parameters:  objectSchema(map[string]any{}),
-			run: func(ctx context.Context, _ map[string]any) (any, error) {
-				return querySchedulers(ctx, deps)
+			description: "分页列出定时任务及其 cron 表达式、最近执行时间和运行状态。",
+			parameters:  listSchema(listPages, nil),
+			run: func(ctx context.Context, args map[string]any) (any, error) {
+				return querySchedulers(ctx, deps, listPages.read(args))
 			},
 		},
 		builtinTool{
@@ -331,10 +332,55 @@ func objectSchema(properties map[string]any, required ...string) map[string]any 
 		required = []string{}
 	}
 	return map[string]any{
-		"type":       "object",
-		"properties": properties,
-		"required":   required,
+		"type":                 "object",
+		"properties":           properties,
+		"required":             required,
+		"additionalProperties": false,
 	}
+}
+
+// pagePolicy 同时定义工具目录和执行层的分页范围；保留已公开的旧条数参数。
+type pagePolicy struct {
+	defaultSize, maxSize int
+	alias                string
+	aliasMax             int
+}
+
+var (
+	listPages      = pagePolicy{defaultSize: 20, maxSize: 100}
+	tagPages       = pagePolicy{defaultSize: 20, maxSize: 200}
+	recommendPages = pagePolicy{10, 100, "limit", 20}
+	torrentPages   = pagePolicy{defaultSize: 10, maxSize: 100}
+	logPages       = pagePolicy{80, 200, "lines", 200}
+)
+
+type toolPage struct{ number, size int }
+
+func (policy pagePolicy) read(args map[string]any) toolPage {
+	size := policy.defaultSize
+	if policy.alias != "" {
+		size = intArg(args, policy.alias, size, 1, policy.aliasMax)
+	}
+	return toolPage{intArg(args, "page", 1, 1, 1000000), intArg(args, "page_size", size, 1, policy.maxSize)}
+}
+
+// listSchema 在每个列表工具的业务字段上添加一致的分页说明与约束。
+func listSchema(policy pagePolicy, properties map[string]any, required ...string) map[string]any {
+	if properties == nil {
+		properties = map[string]any{}
+	}
+	properties["page"] = map[string]any{"type": "integer", "minimum": 1, "maximum": 1000000, "default": 1, "description": "页码，从 1 开始"}
+	size := map[string]any{"type": "integer", "minimum": 1, "maximum": policy.maxSize, "description": fmt.Sprintf("每页条数；默认 %d，上限 %d", policy.defaultSize, policy.maxSize)}
+	// SDK 会注入 schema 默认值；有旧参数时由执行层决定缺省条数。
+	if policy.alias == "" {
+		size["default"] = policy.defaultSize
+	}
+	properties["page_size"] = size
+	return objectSchema(properties, required...)
+}
+
+func tagCategoryProperty() map[string]any {
+	return stringProperty("标签分类；省略或空字符串表示不限", "", "主题", "角色", "服装", "体型", "行为", "玩法", "类别", "未分类")
 }
 
 // stringProperty 构造字符串参数定义，可选枚举用于限定取值。
@@ -344,6 +390,13 @@ func stringProperty(description string, enum ...string) map[string]any {
 		property["enum"] = enum
 	}
 	return property
+}
+
+func videoTypeProperty() map[string]any {
+	return stringProperty("影片类型；空字符串不限，unknown 未分类，其余为有码、无码、无码破解或流出", "", "censored", "uncensored", "uncensored_cracked", "leaked", "unknown")
+}
+func libraryProperty() map[string]any {
+	return stringProperty("媒体库状态；空字符串不限，unknown 未知、absent 未入库、present 已入库", "", "unknown", "absent", "present")
 }
 
 // integerProperty 构造整数参数定义。
