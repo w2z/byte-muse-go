@@ -40,6 +40,71 @@ func TestQueueLeaseRecoveryRejectsStaleWorker(t *testing.T) {
 	}
 }
 
+func TestTranslationRetryWaitsForOtherRun(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, Config{Dialect: DialectSQLite, SQLitePath: filepath.Join(t.TempDir(), "serial.db")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err := store.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	first := NewCollectionRepository(store.SQLDB(), DialectSQLite)
+	second := NewCollectionRepository(store.SQLDB(), DialectSQLite)
+	add := func(code string) {
+		t.Helper()
+		if _, err := first.CreateRun(ctx, ports.CollectionRequest{Kind: "search", Source: "javdb", Query: code, Page: 1}); err != nil {
+			t.Fatal(err)
+		}
+		page, err := first.Claim(ctx, "page", time.Now())
+		if err != nil || page == nil {
+			t.Fatalf("page: %v %v", page, err)
+		}
+		if err := first.SavePage(ctx, *page, ports.CollectionBatch{Items: []ports.CollectedMedia{{SourceID: code, Code: code, Title: code, URL: "https://example.com/video/" + code}}}); err != nil {
+			t.Fatal(err)
+		}
+		video, err := first.Claim(ctx, "video", time.Now())
+		if err != nil || video == nil {
+			t.Fatalf("video: %v %v", video, err)
+		}
+		if err := first.SaveVideo(ctx, *video, true); err != nil {
+			t.Fatal(err)
+		}
+	}
+	add("TEST-001")
+	now := time.Now()
+	for _, wait := range []time.Duration{5 * time.Second, 10 * time.Second, 10 * time.Minute} {
+		task, err := first.Claim(ctx, "translation", now)
+		if err != nil || task == nil {
+			t.Fatalf("retry: %v %v", task, err)
+		}
+		if err := first.FailWork(ctx, *task, "translation_failed", now); err != nil {
+			t.Fatal(err)
+		}
+		now = now.Add(wait)
+	}
+	add("TEST-002")
+	active, err := second.Claim(ctx, "translation", now.Add(-time.Second))
+	if err != nil || active == nil || active.Code != "TEST-002" {
+		t.Fatalf("other run: %v %v", active, err)
+	}
+	if retry, err := first.Claim(ctx, "translation", now); err != nil || retry != nil {
+		t.Fatalf("overlapping lease: %v %v", retry, err)
+	}
+	if err := second.SaveTranslation(ctx, *active, "译文"); err != nil {
+		t.Fatal(err)
+	}
+	retry, err := first.Claim(ctx, "translation", now)
+	if err != nil || retry == nil || retry.Code != "TEST-001" || retry.Attempt != 4 {
+		t.Fatalf("resume: %v %v", retry, err)
+	}
+	reclaimed, err := second.Claim(ctx, "translation", now.Add(3*time.Minute))
+	if err != nil || reclaimed == nil || reclaimed.Attempt != retry.Attempt || reclaimed.Token == retry.Token {
+		t.Fatalf("expired lease: %v %v", reclaimed, err)
+	}
+}
+
 func TestQueueOlderRankCannotReplaceNewerRun(t *testing.T) {
 	ctx := context.Background()
 	s, e := Open(ctx, Config{Dialect: DialectSQLite, SQLitePath: filepath.Join(t.TempDir(), "ordering.db")})

@@ -127,10 +127,43 @@ func (r *CollectionRepository) insertWork(ctx context.Context, tx *sql.Tx, run, 
 // Claim 原子比较并交换领取令牌，过期任务可恢复；租约必须长于阶段执行上限，
 // 页面阶段含数分钟的 Cloudflare 挑战等待，其余阶段仍为 2 分钟。
 func (r *CollectionRepository) Claim(ctx context.Context, kind string, now time.Time) (*ports.CollectionWork, error) {
+	if kind != "translation" {
+		return r.claimWork(ctx, r.db, kind, now)
+	}
+	// 在同一可串行化事务内检查全队列租约并领取；网络翻译不持有事务锁。
+	tx, err := r.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	var active int
+	err = tx.QueryRowContext(ctx, r.q(`SELECT 1 FROM collection_work WHERE kind='translation' AND state='running' AND lease_until_ms>? LIMIT 1`), now.UnixMilli()).Scan(&active)
+	if err == nil {
+		return nil, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return nil, err
+	}
+	work, err := r.claimWork(ctx, tx, kind, now)
+	if err != nil || work == nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return work, nil
+}
+
+// claimWork 领取已到期的工作；翻译按可领取时间排队，不让恢复任务抢占其他就绪任务。
+func (r *CollectionRepository) claimWork(ctx context.Context, exec sqlExecutor, kind string, now time.Time) (*ports.CollectionWork, error) {
 	var w ports.CollectionWork
-	var req string
+	var req, state string
 	var attempts int
-	e := r.db.QueryRowContext(ctx, r.q(`SELECT w.id,w.run_id,w.kind,w.page_number,w.payload_json,w.code,w.attempts,r.request_json FROM collection_work w JOIN collection_runs r ON r.id=w.run_id WHERE w.kind=? AND ((w.state='queued' AND w.available_ms<=?) OR (w.state='running' AND w.lease_until_ms<=?)) ORDER BY r.created_ms,w.page_number,w.position_number,w.id LIMIT 1`), kind, now.UnixMilli(), now.UnixMilli()).Scan(&w.ID, &w.RunID, &w.Kind, &w.Page, &w.Payload, &w.Code, &attempts, &req)
+	order := "r.created_ms,w.page_number,w.position_number,w.id"
+	if kind == "translation" {
+		order = "w.available_ms," + order
+	}
+	e := exec.QueryRowContext(ctx, r.q(`SELECT w.id,w.run_id,w.kind,w.page_number,w.payload_json,w.code,w.attempts,w.state,r.request_json FROM collection_work w JOIN collection_runs r ON r.id=w.run_id WHERE w.kind=? AND ((w.state='queued' AND w.available_ms<=?) OR (w.state='running' AND w.lease_until_ms<=?)) ORDER BY `+order+` LIMIT 1`), kind, now.UnixMilli(), now.UnixMilli()).Scan(&w.ID, &w.RunID, &w.Kind, &w.Page, &w.Payload, &w.Code, &attempts, &state, &req)
 	if errors.Is(e, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -142,11 +175,15 @@ func (r *CollectionRepository) Claim(ctx context.Context, kind string, now time.
 	}
 	w.Token = collectionID()
 	w.Attempt = attempts + 1
+	// 过期租约没有已确认的翻译结果，接手同一次尝试，不提前触发三连败冷却。
+	if kind == "translation" && state == "running" {
+		w.Attempt = attempts
+	}
 	lease := 2 * time.Minute
 	if kind == "page" {
 		lease = 10 * time.Minute
 	}
-	result, e := r.db.ExecContext(ctx, r.q(`UPDATE collection_work SET state='running',token=?,attempts=attempts+1,lease_until_ms=? WHERE id=? AND attempts=? AND ((state='queued' AND available_ms<=?) OR (state='running' AND lease_until_ms<=?))`), w.Token, now.Add(lease).UnixMilli(), w.ID, attempts, now.UnixMilli(), now.UnixMilli())
+	result, e := exec.ExecContext(ctx, r.q(`UPDATE collection_work SET state='running',token=?,attempts=?,lease_until_ms=? WHERE id=? AND attempts=? AND state=? AND ((state='queued' AND available_ms<=?) OR (state='running' AND lease_until_ms<=?))`), w.Token, w.Attempt, now.Add(lease).UnixMilli(), w.ID, attempts, state, now.UnixMilli(), now.UnixMilli())
 	if e != nil {
 		return nil, e
 	}
@@ -334,7 +371,7 @@ func (r *CollectionRepository) SaveTranslation(ctx context.Context, w ports.Coll
 	return tx.Commit()
 }
 
-// FailWork 最多执行三次，失败保留记录；可恢复错误按 5 秒、10 秒退避。
+// FailWork 为当前任务持久化重试时间。翻译每三次失败冷却十分钟，其他阶段三次失败后结束。
 func (r *CollectionRepository) FailWork(ctx context.Context, w ports.CollectionWork, code string, now time.Time) error {
 	tx, e := r.db.BeginTx(ctx, nil)
 	if e != nil {
@@ -345,10 +382,20 @@ func (r *CollectionRepository) FailWork(ctx context.Context, w ports.CollectionW
 		return e
 	}
 	state := "queued"
-	if w.Attempt >= 3 {
+	delay := time.Duration(w.Attempt) * 5 * time.Second
+	if w.Kind == "translation" {
+		switch w.Attempt % 3 {
+		case 0:
+			delay = 10 * time.Minute
+		case 1:
+			delay = 5 * time.Second
+		case 2:
+			delay = 10 * time.Second
+		}
+	} else if w.Attempt >= 3 {
 		state = "failed"
 	}
-	_, e = tx.ExecContext(ctx, r.q(`UPDATE collection_work SET state=?,available_ms=?,token='',lease_until_ms=0,error_code=? WHERE id=?`), state, now.Add(time.Duration(w.Attempt)*5*time.Second).UnixMilli(), code, w.ID)
+	_, e = tx.ExecContext(ctx, r.q(`UPDATE collection_work SET state=?,available_ms=?,token='',lease_until_ms=0,error_code=? WHERE id=?`), state, now.Add(delay).UnixMilli(), code, w.ID)
 	if e != nil {
 		return e
 	}

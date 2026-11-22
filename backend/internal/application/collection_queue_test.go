@@ -82,13 +82,14 @@ func (errorTranslator) Translate(context.Context, application.TranslationRequest
 	return "", fmt.Errorf("upstream secret must not be logged")
 }
 
-func TestQueuedTranslationFailureKeepsVideoAndStopsAfterThreeAttempts(t *testing.T) {
+func TestQueuedTranslationRetriesAcrossCooldownsUntilSuccess(t *testing.T) {
 	ctx := context.Background()
-	s, e := database.Open(ctx, database.Config{Dialect: database.DialectSQLite, SQLitePath: filepath.Join(t.TempDir(), "translation.db")})
+	config := database.Config{Dialect: database.DialectSQLite, SQLitePath: filepath.Join(t.TempDir(), "translation.db")}
+	s, e := database.Open(ctx, config)
 	if e != nil {
 		t.Fatal(e)
 	}
-	defer s.Close()
+	defer func() { s.Close() }()
 	if e = s.Migrate(ctx); e != nil {
 		t.Fatal(e)
 	}
@@ -102,21 +103,47 @@ func TestQueuedTranslationFailureKeepsVideoAndStopsAfterThreeAttempts(t *testing
 			t.Fatal(e)
 		}
 	}
-	for i := 0; i < 3; i++ {
-		if _, e = service.ProcessOne(ctx, "translation", time.Now().Add(time.Minute)); e != nil {
-			t.Fatal(e)
+	due := time.Now()
+	for attempt, delay := range []time.Duration{5 * time.Second, 10 * time.Second, 10 * time.Minute, 5 * time.Second, 10 * time.Second, 10 * time.Minute} {
+		start := time.Now()
+		if worked, err := service.ProcessOne(ctx, "translation", due); err != nil || !worked {
+			t.Fatalf("attempt %d not processed: %v", attempt+1, err)
+		}
+		status, err := service.RunStatus(ctx, run.ID)
+		if err != nil || status.Status != "running" || status.Saved != 1 || status.TranslationPending != 1 || status.TranslationFailed != 0 || status.Error != "translation_failed" {
+			t.Fatalf("attempt %d: %+v %v", attempt+1, status, err)
+		}
+		var next int64
+		if err := s.SQLDB().QueryRow(`SELECT available_ms FROM collection_work WHERE kind='translation'`).Scan(&next); err != nil || next < start.Add(delay).UnixMilli() || next > time.Now().Add(delay).UnixMilli() {
+			t.Fatalf("attempt %d: wrong retry time %d, expected delay %v: %v", attempt+1, next, delay, err)
+		}
+		due = time.UnixMilli(next)
+		if attempt == 2 {
+			s.Close()
+			s, e = database.Open(ctx, config)
+			if e != nil {
+				t.Fatal(e)
+			}
+			service = application.NewQueuedCollectionService(pagesCollector{}, database.NewCollectionRepository(s.SQLDB(), database.DialectSQLite), errorTranslator{})
+		}
+		if worked, err := service.ProcessOne(ctx, "translation", due.Add(-time.Millisecond)); err != nil || worked {
+			t.Fatalf("attempt %d retried early: %v %v", attempt+1, worked, err)
 		}
 	}
-	got, e := service.RunStatus(ctx, run.ID)
-	if e != nil || got.Status != "partial_failed" || got.Saved != 1 || got.TranslationFailed != 1 || got.Error != "translation_failed" {
-		t.Fatalf("%+v %v", got, e)
+	service.SetTranslator(signalTranslator{called: make(chan struct{})})
+	if worked, err := service.ProcessOne(ctx, "translation", due); err != nil || !worked {
+		t.Fatalf("resume: %v %v", worked, err)
 	}
-	if ok, e := service.ProcessOne(ctx, "translation", time.Now().Add(time.Hour)); e != nil || ok {
-		t.Fatalf("retry limit ignored %v %v", ok, e)
+	status, err := service.RunStatus(ctx, run.ID)
+	if err != nil || status.Status != "completed" || status.Translated != 1 || status.TranslationPending != 0 || status.Error != "" {
+		t.Fatalf("completion: %+v %v", status, err)
 	}
-	var n int
-	if e = s.SQLDB().QueryRow(`SELECT count(*) FROM media`).Scan(&n); e != nil || n != 1 {
-		t.Fatalf("%d %v", n, e)
+	var title string
+	if err := s.SQLDB().QueryRow(`SELECT translated_title FROM media`).Scan(&title); err != nil || title != "后台译文" {
+		t.Fatalf("translation: %q %v", title, err)
+	}
+	if worked, err := service.ProcessOne(ctx, "translation", due.Add(24*time.Hour)); err != nil || worked {
+		t.Fatalf("completed task retried: %v %v", worked, err)
 	}
 }
 
