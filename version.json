@@ -1,16 +1,20 @@
 {
-  "version": "0.1.260",
-  "commit": "c09280fad803693b17ba04248580445d2128ddad",
-  "short_commit": "c09280f",
-  "built_at": "2026-11-19T10:10:25Z",
+  "version": "0.1.261",
+  "commit": "91b27dc187fc85bc313fbc936991adc7f12dd6f5",
+  "short_commit": "91b27dc",
+  "built_at": "2026-11-22T14:55:54Z",
   "image": "ghcr.io/w2z/byte-muse-go",
   "tags": [
-    "0.1.260",
-    "sha-c09280f",
+    "0.1.261",
+    "sha-91b27dc",
     "latest"
   ],
   "source": "https://github.com/w2z/byte-muse-go",
   "changes": [
+    {
+      "version": "0.1.261",
+      "message": "串行执行标题翻译并在连续三次失败后等待十分钟重试"
+    },
     {
       "version": "0.1.260",
       "message": "为 MCP 列表工具接入分页并支持本地影片组合搜索"
